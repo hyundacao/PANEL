@@ -47,6 +47,24 @@ export async function PATCH(
   });
 
   if (error) {
+    if (
+      typeof payload?.isActive === 'boolean' &&
+      payload?.name === undefined &&
+      payload?.username === undefined &&
+      payload?.password === undefined &&
+      payload?.role === undefined &&
+      payload?.access === undefined
+    ) {
+      const { data: directRow, error: directError } = await supabaseAdmin
+        .from('app_users')
+        .update({ is_active: payload.isActive })
+        .eq('id', userId)
+        .select('*')
+        .maybeSingle();
+      if (!directError && directRow) {
+        return NextResponse.json(mapDbUser(directRow as DbUserRow));
+      }
+    }
     const code = getErrorCode(error.message, error.code);
     const status = code === 'DUPLICATE' ? 409 : code === 'NOT_FOUND' ? 404 : 400;
     return NextResponse.json({ code }, { status });
