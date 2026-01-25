@@ -28,6 +28,11 @@ type UiState = {
   setFilters: (filters: Partial<UiFilters>) => void;
 };
 
+type PersistedUiState = Pick<
+  UiState,
+  'sidebarCollapsed' | 'user' | 'role' | 'activeWarehouse' | 'rememberMe' | 'filters'
+>;
+
 const roleFromUser = (user: AppUser | null): Role =>
   user?.access?.admin ? 'ADMIN' : user?.role ?? 'VIEWER';
 const storageKey = 'apka-ui';
@@ -37,7 +42,7 @@ const getRememberFlag = () => {
   return window.localStorage.getItem(rememberKey) !== '0';
 };
 
-const storage = createJSONStorage<UiState>(() => ({
+const storage = createJSONStorage<PersistedUiState>(() => ({
   getItem: (name: string) => {
     if (typeof window === 'undefined') return null;
     const remember = getRememberFlag();
