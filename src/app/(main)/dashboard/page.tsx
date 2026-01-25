@@ -271,7 +271,7 @@ export default function DashboardPage() {
                   }}
                   labelStyle={{ color: 'var(--t-muted)' }}
                   itemStyle={{ color: 'var(--t-title)' }}
-                  formatter={(value: number) => formatKg(value)}
+                  formatter={(value) => formatKg(typeof value === 'number' ? value : 0)}
                 />
               </PieChart>
             </ResponsiveContainer>
@@ -304,7 +304,7 @@ export default function DashboardPage() {
                   }}
                   labelStyle={{ color: 'var(--t-muted)' }}
                   itemStyle={{ color: 'var(--t-title)' }}
-                  formatter={(value: number) => formatKg(value)}
+                  formatter={(value) => formatKg(typeof value === 'number' ? value : 0)}
                 />
               </PieChart>
             </ResponsiveContainer>
@@ -337,7 +337,7 @@ export default function DashboardPage() {
                 }}
                 labelStyle={{ color: 'var(--t-muted)' }}
                 itemStyle={{ color: 'var(--t-title)' }}
-                formatter={(value: number) => formatKg(value)}
+                formatter={(value) => formatKg(typeof value === 'number' ? value : 0)}
                 cursor={false}
               />
               <Bar dataKey="total" fill="var(--value-purple)" radius={[4, 4, 0, 0]} barSize={10} />
