@@ -59,9 +59,9 @@ type MobileNavItem = {
 
 const navItemsPrzemialy: MobileNavItem[] = [
   { label: 'Pulpit', href: '/dashboard', tab: 'dashboard' },
-  { label: 'Spis przemia艂贸w', href: '/spis', tab: 'spis' },
-  { label: 'Spis orygina艂贸w', href: '/spis-oryginalow', tab: 'spis-oryginalow' },
-  { label: 'Przesuni臋cia', href: '/przesuniecia', tab: 'przesuniecia' },
+  { label: 'Spis przemiałów', href: '/spis', tab: 'spis' },
+  { label: 'Spis oryginałów', href: '/spis-oryginalow', tab: 'spis-oryginalow' },
+  { label: 'Przesunięcia', href: '/przesuniecia', tab: 'przesuniecia' },
   { label: 'Raporty', href: '/raporty', tab: 'raporty' },
   { label: 'Stany magazynowe', href: '/kartoteka', tab: 'kartoteka' },
   { label: 'Suszarki', href: '/suszarki', tab: 'suszarki' },
@@ -86,7 +86,11 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   useEffect(() => {
     if (!hydrated || autoCollapseDone.current) return;
     autoCollapseDone.current = true;
-    if (!window.matchMedia('(max-width: 767px)').matches) return;
+    const isMobile = window.matchMedia('(max-width: 767px)').matches;
+    if (isMobile) {
+      setSidebarCollapsed(true);
+      return;
+    }
     const hasStored =
       window.localStorage.getItem('apka-ui') ?? window.sessionStorage.getItem('apka-ui');
     if (!hasStored) {
@@ -158,7 +162,9 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
 
   return (
     <div className="min-h-screen bg-bg text-body">
-      <Sidebar />
+      <div className="hidden md:block">
+        <Sidebar />
+      </div>
       <button
         type="button"
         aria-label="Zamknij menu"

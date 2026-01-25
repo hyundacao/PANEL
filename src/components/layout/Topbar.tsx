@@ -20,6 +20,7 @@ export const Topbar = ({ title, breadcrumb }: { title: string; breadcrumb?: stri
           onClick={toggleSidebar}
           aria-label="Przelacz menu"
           aria-expanded={!sidebarCollapsed}
+          className="hidden md:inline-flex"
         >
           <Menu className="h-4 w-4" style={{ color: 'var(--brand)' }} />
         </Button>
