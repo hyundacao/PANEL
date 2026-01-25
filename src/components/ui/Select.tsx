@@ -49,7 +49,9 @@ const parseOptions = (children: React.ReactNode) => {
     addGroup(label, source).items.push(item);
   };
 
-  const parseOption = (child: React.ReactElement) => {
+  const parseOption = (
+    child: React.ReactElement<{ value?: string; disabled?: boolean; children?: React.ReactNode }>
+  ) => {
     const value = child.props.value ?? '';
     const label = child.props.children;
     const disabled = Boolean(child.props.disabled);
