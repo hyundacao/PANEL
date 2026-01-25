@@ -118,7 +118,7 @@ export default function DashboardPage() {
                       color: 'var(--t-body)'
                     }}
                     labelStyle={{ color: 'var(--t-muted)' }}
-                    formatter={(value: number) => formatKg(value)}
+                    formatter={(value) => formatKg(typeof value === 'number' ? value : 0)}
                   />
                   <Area
                     type="monotone"
