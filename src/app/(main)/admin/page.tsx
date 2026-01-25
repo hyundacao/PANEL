@@ -32,6 +32,7 @@ import {
   removeLocation,
   removeMaterial,
   removeSparePart,
+  removeUser,
   removeWarehouse,
   updateMaterial,
   setSparePartQty,
@@ -1029,6 +1030,20 @@ export default function AdminPage() {
     }
   });
 
+  const removeUserMutation = useMutation({
+    mutationFn: removeUser,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast({ title: 'Usunieto uzytkownika', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        NOT_FOUND: 'Nie znaleziono uzytkownika.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie usunieto uzytkownika.', tone: 'error' });
+    }
+  });
+
   const updateSparePartMutation = useMutation({
     mutationFn: updateSparePart,
     onSuccess: () => {
@@ -1433,6 +1448,11 @@ export default function AdminPage() {
       return { ...prev, [userId]: { ...draft, isActive: nextActive } };
     });
     updateUserMutation.mutate({ id: userId, isActive: nextActive });
+  };
+
+  const handleRemoveUser = (userId: string, name: string) => {
+    if (!confirm(`Usunac uzytkownika ${name}?`)) return;
+    removeUserMutation.mutate(userId);
   };
 
   const handleApplyInventory = () => {
@@ -1869,6 +1889,14 @@ export default function AdminPage() {
                           disabled={updateUserMutation.isPending || isSelf}
                         >
                           {draft.isActive ? 'Zablokuj' : 'Aktywuj'}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => handleRemoveUser(item.id, item.name)}
+                          disabled={removeUserMutation.isPending || isSelf}
+                          className="border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
+                        >
+                          Usun
                         </Button>
                       </div>
                     ];
