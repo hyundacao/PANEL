@@ -1092,7 +1092,7 @@ const handleAction = async (action: string, payload: any) => {
 
       const normalized: Array<{ name: string }> = [];
       const seen = new Set<string>();
-      items.forEach((item) => {
+      items.forEach((item: { name?: string }) => {
         const name = String(item?.name ?? '').trim();
         if (!name) return;
         const key = name.toLowerCase();
@@ -1110,7 +1110,9 @@ const handleAction = async (action: string, payload: any) => {
       const existingSet = new Set(
         (existingRows ?? []).map((row: any) => String(row.name ?? '').trim().toLowerCase())
       );
-      const toInsert = normalized.filter((item) => !existingSet.has(item.name.toLowerCase()));
+      const toInsert = normalized.filter(
+        (item: { name: string }) => !existingSet.has(item.name.toLowerCase())
+      );
       if (toInsert.length === 0) {
         return { total: normalized.length, inserted: 0, skipped: normalized.length };
       }
@@ -1118,7 +1120,7 @@ const handleAction = async (action: string, payload: any) => {
       let inserted = 0;
       const chunkSize = 500;
       for (let i = 0; i < toInsert.length; i += chunkSize) {
-        const chunk = toInsert.slice(i, i + chunkSize).map((item) => ({
+        const chunk = toInsert.slice(i, i + chunkSize).map((item: { name: string }) => ({
           id: `cat-${randomUUID()}`,
           name: item.name,
           is_active: true
@@ -1209,7 +1211,7 @@ const handleAction = async (action: string, payload: any) => {
 
       const normalized: Array<{ name: string; catalogName: string }> = [];
       const seen = new Set<string>();
-      items.forEach((item) => {
+      items.forEach((item: { name?: string; catalogName?: string; code?: string }) => {
         const name = String(item?.name ?? '').trim();
         if (!name) return;
         const catalogName = String(item?.catalogName ?? item?.code ?? '').trim();
@@ -1238,14 +1240,14 @@ const handleAction = async (action: string, payload: any) => {
       const catalogNames = Array.from(
         new Set(
           normalized
-            .map((item) => item.catalogName)
+            .map((item: { catalogName: string }) => item.catalogName)
             .filter((name) => name)
             .map((name) => name.trim())
         )
       );
 
       const missingCatalogs = catalogNames.filter(
-        (name) => !catalogMap.has(name.toLowerCase())
+        (name: string) => !catalogMap.has(name.toLowerCase())
       );
       if (missingCatalogs.length > 0) {
         const now = new Date().toISOString();
@@ -1269,7 +1271,7 @@ const handleAction = async (action: string, payload: any) => {
       }
 
       const inactiveCatalogs = catalogNames
-        .map((name) => catalogMap.get(name.toLowerCase()))
+        .map((name: string) => catalogMap.get(name.toLowerCase()))
         .filter((row): row is { id: string; name: string; isActive: boolean } =>
           Boolean(row && !row.isActive)
         );
@@ -2227,7 +2229,7 @@ const handleAction = async (action: string, payload: any) => {
 
       const normalized: Array<{ name: string; unit: string }> = [];
       const seen = new Set<string>();
-      items.forEach((item) => {
+      items.forEach((item: { name?: string; unit?: string }) => {
         const name = String(item?.name ?? '').trim();
         if (!name) return;
         const key = name.toLowerCase();
@@ -2246,7 +2248,9 @@ const handleAction = async (action: string, payload: any) => {
       const existingSet = new Set(
         (existingRows ?? []).map((row: any) => String(row.name ?? '').trim().toLowerCase())
       );
-      const toInsert = normalized.filter((item) => !existingSet.has(item.name.toLowerCase()));
+      const toInsert = normalized.filter(
+        (item: { name: string }) => !existingSet.has(item.name.toLowerCase())
+      );
       if (toInsert.length === 0) {
         return { total: normalized.length, inserted: 0, skipped: normalized.length };
       }
@@ -2255,7 +2259,7 @@ const handleAction = async (action: string, payload: any) => {
       let inserted = 0;
       const chunkSize = 500;
       for (let i = 0; i < toInsert.length; i += chunkSize) {
-        const chunk = toInsert.slice(i, i + chunkSize).map((item) => ({
+        const chunk = toInsert.slice(i, i + chunkSize).map((item: { name: string; unit: string }) => ({
           id: randomUUID(),
           name: item.name,
           unit: item.unit,
