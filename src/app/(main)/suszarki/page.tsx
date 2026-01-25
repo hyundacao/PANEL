@@ -246,7 +246,7 @@ export default function DryersPage() {
     if (newMaterialType === 'PRZEMIAL') {
       addMaterialMutation.mutate({ name });
     } else {
-      addOriginalMutation.mutate({ name });
+      addOriginalMutation.mutate({ name, unit: 'kg' });
     }
   };
 
