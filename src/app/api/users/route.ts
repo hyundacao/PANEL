@@ -12,8 +12,7 @@
   };
 
   const normalizeRole = (role?: Role) =>
-    role === 'ADMIN' || role === 'USER' || role === 'VIEWER' ? role :
-  'USER';
+    role === 'ADMIN' || role === 'USER' || role === 'VIEWER' ? role : 'USER';
 
   export async function GET() {
     const { data, error } = await supabaseAdmin.rpc('list_app_users');
@@ -28,18 +27,14 @@
   }
 
   export async function POST(request: Request) {
-    const payload = (await request.json().catch(() => null)) as
-  CreateUserPayload | null;
+    const payload = (await request.json().catch(() => null)) as CreateUserPayload | null;
     const name = payload?.name?.trim() ?? '';
     const username = payload?.username?.trim() ?? '';
     const password = payload?.password?.trim() ?? '';
 
-    if (!name) return NextResponse.json({ code: 'NAME_REQUIRED' },
-  { status: 400 });
-    if (!username) return NextResponse.json({ code: 'USERNAME_REQUIRED' },
-  { status: 400 });
-    if (!password) return NextResponse.json({ code: 'PASSWORD_REQUIRED' },
-  { status: 400 });
+    if (!name) return NextResponse.json({ code: 'NAME_REQUIRED' }, { status: 400 });
+    if (!username) return NextResponse.json({ code: 'USERNAME_REQUIRED' }, { status: 400 });
+    if (!password) return NextResponse.json({ code: 'PASSWORD_REQUIRED' }, { status: 400 });
 
     const { data, error } = await supabaseAdmin.rpc('create_app_user', {
       p_name: name,
