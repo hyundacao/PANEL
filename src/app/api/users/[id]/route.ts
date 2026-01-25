@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { getErrorCode, mapDbUser, type DbUserRow } from '@/lib/supabase/users';
 import type { Role, UserAccess } from '@/lib/api/types';
@@ -14,8 +14,12 @@ type UpdateUserPayload = {
 
 const normalizeRole = (role?: Role) => (role === 'ADMIN' || role === 'USER' || role === 'VIEWER' ? role : null);
 
-export async function PATCH(request: Request, context: { params: { id?: string } }) {
-  const userId = context.params.id ?? '';
+export async function PATCH(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
+  const userId = id ?? '';
   if (!userId) {
     return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
   }
@@ -56,8 +60,12 @@ export async function PATCH(request: Request, context: { params: { id?: string }
   return NextResponse.json(mapDbUser(row));
 }
 
-export async function DELETE(_request: Request, context: { params: { id?: string } }) {
-  const userId = context.params.id ?? '';
+export async function DELETE(
+  _request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
+  const userId = id ?? '';
   if (!userId) {
     return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
   }
