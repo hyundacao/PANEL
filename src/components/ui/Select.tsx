@@ -73,9 +73,10 @@ const parseOptions = (children: React.ReactNode) => {
       return;
     }
     if (child.type === 'optgroup') {
-      const label = child.props.label;
+      const props = child.props as { label?: React.ReactNode; children?: React.ReactNode };
+      const label = props.label;
       const groupItems: SelectItem[] = [];
-      React.Children.forEach(child.props.children, (optionChild) => {
+      React.Children.forEach(props.children, (optionChild) => {
         if (!React.isValidElement(optionChild)) return;
         if (optionChild.type !== 'option') return;
         groupItems.push(parseOption(optionChild));
