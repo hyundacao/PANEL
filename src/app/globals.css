@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --bg-0: #0B0B0F;
+  --scrim: rgba(11, 11, 15, 0.72);
+  --surface-1: #12131A;
+  --surface-2: #171924;
+  --border: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --inner-highlight: rgba(255, 255, 255, 0.05);
+  --t-title: #F1F5F9;
+  --t-body: #E2E8F0;
+  --t-muted: #A8B3C1;
+  --t-dim: #7C8796;
+  --t-disabled: rgba(226, 232, 240, 0.45);
+  --brand: #FF6A00;
+  --brand-hover: #FF8A33;
+  --brand-soft: rgba(255, 106, 0, 0.14);
+  --location-blue: #2D6CDF;
+  --ring: rgba(255, 106, 0, 0.35);
+  --value-purple: #7C5CFF;
+  --success: #22C55E;
+  --danger: #EF4444;
+  --warning: #F59E0B;
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background-color: var(--bg-0);
+  color: var(--t-body);
+  min-height: 100vh;
+  font-family: var(--font-space), 'Space Grotesk', sans-serif;
+  position: relative;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 20% 20%, var(--brand-soft), transparent 55%),
+    url('/tlo-apki.png');
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+  opacity: 0.08;
+  pointer-events: none;
+  z-index: 0;
+}
+
+body > * {
+  position: relative;
+  z-index: 1;
+}
+
+.content-area {
+  position: relative;
+}
+
+::selection {
+  background: var(--brand-soft);
+}
+
+.text-balance {
+  text-wrap: balance;
+}

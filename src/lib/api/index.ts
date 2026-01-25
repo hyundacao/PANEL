@@ -1,0 +1,424 @@
+import type {
+  AuditEvent,
+  AppUser,
+  CatalogTotal,
+  DailyTotals,
+  DashboardSummary,
+  Dryer,
+  InventoryAdjustment,
+  InventoryTotalPoint,
+  Location,
+  LocationDetailItem,
+  LocationOption,
+  LocationOverview,
+  Material,
+  MaterialCatalog,
+  MaterialCatalogImportResult,
+  MaterialImportResult,
+  MaterialLocationsMap,
+  MaterialReportRow,
+  MaterialTotal,
+  MixedMaterial,
+  MonthlyDelta,
+  MonthlyMaterialBreakdown,
+  OriginalInventoryCatalogEntry,
+  OriginalInventoryCatalogImportResult,
+  OriginalInventoryEntry,
+  PeriodReport,
+  ReportRow,
+  Role,
+  SparePart,
+  SparePartHistory,
+  Transfer,
+  TransferKind,
+  UserAccess,
+  Warehouse,
+  YearlyReport
+} from './types';
+import { formatDate } from '../utils/format';
+
+const apiRequest = async <T,>(path: string, options?: RequestInit): Promise<T> => {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options?.headers ?? {})
+    }
+  });
+  if (!response.ok) {
+    let code = 'UNKNOWN';
+    try {
+      const data = await response.json();
+      if (data?.code) code = String(data.code);
+    } catch {
+      // ignore
+    }
+    throw new Error(code);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return response.json() as Promise<T>;
+};
+
+const appRequest = async <T,>(action: string, payload?: unknown): Promise<T> =>
+  apiRequest<T>('/api/app', {
+    method: 'POST',
+    cache: 'no-store',
+    body: JSON.stringify({ action, payload })
+  });
+
+export const getDashboard = async (date: string): Promise<DashboardSummary[]> =>
+  appRequest('getDashboard', { date });
+
+export const getLocationsOverview = async (
+  warehouseId: string,
+  date: string
+): Promise<LocationOverview[]> => appRequest('getLocationsOverview', { warehouseId, date });
+
+export const getLocationDetail = async (
+  _warehouseId: string,
+  locationId: string,
+  date: string
+): Promise<LocationDetailItem[]> => appRequest('getLocationDetail', { locationId, date });
+
+export const upsertEntry = async (payload: {
+  locationId: string;
+  materialId: string;
+  qty: number;
+  comment?: string;
+}) => appRequest('upsertEntry', payload);
+
+export const confirmNoChangeEntry = async (payload: {
+  locationId: string;
+  materialId: string;
+}) => appRequest('confirmNoChangeEntry', payload);
+
+export const confirmNoChangeLocation = async (locationId: string) =>
+  appRequest('confirmNoChangeLocation', { locationId });
+
+export const closeSpis = async () => appRequest('closeSpis');
+
+export const getReports = async (): Promise<ReportRow[]> => appRequest('getReports');
+
+export const getCatalog = async (): Promise<Material[]> => appRequest('getCatalog');
+
+export const getCatalogs = async (): Promise<MaterialCatalog[]> => appRequest('getCatalogs');
+
+export const getTotalsHistory = async (days = 30): Promise<InventoryTotalPoint[]> =>
+  appRequest('getTotalsHistory', { days });
+
+export const getMonthlyDelta = async (): Promise<MonthlyDelta> =>
+  appRequest('getMonthlyDelta');
+
+export const getMonthlyMaterialBreakdown = async (): Promise<MonthlyMaterialBreakdown> =>
+  appRequest('getMonthlyMaterialBreakdown');
+
+export const getDailyHistory = async (): Promise<DailyTotals[]> => appRequest('getDailyHistory');
+
+export const getPeriodReport = async (from: string, to: string): Promise<PeriodReport> =>
+  appRequest('getPeriodReport', { from, to });
+
+export const getYearlyReport = async (from: string, to: string): Promise<YearlyReport> =>
+  appRequest('getYearlyReport', { from, to });
+
+export const getCurrentMaterialTotals = async (
+  scope: 'stats' | 'all' = 'stats'
+): Promise<MaterialTotal[]> => appRequest('getCurrentMaterialTotals', { scope });
+
+export const getMaterialLocations = async (): Promise<MaterialLocationsMap> =>
+  appRequest('getMaterialLocations');
+
+export const getTopCatalogTotal = async (): Promise<CatalogTotal> =>
+  appRequest('getTopCatalogTotal');
+
+export const addMaterial = async (payload: {
+  name: string;
+  catalogId?: string | null;
+  catalogName?: string;
+  code?: string;
+}): Promise<Material> => appRequest('addMaterial', payload);
+
+export const addMaterialBulk = async (payload: {
+  items: Array<{ name: string; catalogName?: string }>;
+}): Promise<MaterialImportResult> => appRequest('addMaterialBulk', payload);
+
+export const addCatalog = async (payload: { name: string }): Promise<MaterialCatalog> =>
+  appRequest('addCatalog', payload);
+
+export const addMaterialCatalogBulk = async (payload: {
+  items: Array<{ name: string }>;
+}): Promise<MaterialCatalogImportResult> => appRequest('addMaterialCatalogBulk', payload);
+
+export const removeMaterial = async (materialId: string): Promise<void> =>
+  appRequest('removeMaterial', { materialId });
+
+export const removeCatalog = async (
+  payload: string | { catalogId: string; force?: boolean }
+): Promise<void> => {
+  if (typeof payload === 'string') {
+    return appRequest('removeCatalog', { catalogId: payload });
+  }
+  return appRequest('removeCatalog', payload);
+};
+
+export const updateMaterialCatalog = async (payload: {
+  materialId: string;
+  catalogId: string | null;
+}): Promise<Material> => appRequest('updateMaterialCatalog', payload);
+
+export const updateMaterial = async (payload: {
+  materialId: string;
+  name?: string;
+  catalogId?: string | null;
+}): Promise<Material> => appRequest('updateMaterial', payload);
+
+export const addWarehouse = async (payload: {
+  name: string;
+  orderNo?: number;
+  includeInSpis?: boolean;
+  includeInStats?: boolean;
+}): Promise<Warehouse> => appRequest('addWarehouse', payload);
+
+export const updateWarehouse = async (payload: {
+  id: string;
+  name?: string;
+  orderNo?: number;
+  includeInSpis?: boolean;
+  includeInStats?: boolean;
+}): Promise<Warehouse> => appRequest('updateWarehouse', payload);
+
+export const removeWarehouse = async (id: string): Promise<Warehouse> =>
+  appRequest('removeWarehouse', { id });
+
+export const addLocation = async (payload: {
+  warehouseId: string;
+  name: string;
+  type: Location['type'];
+  orderNo?: number;
+}): Promise<Location> => appRequest('addLocation', payload);
+
+export const updateLocation = async (payload: {
+  id: string;
+  name?: string;
+  orderNo?: number;
+}): Promise<Location> => appRequest('updateLocation', payload);
+
+export const removeLocation = async (id: string): Promise<Location> =>
+  appRequest('removeLocation', { id });
+
+export const getAudit = async (): Promise<AuditEvent[]> => appRequest('getAudit');
+
+export const getLocations = async (): Promise<LocationOption[]> => appRequest('getLocations');
+
+export const getLocationsAdmin = async (): Promise<Location[]> =>
+  appRequest('getLocationsAdmin');
+
+export const getTransfers = async (dateKey?: string): Promise<Transfer[]> =>
+  appRequest('getTransfers', { dateKey });
+
+export const addTransfer = async (payload: {
+  kind: TransferKind;
+  materialId: string;
+  qty: number;
+  fromLocationId?: string;
+  toLocationId?: string;
+  partner?: string;
+  note?: string;
+}): Promise<Transfer> => appRequest('addTransfer', payload);
+
+export const getInventoryAdjustments = async (): Promise<InventoryAdjustment[]> =>
+  appRequest('getInventoryAdjustments');
+
+export const applyInventoryAdjustment = async (payload: {
+  locationId: string;
+  materialId: string;
+  qty: number;
+  note?: string;
+}): Promise<InventoryAdjustment> => appRequest('applyInventoryAdjustment', payload);
+
+export const getMixedMaterials = async (): Promise<MixedMaterial[]> =>
+  appRequest('getMixedMaterials');
+
+export const addMixedMaterial = async (payload: {
+  name: string;
+  qty: number;
+  locationId: string;
+}): Promise<MixedMaterial> => appRequest('addMixedMaterial', payload);
+
+export const removeMixedMaterial = async (payload: {
+  name: string;
+  qty: number;
+  locationId: string;
+}): Promise<MixedMaterial> => appRequest('removeMixedMaterial', payload);
+
+export const deleteMixedMaterial = async (id: string): Promise<void> =>
+  appRequest('deleteMixedMaterial', { id });
+
+export const transferMixedMaterial = async (payload: {
+  name: string;
+  fromLocationId: string;
+  toLocationId: string;
+  qty: number;
+}): Promise<{ from: MixedMaterial; to: MixedMaterial }> =>
+  appRequest('transferMixedMaterial', payload);
+
+export const getDryers = async (): Promise<Dryer[]> => appRequest('getDryers');
+
+export const addDryer = async (payload: {
+  name: string;
+  orderNo?: number;
+  isActive?: boolean;
+}): Promise<Dryer> => appRequest('addDryer', payload);
+
+export const updateDryer = async (payload: {
+  id: string;
+  name?: string;
+  orderNo?: number;
+  isActive?: boolean;
+  materialId?: string | null;
+}): Promise<Dryer> => appRequest('updateDryer', payload);
+
+export const removeDryer = async (id: string): Promise<Dryer> =>
+  appRequest('removeDryer', { id });
+
+export const setDryerMaterial = async (payload: {
+  id: string;
+  materialId: string | null;
+}): Promise<Dryer> => appRequest('setDryerMaterial', payload);
+
+export const getUsers = async (): Promise<AppUser[]> =>
+  apiRequest('/api/users', { cache: 'no-store' });
+
+export const addUser = async (payload: {
+  name: string;
+  username: string;
+  password: string;
+  role: Role;
+  access?: UserAccess;
+}): Promise<AppUser> =>
+  apiRequest('/api/users', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+
+export const updateUser = async (payload: {
+  id: string;
+  name?: string;
+  username?: string;
+  password?: string;
+  role?: Role;
+  access?: UserAccess;
+  isActive?: boolean;
+}): Promise<AppUser> =>
+  apiRequest(`/api/users/${payload.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  });
+
+export const removeUser = async (id: string): Promise<AppUser> =>
+  apiRequest(`/api/users/${id}`, {
+    method: 'DELETE'
+  });
+
+export const authenticateUser = async (payload: {
+  username: string;
+  password: string;
+}): Promise<AppUser> =>
+  apiRequest('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+
+export const getSpareParts = async (): Promise<SparePart[]> => appRequest('getSpareParts');
+
+export const getSparePartHistory = async (): Promise<SparePartHistory[]> =>
+  appRequest('getSparePartHistory');
+
+export const getOriginalInventory = async (): Promise<OriginalInventoryEntry[]> =>
+  appRequest('getOriginalInventory');
+
+export const getOriginalInventoryCatalog = async (): Promise<OriginalInventoryCatalogEntry[]> =>
+  appRequest('getOriginalInventoryCatalog');
+
+export const addOriginalInventory = async (payload: {
+  warehouseId: string;
+  name: string;
+  qty: number;
+  unit: string;
+  location?: string;
+  note?: string;
+  user: string;
+}): Promise<OriginalInventoryEntry> => appRequest('addOriginalInventory', payload);
+
+export const addOriginalInventoryCatalog = async (payload: {
+  name: string;
+  unit: string;
+}): Promise<OriginalInventoryCatalogEntry> =>
+  appRequest('addOriginalInventoryCatalog', payload);
+
+export const addOriginalInventoryCatalogBulk = async (payload: {
+  items: Array<{ name: string; unit?: string }>;
+}): Promise<OriginalInventoryCatalogImportResult> =>
+  appRequest('addOriginalInventoryCatalogBulk', payload);
+
+export const updateOriginalInventory = async (payload: {
+  id: string;
+  qty: number;
+  warehouseId: string;
+}): Promise<OriginalInventoryEntry> => appRequest('updateOriginalInventory', payload);
+
+export const removeOriginalInventory = async (entryId: string) =>
+  appRequest('removeOriginalInventory', { entryId });
+
+export const removeOriginalInventoryCatalog = async (catalogId: string) =>
+  appRequest('removeOriginalInventoryCatalog', { catalogId });
+
+export const addSparePart = async (payload: {
+  code: string;
+  name: string;
+  unit: string;
+  qty?: number;
+  location?: string;
+}): Promise<SparePart> => appRequest('addSparePart', payload);
+
+export const updateSparePart = async (payload: {
+  id: string;
+  code?: string;
+  name?: string;
+  unit?: string;
+  location?: string;
+}): Promise<SparePart> => appRequest('updateSparePart', payload);
+
+export const removeSparePart = async (id: string): Promise<SparePart> =>
+  appRequest('removeSparePart', { id });
+
+export const setSparePartQty = async (payload: {
+  partId: string;
+  qty: number;
+  user: string;
+  note?: string;
+}): Promise<SparePart> => appRequest('setSparePartQty', payload);
+
+export const adjustSparePart = async (payload: {
+  partId: string;
+  qty: number;
+  kind: 'IN' | 'OUT';
+  user: string;
+  note?: string;
+}): Promise<SparePart> => appRequest('adjustSparePart', payload);
+
+export const getWarehouses = async (): Promise<Warehouse[]> => appRequest('getWarehouses');
+
+export const getWarehousesAdmin = async (): Promise<Warehouse[]> =>
+  appRequest('getWarehousesAdmin');
+
+export const getWarehouse = async (id: string): Promise<Warehouse | null> =>
+  appRequest('getWarehouse', { id });
+
+export const getLocation = async (id: string): Promise<Location | null> =>
+  appRequest('getLocation', { id });
+
+export const getMaterials = async (): Promise<Material[]> => appRequest('getMaterials');
+
+export const getTodayKey = () => formatDate(new Date());
