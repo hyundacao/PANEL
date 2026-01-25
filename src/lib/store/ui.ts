@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { AppUser, Role, WarehouseKey } from '@/lib/api/types';
 
 export type UiFilters = {
@@ -37,7 +37,7 @@ const getRememberFlag = () => {
   return window.localStorage.getItem(rememberKey) !== '0';
 };
 
-const storage = {
+const storage = createJSONStorage<UiState>(() => ({
   getItem: (name: string) => {
     if (typeof window === 'undefined') return null;
     const remember = getRememberFlag();
@@ -58,7 +58,7 @@ const storage = {
     window.sessionStorage.removeItem(name);
     window.localStorage.removeItem(rememberKey);
   }
-};
+}));
 
 export const useUiStore = create<UiState>()(
   persist(
