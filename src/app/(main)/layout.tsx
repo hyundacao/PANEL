@@ -9,6 +9,7 @@ import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
 import { canAccessWarehouse, canSeeTab, getWarehouseLabel, isAdmin } from '@/lib/auth/access';
 import type { WarehouseKey, WarehouseTab } from '@/lib/api/types';
+import Link from 'next/link';
 
 const getTitle = (pathname: string) => {
   if (pathname.startsWith('/dashboard')) return 'Pulpit';
@@ -49,6 +50,29 @@ const getTabFromPath = (pathname: string): WarehouseTab | null => {
   if (pathname.startsWith('/czesci/historia')) return 'historia';
   return null;
 };
+
+type MobileNavItem = {
+  label: string;
+  href: string;
+  tab?: WarehouseTab;
+};
+
+const navItemsPrzemialy: MobileNavItem[] = [
+  { label: 'Pulpit', href: '/dashboard', tab: 'dashboard' },
+  { label: 'Spis przemia艂贸w', href: '/spis', tab: 'spis' },
+  { label: 'Spis orygina艂贸w', href: '/spis-oryginalow', tab: 'spis-oryginalow' },
+  { label: 'Przesuni臋cia', href: '/przesuniecia', tab: 'przesuniecia' },
+  { label: 'Raporty', href: '/raporty', tab: 'raporty' },
+  { label: 'Stany magazynowe', href: '/kartoteka', tab: 'kartoteka' },
+  { label: 'Suszarki', href: '/suszarki', tab: 'suszarki' },
+  { label: 'Wymieszane tworzywa', href: '/wymieszane', tab: 'wymieszane' }
+];
+
+const navItemsCzesci: MobileNavItem[] = [
+  { label: 'Start', href: '/czesci' },
+  { label: 'Stany magazynowe', href: '/czesci/stany', tab: 'stany' },
+  { label: 'Historia', href: '/czesci/historia', tab: 'historia' }
+];
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -115,6 +139,22 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   const breadcrumb = pathname.startsWith('/admin')
     ? 'Panel administratora'
     : getWarehouseLabel(activeWarehouse ?? warehouseFromPath);
+  const showMobileNav =
+    !pathname.startsWith('/admin') && Boolean(activeWarehouse && warehouseFromPath);
+  const isActivePath = (href: string) => {
+    if (href === '/czesci') return pathname === '/czesci';
+    if (href === '/spis') return pathname === '/spis' || pathname.startsWith('/spis/');
+    if (href === '/spis-oryginalow') {
+      return pathname === '/spis-oryginalow' || pathname.startsWith('/spis-oryginalow/');
+    }
+    return pathname.startsWith(href);
+  };
+  const mobileItems =
+    (activeWarehouse === 'CZESCI' ? navItemsCzesci : navItemsPrzemialy).filter((item) => {
+      if (!activeWarehouse) return false;
+      if (!item.tab) return true;
+      return canSeeTab(user, activeWarehouse, item.tab);
+    });
 
   return (
     <div className="min-h-screen bg-bg text-body">
@@ -136,7 +176,31 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       >
         <Topbar title={title} breadcrumb={breadcrumb} />
         <main className="content-area flex-1 px-4 py-4 md:px-6 md:py-6">
-          <ContentScrim className="min-h-full">{children}</ContentScrim>
+          <ContentScrim className="min-h-full">
+            {showMobileNav && (
+              <div className="mb-4 md:hidden">
+                <div className="grid grid-cols-2 gap-2">
+                  {mobileItems.map((item) => {
+                    const active = isActivePath(item.href);
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        className={cn(
+                          'rounded-xl border border-border bg-surface2 px-3 py-3 text-center text-sm font-semibold text-title shadow-[inset_0_1px_0_var(--inner-highlight)] transition hover:border-[rgba(255,122,26,0.7)] hover:text-title',
+                          active &&
+                            'border-[rgba(255,122,26,0.9)] bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(0,0,0,0.5))] shadow-[0_0_0_2px_rgba(255,122,26,0.25)]'
+                        )}
+                      >
+                        {item.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {children}
+          </ContentScrim>
         </main>
       </div>
     </div>
