@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils/cn';
 const EMPTY_VALUE = '__empty__';
 
 type NativeSelectProps = Omit<
-  React.SelectHTMLAttributes<HTMLSelectElement>,
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>,
   'value' | 'defaultValue' | 'onChange'
 > & {
   value?: string;
