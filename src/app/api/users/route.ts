@@ -17,7 +17,7 @@ const normalizeRole = (role?: Role) =>
 export async function GET() {
   const { data, error } = await supabaseAdmin.rpc('list_app_users');
 
-  if (error) {
+if (error) {
     const code = getErrorCode(error.message, error.code);
     return NextResponse.json({ code }, { status: 500 });
   }
