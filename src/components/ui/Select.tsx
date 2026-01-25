@@ -49,12 +49,15 @@ const parseOptions = (children: React.ReactNode) => {
     addGroup(label, source).items.push(item);
   };
 
-  const parseOption = (
-    child: React.ReactElement<{ value?: string; disabled?: boolean; children?: React.ReactNode }>
-  ) => {
-    const value = child.props.value ?? '';
-    const label = child.props.children;
-    const disabled = Boolean(child.props.disabled);
+  const parseOption = (child: React.ReactElement) => {
+    const props = child.props as {
+      value?: string;
+      disabled?: boolean;
+      children?: React.ReactNode;
+    };
+    const value = props.value ?? '';
+    const label = props.children;
+    const disabled = Boolean(props.disabled);
     const isEmpty = String(value) === '';
     const itemValue = isEmpty ? EMPTY_VALUE : String(value);
     if (isEmpty && placeholder === undefined) {
