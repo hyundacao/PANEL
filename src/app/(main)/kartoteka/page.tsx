@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown } from 'lucide-react';
 import { getCatalog, getCurrentMaterialTotals, getMaterialLocations, getTodayKey } from '@/lib/api';
@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { formatKg } from '@/lib/utils/format';
 
 type ViewMode = 'materials' | 'catalogs';
+const KARTOTEKA_TAB_STORAGE_KEY = 'kartoteka-tab';
 
 export default function CatalogPage() {
   const today = getTodayKey();
@@ -24,8 +25,23 @@ export default function CatalogPage() {
     queryFn: getMaterialLocations
   });
   const [view, setView] = useState<ViewMode>('materials');
+  const [tabReady, setTabReady] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [expandedCatalogs, setExpandedCatalogs] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = window.localStorage.getItem(KARTOTEKA_TAB_STORAGE_KEY);
+    if (saved === 'materials' || saved === 'catalogs') {
+      setView(saved);
+    }
+    setTabReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !tabReady) return;
+    window.localStorage.setItem(KARTOTEKA_TAB_STORAGE_KEY, view);
+  }, [tabReady, view]);
 
   const totalsByMaterial = useMemo(() => {
     const totals = new Map<string, number>();

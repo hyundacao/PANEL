@@ -348,6 +348,8 @@ export const addOriginalInventory = async (payload: {
   unit: string;
   location?: string;
   note?: string;
+  at?: string;
+  dateKey?: string;
   user: string;
 }): Promise<OriginalInventoryEntry> => appRequest('addOriginalInventory', payload);
 

@@ -88,9 +88,12 @@ export async function DELETE(
     return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
   }
 
-  const { data, error } = await supabaseAdmin.rpc('deactivate_app_user', {
-    p_id: userId
-  });
+  const { data, error } = await supabaseAdmin
+    .from('app_users')
+    .delete()
+    .eq('id', userId)
+    .select('*')
+    .maybeSingle();
 
   if (error) {
     const code = getErrorCode(error.message, error.code);

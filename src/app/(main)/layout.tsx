@@ -82,6 +82,31 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   const warehouseFromPath = getWarehouseFromPath(pathname);
   const tabFromPath = getTabFromPath(pathname);
   const autoCollapseDone = useRef(false);
+  const previousPath = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!hydrated) return;
+    if (previousPath.current && previousPath.current !== pathname) {
+      const prev = previousPath.current;
+      if (prev.startsWith('/admin')) {
+        window.localStorage.removeItem('admin-przemialy-tab');
+      }
+      if (prev.startsWith('/raporty')) {
+        window.localStorage.removeItem('raporty-tab');
+      }
+      if (prev.startsWith('/spis-oryginalow')) {
+        window.localStorage.removeItem('spis-oryginalow-tab');
+      }
+      if (prev.startsWith('/wymieszane')) {
+        window.localStorage.removeItem('wymieszane-tab');
+      }
+      if (prev.startsWith('/kartoteka')) {
+        window.localStorage.removeItem('kartoteka-tab');
+      }
+    }
+    previousPath.current = pathname;
+  }, [hydrated, pathname]);
 
   useEffect(() => {
     if (!hydrated || autoCollapseDone.current) return;

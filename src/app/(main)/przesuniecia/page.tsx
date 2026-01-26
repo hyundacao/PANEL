@@ -107,6 +107,8 @@ export default function TransfersPage() {
     mutationFn: addTransfer,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['transfers'] });
+      queryClient.invalidateQueries({ queryKey: ['material-locations'] });
+      queryClient.invalidateQueries({ queryKey: ['material-totals'] });
       setForm(initialForm);
       toast({ title: 'Zapisano przesunięcie', tone: 'success' });
     },
@@ -427,7 +429,22 @@ export default function TransfersPage() {
                   setTimeout(() => setShowMaterialSuggestions(false), 120);
                 }}
                 placeholder="np. ABS 9203"
+                className={form.material ? 'pr-10' : undefined}
               />
+              {form.material && (
+                <button
+                  type="button"
+                  aria-label="Wyczysc pole przemial"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    setForm((prev) => ({ ...prev, material: '' }));
+                    setShowMaterialSuggestions(false);
+                  }}
+                >
+                  X
+                </button>
+              )}
               {showMaterialSuggestions && materialSuggestions.length > 0 && (
                 <div className="absolute z-20 mt-2 w-full max-h-72 overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
                   {materialSuggestions.map((item) => {
@@ -472,7 +489,23 @@ export default function TransfersPage() {
                     setTimeout(() => setShowFromSuggestions(false), 120);
                   }}
                   placeholder="Hala 1 · WTR 1"
+                  className={form.fromLocation ? 'pr-10' : undefined}
                 />
+                {form.fromLocation && (
+                  <button
+                    type="button"
+                    aria-label="Wyczysc pole lokacji"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setForm((prev) => ({ ...prev, fromLocation: '' }));
+                      setShowFromSuggestions(false);
+                    }}
+                  >
+                    X
+                  </button>
+                )}
+
                 {showFromSuggestions && fromLocationSuggestions.length > 0 && (
                   <div className="absolute z-20 mt-2 w-full rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
                     {fromLocationSuggestions.map((location) => {

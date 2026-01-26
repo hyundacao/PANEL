@@ -27,6 +27,13 @@ const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const normalizeName = (value: string) => value.trim().toLowerCase();
 const compareByName = (a: { name: string }, b: { name: string }) =>
   collator.compare(a.name, b.name);
+const sortMixedMaterials = (list: MixedMaterial[]) =>
+  list.sort((a, b) => {
+    const nameCompare = collator.compare(a.name, b.name);
+    if (nameCompare !== 0) return nameCompare;
+    return a.locationId.localeCompare(b.locationId);
+  });
+const MIXED_TAB_STORAGE_KEY = 'wymieszane-tab';
 
 export default function MixedMaterialsPage() {
   const toast = useToastStore((state) => state.push);
@@ -55,6 +62,8 @@ export default function MixedMaterialsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MixedMaterial | null>(null);
   const [confirmReady, setConfirmReady] = useState(false);
+  const [activeTab, setActiveTab] = useState<'add' | 'transfer'>('add');
+  const [tabReady, setTabReady] = useState(false);
 
   const locationLabel = (warehouse: string, name: string) => `${warehouse} - ${name}`;
   const locationMap = useMemo(() => {
@@ -159,6 +168,20 @@ export default function MixedMaterialsPage() {
   });
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = window.localStorage.getItem(MIXED_TAB_STORAGE_KEY);
+    if (saved === 'add' || saved === 'transfer') {
+      setActiveTab(saved);
+    }
+    setTabReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !tabReady) return;
+    window.localStorage.setItem(MIXED_TAB_STORAGE_KEY, activeTab);
+  }, [activeTab, tabReady]);
+
+  useEffect(() => {
     if (selectedId && !mixedMaterials.some((item) => item.id === selectedId)) {
       setSelectedId(null);
     }
@@ -196,7 +219,15 @@ export default function MixedMaterialsPage() {
 
   const transferMutation = useMutation({
     mutationFn: transferMixedMaterial,
-    onSuccess: () => {
+    onSuccess: (data) => {
+      queryClient.setQueryData<MixedMaterial[]>(['mixed-materials'], (current = []) => {
+        const next = current.filter(
+          (item) => item.id !== data.from.id && item.id !== data.to.id
+        );
+        if (data.from.qty > 0) next.push(data.from);
+        if (data.to.qty > 0) next.push(data.to);
+        return sortMixedMaterials(next);
+      });
       queryClient.invalidateQueries({ queryKey: ['mixed-materials'] });
       setTransferQty('');
       toast({ title: 'Zapisano transfer', tone: 'success' });
@@ -365,7 +396,7 @@ export default function MixedMaterialsPage() {
           </Card>
         ) : (
           <Card>
-            <Tabs defaultValue="add">
+            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)}>
             <TabsList>
               <TabsTrigger value="add" className="data-[state=active]:bg-[var(--brand)] data-[state=active]:text-bg">
                 Dodaj
@@ -436,12 +467,26 @@ export default function MixedMaterialsPage() {
               <form onSubmit={handleTransfer} className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-xs uppercase tracking-wide text-dim">Mieszanka</label>
-                  <Input
-                    value={transferName}
-                    onChange={(event) => setTransferName(event.target.value)}
-                    list="mixed-materials-names"
-                    placeholder="Wybierz z listy"
-                  />
+                  <div className="relative">
+                    <Input
+                      value={transferName}
+                      onChange={(event) => setTransferName(event.target.value)}
+                      list="mixed-materials-names"
+                      placeholder="Wybierz z listy"
+                      className={transferName ? 'pr-10' : undefined}
+                    />
+                    {transferName && (
+                      <button
+                        type="button"
+                        aria-label="Wyczysc mieszanke"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => setTransferName('')}
+                      >
+                        X
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {transferName.trim() && transferSourceLocations.length === 0 && (
                   <p className="text-xs text-dim">

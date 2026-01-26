@@ -39,6 +39,11 @@ export const dynamic = 'force-dynamic';
 
 type EntryMap = Record<string, Record<string, { qty: number; confirmed: boolean; comment?: string }>>;
 type EntriesByDate = Record<string, EntryMap>;
+type TransferAdjustment = { added: number; removed: number };
+type TransferAdjustmentsByDate = Record<string, Record<string, TransferAdjustment>>;
+type TransferAdjustmentsByWarehouse = Record<string, Record<string, TransferAdjustment>>;
+type TransferCommentsByDate = Record<string, Record<string, string[]>>;
+type TransferDeltasByDate = Record<string, Record<string, Record<string, number>>>;
 
 const toNumber = (value: unknown) => {
   if (typeof value === 'number') return value;
@@ -65,6 +70,26 @@ const buildDateKeys = (fromKey: string, toKey: string) => {
     keys.push(formatDate(cursor));
   }
   return keys;
+};
+
+const ensureAdjustment = (target: Record<string, TransferAdjustment>, key: string) => {
+  if (!target[key]) {
+    target[key] = { added: 0, removed: 0 };
+  }
+  return target[key];
+};
+
+const addTransferDelta = (
+  target: TransferDeltasByDate,
+  dateKey: string,
+  locationId: string,
+  materialId: string,
+  delta: number
+) => {
+  if (!target[dateKey]) target[dateKey] = {};
+  if (!target[dateKey][locationId]) target[dateKey][locationId] = {};
+  target[dateKey][locationId][materialId] =
+    (target[dateKey][locationId][materialId] ?? 0) + delta;
 };
 
 const mapWarehouse = (row: any): Warehouse => ({
@@ -243,11 +268,167 @@ const addComment = (target: Map<string, string[]>, label: string, comment?: stri
   target.set(label, existing);
 };
 
+const applyExternalTransferTotalsToDiffs = (
+  diffs: {
+    addedTotals: Map<string, number>;
+    removedTotals: Map<string, number>;
+  },
+  externalTotals: Record<string, TransferAdjustment> | undefined,
+  materialMap: Map<string, Material>
+) => {
+  if (!externalTotals) return;
+  Object.entries(externalTotals).forEach(([materialId, totals]) => {
+    const label = materialMap.get(materialId)?.name ?? 'Nieznany';
+    if (totals.added) {
+      diffs.addedTotals.set(label, (diffs.addedTotals.get(label) ?? 0) + totals.added);
+    }
+    if (totals.removed) {
+      diffs.removedTotals.set(label, (diffs.removedTotals.get(label) ?? 0) + totals.removed);
+    }
+  });
+};
+
+const buildTransferDeltasByDate = (
+  transfers: Array<{
+    at: string;
+    kind: string;
+    material_id: string;
+    qty: number;
+    from_location_id?: string | null;
+    to_location_id?: string | null;
+  }>
+): TransferDeltasByDate => {
+  const result: TransferDeltasByDate = {};
+  transfers.forEach((transfer) => {
+    const qty = toNumber(transfer.qty);
+    if (!qty) return;
+    const dateKey = formatDate(new Date(transfer.at));
+    const materialId = String(transfer.material_id);
+    if (
+      (transfer.kind === 'INTERNAL' || transfer.kind === 'EXTERNAL_OUT') &&
+      transfer.from_location_id
+    ) {
+      addTransferDelta(result, dateKey, transfer.from_location_id, materialId, -qty);
+    }
+    if (
+      (transfer.kind === 'INTERNAL' || transfer.kind === 'EXTERNAL_IN') &&
+      transfer.to_location_id
+    ) {
+      addTransferDelta(result, dateKey, transfer.to_location_id, materialId, qty);
+    }
+  });
+  return result;
+};
+
+const buildExternalTotalsByDate = (
+  transfers: Array<{
+    at: string;
+    kind: string;
+    material_id: string;
+    qty: number;
+    from_location_id?: string | null;
+    to_location_id?: string | null;
+  }>,
+  activeLocationIds: Set<string>
+): TransferAdjustmentsByDate => {
+  const result: TransferAdjustmentsByDate = {};
+  transfers.forEach((transfer) => {
+    const qty = toNumber(transfer.qty);
+    if (!qty) return;
+    const dateKey = formatDate(new Date(transfer.at));
+    const materialId = String(transfer.material_id);
+    if (transfer.kind === 'EXTERNAL_OUT' && transfer.from_location_id) {
+      if (!activeLocationIds.has(transfer.from_location_id)) return;
+      if (!result[dateKey]) result[dateKey] = {};
+      const adjustment = ensureAdjustment(result[dateKey], materialId);
+      adjustment.removed += qty;
+    }
+    if (transfer.kind === 'EXTERNAL_IN' && transfer.to_location_id) {
+      if (!activeLocationIds.has(transfer.to_location_id)) return;
+      if (!result[dateKey]) result[dateKey] = {};
+      const adjustment = ensureAdjustment(result[dateKey], materialId);
+      adjustment.added += qty;
+    }
+  });
+  return result;
+};
+
+const buildExternalTotalsByWarehouse = (
+  transfers: Array<{
+    at: string;
+    kind: string;
+    material_id: string;
+    qty: number;
+    from_location_id?: string | null;
+    to_location_id?: string | null;
+  }>,
+  locationWarehouseMap: Map<string, string>
+): TransferAdjustmentsByWarehouse => {
+  const result: TransferAdjustmentsByWarehouse = {};
+  transfers.forEach((transfer) => {
+    const qty = toNumber(transfer.qty);
+    if (!qty) return;
+    const dateKey = formatDate(new Date(transfer.at));
+    if (transfer.kind === 'EXTERNAL_OUT' && transfer.from_location_id) {
+      const warehouseId = locationWarehouseMap.get(transfer.from_location_id);
+      if (!warehouseId) return;
+      if (!result[dateKey]) result[dateKey] = {};
+      const adjustment = ensureAdjustment(result[dateKey], warehouseId);
+      adjustment.removed += qty;
+    }
+    if (transfer.kind === 'EXTERNAL_IN' && transfer.to_location_id) {
+      const warehouseId = locationWarehouseMap.get(transfer.to_location_id);
+      if (!warehouseId) return;
+      if (!result[dateKey]) result[dateKey] = {};
+      const adjustment = ensureAdjustment(result[dateKey], warehouseId);
+      adjustment.added += qty;
+    }
+  });
+  return result;
+};
+
+const buildExternalOutCommentsByDate = (
+  transfers: Array<{
+    at: string;
+    kind: string;
+    material_id: string;
+    from_location_id?: string | null;
+    partner?: string | null;
+    note?: string | null;
+  }>,
+  activeLocationIds: Set<string>
+): TransferCommentsByDate => {
+  const result: TransferCommentsByDate = {};
+  transfers.forEach((transfer) => {
+    if (transfer.kind !== 'EXTERNAL_OUT') return;
+    if (!transfer.from_location_id) return;
+    if (!activeLocationIds.has(transfer.from_location_id)) return;
+    const dateKey = formatDate(new Date(transfer.at));
+    const materialId = String(transfer.material_id);
+    const commentParts = [];
+    if (transfer.partner && String(transfer.partner).trim()) {
+      commentParts.push(`Kontrahent: ${String(transfer.partner).trim()}`);
+    }
+    if (transfer.note && String(transfer.note).trim()) {
+      commentParts.push(String(transfer.note).trim());
+    }
+    if (commentParts.length === 0) return;
+    if (!result[dateKey]) result[dateKey] = {};
+    const list = result[dateKey][materialId] ?? [];
+    commentParts.forEach((part) => {
+      if (!list.includes(part)) list.push(part);
+    });
+    result[dateKey][materialId] = list;
+  });
+  return result;
+};
+
 const collectConfirmedDiffs = (
   dateKey: string,
   entriesByDate: EntriesByDate,
   materialMap: Map<string, Material>,
-  activeLocations: Location[]
+  activeLocations: Location[],
+  transferDeltasByDate?: TransferDeltasByDate
 ) => {
   const addedTotals = new Map<string, number>();
   const removedTotals = new Map<string, number>();
@@ -256,6 +437,7 @@ const collectConfirmedDiffs = (
   const yesterdayKey = addDays(dateKey, -1);
   const todayEntries = entriesByDate[dateKey] ?? {};
   const yesterdayEntries = entriesByDate[yesterdayKey] ?? {};
+  const dayDeltas = transferDeltasByDate?.[dateKey] ?? {};
 
   activeLocations.forEach((loc) => {
     const today = todayEntries[loc.id] ?? {};
@@ -266,8 +448,10 @@ const collectConfirmedDiffs = (
       if (!todayEntry?.confirmed) return;
       const label = materialMap.get(materialId)?.name ?? 'Nieznany';
       const todayQty = todayEntry.qty ?? 0;
+      const delta = dayDeltas[loc.id]?.[materialId] ?? 0;
+      const adjustedTodayQty = todayQty - delta;
       const yesterdayQty = yesterday[materialId]?.qty ?? 0;
-      const diff = todayQty - yesterdayQty;
+      const diff = adjustedTodayQty - yesterdayQty;
       if (diff > 0) {
         addedTotals.set(label, (addedTotals.get(label) ?? 0) + diff);
         addComment(addedComments, label, todayEntry.comment);
@@ -324,6 +508,18 @@ const fetchEntries = async (fromKey: string, toKey?: string) => {
   return data ?? [];
 };
 
+const fetchTransfers = async (fromKey: string, toKey: string) => {
+  const start = `${fromKey}T00:00:00.000Z`;
+  const end = `${addDays(toKey, 1)}T00:00:00.000Z`;
+  const { data, error } = await supabaseAdmin
+    .from('transfers')
+    .select('at, kind, material_id, qty, from_location_id, to_location_id, partner, note')
+    .gte('at', start)
+    .lt('at', end);
+  if (error) throw error;
+  return data ?? [];
+};
+
 const fetchLocationStatus = async (fromKey: string, toKey?: string) => {
   let query = supabaseAdmin.from('daily_location_status').select('*');
   query = toKey ? query.gte('date_key', fromKey).lte('date_key', toKey) : query.eq('date_key', fromKey);
@@ -350,6 +546,60 @@ const normalizeMixedName = (value: string) => value.trim().toLowerCase();
 
 const getTodayKey = () => formatDate(new Date());
 
+const upsertTransferEntry = async (
+  dateKey: string,
+  locationId: string,
+  materialId: string,
+  delta: number
+) => {
+  const { data: todayEntry, error: todayError } = await supabaseAdmin
+    .from('daily_entries')
+    .select('qty, confirmed, comment')
+    .eq('date_key', dateKey)
+    .eq('location_id', locationId)
+    .eq('material_id', materialId)
+    .maybeSingle();
+  if (todayError) throw todayError;
+  let baseQty: number | null = todayEntry ? toNumber(todayEntry.qty) : null;
+  let confirmed = todayEntry?.confirmed ?? false;
+  let comment = todayEntry?.comment ?? null;
+  if (baseQty === null) {
+    const yesterdayKey = addDays(dateKey, -1);
+    const { data: yesterdayEntry, error: yesterdayError } = await supabaseAdmin
+      .from('daily_entries')
+      .select('qty')
+      .eq('date_key', yesterdayKey)
+      .eq('location_id', locationId)
+      .eq('material_id', materialId)
+      .maybeSingle();
+    if (yesterdayError) throw yesterdayError;
+    baseQty = toNumber(yesterdayEntry?.qty);
+    confirmed = false;
+    comment = null;
+  }
+  const nextQty = Math.max(0, baseQty + delta);
+  const { error: upsertError } = await supabaseAdmin
+    .from('daily_entries')
+    .upsert(
+      {
+        date_key: dateKey,
+        location_id: locationId,
+        material_id: materialId,
+        qty: nextQty,
+        confirmed,
+        comment,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'date_key,location_id,material_id' }
+    );
+  if (upsertError) throw upsertError;
+  await supabaseAdmin
+    .from('daily_location_status')
+    .delete()
+    .eq('date_key', dateKey)
+    .eq('location_id', locationId);
+};
+
 const handleAction = async (action: string, payload: any) => {
   switch (action) {
     case 'getDashboard': {
@@ -360,17 +610,27 @@ const handleAction = async (action: string, payload: any) => {
       ]);
       const activeStatsLocations = getActiveStatsLocations(warehouses, locations);
       const yesterdayKey = addDays(dateKey, -1);
-      const [todayEntriesRows, yesterdayEntriesRows, todayStatusRows, yesterdayStatusRows] =
+      const [todayEntriesRows, yesterdayEntriesRows, todayStatusRows, yesterdayStatusRows, transferRows] =
         await Promise.all([
           fetchEntries(dateKey),
           fetchEntries(yesterdayKey),
           fetchLocationStatus(dateKey),
-          fetchLocationStatus(yesterdayKey)
+          fetchLocationStatus(yesterdayKey),
+          fetchTransfers(dateKey, dateKey)
         ]);
-      const todayEntries = buildEntriesByDate(todayEntriesRows)[dateKey] ?? {};
+      const todayEntriesByDate = buildEntriesByDate(todayEntriesRows);
+      const todayEntries = todayEntriesByDate[dateKey] ?? {};
       const yesterdayEntries = buildEntriesByDate(yesterdayEntriesRows)[yesterdayKey] ?? {};
       const emptyConfirmedToday = new Set(todayStatusRows.map((row) => row.location_id));
       const emptyConfirmedYesterday = new Set(yesterdayStatusRows.map((row) => row.location_id));
+      const locationWarehouseMap = new Map(activeStatsLocations.map((loc) => [loc.id, loc.warehouseId]));
+      const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
+      const externalTotalsByWarehouse = buildExternalTotalsByWarehouse(
+        transferRows,
+        locationWarehouseMap
+      );
+      const externalTotalsForDay = externalTotalsByWarehouse[dateKey] ?? {};
+      const dayDeltas = transferDeltasByDate[dateKey] ?? {};
       return warehouses
         .filter((warehouse) => warehouse.isActive && warehouse.includeInStats)
         .map((warehouse) => {
@@ -397,12 +657,20 @@ const handleAction = async (action: string, payload: any) => {
 
             union.forEach((materialId) => {
               const todayQty = today[materialId]?.qty ?? 0;
+              const delta = dayDeltas[loc.id]?.[materialId] ?? 0;
+              const adjustedTodayQty = todayQty - delta;
               const yesterdayQty = yesterday[materialId]?.qty ?? 0;
-              const diff = todayQty - yesterdayQty;
+              const diff = adjustedTodayQty - yesterdayQty;
               if (diff > 0) added += diff;
               if (diff < 0) removed += Math.abs(diff);
             });
           });
+
+          const externalTotals = externalTotalsForDay[warehouse.id];
+          if (externalTotals) {
+            added += externalTotals.added;
+            removed += externalTotals.removed;
+          }
 
           return {
             warehouseId: warehouse.id,
@@ -665,7 +933,20 @@ const handleAction = async (action: string, payload: any) => {
       const rows = await fetchEntries(fromKey, dateKey);
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
-      const diffs = collectConfirmedDiffs(dateKey, entriesByDate, materialMap, activeLocations);
+      const transferRows = await fetchTransfers(fromKey, dateKey);
+      const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
+      const externalTotalsByDate = buildExternalTotalsByDate(
+        transferRows,
+        new Set(activeLocations.map((loc) => loc.id))
+      );
+      const diffs = collectConfirmedDiffs(
+        dateKey,
+        entriesByDate,
+        materialMap,
+        activeLocations,
+        transferDeltasByDate
+      );
+      applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[dateKey], materialMap);
       const result: ReportRow[] = activeMaterials.map((mat) => {
         const added = diffs.addedTotals.get(mat.name) ?? 0;
         const removed = diffs.removedTotals.get(mat.name) ?? 0;
@@ -730,11 +1011,24 @@ const handleAction = async (action: string, payload: any) => {
       const rows = await fetchEntries(addDays(fromKey, -1), todayKey);
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
+      const transferRows = await fetchTransfers(fromKey, todayKey);
+      const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
+      const externalTotalsByDate = buildExternalTotalsByDate(
+        transferRows,
+        new Set(activeLocations.map((loc) => loc.id))
+      );
       const dateKeys = buildDateKeys(fromKey, todayKey);
       const addedTotals = new Map<string, number>();
       const removedTotals = new Map<string, number>();
       dateKeys.forEach((key) => {
-        const diffs = collectConfirmedDiffs(key, entriesByDate, materialMap, activeLocations);
+        const diffs = collectConfirmedDiffs(
+          key,
+          entriesByDate,
+          materialMap,
+          activeLocations,
+          transferDeltasByDate
+        );
+        applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         diffs.addedTotals.forEach((value, label) => {
           addedTotals.set(label, (addedTotals.get(label) ?? 0) + value);
         });
@@ -760,11 +1054,24 @@ const handleAction = async (action: string, payload: any) => {
       const rows = await fetchEntries(addDays(fromKey, -1), todayKey);
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
+      const transferRows = await fetchTransfers(fromKey, todayKey);
+      const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
+      const externalTotalsByDate = buildExternalTotalsByDate(
+        transferRows,
+        new Set(activeLocations.map((loc) => loc.id))
+      );
       const dateKeys = buildDateKeys(fromKey, todayKey);
       const addedTotals = new Map<string, number>();
       const removedTotals = new Map<string, number>();
       dateKeys.forEach((key) => {
-        const diffs = collectConfirmedDiffs(key, entriesByDate, materialMap, activeLocations);
+        const diffs = collectConfirmedDiffs(
+          key,
+          entriesByDate,
+          materialMap,
+          activeLocations,
+          transferDeltasByDate
+        );
+        applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         diffs.addedTotals.forEach((value, label) => {
           addedTotals.set(label, (addedTotals.get(label) ?? 0) + value);
         });
@@ -805,8 +1112,21 @@ const handleAction = async (action: string, payload: any) => {
       const rows = await fetchEntries(addDays(fromKey, -1), todayKey);
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
+      const transferRows = await fetchTransfers(fromKey, todayKey);
+      const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
+      const externalTotalsByDate = buildExternalTotalsByDate(
+        transferRows,
+        new Set(activeLocations.map((loc) => loc.id))
+      );
       return dateKeys.map((key) => {
-        const diffs = collectConfirmedDiffs(key, entriesByDate, materialMap, activeLocations);
+        const diffs = collectConfirmedDiffs(
+          key,
+          entriesByDate,
+          materialMap,
+          activeLocations,
+          transferDeltasByDate
+        );
+        applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         const added = [...diffs.addedTotals.values()].reduce((sum, value) => sum + value, 0);
         const removed = [...diffs.removedTotals.values()].reduce((sum, value) => sum + value, 0);
         return { date: key, added, removed, net: added - removed } satisfies DailyTotals;
@@ -833,13 +1153,28 @@ const handleAction = async (action: string, payload: any) => {
       const rows = await fetchEntries(addDays(range.from, -1), range.to);
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
+      const transferRows = await fetchTransfers(range.from, range.to);
+      const activeLocationIds = new Set(activeLocations.map((loc) => loc.id));
+      const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
+      const externalTotalsByDate = buildExternalTotalsByDate(transferRows, activeLocationIds);
+      const transferExternalOutCommentsByDate = buildExternalOutCommentsByDate(
+        transferRows,
+        activeLocationIds
+      );
       const dateKeys = buildDateKeys(range.from, range.to);
       const addedTotals = new Map<string, number>();
       const removedTotals = new Map<string, number>();
       const addedComments = new Map<string, string[]>();
       const removedComments = new Map<string, string[]>();
       dateKeys.forEach((key) => {
-        const diffs = collectConfirmedDiffs(key, entriesByDate, materialMap, activeLocations);
+        const diffs = collectConfirmedDiffs(
+          key,
+          entriesByDate,
+          materialMap,
+          activeLocations,
+          transferDeltasByDate
+        );
+        applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         diffs.addedTotals.forEach((value, label) => {
           addedTotals.set(label, (addedTotals.get(label) ?? 0) + value);
         });
@@ -856,6 +1191,15 @@ const handleAction = async (action: string, payload: any) => {
         diffs.removedComments.forEach((list, label) => {
           const existing = removedComments.get(label) ?? [];
           list.forEach((comment) => {
+            if (!existing.includes(comment)) existing.push(comment);
+          });
+          removedComments.set(label, existing);
+        });
+        const transferCommentsForDay = transferExternalOutCommentsByDate[key] ?? {};
+        Object.entries(transferCommentsForDay).forEach(([materialId, comments]) => {
+          const label = materialMap.get(materialId)?.name ?? 'Nieznany';
+          const existing = removedComments.get(label) ?? [];
+          comments.forEach((comment) => {
             if (!existing.includes(comment)) existing.push(comment);
           });
           removedComments.set(label, existing);
@@ -907,10 +1251,23 @@ const handleAction = async (action: string, payload: any) => {
       const rows = await fetchEntries(addDays(range.from, -1), range.to);
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
+      const transferRows = await fetchTransfers(range.from, range.to);
+      const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
+      const externalTotalsByDate = buildExternalTotalsByDate(
+        transferRows,
+        new Set(activeLocations.map((loc) => loc.id))
+      );
       const dateKeys = buildDateKeys(range.from, range.to);
       const byMonth = new Map<string, { added: number; removed: number }>();
       dateKeys.forEach((key) => {
-        const diffs = collectConfirmedDiffs(key, entriesByDate, materialMap, activeLocations);
+        const diffs = collectConfirmedDiffs(
+          key,
+          entriesByDate,
+          materialMap,
+          activeLocations,
+          transferDeltasByDate
+        );
+        applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         const month = key.slice(0, 7);
         const current = byMonth.get(month) ?? { added: 0, removed: 0 };
         const added = [...diffs.addedTotals.values()].reduce((sum, value) => sum + value, 0);
@@ -1750,15 +2107,7 @@ const handleAction = async (action: string, payload: any) => {
           if (yesterdayError) throw yesterdayError;
           availableQty = toNumber(yesterdayEntry?.qty);
         }
-        const { data: pendingTransfers, error: pendingError } = await supabaseAdmin
-          .from('transfers')
-          .select('qty')
-          .in('kind', ['INTERNAL', 'EXTERNAL_OUT'])
-          .eq('from_location_id', fromLocationId)
-          .eq('material_id', materialId);
-        if (pendingError) throw pendingError;
-        const pending = (pendingTransfers ?? []).reduce((sum, row) => sum + toNumber(row.qty), 0);
-        if (qty > availableQty - pending) throw new Error('INSUFFICIENT_STOCK');
+        if (qty > availableQty) throw new Error('INSUFFICIENT_STOCK');
       }
       const transfer = {
         id: randomUUID(),
@@ -1777,6 +2126,13 @@ const handleAction = async (action: string, payload: any) => {
         .select('*')
         .maybeSingle();
       if (error) throw error;
+      const dateKey = getTodayKey();
+      if (fromLocationId) {
+        await upsertTransferEntry(dateKey, fromLocationId, materialId, -qty);
+      }
+      if (toLocationId) {
+        await upsertTransferEntry(dateKey, toLocationId, materialId, qty);
+      }
       return mapTransfer(data);
     }
     case 'getInventoryAdjustments': {
@@ -2131,7 +2487,7 @@ const handleAction = async (action: string, payload: any) => {
       if (!id) throw new Error('NOT_FOUND');
       const { data, error } = await supabaseAdmin
         .from('dryers')
-        .update({ is_active: false })
+        .delete()
         .eq('id', id)
         .select('*')
         .maybeSingle();
@@ -2182,11 +2538,39 @@ const handleAction = async (action: string, payload: any) => {
       if (!warehouseId) throw new Error('WAREHOUSE_REQUIRED');
       if (!name) throw new Error('NAME_REQUIRED');
       if (!Number.isFinite(qty) || qty <= 0) throw new Error('QTY_REQUIRED');
+      const now = new Date();
+      let at = now.toISOString();
+      if (typeof payload?.at === 'string') {
+        const parsed = new Date(payload.at);
+        if (!Number.isNaN(parsed.getTime())) {
+          at = parsed.toISOString();
+        }
+      } else if (typeof payload?.dateKey === 'string') {
+        const dateKey = payload.dateKey.trim();
+        const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (match) {
+          const year = Number(match[1]);
+          const month = Number(match[2]);
+          const day = Number(match[3]);
+          const local = new Date(
+            year,
+            month - 1,
+            day,
+            now.getHours(),
+            now.getMinutes(),
+            now.getSeconds(),
+            now.getMilliseconds()
+          );
+          if (!Number.isNaN(local.getTime())) {
+            at = local.toISOString();
+          }
+        }
+      }
       const { data, error } = await supabaseAdmin
         .from('original_inventory_entries')
         .insert({
           id: randomUUID(),
-          at: new Date().toISOString(),
+          at,
           warehouse_id: warehouseId,
           name,
           qty,

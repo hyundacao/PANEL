@@ -26,6 +26,7 @@ import { useUiStore } from '@/lib/store/ui';
 import { parseQtyInput } from '@/lib/utils/format';
 
 const WAREHOUSE_STORAGE_KEY = 'spis-oryginalow-warehouse';
+const TAB_STORAGE_KEY = 'spis-oryginalow-tab';
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
 
@@ -35,6 +36,26 @@ const getLocalDateValue = (date = new Date()) => {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
+
+const buildEntryTimestamp = (dateKey: string) => {
+  if (!dateKey) return undefined;
+  const [year, month, day] = dateKey.split('-').map(Number);
+  if (!year || !month || !day) return undefined;
+  const now = new Date();
+  const local = new Date(
+    year,
+    month - 1,
+    day,
+    now.getHours(),
+    now.getMinutes(),
+    now.getSeconds(),
+    now.getMilliseconds()
+  );
+  if (Number.isNaN(local.getTime())) return undefined;
+  return local.toISOString();
+};
+
+const getEntryDateKey = (value: string) => getLocalDateValue(new Date(value));
 
 const toCsv = (rows: string[][]) =>
   rows
@@ -55,6 +76,8 @@ export default function OriginalInventoryPage() {
   const toast = useToastStore((state) => state.push);
   const { user } = useUiStore();
   const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState<'spis' | 'kartoteki' | 'raporty'>('spis');
+  const [tabReady, setTabReady] = useState(false);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState('');
   const [expandedMaterialKey, setExpandedMaterialKey] = useState<string | null>(null);
   const [quickQty, setQuickQty] = useState('');
@@ -66,7 +89,7 @@ export default function OriginalInventoryPage() {
   const [reportMaterialKey, setReportMaterialKey] = useState('');
   const [reportQuery, setReportQuery] = useState('');
   const [showReportSuggestions, setShowReportSuggestions] = useState(false);
-  const [reportDate, setReportDate] = useState(getLocalDateValue());
+  const [spisDate, setSpisDate] = useState(getLocalDateValue());
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogForm, setCatalogForm] = useState({ name: '', unit: 'kg' });
   const [catalogImporting, setCatalogImporting] = useState(false);
@@ -112,6 +135,20 @@ export default function OriginalInventoryPage() {
     if (!selectedWarehouseId) return;
     localStorage.setItem(WAREHOUSE_STORAGE_KEY, selectedWarehouseId);
   }, [selectedWarehouseId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = window.localStorage.getItem(TAB_STORAGE_KEY);
+    if (saved === 'spis' || saved === 'kartoteki' || saved === 'raporty') {
+      setActiveTab(saved);
+    }
+    setTabReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !tabReady) return;
+    window.localStorage.setItem(TAB_STORAGE_KEY, activeTab);
+  }, [activeTab, tabReady]);
 
   const addMutation = useMutation({
     mutationFn: addOriginalInventory,
@@ -206,6 +243,7 @@ export default function OriginalInventoryPage() {
       name,
       qty: qtyValue,
       unit: form.unit.trim() || 'kg',
+      at: buildEntryTimestamp(spisDate),
       user: user?.username ?? user?.name ?? 'nieznany'
     });
   };
@@ -328,6 +366,7 @@ export default function OriginalInventoryPage() {
         name: selectedGroup.name,
         qty: qtyValue,
         unit: selectedGroup.unit,
+        at: buildEntryTimestamp(spisDate),
         user: user?.username ?? user?.name ?? 'nieznany'
       },
       {
@@ -378,7 +417,10 @@ export default function OriginalInventoryPage() {
     () => new Map(warehouses.map((warehouse) => [warehouse.id, warehouse.orderNo])),
     [warehouses]
   );
-  const entriesForWarehouse = useMemo(() => entries, [entries]);
+  const entriesForDate = useMemo(() => {
+    if (!spisDate) return entries;
+    return entries.filter((entry) => getEntryDateKey(entry.at) === spisDate);
+  }, [entries, spisDate]);
 
   const matchedCatalog = useMemo(() => {
     const needle = form.name.trim().toLowerCase();
@@ -387,7 +429,7 @@ export default function OriginalInventoryPage() {
   }, [catalog, form.name]);
   const existingByName = useMemo(() => {
     const map = new Map<string, { name: string; unit: string; total: number }>();
-    entriesForWarehouse.forEach((entry) => {
+    entriesForDate.forEach((entry) => {
       const key = entry.name.toLowerCase();
       const current = map.get(key);
       if (current) {
@@ -397,7 +439,7 @@ export default function OriginalInventoryPage() {
       }
     });
     return map;
-  }, [entriesForWarehouse]);
+  }, [entriesForDate]);
   const existingList = useMemo(
     () =>
       [...existingByName.values()].sort((a, b) =>
@@ -453,9 +495,9 @@ export default function OriginalInventoryPage() {
   const materialGroups = useMemo(() => {
     const map = new Map<
       string,
-      { key: string; name: string; unit: string; entries: typeof entriesForWarehouse }
+      { key: string; name: string; unit: string; entries: typeof entriesForDate }
     >();
-    entriesForWarehouse.forEach((entry) => {
+    entriesForDate.forEach((entry) => {
       const key = entry.name.toLowerCase();
       const current = map.get(key);
       if (current) {
@@ -465,19 +507,24 @@ export default function OriginalInventoryPage() {
       }
     });
     return map;
-  }, [entriesForWarehouse]);
+  }, [entriesForDate]);
 
-  const reportOptions = useMemo(
-    () =>
-      [...materialGroups.values()].sort((a, b) => collator.compare(a.name, b.name)),
-    [materialGroups]
-  );
+  const reportOptions = useMemo(() => {
+    const map = new Map<string, { key: string; name: string }>();
+    entries.forEach((entry) => {
+      const key = entry.name.toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, { key, name: entry.name });
+      }
+    });
+    return [...map.values()].sort((a, b) => collator.compare(a.name, b.name));
+  }, [entries]);
   const reportEntries = useMemo(() => {
     if (!reportMaterialKey) return [];
-    return entriesForWarehouse
+    return entries
       .filter((entry) => entry.name.toLowerCase() === reportMaterialKey)
       .sort((a, b) => b.at.localeCompare(a.at));
-  }, [entriesForWarehouse, reportMaterialKey]);
+  }, [entries, reportMaterialKey]);
   const reportSuggestions = useMemo(() => {
     const needle = reportQuery.trim().toLowerCase();
     if (!needle) return [];
@@ -488,9 +535,8 @@ export default function OriginalInventoryPage() {
   }, [reportOptions, reportQuery]);
 
   const dailyEntries = useMemo(() => {
-    if (!reportDate) return [];
-    return entriesForWarehouse
-      .filter((entry) => entry.at.slice(0, 10) === reportDate)
+    if (!spisDate) return [];
+    return entriesForDate
       .filter(
         (entry) => !dailyReportExcludePatterns.some((pattern) => pattern.test(entry.name))
       )
@@ -499,7 +545,7 @@ export default function OriginalInventoryPage() {
         if (nameCompare !== 0) return nameCompare;
         return a.at.localeCompare(b.at);
       });
-  }, [entriesForWarehouse, reportDate]);
+  }, [entriesForDate, spisDate]);
   const dailySummary = useMemo(() => {
     const map = new Map<string, { name: string; unit: string; qty: number }>();
     dailyEntries.forEach((entry) => {
@@ -515,17 +561,17 @@ export default function OriginalInventoryPage() {
   }, [dailyEntries]);
 
   const handleExportDaily = () => {
-    if (!reportDate) return;
+    if (!spisDate) return;
     const rows = [
       ['Dzien', 'Material', 'Ilosc', 'Jedn.'],
-      ...dailySummary.map((row) => [reportDate, row.name, String(row.qty), row.unit])
+      ...dailySummary.map((row) => [spisDate, row.name, String(row.qty), row.unit])
     ];
     const csv = toCsv(rows);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `spis-oryginalow-${reportDate}.csv`;
+    link.download = `spis-oryginalow-${spisDate}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -619,7 +665,7 @@ export default function OriginalInventoryPage() {
 
   return (
     <div className="space-y-4">
-      <Tabs defaultValue="spis" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="space-y-4">
         <TabsList>
           <TabsTrigger
             value="spis"
@@ -644,6 +690,18 @@ export default function OriginalInventoryPage() {
         <TabsContent value="spis" className="space-y-4">
           <Card className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">Spis oryginalow</p>
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <label className="text-xs uppercase tracking-wide text-dim">Dzien spisu</label>
+                <Input
+                  type="date"
+                  value={spisDate}
+                  onChange={(event) => setSpisDate(event.target.value)}
+                  className="min-h-[46px]"
+                />
+              </div>
+              <p className="text-xs text-dim">Spis i raport dzienny liczone dla wybranego dnia (00:00-24:00).</p>
+            </div>
             <form
               onSubmit={(event) => {
                 event.preventDefault();
@@ -678,12 +736,27 @@ export default function OriginalInventoryPage() {
                       setShowNameSuggestions(true);
                     }}
                     placeholder="np. BOREALIS HF700SA"
-                    className="min-h-[46px]"
+                    className={form.name ? 'min-h-[46px] pr-10' : 'min-h-[46px]'}
                     onFocus={() => setShowNameSuggestions(true)}
                     onBlur={() => {
                       setTimeout(() => setShowNameSuggestions(false), 120);
                     }}
                   />
+                  {form.name && (
+                    <button
+                      type="button"
+                      aria-label="Wyczysc nazwe"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setForm((prev) => ({ ...prev, name: '' }));
+                        setShowNameSuggestions(false);
+                      }}
+                    >
+                      X
+                    </button>
+                  )}
+
                   {showNameSuggestions && filteredNameSuggestions.length > 0 && (
                     <div className="absolute z-20 mt-2 w-full rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
                       {filteredNameSuggestions.map((name) => (
@@ -1015,12 +1088,27 @@ export default function OriginalInventoryPage() {
                       setShowReportSuggestions(true);
                     }}
                     placeholder="np. TATREN 5046"
-                    className="min-h-[46px]"
+                    className={reportQuery ? 'min-h-[46px] pr-10' : 'min-h-[46px]'}
                     onFocus={() => setShowReportSuggestions(true)}
                     onBlur={() => {
                       setTimeout(() => setShowReportSuggestions(false), 120);
                     }}
                   />
+                  {reportQuery && (
+                    <button
+                      type="button"
+                      aria-label="Wyczysc wyszukiwanie"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setReportQuery('');
+                        setShowReportSuggestions(false);
+                      }}
+                    >
+                      X
+                    </button>
+                  )}
+
                   {showReportSuggestions && reportSuggestions.length > 0 && (
                     <div className="absolute z-20 mt-2 w-full rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
                       {reportSuggestions.map((name) => (
@@ -1064,8 +1152,8 @@ export default function OriginalInventoryPage() {
                 <label className="text-xs uppercase tracking-wide text-dim">Dzien</label>
                 <Input
                   type="date"
-                  value={reportDate}
-                  onChange={(event) => setReportDate(event.target.value)}
+                  value={spisDate}
+                  onChange={(event) => setSpisDate(event.target.value)}
                   className="min-h-[46px]"
                 />
               </div>

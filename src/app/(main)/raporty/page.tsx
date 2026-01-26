@@ -13,11 +13,14 @@ import { formatKg } from '@/lib/utils/format';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
+const REPORTS_TAB_STORAGE_KEY = 'raporty-tab';
 
 export default function ReportsPage() {
   const { data } = useQuery({ queryKey: ['reports'], queryFn: getReports });
   const { data: history } = useQuery({ queryKey: ['daily-history'], queryFn: getDailyHistory });
   const [summaryMode, setSummaryMode] = useState<'weekly' | 'monthly' | 'yearly'>('weekly');
+  const [activeTab, setActiveTab] = useState<'daily' | 'summary' | 'overall'>('daily');
+  const [tabReady, setTabReady] = useState(false);
   const [dailySort, setDailySort] = useState<{
     key: 'alpha' | 'added' | 'removed';
     direction: 'asc' | 'desc';
@@ -102,6 +105,20 @@ export default function ReportsPage() {
   };
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = window.localStorage.getItem(REPORTS_TAB_STORAGE_KEY);
+    if (saved === 'daily' || saved === 'summary' || saved === 'overall') {
+      setActiveTab(saved);
+    }
+    setTabReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !tabReady) return;
+    window.localStorage.setItem(REPORTS_TAB_STORAGE_KEY, activeTab);
+  }, [activeTab, tabReady]);
+
+  useEffect(() => {
     if (rangeFrom || rangeTo || !latestDate) return;
     applyPreset('weekly');
   }, [latestDate, rangeFrom, rangeTo]);
@@ -171,7 +188,7 @@ export default function ReportsPage() {
         String(yearlyReport?.totals.net ?? 0)
       ];
       return {
-        headers: ['Miesiac', 'Przybylo (kg)', 'Wyrobiono (kg)', 'Netto (kg)'],
+        headers: ['Miesiac', 'Przybylo (kg)', 'Wyrobiono (kg)', 'Wynik (kg)'],
         rows: [...rows, totalsRow]
       };
     }
@@ -207,8 +224,8 @@ export default function ReportsPage() {
     return {
       headers:
         summaryMode === 'weekly'
-          ? ['Przemial', 'Przybylo (kg)', 'Wyrobiono (kg)', 'Netto (kg)', 'Komentarze przybylo', 'Komentarze wyrobiono']
-          : ['Przemial', 'Przybylo (kg)', 'Wyrobiono (kg)', 'Netto (kg)'],
+          ? ['Przemial', 'Przybylo (kg)', 'Wyrobiono (kg)', 'Wynik (kg)', 'Komentarze przybylo', 'Komentarze wyrobiono']
+          : ['Przemial', 'Przybylo (kg)', 'Wyrobiono (kg)', 'Wynik (kg)'],
       rows: [...rows, totalsRow]
     };
   };
@@ -253,7 +270,7 @@ export default function ReportsPage() {
           <span key="removed" className="text-success">
             Wyrobiono
           </span>,
-          'Netto',
+          'Wynik',
           'Komentarze przybylo',
           'Komentarze wyrobiono'
         ]
@@ -265,7 +282,7 @@ export default function ReportsPage() {
           <span key="removed" className="text-success">
             Wyrobiono
           </span>,
-          'Netto'
+          'Wynik'
         ];
   const summaryTableRows = summaryRows.map((row) =>
     summaryMode === 'weekly'
@@ -365,7 +382,7 @@ export default function ReportsPage() {
     <div className="space-y-6">
       <PageHeader title="Raporty" subtitle="Podsumowania na podstawie spisu" />
 
-      <Tabs defaultValue="daily">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)}>
         <TabsList>
           <TabsTrigger value="daily">Dzienny</TabsTrigger>
           <TabsTrigger value="summary">Podsumowania</TabsTrigger>
@@ -414,7 +431,7 @@ export default function ReportsPage() {
                     </span>
                   </button>
                 </span>,
-                'Netto'
+                'Wynik'
               ]}
               rows={dailyRows.slice(0, 8).map((row) => [
                 row.name,
@@ -547,7 +564,7 @@ export default function ReportsPage() {
                   Wyrobiono: <span className="text-body">{formatKg(summaryTotals?.removed ?? 0)}</span>
                 </span>
                 <span>
-                  Netto: <span className="text-body">{formatKg(summaryTotals?.net ?? 0)}</span>
+                  Wynik: <span className="text-body">{formatKg(summaryTotals?.net ?? 0)}</span>
                 </span>
               </div>
             </Card>
@@ -563,7 +580,7 @@ export default function ReportsPage() {
             <Card className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">Wynik raportu</p>
               <DataTable
-                columns={['Miesiac', 'Przybylo', 'Wyrobiono', 'Netto']}
+                columns={['Miesiac', 'Przybylo', 'Wyrobiono', 'Wynik']}
                 rows={yearlyRows.map((row) => [
                   row.month,
                   formatKg(row.added),
@@ -579,7 +596,7 @@ export default function ReportsPage() {
                   Wyrobiono: <span className="text-body">{formatKg(yearlyReport?.totals.removed ?? 0)}</span>
                 </span>
                 <span>
-                  Netto: <span className="text-body">{formatKg(yearlyReport?.totals.net ?? 0)}</span>
+                  Wynik: <span className="text-body">{formatKg(yearlyReport?.totals.net ?? 0)}</span>
                 </span>
               </div>
             </Card>

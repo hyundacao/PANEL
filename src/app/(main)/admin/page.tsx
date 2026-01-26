@@ -32,9 +32,11 @@ import {
   removeLocation,
   removeMaterial,
   removeSparePart,
+  removeDryer,
   removeUser,
   removeWarehouse,
   updateMaterial,
+  updateDryer,
   setSparePartQty,
   updateSparePart,
   updateLocation,
@@ -55,7 +57,7 @@ import { useUiStore } from '@/lib/store/ui';
 import { useToastStore } from '@/components/ui/Toast';
 import { cn } from '@/lib/utils/cn';
 import { formatKg, parseQtyInput } from '@/lib/utils/format';
-import type { Role, UserAccess, WarehouseKey, WarehouseRole, WarehouseTab } from '@/lib/api/types';
+import type { AppUser, Role, UserAccess, WarehouseKey, WarehouseRole, WarehouseTab } from '@/lib/api/types';
 import { getRolePreset, isAdmin } from '@/lib/auth/access';
 
 type WarehouseDraft = {
@@ -89,6 +91,12 @@ type UserDraft = {
 type MaterialEditDraft = {
   name: string;
   catalogId: string;
+};
+
+type DryerDraft = {
+  name: string;
+  orderNo: string;
+  isActive: boolean;
 };
 
 type PrzemialyAdminTab =
@@ -136,6 +144,7 @@ const warehouseLabels: Record<WarehouseKey, string> = {
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const compareByName = (a: { name: string }, b: { name: string }) =>
   collator.compare(a.name, b.name);
+const PRZEMIALY_TAB_STORAGE_KEY = 'admin-przemialy-tab';
 const roleOptionsSorted = [...roleOptions].sort((a, b) => collator.compare(a.label, b.label));
 
 const cloneAccess = (access: UserAccess): UserAccess => ({
@@ -185,6 +194,9 @@ const isWarehouseDraftEqual = (left: WarehouseDraft, right: WarehouseDraft) =>
 
 const isLocationDraftEqual = (left: LocationDraft, right: LocationDraft) =>
   left.name === right.name && left.orderNo === right.orderNo;
+
+const isDryerDraftEqual = (left: DryerDraft, right: DryerDraft) =>
+  left.name === right.name && left.orderNo === right.orderNo && left.isActive === right.isActive;
 
 const isSparePartDraftEqual = (left: SparePartDraft, right: SparePartDraft) =>
   left.code === right.code &&
@@ -420,6 +432,7 @@ export default function AdminPage() {
     skipped: number;
   } | null>(null);
   const [materialEdits, setMaterialEdits] = useState<Record<string, MaterialEditDraft>>({});
+  const [dryerDrafts, setDryerDrafts] = useState<Record<string, DryerDraft>>({});
   const [sparePartForm, setSparePartForm] = useState({
     code: '',
     name: '',
@@ -446,11 +459,41 @@ export default function AdminPage() {
   const [userDrafts, setUserDrafts] = useState<Record<string, UserDraft>>({});
   const [selectedAccessUserId, setSelectedAccessUserId] = useState<string | null>(null);
   const [przemialyTab, setPrzemialyTab] = useState<PrzemialyAdminTab>('warehouses');
+  const [tabReady, setTabReady] = useState(false);
   const [dryerForm, setDryerForm] = useState({
     name: '',
     orderNo: '',
     isActive: true
   });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const urlTab = params.get('tab');
+    const saved = window.localStorage.getItem(PRZEMIALY_TAB_STORAGE_KEY);
+    const candidate = urlTab || saved;
+    if (
+      candidate === 'warehouses' ||
+      candidate === 'locations' ||
+      candidate === 'inventory' ||
+      candidate === 'audit' ||
+      candidate === 'positions' ||
+      candidate === 'dryers'
+    ) {
+      setPrzemialyTab(candidate);
+    }
+    setTabReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !tabReady) return;
+    window.localStorage.setItem(PRZEMIALY_TAB_STORAGE_KEY, przemialyTab);
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('tab') !== przemialyTab) {
+      url.searchParams.set('tab', przemialyTab);
+      window.history.replaceState(null, '', url.toString());
+    }
+  }, [przemialyTab, tabReady]);
 
   const updateUserFormAccess = (updater: (current: UserAccess) => UserAccess) => {
     setUserForm((prev) => ({ ...prev, access: updater(cloneAccess(prev.access)) }));
@@ -932,6 +975,41 @@ export default function AdminPage() {
     }
   });
 
+  const updateDryerMutation = useMutation({
+    mutationFn: updateDryer,
+    onSuccess: (_data, variables) => {
+      setDryerDrafts((prev) => {
+        const next = { ...prev };
+        delete next[variables.id];
+        return next;
+      });
+      queryClient.invalidateQueries({ queryKey: ['dryers'] });
+      toast({ title: 'Zapisano suszarke', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        NAME_REQUIRED: 'Podaj nazwe suszarki.',
+        DUPLICATE: 'Taka suszarka juz istnieje.',
+        NOT_FOUND: 'Nie znaleziono suszarki.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie zapisano suszarki.', tone: 'error' });
+    }
+  });
+
+  const removeDryerMutation = useMutation({
+    mutationFn: removeDryer,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dryers'] });
+      toast({ title: 'Usunieto suszarke', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        NOT_FOUND: 'Nie znaleziono suszarki.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie usunieto suszarki.', tone: 'error' });
+    }
+  });
+
   const addUserMutation = useMutation({
     mutationFn: addUser,
     onSuccess: () => {
@@ -1032,7 +1110,16 @@ export default function AdminPage() {
 
   const removeUserMutation = useMutation({
     mutationFn: removeUser,
-    onSuccess: () => {
+    onSuccess: (removedUser) => {
+      queryClient.setQueryData<AppUser[]>(['users'], (current = []) =>
+        current.filter((user) => user.id !== removedUser.id)
+      );
+      setUserDrafts((prev) => {
+        if (!(removedUser.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[removedUser.id];
+        return next;
+      });
       queryClient.invalidateQueries({ queryKey: ['users'] });
       toast({ title: 'Usunieto uzytkownika', tone: 'success' });
     },
@@ -1451,7 +1538,7 @@ export default function AdminPage() {
   };
 
   const handleRemoveUser = (userId: string, name: string) => {
-    if (!confirm(`Usunac uzytkownika ${name}?`)) return;
+    if (!confirm(`Usunac uzytkownika ${name} na stale?`)) return;
     removeUserMutation.mutate(userId);
   };
 
@@ -3090,20 +3177,78 @@ export default function AdminPage() {
             ) : (
               <Card>
                 <DataTable
-                  columns={['Suszarka', 'Tworzywo', 'Status', 'Kolejnosc']}
-                  rows={sortedDryers.map((dryer) => [
-                    dryer.name,
-                    dryerMaterialMap.get(dryer.materialId ?? '') ?? '-',
-                    <Badge
-                      key={`${dryer.id}-status`}
-                      tone={dryer.isActive ? 'success' : 'warning'}
-                    >
-                      {dryer.isActive ? 'Aktywna' : 'Nieaktywna'}
-                    </Badge>,
-                    <span key={`${dryer.id}-order`} className="font-semibold tabular-nums">
-                      {dryer.orderNo}
-                    </span>
-                  ])}
+                  columns={['Suszarka', 'Tworzywo', 'Status', 'Kolejnosc', 'Akcje']}
+                  rows={sortedDryers.map((dryer) => {
+                    const draft = dryerDrafts[dryer.id] ?? {
+                      name: dryer.name,
+                      orderNo: String(dryer.orderNo),
+                      isActive: dryer.isActive
+                    };
+                    const isDirty = !isDryerDraftEqual(draft, {
+                      name: dryer.name,
+                      orderNo: String(dryer.orderNo),
+                      isActive: dryer.isActive
+                    });
+                    return [
+                      <Input
+                        key={`${dryer.id}-name`}
+                        value={draft.name}
+                        onChange={(event) =>
+                          setDryerDrafts((prev) => ({
+                            ...prev,
+                            [dryer.id]: { ...draft, name: event.target.value }
+                          }))
+                        }
+                      />,
+                      dryerMaterialMap.get(dryer.materialId ?? '') ?? '-',
+                      <Toggle
+                        key={`${dryer.id}-status`}
+                        checked={draft.isActive}
+                        onCheckedChange={(value) =>
+                          setDryerDrafts((prev) => ({
+                            ...prev,
+                            [dryer.id]: { ...draft, isActive: value }
+                          }))
+                        }
+                        label={draft.isActive ? 'Aktywna' : 'Nieaktywna'}
+                      />,
+                      <Input
+                        key={`${dryer.id}-order`}
+                        value={draft.orderNo}
+                        onChange={(event) =>
+                          setDryerDrafts((prev) => ({
+                            ...prev,
+                            [dryer.id]: { ...draft, orderNo: event.target.value }
+                          }))
+                        }
+                        inputMode="numeric"
+                      />,
+                      <div key={`${dryer.id}-actions`} className="flex flex-wrap gap-2">
+                        <Button
+                          variant="secondary"
+                          onClick={() =>
+                            updateDryerMutation.mutate({
+                              id: dryer.id,
+                              name: draft.name,
+                              orderNo: parseOrderNo(draft.orderNo),
+                              isActive: draft.isActive
+                            })
+                          }
+                          disabled={!isDirty || updateDryerMutation.isPending}
+                        >
+                          Zapisz
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => removeDryerMutation.mutate(dryer.id)}
+                          disabled={removeDryerMutation.isPending}
+                          className="border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
+                        >
+                          Usun
+                        </Button>
+                      </div>
+                    ];
+                  })}
                 />
               </Card>
             )}
