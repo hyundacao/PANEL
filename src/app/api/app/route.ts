@@ -2649,7 +2649,8 @@ const handleAction = async (action: string, payload: any) => {
       return mapOriginalInventoryCatalogEntry(data);
     }
     case 'addOriginalInventoryCatalogBulk': {
-      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const items: Array<{ indexCode?: string; description?: string; station?: string }> =
+        Array.isArray(payload?.items) ? payload.items : [];
       if (items.length === 0) throw new Error('EMPTY');
 
       const normalized: Array<{ name: string; unit: string }> = [];
