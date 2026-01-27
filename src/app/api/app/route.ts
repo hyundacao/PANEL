@@ -2954,7 +2954,8 @@ const handleAction = async (action: string, payload: any) => {
       const dateKeyRaw = typeof payload?.dateKey === 'string' ? payload.dateKey.trim() : '';
       const dateKeyMatch = dateKeyRaw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
       const sessionDate = dateKeyMatch ? dateKeyRaw : formatDate(new Date());
-      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const items: Array<{ indexCode?: string; description?: string; station?: string }> =
+        Array.isArray(payload?.items) ? payload.items : [];
       if (!shift) throw new Error('SHIFT_REQUIRED');
       if (!['I', 'II', 'III'].includes(shift)) throw new Error('SHIFT_REQUIRED');
       if (!planSheet) throw new Error('SHEET_REQUIRED');
