@@ -1484,8 +1484,7 @@ const handleAction = async (action: string, payload: any) => {
       return catalog;
     }
     case 'addMaterialCatalogBulk': {
-      const items: Array<{ indexCode?: string; description?: string; station?: string }> =
-        Array.isArray(payload?.items) ? payload.items : [];
+      const items: Array<{ name?: string }> = Array.isArray(payload?.items) ? payload.items : [];
       if (items.length === 0) throw new Error('EMPTY');
 
       const normalized: Array<{ name: string }> = [];
