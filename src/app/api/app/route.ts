@@ -31,6 +31,10 @@ import type {
   Transfer,
   TransferKind,
   Warehouse,
+  ZeszytItem,
+  ZeszytReceipt,
+  ZeszytSession,
+  ZeszytSessionData,
   YearlyReport,
   YearlyReportRow
 } from '@/lib/api/types';
@@ -199,6 +203,42 @@ const mapOriginalInventoryCatalogEntry = (row: any): OriginalInventoryCatalogEnt
   name: row.name,
   unit: row.unit,
   createdAt: row.created_at
+});
+
+const mapZeszytSession = (row: any): ZeszytSession => ({
+  id: row.id,
+  createdAt: row.created_at,
+  createdBy: row.created_by,
+  shift: row.shift,
+  dateKey: row.session_date ?? formatDate(new Date(row.created_at)),
+  planSheet: row.plan_sheet,
+  fileName: row.file_name ?? null
+});
+
+const mapZeszytItem = (row: any): ZeszytItem => ({
+  id: row.id,
+  sessionId: row.session_id,
+  indexCode: row.index_code,
+  description: row.description ?? null,
+  station: row.station ?? null,
+  operators: Array.isArray(row.operators) ? row.operators : [],
+  defaultQty: row.default_qty ?? null,
+  createdAt: row.created_at
+});
+
+const mapZeszytReceipt = (row: any): ZeszytReceipt => ({
+  id: row.id,
+  itemId: row.item_id,
+  operatorNo: row.operator_no,
+  qty: toNumber(row.qty),
+  receivedAt: row.received_at,
+  flagPw: row.flag_pw ?? false,
+  approved: row.approved ?? false,
+  approvedAt: row.approved_at ?? null,
+  approvedBy: row.approved_by ?? null,
+  createdAt: row.created_at,
+  editedAt: row.edited_at ?? null,
+  editedBy: row.edited_by ?? null
 });
 
 const mapAuditEvent = (row: any): AuditEvent => ({
@@ -2860,6 +2900,320 @@ const handleAction = async (action: string, payload: any) => {
         note: payload?.note ? String(payload.note).trim() || null : null
       });
       return mapSparePart(updated);
+    }
+    case 'getZeszytSessions': {
+      const { data, error } = await supabaseAdmin
+        .from('zeszyt_sessions')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return (data ?? []).map(mapZeszytSession);
+    }
+    case 'getZeszytSession': {
+      const sessionId = String(payload?.sessionId ?? '').trim();
+      if (!sessionId) throw new Error('NOT_FOUND');
+      const { data: sessionRow, error: sessionError } = await supabaseAdmin
+        .from('zeszyt_sessions')
+        .select('*')
+        .eq('id', sessionId)
+        .maybeSingle();
+      if (sessionError) throw sessionError;
+      if (!sessionRow) throw new Error('NOT_FOUND');
+      const { data: itemRows, error: itemsError } = await supabaseAdmin
+        .from('zeszyt_items')
+        .select('*')
+        .eq('session_id', sessionId)
+        .order('created_at', { ascending: true });
+      if (itemsError) throw itemsError;
+      const items = (itemRows ?? []).map(mapZeszytItem);
+      const itemIds = items.map((item) => item.id);
+      let receipts: ZeszytReceipt[] = [];
+      if (itemIds.length > 0) {
+        const { data: receiptRows, error: receiptsError } = await supabaseAdmin
+          .from('zeszyt_receipts')
+          .select('*')
+          .in('item_id', itemIds)
+          .order('received_at', { ascending: true });
+        if (receiptsError) throw receiptsError;
+        receipts = (receiptRows ?? []).map(mapZeszytReceipt);
+      }
+      const result: ZeszytSessionData = {
+        session: mapZeszytSession(sessionRow),
+        items,
+        receipts
+      };
+      return result;
+    }
+    case 'createZeszytSession': {
+      const shift = String(payload?.shift ?? '').toUpperCase().trim();
+      const planSheet = String(payload?.planSheet ?? '').trim();
+      const createdBy = String(payload?.createdBy ?? '').trim() || 'nieznany';
+      const fileName = payload?.fileName ? String(payload.fileName).trim() : null;
+      const dateKeyRaw = typeof payload?.dateKey === 'string' ? payload.dateKey.trim() : '';
+      const dateKeyMatch = dateKeyRaw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      const sessionDate = dateKeyMatch ? dateKeyRaw : formatDate(new Date());
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      if (!shift) throw new Error('SHIFT_REQUIRED');
+      if (!['I', 'II', 'III'].includes(shift)) throw new Error('SHIFT_REQUIRED');
+      if (!planSheet) throw new Error('SHEET_REQUIRED');
+      const normalizedItems = items
+        .map((item: { indexCode?: string; description?: string; station?: string }) => ({
+          indexCode: String(item?.indexCode ?? '').trim(),
+          description: item?.description ? String(item.description).trim() : null,
+          station: item?.station ? String(item.station).trim() : null
+        }))
+        .filter((item: { indexCode: string }) => item.indexCode);
+      if (normalizedItems.length === 0) throw new Error('EMPTY');
+      const now = new Date().toISOString();
+      const sessionId = randomUUID();
+      const sessionPayload = {
+        id: sessionId,
+        created_at: now,
+        created_by: createdBy,
+        shift,
+        session_date: sessionDate,
+        plan_sheet: planSheet,
+        file_name: fileName
+      };
+      let { data: sessionRow, error: sessionError } = await supabaseAdmin
+        .from('zeszyt_sessions')
+        .insert(sessionPayload)
+        .select('*')
+        .maybeSingle();
+      if (sessionError) {
+        const message = String(sessionError.message ?? '');
+        if (message.toLowerCase().includes('session_date')) {
+          const fallbackPayload = { ...sessionPayload };
+          delete (fallbackPayload as Record<string, unknown>).session_date;
+          const fallback = await supabaseAdmin
+            .from('zeszyt_sessions')
+            .insert(fallbackPayload)
+            .select('*')
+            .maybeSingle();
+          sessionRow = fallback.data ?? null;
+          sessionError = fallback.error ?? null;
+        }
+      }
+      if (sessionError) throw sessionError;
+      if (!sessionRow) throw new Error('NOT_FOUND');
+      const itemsToInsert = normalizedItems.map((item) => ({
+        id: randomUUID(),
+        session_id: sessionId,
+        index_code: item.indexCode,
+        description: item.description,
+        station: item.station,
+        operators: [],
+        default_qty: null,
+        created_at: now
+      }));
+      const { data: itemRows, error: itemsError } = await supabaseAdmin
+        .from('zeszyt_items')
+        .insert(itemsToInsert)
+        .select('*');
+      if (itemsError) throw itemsError;
+      const result: ZeszytSessionData = {
+        session: mapZeszytSession(sessionRow),
+        items: (itemRows ?? []).map(mapZeszytItem),
+        receipts: []
+      };
+      return result;
+    }
+    case 'removeZeszytSession': {
+      const sessionId = String(payload?.sessionId ?? '').trim();
+      if (!sessionId) throw new Error('NOT_FOUND');
+      const { data, error } = await supabaseAdmin
+        .from('zeszyt_sessions')
+        .delete()
+        .eq('id', sessionId)
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return;
+    }
+    case 'addZeszytItem': {
+      const sessionId = String(payload?.sessionId ?? '').trim();
+      const indexCode = String(payload?.indexCode ?? '').trim();
+      if (!sessionId) throw new Error('NOT_FOUND');
+      if (!indexCode) throw new Error('INDEX_REQUIRED');
+      const description = payload?.description ? String(payload.description).trim() : null;
+      const station = payload?.station ? String(payload.station).trim() : null;
+      const { data, error } = await supabaseAdmin
+        .from('zeszyt_items')
+        .insert({
+          id: randomUUID(),
+          session_id: sessionId,
+          index_code: indexCode,
+          description,
+          station,
+          operators: [],
+          default_qty: null,
+          created_at: new Date().toISOString()
+        })
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapZeszytItem(data);
+    }
+    case 'updateZeszytItem': {
+      const itemId = String(payload?.itemId ?? '').trim();
+      if (!itemId) throw new Error('NOT_FOUND');
+      const updates: Record<string, unknown> = {};
+      if (payload?.defaultQty !== undefined) {
+        const raw = payload.defaultQty;
+        if (raw === null || raw === '') {
+          updates.default_qty = null;
+        } else {
+          const qty = toNumber(raw);
+          if (!Number.isFinite(qty) || qty <= 0) throw new Error('INVALID_QTY');
+          updates.default_qty = qty;
+        }
+      }
+      if (payload?.operators !== undefined) {
+        const next = Array.isArray(payload.operators)
+          ? payload.operators.map((value: unknown) => String(value).trim()).filter(Boolean)
+          : [];
+        updates.operators = Array.from(new Set(next));
+      }
+      if (payload?.station !== undefined) {
+        const station = payload.station ? String(payload.station).trim() : '';
+        updates.station = station || null;
+      }
+      if (payload?.description !== undefined) {
+        const description = payload.description ? String(payload.description).trim() : '';
+        updates.description = description || null;
+      }
+      if (payload?.indexCode !== undefined) {
+        const indexCode = String(payload.indexCode ?? '').trim();
+        if (!indexCode) throw new Error('INDEX_REQUIRED');
+        updates.index_code = indexCode;
+      }
+      if (Object.keys(updates).length === 0) throw new Error('EMPTY');
+      const { data, error } = await supabaseAdmin
+        .from('zeszyt_items')
+        .update(updates)
+        .eq('id', itemId)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapZeszytItem(data);
+    }
+    case 'addZeszytOperator': {
+      const itemId = String(payload?.itemId ?? '').trim();
+      const operatorNo = String(payload?.operatorNo ?? '').trim();
+      if (!itemId) throw new Error('NOT_FOUND');
+      if (!operatorNo) throw new Error('OPERATOR_REQUIRED');
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('zeszyt_items')
+        .select('operators')
+        .eq('id', itemId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) throw new Error('NOT_FOUND');
+      const current = Array.isArray(existing.operators) ? existing.operators : [];
+      const next = Array.from(new Set([...current, operatorNo]));
+      const { data, error } = await supabaseAdmin
+        .from('zeszyt_items')
+        .update({ operators: next })
+        .eq('id', itemId)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapZeszytItem(data);
+    }
+    case 'addZeszytReceipt': {
+      const itemId = String(payload?.itemId ?? '').trim();
+      const operatorNo = String(payload?.operatorNo ?? '').trim();
+      const qty = toNumber(payload?.qty);
+      if (!itemId) throw new Error('NOT_FOUND');
+      if (!operatorNo) throw new Error('OPERATOR_REQUIRED');
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error('INVALID_QTY');
+      const now = new Date().toISOString();
+      const { data, error } = await supabaseAdmin
+        .from('zeszyt_receipts')
+        .insert({
+          id: randomUUID(),
+          item_id: itemId,
+          operator_no: operatorNo,
+          qty,
+          received_at: now,
+          flag_pw: Boolean(payload?.flagPw),
+          approved: false,
+          approved_at: null,
+          approved_by: null,
+          created_at: now,
+          edited_at: null,
+          edited_by: null
+        })
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapZeszytReceipt(data);
+    }
+    case 'updateZeszytReceipt': {
+      const receiptId = String(payload?.receiptId ?? '').trim();
+      if (!receiptId) throw new Error('NOT_FOUND');
+      const updates: Record<string, unknown> = {};
+      if (payload?.operatorNo !== undefined) {
+        const operatorNo = String(payload.operatorNo ?? '').trim();
+        if (!operatorNo) throw new Error('OPERATOR_REQUIRED');
+        updates.operator_no = operatorNo;
+      }
+      if (payload?.qty !== undefined) {
+        const qty = toNumber(payload.qty);
+        if (!Number.isFinite(qty) || qty <= 0) throw new Error('INVALID_QTY');
+        updates.qty = qty;
+      }
+      if (payload?.flagPw !== undefined) {
+        updates.flag_pw = Boolean(payload.flagPw);
+      }
+      if (payload?.approved !== undefined) {
+        const approved = Boolean(payload.approved);
+        updates.approved = approved;
+        updates.approved_at = approved ? new Date().toISOString() : null;
+        updates.approved_by = approved
+          ? payload?.approvedBy
+            ? String(payload.approvedBy).trim()
+            : null
+          : null;
+      }
+      if (updates.flag_pw === true) {
+        updates.approved = false;
+        updates.approved_at = null;
+        updates.approved_by = null;
+      }
+      if (updates.approved === true) {
+        updates.flag_pw = false;
+      }
+      if (Object.keys(updates).length === 0) throw new Error('EMPTY');
+      updates.edited_at = new Date().toISOString();
+      updates.edited_by = payload?.editedBy ? String(payload.editedBy).trim() : null;
+      const { data, error } = await supabaseAdmin
+        .from('zeszyt_receipts')
+        .update(updates)
+        .eq('id', receiptId)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapZeszytReceipt(data);
+    }
+    case 'removeZeszytReceipt': {
+      const receiptId = String(payload?.receiptId ?? '').trim();
+      if (!receiptId) throw new Error('NOT_FOUND');
+      const { data, error } = await supabaseAdmin
+        .from('zeszyt_receipts')
+        .delete()
+        .eq('id', receiptId)
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return;
     }
     case 'getWarehouses': {
       const warehouses = await fetchWarehouses();

@@ -25,12 +25,14 @@ const getTitle = (pathname: string) => {
   if (pathname.startsWith('/czesci/uzupelnij')) return 'Uzupełnij';
   if (pathname.startsWith('/czesci/pobierz')) return 'Pobierz';
   if (pathname.startsWith('/czesci')) return 'Części zamienne';
+  if (pathname.startsWith('/zeszyt')) return 'Zeszyt';
   if (pathname.startsWith('/admin')) return 'Admin';
   return 'Pulpit';
 };
 
 const getWarehouseFromPath = (pathname: string): WarehouseKey | null => {
   if (pathname.startsWith('/czesci')) return 'CZESCI';
+  if (pathname.startsWith('/zeszyt')) return 'ZESZYT';
   if (pathname.startsWith('/admin')) return null;
   return 'PRZEMIALY';
 };
@@ -48,6 +50,7 @@ const getTabFromPath = (pathname: string): WarehouseTab | null => {
   if (pathname.startsWith('/czesci/uzupelnij')) return 'uzupelnij';
   if (pathname.startsWith('/czesci/stany')) return 'stany';
   if (pathname.startsWith('/czesci/historia')) return 'historia';
+  if (pathname.startsWith('/zeszyt')) return 'zeszyt';
   return null;
 };
 
@@ -73,6 +76,8 @@ const navItemsCzesci: MobileNavItem[] = [
   { label: 'Stany magazynowe', href: '/czesci/stany', tab: 'stany' },
   { label: 'Historia', href: '/czesci/historia', tab: 'historia' }
 ];
+
+const navItemsZeszyt: MobileNavItem[] = [{ label: 'Zeszyt', href: '/zeszyt', tab: 'zeszyt' }];
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -179,7 +184,12 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     return pathname.startsWith(href);
   };
   const mobileItems =
-    (activeWarehouse === 'CZESCI' ? navItemsCzesci : navItemsPrzemialy).filter((item) => {
+    (activeWarehouse === 'CZESCI'
+      ? navItemsCzesci
+      : activeWarehouse === 'ZESZYT'
+        ? navItemsZeszyt
+        : navItemsPrzemialy
+    ).filter((item) => {
       if (!activeWarehouse) return false;
       if (!item.tab) return true;
       return canSeeTab(user, activeWarehouse, item.tab);

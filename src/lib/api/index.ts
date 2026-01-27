@@ -33,6 +33,11 @@ import type {
   TransferKind,
   UserAccess,
   Warehouse,
+  ZeszytItem,
+  ZeszytReceipt,
+  ZeszytSession,
+  ZeszytSessionData,
+  ZeszytShift,
   YearlyReport
 } from './types';
 import { formatDate } from '../utils/format';
@@ -424,3 +429,66 @@ export const getLocation = async (id: string): Promise<Location | null> =>
 export const getMaterials = async (): Promise<Material[]> => appRequest('getMaterials');
 
 export const getTodayKey = () => formatDate(new Date());
+
+export const getZeszytSessions = async (): Promise<ZeszytSession[]> =>
+  appRequest('getZeszytSessions');
+
+export const getZeszytSession = async (sessionId: string): Promise<ZeszytSessionData> =>
+  appRequest('getZeszytSession', { sessionId });
+
+export const createZeszytSession = async (payload: {
+  shift: ZeszytShift;
+  dateKey?: string;
+  planSheet: string;
+  fileName?: string | null;
+  createdBy: string;
+  items: Array<{
+    indexCode: string;
+    description?: string | null;
+    station?: string | null;
+  }>;
+}): Promise<ZeszytSessionData> => appRequest('createZeszytSession', payload);
+
+export const removeZeszytSession = async (sessionId: string): Promise<void> =>
+  appRequest('removeZeszytSession', { sessionId });
+
+export const addZeszytItem = async (payload: {
+  sessionId: string;
+  indexCode: string;
+  description?: string | null;
+  station?: string | null;
+}): Promise<ZeszytItem> => appRequest('addZeszytItem', payload);
+
+export const updateZeszytItem = async (payload: {
+  itemId: string;
+  indexCode?: string;
+  operators?: string[];
+  defaultQty?: number | null;
+  station?: string | null;
+  description?: string | null;
+}): Promise<ZeszytItem> => appRequest('updateZeszytItem', payload);
+
+export const addZeszytOperator = async (payload: {
+  itemId: string;
+  operatorNo: string;
+}): Promise<ZeszytItem> => appRequest('addZeszytOperator', payload);
+
+export const addZeszytReceipt = async (payload: {
+  itemId: string;
+  operatorNo: string;
+  qty: number;
+  flagPw?: boolean;
+}): Promise<ZeszytReceipt> => appRequest('addZeszytReceipt', payload);
+
+export const updateZeszytReceipt = async (payload: {
+  receiptId: string;
+  operatorNo?: string;
+  qty?: number;
+  flagPw?: boolean;
+  approved?: boolean;
+  approvedBy?: string | null;
+  editedBy?: string | null;
+}): Promise<ZeszytReceipt> => appRequest('updateZeszytReceipt', payload);
+
+export const removeZeszytReceipt = async (receiptId: string): Promise<void> =>
+  appRequest('removeZeszytReceipt', { receiptId });

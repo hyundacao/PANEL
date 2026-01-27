@@ -137,9 +137,13 @@ const czesciTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'stany', label: 'Stany magazynowe' },
   { key: 'historia', label: 'Historia (tylko admin)' }
 ];
+const zeszytTabOptions: Array<{ key: WarehouseTab; label: string }> = [
+  { key: 'zeszyt', label: 'Zeszyt' }
+];
 const warehouseLabels: Record<WarehouseKey, string> = {
   PRZEMIALY: 'Zarządzanie przemiałami i przygotowaniem produkcji',
-  CZESCI: 'Magazyn części zamiennych'
+  CZESCI: 'Magazyn części zamiennych',
+  ZESZYT: 'Zeszyt produkcji (referentka)'
 };
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const compareByName = (a: { name: string }, b: { name: string }) =>
@@ -533,8 +537,14 @@ export default function AdminPage() {
   ) => {
     const warehouseAccess = access.warehouses[warehouseKey];
     const enabled = Boolean(warehouseAccess);
-    const defaultRole: WarehouseRole = warehouseKey === 'PRZEMIALY' ? 'ROZDZIELCA' : 'MECHANIK';
-    const tabOptions = warehouseKey === 'PRZEMIALY' ? przemialyTabOptions : czesciTabOptions;
+    const defaultRole: WarehouseRole =
+      warehouseKey === 'CZESCI' ? 'MECHANIK' : 'ROZDZIELCA';
+    const tabOptions =
+      warehouseKey === 'PRZEMIALY'
+        ? przemialyTabOptions
+        : warehouseKey === 'ZESZYT'
+          ? zeszytTabOptions
+          : czesciTabOptions;
     const visibleTabs =
       warehouseKey === 'CZESCI' && !isAdminUser
         ? tabOptions.filter((tab) => tab.key !== 'historia')
@@ -1828,6 +1838,7 @@ export default function AdminPage() {
                         if (nextAccess.admin) {
                           nextAccess.warehouses.PRZEMIALY = getRolePreset('PRZEMIALY', 'ROZDZIELCA');
                           nextAccess.warehouses.CZESCI = getRolePreset('CZESCI', 'MECHANIK');
+                          nextAccess.warehouses.ZESZYT = getRolePreset('ZESZYT', 'ROZDZIELCA');
                         }
                         return { ...prev, role: nextRole, access: nextAccess };
                       });
@@ -1854,6 +1865,12 @@ export default function AdminPage() {
                   )}
                   {renderWarehouseAccess(
                     'CZESCI',
+                    userForm.access,
+                    updateUserFormAccess,
+                    userForm.role === 'ADMIN'
+                  )}
+                  {renderWarehouseAccess(
+                    'ZESZYT',
                     userForm.access,
                     updateUserFormAccess,
                     userForm.role === 'ADMIN'
@@ -1927,6 +1944,7 @@ export default function AdminPage() {
                             if (nextAccess.admin) {
                               nextAccess.warehouses.PRZEMIALY = getRolePreset('PRZEMIALY', 'ROZDZIELCA');
                               nextAccess.warehouses.CZESCI = getRolePreset('CZESCI', 'MECHANIK');
+                              nextAccess.warehouses.ZESZYT = getRolePreset('ZESZYT', 'ROZDZIELCA');
                             }
                             return {
                               ...prev,
@@ -2012,6 +2030,12 @@ export default function AdminPage() {
                       )}
                       {renderWarehouseAccess(
                         'CZESCI',
+                        selectedDraft.access,
+                        (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
+                        selectedDraft.role === 'ADMIN'
+                      )}
+                      {renderWarehouseAccess(
+                        'ZESZYT',
                         selectedDraft.access,
                         (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
                         selectedDraft.role === 'ADMIN'

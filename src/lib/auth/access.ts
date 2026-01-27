@@ -18,6 +18,7 @@ export const PRZEMIALY_TABS: WarehouseTab[] = [
 ];
 
 export const CZESCI_TABS: WarehouseTab[] = ['pobierz', 'uzupelnij', 'stany', 'historia'];
+export const ZESZYT_TABS: WarehouseTab[] = ['zeszyt'];
 
 const roleLabels: Record<WarehouseRole, string> = {
   ROZDZIELCA: 'Rozdzielca',
@@ -38,7 +39,7 @@ export const getRoleLabel = (user: AppUser | null | undefined, warehouse: Wareho
 
 export const getAccessibleWarehouses = (user: AppUser | null | undefined): WarehouseKey[] => {
   if (!user) return [];
-  if (isAdmin(user)) return ['PRZEMIALY', 'CZESCI'];
+  if (isAdmin(user)) return ['PRZEMIALY', 'CZESCI', 'ZESZYT'];
   return Object.keys(user.access.warehouses) as WarehouseKey[];
 };
 
@@ -81,6 +82,12 @@ export const getRolePreset = (
     }
     return { role, readOnly: false, tabs: ['pobierz', 'uzupelnij', 'stany'] };
   }
+  if (warehouse === 'ZESZYT') {
+    if (role === 'PODGLAD') {
+      return { role, readOnly: true, tabs: ZESZYT_TABS };
+    }
+    return { role, readOnly: false, tabs: ZESZYT_TABS };
+  }
 
   if (role === 'ROZDZIELCA') {
     return { role, readOnly: false, tabs: PRZEMIALY_TABS };
@@ -103,5 +110,6 @@ export const getWarehouseLabel = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'CZESCI') return 'Magazyn części zamiennych';
   if (warehouse === 'PRZEMIALY')
     return 'Zarządzanie przemiałami i przygotowaniem produkcji';
+  if (warehouse === 'ZESZYT') return 'Zeszyt produkcji (referentka)';
   return 'Magazyn';
 };

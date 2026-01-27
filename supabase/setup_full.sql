@@ -439,6 +439,61 @@ create table if not exists public.original_inventory_catalog (
 create unique index if not exists original_inventory_catalog_name_idx
   on public.original_inventory_catalog (lower(name));
 
+-- =========================
+-- ZESZYT (REFERENTKA)
+-- =========================
+create table if not exists public.zeszyt_sessions (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  created_by text not null,
+  shift text not null check (shift in ('I', 'II', 'III')),
+  session_date date not null default current_date,
+  plan_sheet text not null,
+  file_name text
+);
+
+alter table if exists public.zeszyt_sessions
+  add column if not exists session_date date not null default current_date;
+
+create table if not exists public.zeszyt_items (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references public.zeszyt_sessions(id) on delete cascade,
+  index_code text not null,
+  description text,
+  station text,
+  operators text[] not null default '{}',
+  default_qty numeric,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists zeszyt_items_session_idx on public.zeszyt_items (session_id);
+create index if not exists zeszyt_items_index_idx on public.zeszyt_items (index_code);
+
+create table if not exists public.zeszyt_receipts (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references public.zeszyt_items(id) on delete cascade,
+  operator_no text not null,
+  qty numeric not null,
+  received_at timestamptz not null default now(),
+  flag_pw boolean not null default false,
+  approved boolean not null default false,
+  approved_at timestamptz,
+  approved_by text,
+  created_at timestamptz not null default now(),
+  edited_at timestamptz,
+  edited_by text
+);
+
+create index if not exists zeszyt_receipts_item_idx on public.zeszyt_receipts (item_id);
+create index if not exists zeszyt_receipts_received_idx on public.zeszyt_receipts (received_at);
+
+alter table if exists public.zeszyt_receipts
+  add column if not exists approved boolean not null default false;
+alter table if exists public.zeszyt_receipts
+  add column if not exists approved_at timestamptz;
+alter table if exists public.zeszyt_receipts
+  add column if not exists approved_by text;
+
 create table if not exists public.audit_logs (
   id uuid primary key default gen_random_uuid(),
   at timestamptz not null default now(),
@@ -471,6 +526,9 @@ alter table if exists public.spare_parts enable row level security;
 alter table if exists public.spare_part_history enable row level security;
 alter table if exists public.original_inventory_entries enable row level security;
 alter table if exists public.original_inventory_catalog enable row level security;
+alter table if exists public.zeszyt_sessions enable row level security;
+alter table if exists public.zeszyt_items enable row level security;
+alter table if exists public.zeszyt_receipts enable row level security;
 alter table if exists public.audit_logs enable row level security;
 
 drop policy if exists "locations_read" on public.locations;

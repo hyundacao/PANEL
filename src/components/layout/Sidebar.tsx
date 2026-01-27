@@ -47,13 +47,22 @@ const navItemsCzesci: NavItem[] = [
   { label: 'Historia', href: '/czesci/historia', icon: History, tab: 'historia' }
 ];
 
+const navItemsZeszyt: NavItem[] = [
+  { label: 'Zeszyt', href: '/zeszyt', icon: ClipboardList, tab: 'zeszyt' }
+];
+
 export const Sidebar = () => {
   const pathname = usePathname();
   const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse, role } = useUiStore();
   const warehouse = activeWarehouse as WarehouseKey | null;
   const roleLabel = getRoleLabel(user, warehouse);
   const displayName = user?.name ?? 'Gość';
-  const items = warehouse === 'CZESCI' ? navItemsCzesci : navItemsPrzemialy;
+  const items =
+    warehouse === 'CZESCI'
+      ? navItemsCzesci
+      : warehouse === 'ZESZYT'
+        ? navItemsZeszyt
+        : navItemsPrzemialy;
   const visibleItems = items.filter((item) => {
     if (!warehouse) return false;
     if (!item.tab) return true;
@@ -74,7 +83,9 @@ export const Sidebar = () => {
       ? 'PANEL MAGAZYNU CZĘŚCI ZAMIENNYCH'
       : warehouse === 'PRZEMIALY'
         ? 'PANEL MAGAZYNU PRZEMIAŁÓW'
-      : 'Panel produkcji';
+        : warehouse === 'ZESZYT'
+          ? 'PANEL ZESZYTU'
+          : 'Panel produkcji';
   const closeOnMobile = () => {
     if (typeof window === 'undefined') return;
     if (window.matchMedia('(max-width: 767px)').matches) {

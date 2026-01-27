@@ -28,6 +28,13 @@ const warehouseOptions: Array<{
     description: 'Pobrania, uzupełnienia i kontrola stanów części.',
     action: 'WEJDŹ',
     href: '/czesci'
+  },
+  {
+    key: 'ZESZYT',
+    title: 'Zeszyt produkcji',
+    description: 'Ewidencja odbiorów palet i rozliczeń na zmianie.',
+    action: 'WEJDŹ',
+    href: '/zeszyt'
   }
 ];
 

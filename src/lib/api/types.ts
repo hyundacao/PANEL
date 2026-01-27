@@ -1,6 +1,6 @@
 export type Role = 'VIEWER' | 'USER' | 'ADMIN';
 
-export type WarehouseKey = 'PRZEMIALY' | 'CZESCI';
+export type WarehouseKey = 'PRZEMIALY' | 'CZESCI' | 'ZESZYT';
 
 export type WarehouseRole = 'ROZDZIELCA' | 'MECHANIK' | 'PODGLAD';
 
@@ -16,7 +16,9 @@ export type PrzemialyTab =
 
 export type CzesciTab = 'pobierz' | 'uzupelnij' | 'stany' | 'historia';
 
-export type WarehouseTab = PrzemialyTab | CzesciTab;
+export type ZeszytTab = 'zeszyt';
+
+export type WarehouseTab = PrzemialyTab | CzesciTab | ZeszytTab;
 
 export type WarehouseAccess = {
   role: WarehouseRole;
@@ -243,6 +245,50 @@ export type MaterialLocation = {
 };
 
 export type MaterialLocationsMap = Record<string, MaterialLocation[]>;
+
+export type ZeszytShift = 'I' | 'II' | 'III';
+
+export type ZeszytSession = {
+  id: string;
+  createdAt: string;
+  createdBy: string;
+  shift: ZeszytShift;
+  dateKey: string;
+  planSheet: string;
+  fileName?: string | null;
+};
+
+export type ZeszytItem = {
+  id: string;
+  sessionId: string;
+  indexCode: string;
+  description?: string | null;
+  station?: string | null;
+  operators: string[];
+  defaultQty?: number | null;
+  createdAt: string;
+};
+
+export type ZeszytReceipt = {
+  id: string;
+  itemId: string;
+  operatorNo: string;
+  qty: number;
+  receivedAt: string;
+  flagPw: boolean;
+  approved: boolean;
+  approvedAt?: string | null;
+  approvedBy?: string | null;
+  createdAt: string;
+  editedAt?: string | null;
+  editedBy?: string | null;
+};
+
+export type ZeszytSessionData = {
+  session: ZeszytSession;
+  items: ZeszytItem[];
+  receipts: ZeszytReceipt[];
+};
 
 export type AppUser = {
   id: string;
