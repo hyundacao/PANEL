@@ -1484,7 +1484,8 @@ const handleAction = async (action: string, payload: any) => {
       return catalog;
     }
     case 'addMaterialCatalogBulk': {
-      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const items: Array<{ indexCode?: string; description?: string; station?: string }> =
+        Array.isArray(payload?.items) ? payload.items : [];
       if (items.length === 0) throw new Error('EMPTY');
 
       const normalized: Array<{ name: string }> = [];
@@ -2957,7 +2958,7 @@ const handleAction = async (action: string, payload: any) => {
       if (!['I', 'II', 'III'].includes(shift)) throw new Error('SHIFT_REQUIRED');
       if (!planSheet) throw new Error('SHEET_REQUIRED');
       const normalizedItems = items
-        .map((item: { indexCode?: string; description?: string; station?: string }) => ({
+        .map((item) => ({
           indexCode: String(item?.indexCode ?? '').trim(),
           description: item?.description ? String(item.description).trim() : null,
           station: item?.station ? String(item.station).trim() : null
