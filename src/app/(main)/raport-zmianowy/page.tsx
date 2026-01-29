@@ -1093,7 +1093,7 @@ export default function RaportZmianowyPage() {
                   placeholder="Szukaj po indeksie, maszynie lub opisie..."
                 />
               </div>
-              <Badge tone="neutral">
+              <Badge tone="default">
                 {filteredItems.length} / {activeSessionData?.items.length ?? 0} indeksów
               </Badge>
             </div>
@@ -1246,7 +1246,7 @@ export default function RaportZmianowyPage() {
                                     </p>
                                     <div className="flex flex-wrap gap-2">
                                       {entry.editedAt && (
-                                        <Badge tone="neutral">
+                                        <Badge tone="default">
                                           Edytowano{' '}
                                           {new Date(entry.editedAt).toLocaleString('pl-PL')}
                                         </Badge>
@@ -1441,7 +1441,7 @@ export default function RaportZmianowyPage() {
                 <Card key={group.key} className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-lg font-semibold text-title">{group.label}</p>
-                    <Badge tone="neutral">{group.entries.length} wpisów</Badge>
+                    <Badge tone="default">{group.entries.length} wpisów</Badge>
                   </div>
                   <div className="space-y-3">
                     {splitEntriesByShift(group.entries).map((shift) => (
@@ -1453,7 +1453,7 @@ export default function RaportZmianowyPage() {
                           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-dim">
                             {shift.label}
                           </p>
-                          <Badge tone="neutral">{shift.entries.length} wpisów</Badge>
+                          <Badge tone="default">{shift.entries.length} wpisów</Badge>
                         </div>
                         {shift.entries.length === 0 ? (
                           <p className="mt-2 text-xs text-dim">Brak wpisów.</p>
