@@ -33,8 +33,11 @@ type PersistedUiState = Pick<
   'sidebarCollapsed' | 'user' | 'role' | 'activeWarehouse' | 'rememberMe' | 'filters'
 >;
 
-const roleFromUser = (user: AppUser | null): Role =>
-  user?.access?.admin ? 'ADMIN' : user?.role ?? 'VIEWER';
+const roleFromUser = (user: AppUser | null): Role => {
+  if (!user) return 'VIEWER';
+  if (user.access?.admin || user.role === 'HEAD_ADMIN') return 'HEAD_ADMIN';
+  return user.role ?? 'VIEWER';
+};
 const storageKey = 'apka-ui';
 const rememberKey = `${storageKey}:remember`;
 const getRememberFlag = () => {

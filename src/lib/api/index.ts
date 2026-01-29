@@ -27,17 +27,17 @@ import type {
   PeriodReport,
   ReportRow,
   Role,
+  RaportZmianowyEntry,
+  RaportZmianowyEntryLog,
+  RaportZmianowyItem,
+  RaportZmianowySession,
+  RaportZmianowySessionData,
   SparePart,
   SparePartHistory,
   Transfer,
   TransferKind,
   UserAccess,
   Warehouse,
-  ZeszytItem,
-  ZeszytReceipt,
-  ZeszytSession,
-  ZeszytSessionData,
-  ZeszytShift,
   YearlyReport
 } from './types';
 import { formatDate } from '../utils/format';
@@ -430,65 +430,66 @@ export const getMaterials = async (): Promise<Material[]> => appRequest('getMate
 
 export const getTodayKey = () => formatDate(new Date());
 
-export const getZeszytSessions = async (): Promise<ZeszytSession[]> =>
-  appRequest('getZeszytSessions');
+export const getRaportZmianowySessions = async (
+  dateKey?: string
+): Promise<RaportZmianowySession[]> =>
+  appRequest('getRaportZmianowySessions', dateKey ? { dateKey } : undefined);
 
-export const getZeszytSession = async (sessionId: string): Promise<ZeszytSessionData> =>
-  appRequest('getZeszytSession', { sessionId });
+export const getRaportZmianowySession = async (
+  sessionId: string
+): Promise<RaportZmianowySessionData> =>
+  appRequest('getRaportZmianowySession', { sessionId });
 
-export const createZeszytSession = async (payload: {
-  shift: ZeszytShift;
+export const getRaportZmianowyEntries = async (payload: {
+  from?: string;
+  to?: string;
+  indexCode?: string;
+  station?: string;
+}): Promise<RaportZmianowyEntryLog[]> => appRequest('getRaportZmianowyEntries', payload);
+
+export const createRaportZmianowySession = async (payload: {
   dateKey?: string;
   planSheet: string;
   fileName?: string | null;
   createdBy: string;
-  items: Array<{
+  items?: Array<{
     indexCode: string;
     description?: string | null;
     station?: string | null;
   }>;
-}): Promise<ZeszytSessionData> => appRequest('createZeszytSession', payload);
+}): Promise<RaportZmianowySessionData> =>
+  appRequest('createRaportZmianowySession', payload);
 
-export const removeZeszytSession = async (sessionId: string): Promise<void> =>
-  appRequest('removeZeszytSession', { sessionId });
+export const removeRaportZmianowySession = async (sessionId: string): Promise<void> =>
+  appRequest('removeRaportZmianowySession', { sessionId });
 
-export const addZeszytItem = async (payload: {
+export const addRaportZmianowyItem = async (payload: {
   sessionId: string;
   indexCode: string;
   description?: string | null;
   station?: string | null;
-}): Promise<ZeszytItem> => appRequest('addZeszytItem', payload);
+}): Promise<RaportZmianowyItem> => appRequest('addRaportZmianowyItem', payload);
 
-export const updateZeszytItem = async (payload: {
+export const updateRaportZmianowyItem = async (payload: {
   itemId: string;
   indexCode?: string;
-  operators?: string[];
-  defaultQty?: number | null;
   station?: string | null;
   description?: string | null;
-}): Promise<ZeszytItem> => appRequest('updateZeszytItem', payload);
+}): Promise<RaportZmianowyItem> => appRequest('updateRaportZmianowyItem', payload);
 
-export const addZeszytOperator = async (payload: {
+export const addRaportZmianowyEntry = async (payload: {
   itemId: string;
-  operatorNo: string;
-}): Promise<ZeszytItem> => appRequest('addZeszytOperator', payload);
+  note: string;
+  authorId?: string | null;
+  authorName: string;
+}): Promise<RaportZmianowyEntry> => appRequest('addRaportZmianowyEntry', payload);
 
-export const addZeszytReceipt = async (payload: {
-  itemId: string;
-  operatorNo: string;
-  qty: number;
-  flagPw?: boolean;
-}): Promise<ZeszytReceipt> => appRequest('addZeszytReceipt', payload);
+export const updateRaportZmianowyEntry = async (payload: {
+  entryId: string;
+  note: string;
+  editedById?: string | null;
+  editedByName?: string | null;
+}): Promise<RaportZmianowyEntry> => appRequest('updateRaportZmianowyEntry', payload);
 
-export const updateZeszytReceipt = async (payload: {
-  receiptId: string;
-  operatorNo?: string;
-  qty?: number;
-  flagPw?: boolean;
-  approved?: boolean;
-  approvedBy?: string | null;
-  editedBy?: string | null;
-}): Promise<ZeszytReceipt> => appRequest('updateZeszytReceipt', payload);
-
-export const removeZeszytReceipt = async (receiptId: string): Promise<void> =>
-  appRequest('removeZeszytReceipt', { receiptId });
+export const removeRaportZmianowyEntry = async (entryId: string): Promise<void> =>
+  appRequest('removeRaportZmianowyEntry', { entryId });

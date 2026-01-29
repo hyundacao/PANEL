@@ -60,7 +60,7 @@ export const Topbar = ({ title, breadcrumb }: { title: string; breadcrumb?: stri
             className="w-full md:w-auto"
           >
             <ArrowLeftRight className="mr-2 h-4 w-4" />
-            Zmien magazyn
+            Zmień moduł
           </Button>
         )}
         <Button variant="ghost">

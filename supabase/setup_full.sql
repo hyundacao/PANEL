@@ -12,7 +12,7 @@ create table if not exists public.app_users (
   name text not null,
   username text not null,
   password_hash text not null,
-  role text not null default 'USER' check (role in ('VIEWER', 'USER', 'ADMIN')),
+  role text not null default 'USER' check (role in ('VIEWER', 'USER', 'ADMIN', 'HEAD_ADMIN')),
   access jsonb not null default '{"admin":false,"warehouses":{}}'::jsonb,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
@@ -87,7 +87,7 @@ begin
     trim(p_name),
     trim(p_username),
     extensions.crypt(p_password, extensions.gen_salt('bf')),
-    case when p_role in ('VIEWER', 'USER', 'ADMIN') then p_role else 'USER' end,
+    case when p_role in ('VIEWER', 'USER', 'ADMIN', 'HEAD_ADMIN') then p_role else 'USER' end,
     coalesce(p_access, '{"admin":false,"warehouses":{}}'::jsonb)
   )
   returning * into record;
@@ -150,7 +150,7 @@ begin
           else extensions.crypt(p_password, extensions.gen_salt('bf'))
         end,
         role = case
-          when p_role in ('VIEWER', 'USER', 'ADMIN') then p_role
+          when p_role in ('VIEWER', 'USER', 'ADMIN', 'HEAD_ADMIN') then p_role
           else role
         end,
         access = coalesce(p_access, access),
@@ -440,59 +440,52 @@ create unique index if not exists original_inventory_catalog_name_idx
   on public.original_inventory_catalog (lower(name));
 
 -- =========================
--- ZESZYT (REFERENTKA)
+-- RAPORT ZMIANOWY
 -- =========================
-create table if not exists public.zeszyt_sessions (
+create table if not exists public.raport_zmianowy_sessions (
   id uuid primary key default gen_random_uuid(),
   created_at timestamptz not null default now(),
   created_by text not null,
-  shift text not null check (shift in ('I', 'II', 'III')),
   session_date date not null default current_date,
   plan_sheet text not null,
   file_name text
 );
 
-alter table if exists public.zeszyt_sessions
-  add column if not exists session_date date not null default current_date;
+create index if not exists raport_zmianowy_sessions_date_idx
+  on public.raport_zmianowy_sessions (session_date);
 
-create table if not exists public.zeszyt_items (
+create table if not exists public.raport_zmianowy_items (
   id uuid primary key default gen_random_uuid(),
-  session_id uuid not null references public.zeszyt_sessions(id) on delete cascade,
+  session_id uuid not null references public.raport_zmianowy_sessions(id) on delete cascade,
   index_code text not null,
   description text,
   station text,
-  operators text[] not null default '{}',
-  default_qty numeric,
   created_at timestamptz not null default now()
 );
 
-create index if not exists zeszyt_items_session_idx on public.zeszyt_items (session_id);
-create index if not exists zeszyt_items_index_idx on public.zeszyt_items (index_code);
+create index if not exists raport_zmianowy_items_session_idx
+  on public.raport_zmianowy_items (session_id);
+create index if not exists raport_zmianowy_items_index_idx
+  on public.raport_zmianowy_items (index_code);
+create index if not exists raport_zmianowy_items_station_idx
+  on public.raport_zmianowy_items (station);
 
-create table if not exists public.zeszyt_receipts (
+create table if not exists public.raport_zmianowy_entries (
   id uuid primary key default gen_random_uuid(),
-  item_id uuid not null references public.zeszyt_items(id) on delete cascade,
-  operator_no text not null,
-  qty numeric not null,
-  received_at timestamptz not null default now(),
-  flag_pw boolean not null default false,
-  approved boolean not null default false,
-  approved_at timestamptz,
-  approved_by text,
+  item_id uuid not null references public.raport_zmianowy_items(id) on delete cascade,
+  note text not null,
   created_at timestamptz not null default now(),
+  author_id uuid,
+  author_name text not null,
   edited_at timestamptz,
-  edited_by text
+  edited_by_id uuid,
+  edited_by_name text
 );
 
-create index if not exists zeszyt_receipts_item_idx on public.zeszyt_receipts (item_id);
-create index if not exists zeszyt_receipts_received_idx on public.zeszyt_receipts (received_at);
-
-alter table if exists public.zeszyt_receipts
-  add column if not exists approved boolean not null default false;
-alter table if exists public.zeszyt_receipts
-  add column if not exists approved_at timestamptz;
-alter table if exists public.zeszyt_receipts
-  add column if not exists approved_by text;
+create index if not exists raport_zmianowy_entries_item_idx
+  on public.raport_zmianowy_entries (item_id);
+create index if not exists raport_zmianowy_entries_created_idx
+  on public.raport_zmianowy_entries (created_at);
 
 create table if not exists public.audit_logs (
   id uuid primary key default gen_random_uuid(),
@@ -526,9 +519,9 @@ alter table if exists public.spare_parts enable row level security;
 alter table if exists public.spare_part_history enable row level security;
 alter table if exists public.original_inventory_entries enable row level security;
 alter table if exists public.original_inventory_catalog enable row level security;
-alter table if exists public.zeszyt_sessions enable row level security;
-alter table if exists public.zeszyt_items enable row level security;
-alter table if exists public.zeszyt_receipts enable row level security;
+alter table if exists public.raport_zmianowy_sessions enable row level security;
+alter table if exists public.raport_zmianowy_items enable row level security;
+alter table if exists public.raport_zmianowy_entries enable row level security;
 alter table if exists public.audit_logs enable row level security;
 
 drop policy if exists "locations_read" on public.locations;

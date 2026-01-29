@@ -12,7 +12,10 @@ type UpdateUserPayload = {
   isActive?: boolean;
 };
 
-const normalizeRole = (role?: Role) => (role === 'ADMIN' || role === 'USER' || role === 'VIEWER' ? role : null);
+const normalizeRole = (role?: Role) =>
+  role === 'HEAD_ADMIN' || role === 'ADMIN' || role === 'USER' || role === 'VIEWER'
+    ? role
+    : null;
 
 export async function PATCH(
   request: NextRequest,

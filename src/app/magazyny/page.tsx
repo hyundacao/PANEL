@@ -30,11 +30,11 @@ const warehouseOptions: Array<{
     href: '/czesci'
   },
   {
-    key: 'ZESZYT',
-    title: 'Zeszyt produkcji',
-    description: 'Ewidencja odbiorów palet i rozliczeń na zmianie.',
+    key: 'RAPORT_ZMIANOWY',
+    title: 'Raport zmianowy',
+    description: 'Bieżące podsumowania produkcji, uwagi i analiza zdarzeń na zmianach.',
     action: 'WEJDŹ',
-    href: '/zeszyt'
+    href: '/raport-zmianowy'
   }
 ];
 
@@ -55,20 +55,20 @@ export default function WarehousesPage() {
 
   const available = getAccessibleWarehouses(user);
   const visibleOptions = warehouseOptions.filter((item) => available.includes(item.key));
-  const adminVisible = isAdmin(user) || user?.role === 'ADMIN';
+  const adminVisible = isAdmin(user);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg px-4 py-12">
       <div className="flex w-full max-w-4xl flex-col gap-8">
         <div className="space-y-2 text-center">
-          <h1 className="text-3xl font-semibold text-title">Wybierz magazyn do pracy</h1>
+          <h1 className="text-3xl font-semibold text-title">Wybierz moduł do pracy</h1>
         </div>
 
         {visibleOptions.length === 0 && !adminVisible ? (
           <Card className="space-y-2 text-center">
             <p className="text-sm font-semibold text-title">Brak dostępu</p>
             <p className="text-sm text-dim">
-              Skontaktuj się z administratorem, aby otrzymać dostęp do magazynu.
+              Skontaktuj się z administratorem, aby otrzymać dostęp do modułu.
             </p>
           </Card>
         ) : (

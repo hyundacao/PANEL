@@ -47,8 +47,8 @@ const navItemsCzesci: NavItem[] = [
   { label: 'Historia', href: '/czesci/historia', icon: History, tab: 'historia' }
 ];
 
-const navItemsZeszyt: NavItem[] = [
-  { label: 'Zeszyt', href: '/zeszyt', icon: ClipboardList, tab: 'zeszyt' }
+const navItemsRaport: NavItem[] = [
+  { label: 'Raport zmianowy', href: '/raport-zmianowy', icon: FileText, tab: 'raport-zmianowy' }
 ];
 
 export const Sidebar = () => {
@@ -60,15 +60,15 @@ export const Sidebar = () => {
   const items =
     warehouse === 'CZESCI'
       ? navItemsCzesci
-      : warehouse === 'ZESZYT'
-        ? navItemsZeszyt
+      : warehouse === 'RAPORT_ZMIANOWY'
+        ? navItemsRaport
         : navItemsPrzemialy;
   const visibleItems = items.filter((item) => {
     if (!warehouse) return false;
     if (!item.tab) return true;
     return canSeeTab(user, warehouse, item.tab);
   });
-  const showAdmin = isAdmin(user) || role === 'ADMIN';
+  const showAdmin = isAdmin(user) || role === 'HEAD_ADMIN';
   const warehouseLabel = getWarehouseLabel(warehouse);
   const isActivePath = (href: string) => {
     if (href === '/czesci') return pathname === '/czesci';
@@ -83,8 +83,8 @@ export const Sidebar = () => {
       ? 'PANEL MAGAZYNU CZĘŚCI ZAMIENNYCH'
       : warehouse === 'PRZEMIALY'
         ? 'PANEL MAGAZYNU PRZEMIAŁÓW'
-        : warehouse === 'ZESZYT'
-          ? 'PANEL ZESZYTU'
+        : warehouse === 'RAPORT_ZMIANOWY'
+          ? 'PANEL RAPORTU ZMIANOWEGO'
           : 'Panel produkcji';
   const closeOnMobile = () => {
     if (typeof window === 'undefined') return;
@@ -96,7 +96,7 @@ export const Sidebar = () => {
   return (
     <aside
       className={cn(
-        'fixed left-0 top-0 z-40 h-screen w-64 border-r border-border bg-surface transition-transform duration-200 md:translate-x-0',
+        'fixed left-0 top-0 z-40 hidden h-screen w-64 border-r border-border bg-surface transition-transform duration-200 md:block md:translate-x-0',
         sidebarCollapsed ? 'md:w-20 -translate-x-full md:translate-x-0' : 'translate-x-0'
       )}
     >

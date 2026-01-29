@@ -18,7 +18,7 @@ export const PRZEMIALY_TABS: WarehouseTab[] = [
 ];
 
 export const CZESCI_TABS: WarehouseTab[] = ['pobierz', 'uzupelnij', 'stany', 'historia'];
-export const ZESZYT_TABS: WarehouseTab[] = ['zeszyt'];
+export const RAPORT_ZMIANOWY_TABS: WarehouseTab[] = ['raport-zmianowy'];
 
 const roleLabels: Record<WarehouseRole, string> = {
   ROZDZIELCA: 'Rozdzielca',
@@ -27,11 +27,11 @@ const roleLabels: Record<WarehouseRole, string> = {
 };
 
 export const isAdmin = (user: AppUser | null | undefined) =>
-  Boolean(user?.access?.admin || user?.role === 'ADMIN');
+  Boolean(user?.access?.admin || user?.role === 'HEAD_ADMIN');
 
 export const getRoleLabel = (user: AppUser | null | undefined, warehouse: WarehouseKey | null) => {
   if (!user) return 'Gość';
-  if (isAdmin(user)) return 'Administrator';
+  if (isAdmin(user)) return 'Head admin';
   if (!warehouse) return 'Użytkownik';
   const role = user.access.warehouses[warehouse]?.role;
   return role ? roleLabels[role] : 'Użytkownik';
@@ -39,7 +39,7 @@ export const getRoleLabel = (user: AppUser | null | undefined, warehouse: Wareho
 
 export const getAccessibleWarehouses = (user: AppUser | null | undefined): WarehouseKey[] => {
   if (!user) return [];
-  if (isAdmin(user)) return ['PRZEMIALY', 'CZESCI', 'ZESZYT'];
+  if (isAdmin(user)) return ['PRZEMIALY', 'CZESCI', 'RAPORT_ZMIANOWY'];
   return Object.keys(user.access.warehouses) as WarehouseKey[];
 };
 
@@ -82,11 +82,11 @@ export const getRolePreset = (
     }
     return { role, readOnly: false, tabs: ['pobierz', 'uzupelnij', 'stany'] };
   }
-  if (warehouse === 'ZESZYT') {
+  if (warehouse === 'RAPORT_ZMIANOWY') {
     if (role === 'PODGLAD') {
-      return { role, readOnly: true, tabs: ZESZYT_TABS };
+      return { role, readOnly: true, tabs: RAPORT_ZMIANOWY_TABS };
     }
-    return { role, readOnly: false, tabs: ZESZYT_TABS };
+    return { role, readOnly: false, tabs: RAPORT_ZMIANOWY_TABS };
   }
 
   if (role === 'ROZDZIELCA') {
@@ -110,6 +110,6 @@ export const getWarehouseLabel = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'CZESCI') return 'Magazyn części zamiennych';
   if (warehouse === 'PRZEMIALY')
     return 'Zarządzanie przemiałami i przygotowaniem produkcji';
-  if (warehouse === 'ZESZYT') return 'Zeszyt produkcji (referentka)';
+  if (warehouse === 'RAPORT_ZMIANOWY') return 'Raport zmianowy';
   return 'Magazyn';
 };

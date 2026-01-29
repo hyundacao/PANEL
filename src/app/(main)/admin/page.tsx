@@ -108,6 +108,7 @@ type PrzemialyAdminTab =
   | 'dryers';
 
 const roleOptions = [
+  { value: 'HEAD_ADMIN', label: 'Head admin' },
   { value: 'ADMIN', label: 'Administrator' },
   { value: 'USER', label: 'Użytkownik' }
 ] as const;
@@ -135,22 +136,21 @@ const czesciTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'pobierz', label: 'Pobierz' },
   { key: 'uzupelnij', label: 'Uzupełnij' },
   { key: 'stany', label: 'Stany magazynowe' },
-  { key: 'historia', label: 'Historia (tylko admin)' }
+  { key: 'historia', label: 'Historia (tylko head admin)' }
 ];
-const zeszytTabOptions: Array<{ key: WarehouseTab; label: string }> = [
-  { key: 'zeszyt', label: 'Zeszyt' }
+const raportZmianowyTabOptions: Array<{ key: WarehouseTab; label: string }> = [
+  { key: 'raport-zmianowy', label: 'Raport zmianowy' }
 ];
 const warehouseLabels: Record<WarehouseKey, string> = {
   PRZEMIALY: 'Zarządzanie przemiałami i przygotowaniem produkcji',
   CZESCI: 'Magazyn części zamiennych',
-  ZESZYT: 'Zeszyt produkcji (referentka)'
+  RAPORT_ZMIANOWY: 'Raport zmianowy'
 };
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const compareByName = (a: { name: string }, b: { name: string }) =>
   collator.compare(a.name, b.name);
 const PRZEMIALY_TAB_STORAGE_KEY = 'admin-przemialy-tab';
 const roleOptionsSorted = [...roleOptions].sort((a, b) => collator.compare(a.label, b.label));
-
 const cloneAccess = (access: UserAccess): UserAccess => ({
   admin: access.admin,
   warehouses: Object.fromEntries(
@@ -512,8 +512,8 @@ export default function AdminPage() {
   };
 
   const formatAccessSummary = (access: UserAccess, role: Role) => {
-    if (role === 'ADMIN' || access.admin) {
-      return 'Administrator (pełny dostęp)';
+    if (role === 'HEAD_ADMIN' || access.admin) {
+      return 'Head admin (pełny dostęp)';
     }
     const entries = Object.entries(access.warehouses)
       .map(([key, value]) => {
@@ -542,8 +542,8 @@ export default function AdminPage() {
     const tabOptions =
       warehouseKey === 'PRZEMIALY'
         ? przemialyTabOptions
-        : warehouseKey === 'ZESZYT'
-          ? zeszytTabOptions
+        : warehouseKey === 'RAPORT_ZMIANOWY'
+          ? raportZmianowyTabOptions
           : czesciTabOptions;
     const visibleTabs =
       warehouseKey === 'CZESCI' && !isAdminUser
@@ -639,12 +639,12 @@ export default function AdminPage() {
               ))}
             </div>
             {warehouseKey === 'CZESCI' && !isAdminUser && (
-              <p className="text-xs text-dim">Historia ruchów jest dostępna tylko dla administratora.</p>
+              <p className="text-xs text-dim">Historia ruchów jest dostępna tylko dla head admina.</p>
             )}
           </div>
         )}
         {blockEditing && (
-          <p className="text-xs text-dim">Administrator ma pełny dostęp do wszystkich magazynów.</p>
+          <p className="text-xs text-dim">Head admin ma pełny dostęp do wszystkich magazynów.</p>
         )}
       </Card>
     );
@@ -1768,7 +1768,7 @@ export default function AdminPage() {
     return inventorySort.direction === 'asc' ? '^' : 'v';
   };
 
-  if (!isAdmin(currentUser) && role !== 'ADMIN') {
+  if (!isAdmin(currentUser) && role !== 'HEAD_ADMIN') {
     return (
       <Card>
         <p className="text-sm text-muted">Brak dostępu.</p>
@@ -1834,11 +1834,14 @@ export default function AdminPage() {
                       const nextRole = event.target.value as Role;
                       setUserForm((prev) => {
                         const nextAccess = cloneAccess(prev.access);
-                        nextAccess.admin = nextRole === 'ADMIN';
+                        nextAccess.admin = nextRole === 'HEAD_ADMIN';
                         if (nextAccess.admin) {
                           nextAccess.warehouses.PRZEMIALY = getRolePreset('PRZEMIALY', 'ROZDZIELCA');
                           nextAccess.warehouses.CZESCI = getRolePreset('CZESCI', 'MECHANIK');
-                          nextAccess.warehouses.ZESZYT = getRolePreset('ZESZYT', 'ROZDZIELCA');
+                          nextAccess.warehouses.RAPORT_ZMIANOWY = getRolePreset(
+                            'RAPORT_ZMIANOWY',
+                            'ROZDZIELCA'
+                          );
                         }
                         return { ...prev, role: nextRole, access: nextAccess };
                       });
@@ -1861,19 +1864,19 @@ export default function AdminPage() {
                     'PRZEMIALY',
                     userForm.access,
                     updateUserFormAccess,
-                    userForm.role === 'ADMIN'
+                    userForm.role === 'HEAD_ADMIN'
                   )}
                   {renderWarehouseAccess(
                     'CZESCI',
                     userForm.access,
                     updateUserFormAccess,
-                    userForm.role === 'ADMIN'
+                    userForm.role === 'HEAD_ADMIN'
                   )}
                   {renderWarehouseAccess(
-                    'ZESZYT',
+                    'RAPORT_ZMIANOWY',
                     userForm.access,
                     updateUserFormAccess,
-                    userForm.role === 'ADMIN'
+                    userForm.role === 'HEAD_ADMIN'
                   )}
                 </div>
               </div>
@@ -1940,11 +1943,14 @@ export default function AdminPage() {
                           setUserDrafts((prev) => {
                             const existing = prev[item.id] ?? draft;
                             const nextAccess = cloneAccess(existing.access);
-                            nextAccess.admin = nextRole === 'ADMIN';
+                            nextAccess.admin = nextRole === 'HEAD_ADMIN';
                             if (nextAccess.admin) {
                               nextAccess.warehouses.PRZEMIALY = getRolePreset('PRZEMIALY', 'ROZDZIELCA');
                               nextAccess.warehouses.CZESCI = getRolePreset('CZESCI', 'MECHANIK');
-                              nextAccess.warehouses.ZESZYT = getRolePreset('ZESZYT', 'ROZDZIELCA');
+                              nextAccess.warehouses.RAPORT_ZMIANOWY = getRolePreset(
+                                'RAPORT_ZMIANOWY',
+                                'ROZDZIELCA'
+                              );
                             }
                             return {
                               ...prev,
@@ -2026,19 +2032,19 @@ export default function AdminPage() {
                         'PRZEMIALY',
                         selectedDraft.access,
                         (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
-                        selectedDraft.role === 'ADMIN'
+                        selectedDraft.role === 'HEAD_ADMIN'
                       )}
                       {renderWarehouseAccess(
                         'CZESCI',
                         selectedDraft.access,
                         (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
-                        selectedDraft.role === 'ADMIN'
+                        selectedDraft.role === 'HEAD_ADMIN'
                       )}
                       {renderWarehouseAccess(
-                        'ZESZYT',
+                        'RAPORT_ZMIANOWY',
                         selectedDraft.access,
                         (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
-                        selectedDraft.role === 'ADMIN'
+                        selectedDraft.role === 'HEAD_ADMIN'
                       )}
                     </div>
                     <div className="flex justify-end">

@@ -25,14 +25,14 @@ const getTitle = (pathname: string) => {
   if (pathname.startsWith('/czesci/uzupelnij')) return 'Uzupełnij';
   if (pathname.startsWith('/czesci/pobierz')) return 'Pobierz';
   if (pathname.startsWith('/czesci')) return 'Części zamienne';
-  if (pathname.startsWith('/zeszyt')) return 'Zeszyt';
+  if (pathname.startsWith('/raport-zmianowy')) return 'Raport zmianowy';
   if (pathname.startsWith('/admin')) return 'Admin';
   return 'Pulpit';
 };
 
 const getWarehouseFromPath = (pathname: string): WarehouseKey | null => {
   if (pathname.startsWith('/czesci')) return 'CZESCI';
-  if (pathname.startsWith('/zeszyt')) return 'ZESZYT';
+  if (pathname.startsWith('/raport-zmianowy')) return 'RAPORT_ZMIANOWY';
   if (pathname.startsWith('/admin')) return null;
   return 'PRZEMIALY';
 };
@@ -50,7 +50,7 @@ const getTabFromPath = (pathname: string): WarehouseTab | null => {
   if (pathname.startsWith('/czesci/uzupelnij')) return 'uzupelnij';
   if (pathname.startsWith('/czesci/stany')) return 'stany';
   if (pathname.startsWith('/czesci/historia')) return 'historia';
-  if (pathname.startsWith('/zeszyt')) return 'zeszyt';
+  if (pathname.startsWith('/raport-zmianowy')) return 'raport-zmianowy';
   return null;
 };
 
@@ -77,7 +77,9 @@ const navItemsCzesci: MobileNavItem[] = [
   { label: 'Historia', href: '/czesci/historia', tab: 'historia' }
 ];
 
-const navItemsZeszyt: MobileNavItem[] = [{ label: 'Zeszyt', href: '/zeszyt', tab: 'zeszyt' }];
+const navItemsRaport: MobileNavItem[] = [
+  { label: 'Raport zmianowy', href: '/raport-zmianowy', tab: 'raport-zmianowy' }
+];
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -144,7 +146,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       return;
     }
     if (pathname.startsWith('/admin')) {
-      if (!isAdmin(user) && role !== 'ADMIN') {
+      if (!isAdmin(user) && role !== 'HEAD_ADMIN') {
         router.replace('/magazyny');
       }
       return;
@@ -186,8 +188,8 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   const mobileItems =
     (activeWarehouse === 'CZESCI'
       ? navItemsCzesci
-      : activeWarehouse === 'ZESZYT'
-        ? navItemsZeszyt
+      : activeWarehouse === 'RAPORT_ZMIANOWY'
+        ? navItemsRaport
         : navItemsPrzemialy
     ).filter((item) => {
       if (!activeWarehouse) return false;

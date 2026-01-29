@@ -12,7 +12,9 @@ type CreateUserPayload = {
 };
 
 const normalizeRole = (role?: Role) =>
-  role === 'ADMIN' || role === 'USER' || role === 'VIEWER' ? role : 'USER';
+  role === 'HEAD_ADMIN' || role === 'ADMIN' || role === 'USER' || role === 'VIEWER'
+    ? role
+    : 'USER';
 
 export async function GET() {
   const { data, error } = await supabaseAdmin.rpc('list_app_users');

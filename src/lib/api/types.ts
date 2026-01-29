@@ -1,6 +1,6 @@
-export type Role = 'VIEWER' | 'USER' | 'ADMIN';
+export type Role = 'VIEWER' | 'USER' | 'ADMIN' | 'HEAD_ADMIN';
 
-export type WarehouseKey = 'PRZEMIALY' | 'CZESCI' | 'ZESZYT';
+export type WarehouseKey = 'PRZEMIALY' | 'CZESCI' | 'RAPORT_ZMIANOWY';
 
 export type WarehouseRole = 'ROZDZIELCA' | 'MECHANIK' | 'PODGLAD';
 
@@ -16,9 +16,9 @@ export type PrzemialyTab =
 
 export type CzesciTab = 'pobierz' | 'uzupelnij' | 'stany' | 'historia';
 
-export type ZeszytTab = 'zeszyt';
+export type RaportZmianowyTab = 'raport-zmianowy';
 
-export type WarehouseTab = PrzemialyTab | CzesciTab | ZeszytTab;
+export type WarehouseTab = PrzemialyTab | CzesciTab | RaportZmianowyTab;
 
 export type WarehouseAccess = {
   role: WarehouseRole;
@@ -246,48 +246,48 @@ export type MaterialLocation = {
 
 export type MaterialLocationsMap = Record<string, MaterialLocation[]>;
 
-export type ZeszytShift = 'I' | 'II' | 'III';
-
-export type ZeszytSession = {
+export type RaportZmianowySession = {
   id: string;
   createdAt: string;
   createdBy: string;
-  shift: ZeszytShift;
   dateKey: string;
   planSheet: string;
   fileName?: string | null;
 };
 
-export type ZeszytItem = {
+export type RaportZmianowyItem = {
   id: string;
   sessionId: string;
   indexCode: string;
   description?: string | null;
   station?: string | null;
-  operators: string[];
-  defaultQty?: number | null;
   createdAt: string;
 };
 
-export type ZeszytReceipt = {
+export type RaportZmianowyEntry = {
   id: string;
   itemId: string;
-  operatorNo: string;
-  qty: number;
-  receivedAt: string;
-  flagPw: boolean;
-  approved: boolean;
-  approvedAt?: string | null;
-  approvedBy?: string | null;
+  note: string;
   createdAt: string;
+  authorId?: string | null;
+  authorName: string;
   editedAt?: string | null;
-  editedBy?: string | null;
+  editedById?: string | null;
+  editedByName?: string | null;
 };
 
-export type ZeszytSessionData = {
-  session: ZeszytSession;
-  items: ZeszytItem[];
-  receipts: ZeszytReceipt[];
+export type RaportZmianowySessionData = {
+  session: RaportZmianowySession;
+  items: RaportZmianowyItem[];
+  entries: RaportZmianowyEntry[];
+};
+
+export type RaportZmianowyEntryLog = RaportZmianowyEntry & {
+  indexCode: string;
+  station?: string | null;
+  description?: string | null;
+  sessionId: string;
+  sessionDate: string;
 };
 
 export type AppUser = {
