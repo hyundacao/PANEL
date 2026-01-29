@@ -1073,7 +1073,8 @@ export default function RaportZmianowyPage() {
               </div>
               {adminMode && activeSessionId && (
                 <Button
-                  tone="danger"
+                  variant="outline"
+                  className="text-danger border-danger/60 hover:border-danger"
                   onClick={() => removeSessionMutation.mutate(activeSessionId)}
                 >
                   Usuń raport
@@ -1261,7 +1262,7 @@ export default function RaportZmianowyPage() {
                                       {adminMode && (
                                         <Button
                                           variant="ghost"
-                                          tone="danger"
+                                          className="text-danger hover:text-danger"
                                           onClick={() => handleRemoveEntry(entry.id)}
                                         >
                                           Usuń
