@@ -192,7 +192,7 @@ export const Sidebar = () => {
                   )}
                 />
                 <Shield className="h-4 w-4" style={{ color: 'var(--brand)' }} />
-                {!sidebarCollapsed && <span style={{ color: 'var(--brand)' }}>ZARZ\u0104DZANIE</span>}
+                {!sidebarCollapsed && <span style={{ color: 'var(--brand)' }}>ZARZĄDZANIE</span>}
               </Link>
               {!sidebarCollapsed && (
                 <div className="flex justify-center pt-3">
