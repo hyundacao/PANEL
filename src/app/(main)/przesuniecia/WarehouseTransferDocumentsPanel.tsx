@@ -690,7 +690,7 @@ const parseDocumentItemsFromTesseractTsv = (tsv: string): ParsedDocumentItems =>
   flushRow(currentRow);
 
   const items = rowBlocks
-    .map((row, index) => {
+    .map((row, index): ParsedItemInput | null => {
       const name = row.nameParts.join(' ').replace(/\s+/g, ' ').trim();
       const qty = row.qty ?? null;
       if (!row.indexCode || !name || qty === null || qty <= 0) {
@@ -704,7 +704,7 @@ const parseDocumentItemsFromTesseractTsv = (tsv: string): ParsedDocumentItems =>
         name,
         unit: row.unit || 'kg',
         plannedQty: qty
-      } satisfies ParsedItemInput;
+      };
     })
     .filter((item): item is ParsedItemInput => item !== null);
 
@@ -922,11 +922,17 @@ const parseDocumentItemsFromTesseractGrid = (tsv: string): ParsedDocumentItems =
     const qty = qtyFromQtyColumn ?? qtyFromUnitColumn ?? undefined;
     let unit = cols.unit
       .map((token) => normalizeUnitToken(token))
-      .find((token): token is string => Boolean(token));
+      .find(
+        (token): token is Exclude<ReturnType<typeof normalizeUnitToken>, null> =>
+          token !== null
+      );
     if (!unit) {
       unit = cols.qty
         .map((token) => normalizeUnitToken(token))
-        .find((token): token is string => Boolean(token));
+        .find(
+          (token): token is Exclude<ReturnType<typeof normalizeUnitToken>, null> =>
+            token !== null
+        );
     }
 
     const rowNameTokens = [...cols.name].filter(
@@ -977,7 +983,7 @@ const parseDocumentItemsFromTesseractGrid = (tsv: string): ParsedDocumentItems =
   flushCurrent();
 
   const items = rowBlocks
-    .map((row, index) => {
+    .map((row, index): ParsedItemInput | null => {
       const name = row.nameParts.join(' ').replace(/\s+/g, ' ').trim();
       const qty = row.qty ?? null;
       if (!row.indexCode || !name || qty === null || qty <= 0) {
@@ -991,7 +997,7 @@ const parseDocumentItemsFromTesseractGrid = (tsv: string): ParsedDocumentItems =
         name,
         unit: row.unit || 'kg',
         plannedQty: qty
-      } satisfies ParsedItemInput;
+      };
     })
     .filter((item): item is ParsedItemInput => item !== null);
 
