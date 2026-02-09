@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent } from 'react';
@@ -58,7 +58,7 @@ import { useToastStore } from '@/components/ui/Toast';
 import { cn } from '@/lib/utils/cn';
 import { formatKg, parseQtyInput } from '@/lib/utils/format';
 import type { AppUser, Role, UserAccess, WarehouseKey, WarehouseRole, WarehouseTab } from '@/lib/api/types';
-import { getRolePreset, isAdmin } from '@/lib/auth/access';
+import { getRolePreset, isHeadAdmin, isWarehouseAdmin } from '@/lib/auth/access';
 
 type WarehouseDraft = {
   name: string;
@@ -110,23 +110,13 @@ type PrzemialyAdminTab =
 const roleOptions = [
   { value: 'HEAD_ADMIN', label: 'Head admin' },
   { value: 'ADMIN', label: 'Administrator' },
-  { value: 'USER', label: 'Użytkownik' }
+  { value: 'USER', label: 'Uzytkownik' }
 ] as const;
-const warehouseRoleOptions: Array<{ value: WarehouseRole; label: string }> = [
-  { value: 'ROZDZIELCA', label: 'Rozdzielca' },
-  { value: 'MECHANIK', label: 'Mechanik' },
-  { value: 'PODGLAD', label: 'Podgląd' }
-];
-const warehouseRoleLabels: Record<WarehouseRole, string> = {
-  ROZDZIELCA: 'Rozdzielca',
-  MECHANIK: 'Mechanik',
-  PODGLAD: 'Podgląd'
-};
 const przemialyTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'dashboard', label: 'Pulpit' },
-  { key: 'spis', label: 'Spis przemiałów' },
-  { key: 'spis-oryginalow', label: 'Spis oryginałów' },
-  { key: 'przesuniecia', label: 'Przesunięcia' },
+  { key: 'spis', label: 'Spis przemialow' },
+  { key: 'spis-oryginalow', label: 'Spis oryginalow' },
+  { key: 'przesuniecia', label: 'Przesuniecia przemialowe' },
   { key: 'raporty', label: 'Raporty' },
   { key: 'kartoteka', label: 'Stany magazynowe' },
   { key: 'wymieszane', label: 'Wymieszane tworzywa' },
@@ -134,16 +124,16 @@ const przemialyTabOptions: Array<{ key: WarehouseTab; label: string }> = [
 ];
 const czesciTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'pobierz', label: 'Pobierz' },
-  { key: 'uzupelnij', label: 'Uzupełnij' },
+  { key: 'uzupelnij', label: 'Uzupelnij' },
   { key: 'stany', label: 'Stany magazynowe' },
-  { key: 'historia', label: 'Historia (tylko head admin)' }
+  { key: 'historia', label: 'Historia (head admin lub admin modulu)' }
 ];
 const raportZmianowyTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'raport-zmianowy', label: 'Raport zmianowy' }
 ];
 const warehouseLabels: Record<WarehouseKey, string> = {
   PRZEMIALY: 'Zarządzanie przemiałami i przygotowaniem produkcji',
-  CZESCI: 'Magazyn części zamiennych',
+  CZESCI: 'Magazyn czesci zamiennych',
   RAPORT_ZMIANOWY: 'Raport zmianowy'
 };
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
@@ -184,7 +174,8 @@ const accessKey = (access: UserAccess) => {
       const entry = access.warehouses[key as WarehouseKey];
       if (!entry) return `${key}:none`;
       const tabsKey = [...entry.tabs].sort().join(',');
-      return `${key}:${entry.role}:${entry.readOnly ? 1 : 0}:${tabsKey}`;
+      const adminKey = entry.admin ? 1 : 0;
+      return `${key}:${entry.role}:${entry.readOnly ? 1 : 0}:${adminKey}:${tabsKey}`;
     })
     .join('|');
   return `${access.admin ? 1 : 0}|${warehouseKey}`;
@@ -253,7 +244,7 @@ const AdminToggle = ({
 
 
 export default function AdminPage() {
-  const { role, user: currentUser, activeWarehouse } = useUiStore();
+  const { user: currentUser, activeWarehouse } = useUiStore();
   const toast = useToastStore((state) => state.push);
   const queryClient = useQueryClient();
   const today = getTodayKey();
@@ -512,19 +503,19 @@ export default function AdminPage() {
   };
 
   const formatAccessSummary = (access: UserAccess, role: Role) => {
-    if (role === 'HEAD_ADMIN' || access.admin) {
-      return 'Head admin (pełny dostęp)';
+    if (role === 'HEAD_ADMIN') {
+      return 'Head admin (pelny dostep)';
     }
     const entries = Object.entries(access.warehouses)
       .map(([key, value]) => {
         if (!value) return null;
         const label = warehouseLabels[key as WarehouseKey];
-        const roleLabel = warehouseRoleLabels[value.role];
+        const roleLabel = role === 'ADMIN' && value.admin ? 'Administrator modulu' : 'Uzytkownik';
         return `${label}: ${roleLabel}`;
       })
       .filter(Boolean);
     if (entries.length === 0) {
-      return 'Brak przypisanych magazynów';
+      return 'Brak przypisanych magazynow';
     }
     return entries.join(', ');
   };
@@ -533,12 +524,17 @@ export default function AdminPage() {
     warehouseKey: WarehouseKey,
     access: UserAccess,
     onChange: (updater: (current: UserAccess) => UserAccess) => void,
-    isAdminUser: boolean
+    userRole: Role
   ) => {
     const warehouseAccess = access.warehouses[warehouseKey];
     const enabled = Boolean(warehouseAccess);
     const defaultRole: WarehouseRole =
       warehouseKey === 'CZESCI' ? 'MECHANIK' : 'ROZDZIELCA';
+    const isHeadAdminUser = userRole === 'HEAD_ADMIN';
+    const canAssignAdmin = userRole === 'ADMIN';
+    const canSeeHistory =
+      userRole === 'HEAD_ADMIN' ||
+      (userRole === 'ADMIN' && Boolean(warehouseAccess?.admin));
     const tabOptions =
       warehouseKey === 'PRZEMIALY'
         ? przemialyTabOptions
@@ -546,16 +542,16 @@ export default function AdminPage() {
           ? raportZmianowyTabOptions
           : czesciTabOptions;
     const visibleTabs =
-      warehouseKey === 'CZESCI' && !isAdminUser
+      warehouseKey === 'CZESCI' && !canSeeHistory
         ? tabOptions.filter((tab) => tab.key !== 'historia')
         : tabOptions;
-    const blockEditing = isAdminUser;
+    const blockEditing = isHeadAdminUser;
 
     return (
       <Card key={warehouseKey} className={`space-y-3 ${blockEditing ? 'opacity-70' : ''}`}>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dostęp</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dostep</p>
             <p className="text-sm font-semibold text-title">{warehouseLabels[warehouseKey]}</p>
           </div>
           <AdminToggle
@@ -578,26 +574,22 @@ export default function AdminPage() {
 
         {enabled && warehouseAccess && (
           <div className={`space-y-3 ${blockEditing ? 'pointer-events-none' : ''}`}>
-            <div>
-              <label className="text-xs uppercase tracking-wide text-dim">Rola w magazynie</label>
-              <SelectField
-                value={warehouseAccess.role}
-                onChange={(event) => {
-                  const nextRole = event.target.value as WarehouseRole;
+            {canAssignAdmin && (
+              <AdminToggle
+                checked={Boolean(warehouseAccess.admin)}
+                onCheckedChange={(value) =>
                   onChange((current) => {
                     const next = cloneAccess(current);
-                    next.warehouses[warehouseKey] = getRolePreset(warehouseKey, nextRole);
+                    const currentAccess = next.warehouses[warehouseKey];
+                    if (!currentAccess) return next;
+                    currentAccess.admin = value;
                     return next;
-                  });
-                }}
-              >
-                {warehouseRoleOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </SelectField>
-            </div>
+                  })
+                }
+                label="Administrator modulu"
+                disabled={blockEditing}
+              />
+            )}
             <AdminToggle
               checked={warehouseAccess.readOnly}
               onCheckedChange={(value) =>
@@ -638,13 +630,15 @@ export default function AdminPage() {
                 />
               ))}
             </div>
-            {warehouseKey === 'CZESCI' && !isAdminUser && (
-              <p className="text-xs text-dim">Historia ruchów jest dostępna tylko dla head admina.</p>
+            {warehouseKey === 'CZESCI' && !canSeeHistory && (
+              <p className="text-xs text-dim">
+                Historia ruchow jest dostepna tylko dla head admina lub administratora modulu.
+              </p>
             )}
           </div>
         )}
         {blockEditing && (
-          <p className="text-xs text-dim">Head admin ma pełny dostęp do wszystkich magazynów.</p>
+          <p className="text-xs text-dim">Head admin ma pelny dostep do wszystkich magazynow.</p>
         )}
       </Card>
     );
@@ -796,7 +790,10 @@ export default function AdminPage() {
         DUPLICATE: 'Pozycja juz istnieje.',
         CATALOG_REQUIRED: 'Wybierz poprawna kartoteke.'
       };
-      toast({ title: messageMap[err.message] ?? 'Nie dodano pozycji.', tone: 'error' });
+      toast({
+        title: messageMap[err.message] ?? 'Nie dodano czesci.',
+        tone: 'error'
+      });
     }
   });
 
@@ -810,7 +807,10 @@ export default function AdminPage() {
         DUPLICATE: 'Kartoteka juz istnieje.',
         NAME_REQUIRED: 'Podaj nazwe kartoteki ERP.'
       };
-      toast({ title: messageMap[err.message] ?? 'Nie dodano kartoteki.', tone: 'error' });
+      toast({
+        title: messageMap[err.message] ?? 'Nie dodano kartoteki.',
+        tone: 'error'
+      });
     }
   });
 
@@ -1103,16 +1103,16 @@ export default function AdminPage() {
     mutationFn: addSparePart,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['spare-parts'] });
-      toast({ title: 'Dodano część', tone: 'success' });
+      toast({ title: 'Dodano czesc zamienna', tone: 'success' });
       setSparePartForm({ code: '', name: '', unit: 'szt', qty: '', location: '' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        INVALID_PART: 'Podaj kod, nazwę i jednostkę.',
-        DUPLICATE: 'Część o takim kodzie lub nazwie już istnieje.'
+        INVALID_PART: 'Podaj kod, nazwe i jednostke.',
+        DUPLICATE: 'Czesc o takim kodzie lub nazwie juz istnieje.'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie dodano części.',
+        title: messageMap[err.message] ?? 'Nie dodano czesci.',
         tone: 'error'
       });
     }
@@ -1145,16 +1145,16 @@ export default function AdminPage() {
     mutationFn: updateSparePart,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['spare-parts'] });
-      toast({ title: 'Zapisano część', tone: 'success' });
+      toast({ title: 'Zapisano czesc zamienna', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        INVALID_PART: 'Uzupełnij poprawnie dane części.',
-        DUPLICATE: 'Kod lub nazwa już istnieje.',
-        PART_MISSING: 'Nie znaleziono części.'
+        INVALID_PART: 'Uzupelnij poprawnie dane czesci.',
+        DUPLICATE: 'Kod lub nazwa juz istnieje.',
+        PART_MISSING: 'Nie znaleziono czesci.'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie zapisano części.',
+        title: messageMap[err.message] ?? 'Nie zapisano czesci.',
         tone: 'error'
       });
     }
@@ -1164,10 +1164,10 @@ export default function AdminPage() {
     mutationFn: removeSparePart,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['spare-parts'] });
-      toast({ title: 'Usunięto część', tone: 'success' });
+      toast({ title: 'Usunieto czesc zamienna', tone: 'success' });
     },
     onError: () => {
-      toast({ title: 'Nie usunięto części', tone: 'error' });
+      toast({ title: 'Nie usunieto czesci zamiennej', tone: 'error' });
     }
   });
 
@@ -1180,7 +1180,7 @@ export default function AdminPage() {
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        PART_MISSING: 'Nie znaleziono części.',
+        PART_MISSING: 'Nie znaleziono czesci.',
         INVALID_QTY: 'Podaj poprawny stan.'
       };
       toast({
@@ -1405,7 +1405,7 @@ export default function AdminPage() {
     const nameHeaders = [
       'nazwa przemia',
       'przemial',
-      'przemiał',
+      'przemialu',
       'nazwa',
       'name',
       'material',
@@ -1596,7 +1596,7 @@ export default function AdminPage() {
     const unit = sparePartForm.unit.trim();
     const qtyValue = sparePartForm.qty.trim() ? parseQtyInput(sparePartForm.qty) : 0;
     if (!code || !name || !unit) {
-      toast({ title: 'Podaj kod, nazwę i jednostkę', tone: 'error' });
+      toast({ title: 'Podaj kod, nazwe i jednostke', tone: 'error' });
       return;
     }
     if (qtyValue === null || qtyValue < 0) {
@@ -1768,10 +1768,15 @@ export default function AdminPage() {
     return inventorySort.direction === 'asc' ? '^' : 'v';
   };
 
-  if (!isAdmin(currentUser) && role !== 'HEAD_ADMIN') {
+  const isHead = isHeadAdmin(currentUser);
+  const canAccessModule = Boolean(
+    activeWarehouse && isWarehouseAdmin(currentUser, activeWarehouse)
+  );
+
+  if (!isHead && !canAccessModule) {
     return (
       <Card>
-        <p className="text-sm text-muted">Brak dostępu.</p>
+        <p className="text-sm text-muted">Brak dostepu.</p>
       </Card>
     );
   }
@@ -1779,18 +1784,18 @@ export default function AdminPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Zarzadzanie"
+        title="Zarządzanie"
         subtitle="Konfiguracja i ustawienia"
       />
 
       <div className="space-y-10">
-        {activeWarehouse === null && (
+        {isHead && activeWarehouse === null && (
         <section className="space-y-4">
           <div className="space-y-1">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">Konta</p>
             <h2 className="text-xl font-semibold text-title">Konta i uprawnienia</h2>
             <p className="text-sm text-dim">
-              Tworzenie kont, przypisy magazynow i zarzadzanie rolami.
+              Tworzenie kont, przypisy magazynow i zarządzanie rolami.
             </p>
           </div>
           <div className="space-y-4">
@@ -1835,7 +1840,12 @@ export default function AdminPage() {
                       setUserForm((prev) => {
                         const nextAccess = cloneAccess(prev.access);
                         nextAccess.admin = nextRole === 'HEAD_ADMIN';
-                        if (nextAccess.admin) {
+                        if (nextRole !== 'ADMIN') {
+                          Object.values(nextAccess.warehouses).forEach((entry) => {
+                            if (entry) entry.admin = false;
+                          });
+                        }
+                        if (nextRole === 'HEAD_ADMIN') {
                           nextAccess.warehouses.PRZEMIALY = getRolePreset('PRZEMIALY', 'ROZDZIELCA');
                           nextAccess.warehouses.CZESCI = getRolePreset('CZESCI', 'MECHANIK');
                           nextAccess.warehouses.RAPORT_ZMIANOWY = getRolePreset(
@@ -1864,19 +1874,19 @@ export default function AdminPage() {
                     'PRZEMIALY',
                     userForm.access,
                     updateUserFormAccess,
-                    userForm.role === 'HEAD_ADMIN'
+                    userForm.role
                   )}
                   {renderWarehouseAccess(
                     'CZESCI',
                     userForm.access,
                     updateUserFormAccess,
-                    userForm.role === 'HEAD_ADMIN'
+                    userForm.role
                   )}
                   {renderWarehouseAccess(
                     'RAPORT_ZMIANOWY',
                     userForm.access,
                     updateUserFormAccess,
-                    userForm.role === 'HEAD_ADMIN'
+                    userForm.role
                   )}
                 </div>
               </div>
@@ -1944,7 +1954,12 @@ export default function AdminPage() {
                             const existing = prev[item.id] ?? draft;
                             const nextAccess = cloneAccess(existing.access);
                             nextAccess.admin = nextRole === 'HEAD_ADMIN';
-                            if (nextAccess.admin) {
+                            if (nextRole !== 'ADMIN') {
+                              Object.values(nextAccess.warehouses).forEach((entry) => {
+                                if (entry) entry.admin = false;
+                              });
+                            }
+                            if (nextRole === 'HEAD_ADMIN') {
                               nextAccess.warehouses.PRZEMIALY = getRolePreset('PRZEMIALY', 'ROZDZIELCA');
                               nextAccess.warehouses.CZESCI = getRolePreset('CZESCI', 'MECHANIK');
                               nextAccess.warehouses.RAPORT_ZMIANOWY = getRolePreset(
@@ -2028,24 +2043,24 @@ export default function AdminPage() {
                       </Button>
                     </div>
                     <div className="grid gap-4 lg:grid-cols-2">
-                      {renderWarehouseAccess(
-                        'PRZEMIALY',
-                        selectedDraft.access,
-                        (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
-                        selectedDraft.role === 'HEAD_ADMIN'
-                      )}
-                      {renderWarehouseAccess(
-                        'CZESCI',
-                        selectedDraft.access,
-                        (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
-                        selectedDraft.role === 'HEAD_ADMIN'
-                      )}
-                      {renderWarehouseAccess(
-                        'RAPORT_ZMIANOWY',
-                        selectedDraft.access,
-                        (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
-                        selectedDraft.role === 'HEAD_ADMIN'
-                      )}
+                    {renderWarehouseAccess(
+                      'PRZEMIALY',
+                      selectedDraft.access,
+                      (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
+                      selectedDraft.role
+                    )}
+                    {renderWarehouseAccess(
+                      'CZESCI',
+                      selectedDraft.access,
+                      (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
+                      selectedDraft.role
+                    )}
+                    {renderWarehouseAccess(
+                      'RAPORT_ZMIANOWY',
+                      selectedDraft.access,
+                      (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
+                      selectedDraft.role
+                    )}
                     </div>
                     <div className="flex justify-end">
                       <Button
@@ -2074,8 +2089,8 @@ export default function AdminPage() {
               <TabsTrigger value="warehouses">Magazyny</TabsTrigger>
               <TabsTrigger value="locations">Lokalizacje</TabsTrigger>
               <TabsTrigger value="inventory">Inwentaryzacja</TabsTrigger>
-              <TabsTrigger value="audit">Audyt</TabsTrigger>
-              <TabsTrigger value="positions">KARTOTEKI/NAZWY PRZEMIAŁÓW</TabsTrigger>
+              <TabsTrigger value="audit">REJESTR DZIALAN</TabsTrigger>
+              <TabsTrigger value="positions">KARTOTEKI/NAZWY PRZEMIALOW</TabsTrigger>
               <TabsTrigger value="dryers">Suszarki</TabsTrigger>
             </TabsList>
 
@@ -2818,7 +2833,7 @@ export default function AdminPage() {
 <TabsContent value="audit" className="mt-6">
           <Card>
             <DataTable
-              columns={['Data', 'Użytkownik', 'Akcja', 'Lokalizacja']}
+              columns={['Data', 'Uzytkownik', 'Akcja', 'Lokalizacja']}
               rows={(audit ?? []).map((row) => [
                 <span key={`${row.id}-date`} className="text-dim">
                   {new Date(row.at).toLocaleString('pl-PL')}
@@ -2900,7 +2915,7 @@ export default function AdminPage() {
           </Card>
           <Card className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              KARTOTEKI/NAZWY PRZEMIAŁÓW
+              KARTOTEKI/NAZWY PRZEMIALOW
             </p>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <Button
@@ -2908,35 +2923,35 @@ export default function AdminPage() {
                 className="h-full w-full justify-start"
                 onClick={() => openPositionsAction('addCatalog')}
               >
-                Dodaj kartotekę
+                Dodaj kartoteke
               </Button>
               <Button
                 variant="secondary"
                 className="h-full w-full justify-start"
                 onClick={() => openPositionsAction('addMaterial')}
               >
-                Dodaj przemiał
+                Dodaj przemial
               </Button>
 <Button
                 variant="outline"
                 className="h-full w-full justify-start border-[rgba(170,24,24,0.4)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
                 onClick={() => openPositionsAction('removeCatalog')}
               >
-                Usuń kartotekę
+                Usun kartoteke
               </Button>
               <Button
                 variant="outline"
                 className="h-full w-full justify-start border-[rgba(170,24,24,0.4)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
                 onClick={() => openPositionsAction('removeMaterial')}
               >
-                Usuń przemiał
+                Usun przemial
               </Button>
             </div>
           </Card>
 
           {positionsAction === 'addCatalog' && (
             <Card className="mt-4 space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dodaj kartotekę</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dodaj kartoteke</p>
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
                   <label className="text-xs uppercase tracking-wide text-dim">Nazwa kartoteki ERP</label>
@@ -2945,7 +2960,7 @@ export default function AdminPage() {
                     onChange={(event) =>
                       setCatalogForm((prev) => ({ ...prev, name: event.target.value }))
                     }
-                    placeholder="np. PRZEMIAŁ PP"
+                    placeholder="np. PRZEMIAL PP"
                   />
                 </div>
               </div>
@@ -2954,7 +2969,7 @@ export default function AdminPage() {
                   Anuluj
                 </Button>
                 <Button onClick={handleAddCatalog} disabled={addCatalogMutation.isPending}>
-                  Dodaj kartotekę
+                  Dodaj kartoteke
                 </Button>
               </div>
             </Card>
@@ -2962,7 +2977,7 @@ export default function AdminPage() {
 
           {positionsAction === 'addMaterial' && (
             <Card className="mt-4 space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dodaj przemiał</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dodaj przemial</p>
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
                   <label className="text-xs uppercase tracking-wide text-dim">Kartoteka ERP</label>
@@ -2981,7 +2996,7 @@ export default function AdminPage() {
                   </SelectField>
                 </div>
                 <div>
-                  <label className="text-xs uppercase tracking-wide text-dim">Nazwa przemiału</label>
+                  <label className="text-xs uppercase tracking-wide text-dim">Nazwa przemialu</label>
                   <Input
                     value={materialForm.name}
                     onChange={(event) =>
@@ -2996,7 +3011,7 @@ export default function AdminPage() {
                   Anuluj
                 </Button>
                 <Button onClick={handleAddMaterial} disabled={addMaterialMutation.isPending}>
-                  Dodaj przemiał
+                  Dodaj przemial
                 </Button>
               </div>
             </Card>
@@ -3004,7 +3019,7 @@ export default function AdminPage() {
 
           {positionsAction === 'removeCatalog' && (
             <Card className="mt-4 space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Usuń kartotekę</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Usun kartoteke</p>
               <div className="grid gap-3 md:grid-cols-3 md:items-end">
                 <div>
                   <label className="text-xs uppercase tracking-wide text-dim">Kartoteka ERP</label>
@@ -3012,7 +3027,7 @@ export default function AdminPage() {
                     value={removeCatalogId}
                     onChange={(event) => setRemoveCatalogId(event.target.value)}
                   >
-                    <option value="">Wybierz kartotekę</option>
+                    <option value="">Wybierz kartoteke</option>
                     {erpCatalogOptions.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name}
@@ -3037,7 +3052,7 @@ export default function AdminPage() {
                     onClick={handleRemoveCatalog}
                     disabled={removeCatalogMutation.isPending}
                   >
-                    Usuń kartotekę
+                    Usun kartoteke
                   </Button>
                 </div>
               </div>
@@ -3046,15 +3061,15 @@ export default function AdminPage() {
 
           {positionsAction === 'removeMaterial' && (
             <Card className="mt-4 space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Usuń przemiał</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Usun przemial</p>
               <div className="grid gap-3 md:grid-cols-2 md:items-end">
                 <div>
-                  <label className="text-xs uppercase tracking-wide text-dim">Przemiał</label>
+                  <label className="text-xs uppercase tracking-wide text-dim">Przemial</label>
                   <SelectField
                     value={removeMaterialId}
                     onChange={(event) => setRemoveMaterialId(event.target.value)}
                   >
-                    <option value="">Wybierz przemiał</option>
+                    <option value="">Wybierz przemial</option>
                     {materialGroups.map((group) => (
                       <optgroup key={`catalog-remove-${group}`} label={group}>
                         {(materialOptionsByGroup.get(group) ?? []).map((mat) => (
@@ -3076,7 +3091,7 @@ export default function AdminPage() {
                     onClick={handleRemoveMaterial}
                     disabled={removeMaterialMutation.isPending}
                   >
-                    Usuń przemiał
+                    Usun przemial
                   </Button>
                 </div>
               </div>
@@ -3085,16 +3100,16 @@ export default function AdminPage() {
 
           <Card className="mt-4 space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              Przypisania przemiałów do kartotek ERP
+              Przypisania przemialow do kartotek ERP
             </p>
             {materialOptions.length === 0 ? (
               <EmptyState
-                title="Brak przemiałów"
-                description="Dodaj przemiał, aby móc go przypisać do kartoteki."
+                title="Brak przemialow"
+                description="Dodaj przemial, aby moc go przypisac do kartoteki."
               />
             ) : (
               <DataTable
-                columns={['Przemiał', 'Kartoteka ERP', 'Akcje']}
+                columns={['Przemial', 'Kartoteka ERP', 'Akcje']}
                 rows={materialOptions.map((mat) => {
                   const currentCatalogId = mat.catalogId ?? '';
                   const draft = materialEdits[mat.id];
@@ -3291,15 +3306,15 @@ export default function AdminPage() {
         {activeWarehouse === 'CZESCI' && (
         <section className="space-y-4">
           <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Części</p>
-            <h2 className="text-xl font-semibold text-title">Magazyn części zamiennych</h2>
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Czesci zamienne</p>
+            <h2 className="text-xl font-semibold text-title">Magazyn czesci zamiennych</h2>
             <p className="text-sm text-dim">
-              Zarządzanie katalogiem części i konfiguracją magazynu.
+              Zarządzanie katalogiem czesci i konfiguracja magazynu.
             </p>
           </div>
           <div className="space-y-4">
             <Card className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dodaj część</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dodaj czesc zamienna</p>
               <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
                 <div>
                   <label className="text-xs uppercase tracking-wide text-dim">Kod</label>
@@ -3318,7 +3333,7 @@ export default function AdminPage() {
                     onChange={(event) =>
                       setSparePartForm((prev) => ({ ...prev, name: event.target.value }))
                     }
-                    placeholder="Łożysko 6204"
+                    placeholder="np. Lozysko 6204"
                   />
                 </div>
                 <div>
@@ -3355,20 +3370,20 @@ export default function AdminPage() {
               </div>
               <div className="flex justify-end">
                 <Button onClick={handleAddSparePart} disabled={addSparePartMutation.isPending}>
-                  Dodaj część
+                  Dodaj czesc zamienna
                 </Button>
               </div>
             </Card>
 
             <Card className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Katalog części</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Katalog czesci</p>
               <Input
                 value={sparePartSearch}
                 onChange={(event) => setSparePartSearch(event.target.value)}
                 placeholder="Szukaj po kodzie lub nazwie"
               />
               {spareParts.length === 0 ? (
-                <p className="text-sm text-dim">Brak części w katalogu.</p>
+                <p className="text-sm text-dim">Brak czesci w katalogu.</p>
               ) : (
                 <DataTable
                   columns={[
@@ -3471,7 +3486,7 @@ export default function AdminPage() {
                             onClick={() => removeSparePartMutation.mutate(part.id)}
                             disabled={removeSparePartMutation.isPending}
                           >
-                            Usuń
+                            Usun
                           </Button>
                         </div>
                       ];
@@ -3481,14 +3496,14 @@ export default function AdminPage() {
             </Card>
 
             <Card className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Historia ruchów</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Historia ruchow</p>
               <Input
                 value={spareHistorySearch}
                 onChange={(event) => setSpareHistorySearch(event.target.value)}
-                placeholder="Szukaj po części lub użytkowniku"
+                placeholder="Szukaj po czesci lub uzytkowniku"
               />
               {spareHistory.length === 0 ? (
-                <p className="text-sm text-dim">Brak historii ruchów.</p>
+                <p className="text-sm text-dim">Brak historii ruchow</p>
               ) : (
                 <DataTable
                   columns={['Kiedy', 'Kto', 'Co', 'Ile', 'Typ', 'Uwagi']}
@@ -3506,7 +3521,7 @@ export default function AdminPage() {
                       entry.user,
                       entry.partName,
                       entry.qty,
-                      entry.kind === 'IN' ? 'Uzupełnienie' : 'Pobranie',
+                      entry.kind === 'IN' ? 'Uzupelnienie' : 'Pobranie',
                       entry.note ?? '-'
                     ])}
                 />

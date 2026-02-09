@@ -166,7 +166,6 @@ export default function DashboardPage() {
           ))}
 
         {dashboard?.map((item) => {
-          const ready = item.confirmed === item.total && item.total > 0;
           return (
             <Card key={item.warehouseId} className="text-center">
               <div className="flex flex-col items-center">

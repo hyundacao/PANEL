@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -42,11 +42,13 @@ const initialForm: TransferForm = {
 };
 
 const kindConfig: Record<TransferKind, { label: string; tone: 'info' | 'success' | 'warning' }> = {
-  INTERNAL: { label: 'Wewnętrzne', tone: 'info' },
-  EXTERNAL_IN: { label: 'Przyjęcie zewnętrzne', tone: 'success' },
-  EXTERNAL_OUT: { label: 'Wydanie zewnętrzne', tone: 'warning' }
+  INTERNAL: { label: 'Wewn\u0119trzne', tone: 'info' },
+  EXTERNAL_IN: { label: 'Przyj\u0119cie zewn\u0119trzne', tone: 'success' },
+  EXTERNAL_OUT: { label: 'Wydanie zewn\u0119trzne', tone: 'warning' }
 };
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
+const materialLabel = (name: string, code: string) => `${name} (${code.trim()})`;
+const locationLabel = (warehouse: string, name: string) => `${warehouse} - ${name}`;
 
 export default function TransfersPage() {
   const today = getTodayKey();
@@ -75,8 +77,6 @@ export default function TransfersPage() {
     queryFn: () => getTransfers()
   });
 
-  const materialLabel = (name: string, code: string) => `${name} (${code.trim()})`;
-  const locationLabel = (warehouse: string, name: string) => `${warehouse} · ${name}`;
 
   const resolveMaterial = (value: string) => {
     const normalized = value.trim().toLowerCase();
@@ -110,7 +110,7 @@ export default function TransfersPage() {
       queryClient.invalidateQueries({ queryKey: ['material-locations'] });
       queryClient.invalidateQueries({ queryKey: ['material-totals'] });
       setForm(initialForm);
-      toast({ title: 'Zapisano przesunięcie', tone: 'success' });
+      toast({ title: 'Zapisano przesuniecie.', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
@@ -122,8 +122,8 @@ export default function TransfersPage() {
         INSUFFICIENT_STOCK: 'Brak wystarczajacego stanu w lokacji zrodlowej.'
       };
       toast({
-        title: 'Nie zapisano przesunięcia',
-        description: messageMap[err.message] ?? 'Sprawdź dane i spróbuj ponownie.',
+        title: 'Nie zapisano przesuniecia.',
+        description: messageMap[err.message] ?? 'Sprawdz dane i sprobuj ponownie.',
         tone: 'error'
       });
     }
@@ -147,7 +147,7 @@ export default function TransfersPage() {
     if (!normalized) return;
     const resolved = resolveLocation(normalized, list);
     if (!resolved) {
-      toast({ title: 'Wybierz lokację z listy', tone: 'error' });
+      toast({ title: 'Wybierz lokacje z listy', tone: 'error' });
       setForm((prev) => ({ ...prev, [field]: '' }));
       return;
     }
@@ -168,7 +168,7 @@ export default function TransfersPage() {
     }
   };
 
-  const selectedMaterial = useMemo(() => resolveMaterial(form.material), [form.material, catalog]);
+  const selectedMaterial = resolveMaterial(form.material);
   const filteredLocations = useMemo(() => {
     if (!selectedMaterial) return locations;
     const allowed = new Set(
@@ -182,10 +182,7 @@ export default function TransfersPage() {
       (materialLocations[selectedMaterial.id] ?? []).map((item) => [item.locationId, item.qty])
     );
   }, [materialLocations, selectedMaterial]);
-  const fromLocationResolved = useMemo(
-    () => resolveLocation(form.fromLocation, filteredLocations),
-    [form.fromLocation, filteredLocations]
-  );
+  const fromLocationResolved = resolveLocation(form.fromLocation, filteredLocations);
   const fromLocationQty = fromLocationResolved ? locationQtyMap.get(fromLocationResolved.id) : null;
   const catalogOptions = useMemo(() => {
     const list = [...catalog];
@@ -274,12 +271,12 @@ export default function TransfersPage() {
   const handleAdd = () => {
     const qtyValue = parseQtyInput(form.qty);
     if (!qtyValue || qtyValue <= 0) {
-      toast({ title: 'Podaj ilość', description: 'Wpisz ilość większą od zera.', tone: 'error' });
+      toast({ title: 'Podaj ilosc', description: 'Wpisz ilosc wieksza od zera.', tone: 'error' });
       return;
     }
     const material = resolveMaterial(form.material);
     if (!material) {
-      toast({ title: 'Brak przemiału', description: 'Wybierz przemiał z listy.', tone: 'error' });
+      toast({ title: 'Brak przemialu', description: 'Wybierz przemial z listy.', tone: 'error' });
       return;
     }
 
@@ -291,8 +288,8 @@ export default function TransfersPage() {
     if (form.kind === 'INTERNAL') {
       if (!fromLocation || !toLocation) {
         toast({
-          title: 'Uzupełnij lokacje',
-          description: 'Wybierz lokację źródłową i docelową.',
+          title: 'Uzupelnij lokacje',
+          description: 'Wybierz lokacje zrodlowa i docelowa.',
           tone: 'error'
         });
         return;
@@ -300,7 +297,7 @@ export default function TransfersPage() {
       if (fromLocation.id === toLocation.id) {
         toast({
           title: 'Niepoprawne lokacje',
-          description: 'Lokacje źródłowa i docelowa muszą się różnić.',
+          description: 'Lokacje zrodlowa i docelowa musza sie roznic.',
           tone: 'error'
         });
         return;
@@ -308,12 +305,12 @@ export default function TransfersPage() {
     }
 
     if (form.kind === 'EXTERNAL_IN' && !toLocation) {
-      toast({ title: 'Wybierz lokację docelową', tone: 'error' });
+      toast({ title: 'Wybierz lokacje docelowa', tone: 'error' });
       return;
     }
 
     if (form.kind === 'EXTERNAL_OUT' && !fromLocation) {
-      toast({ title: 'Wybierz lokację źródłową', tone: 'error' });
+      toast({ title: 'Wybierz lokacje zrodlowa', tone: 'error' });
       return;
     }
 
@@ -342,7 +339,7 @@ export default function TransfersPage() {
       const kindMeta = kindConfig[transfer.kind];
       const fromLabel =
         transfer.kind === 'EXTERNAL_IN'
-          ? 'Z zewnątrz'
+          ? 'Z zewnatrz'
           : transfer.fromLocationId
           ? locationLabel(
               locationMap.get(transfer.fromLocationId)?.warehouseName ?? 'Nieznany magazyn',
@@ -351,7 +348,7 @@ export default function TransfersPage() {
           : '-';
       const toLabel =
         transfer.kind === 'EXTERNAL_OUT'
-          ? 'Na zewnątrz'
+          ? 'Na zewnatrz'
           : transfer.toLocationId
           ? locationLabel(
               locationMap.get(transfer.toLocationId)?.warehouseName ?? 'Nieznany magazyn',
@@ -360,7 +357,7 @@ export default function TransfersPage() {
           : '-';
       const noteParts = [transfer.partner && `Kontrahent: ${transfer.partner}`, transfer.note]
         .filter(Boolean)
-        .join(' · ');
+        .join(' | ');
 
       return [
         formatDateTime(transfer.at),
@@ -370,7 +367,7 @@ export default function TransfersPage() {
         material ? (
           <span style={{ color: 'var(--value-purple)' }}>{material.name}</span>
         ) : (
-          'Nieznany przemiał'
+          'Nieznany przemial'
         ),
         <span key={`${transfer.id}-qty`} className="font-semibold tabular-nums">
           {formatKg(transfer.qty)}
@@ -384,17 +381,17 @@ export default function TransfersPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Przesunięcia" subtitle={`Dziś: ${today}`} />
+      <PageHeader title="Przesuni\u0119cia przemia\u0142owe" subtitle={`Dzis: ${today}`} />
 
       <Card className="border-[rgba(255,106,0,0.35)] bg-brandSoft">
         <p className="text-sm text-body">
-          Przesunięcia służą do rejestrowania transferów między lokacjami oraz wydań i przyjęć
-          zewnętrznych. Nie wpływają na podsumowanie "Przybyło/Wyrobiono".
+          Przesuniecia sluza do rejestrowania transferow miedzy lokacjami oraz wydan i przyjec
+          zewnetrznych. Nie wplywaja na podsumowanie &quot;Przybylo/Wyrobiono&quot;.
         </p>
       </Card>
 
       <Card className="space-y-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-dim">Nowe przesunięcie</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-dim">Nowe przesuniecie</p>
 
         <div className="flex flex-wrap gap-2">
           {(['INTERNAL', 'EXTERNAL_IN', 'EXTERNAL_OUT'] as TransferKind[]).map((kind) => (
@@ -415,7 +412,7 @@ export default function TransfersPage() {
 
         <div className="grid gap-4">
           <div>
-            <label className="text-xs uppercase tracking-wide text-dim">Przemiał</label>
+            <label className="text-xs uppercase tracking-wide text-dim">Przemial</label>
             <div className="relative">
               <Input
                 value={form.material}
@@ -488,7 +485,7 @@ export default function TransfersPage() {
                     handleLocationBlur(event.target.value, 'fromLocation', filteredLocations);
                     setTimeout(() => setShowFromSuggestions(false), 120);
                   }}
-                  placeholder="Hala 1 · WTR 1"
+                  placeholder="Hala 1 - WTR 1"
                   className={form.fromLocation ? 'pr-10' : undefined}
                 />
                 {form.fromLocation && (
@@ -546,7 +543,7 @@ export default function TransfersPage() {
 
         <div className="grid gap-4">
           <div>
-            <label className="text-xs uppercase tracking-wide text-dim">Ilość (kg)</label>
+            <label className="text-xs uppercase tracking-wide text-dim">Ilo\u015b\u0107 (kg)</label>
             <Input
               value={form.qty}
               onChange={(event) => setForm((prev) => ({ ...prev, qty: event.target.value }))}
@@ -677,29 +674,29 @@ export default function TransfersPage() {
             className={glowClass}
             disabled={mutation.isPending}
           >
-            Wyczyść
+            Wyczy\u015b\u0107
           </Button>
           <Button onClick={handleAdd} disabled={mutation.isPending}>
-            Zapisz przesunięcie
+            Zapisz przesuni\u0119cie
           </Button>
         </div>
       </Card>
 
       <Card className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-dim">Historia przesunięć</p>
-          <p className="text-sm text-dim">Liczba wpisów: {transfers.length}</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-dim">Historia przesuniec</p>
+          <p className="text-sm text-dim">Liczba wpisow: {transfers.length}</p>
         </div>
         {transfersLoading ? (
-          <p className="text-sm text-dim">Ładowanie...</p>
+          <p className="text-sm text-dim">Ladowanie...</p>
         ) : transfers.length === 0 ? (
           <EmptyState
-            title="Brak przesunięć"
-            description="Dodaj pierwsze przesunięcie, aby śledzić transfery."
+            title="Brak przesuniec"
+            description="Dodaj pierwsze przesuniecie, aby sledzic transfery."
           />
         ) : (
           <DataTable
-            columns={['Data', 'Typ', 'Przemiał', 'Ilość', 'Skąd', 'Dokąd', 'Uwagi']}
+            columns={['Data', 'Typ', 'Przemial', 'Ilosc', 'Skad', 'Dokad', 'Uwagi']}
             rows={transferRows}
           />
         )}

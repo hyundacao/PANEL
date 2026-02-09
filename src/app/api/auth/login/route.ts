@@ -1,18 +1,48 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { getErrorCode, mapDbUser, type DbUserRow } from '@/lib/supabase/users';
+import {
+  buildLoginRateLimitKey,
+  clearLoginFailures,
+  getLoginBlockState,
+  registerLoginFailure
+} from '@/lib/auth/rate-limit';
+import { setSessionCookie } from '@/lib/auth/session';
 
 type LoginPayload = {
   username?: string;
   password?: string;
+  rememberMe?: boolean;
 };
 
-export async function POST(request: Request) {
+const getClientIp = (request: NextRequest) => {
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  if (forwardedFor) {
+    const [first] = forwardedFor.split(',');
+    if (first?.trim()) return first.trim();
+  }
+  const realIp = request.headers.get('x-real-ip');
+  if (realIp?.trim()) return realIp.trim();
+  return 'unknown';
+};
+
+export async function POST(request: NextRequest) {
   const payload = (await request.json().catch(() => null)) as LoginPayload | null;
   const username = payload?.username?.trim() ?? '';
   const password = payload?.password?.trim() ?? '';
+  const rememberMe = payload?.rememberMe === true;
+
+  const rateLimitKey = buildLoginRateLimitKey(username, getClientIp(request));
+  const blockedState = getLoginBlockState(rateLimitKey);
+  if (blockedState.blocked) {
+    return NextResponse.json(
+      { code: 'RATE_LIMITED', retryAfter: blockedState.retryAfterSeconds },
+      { status: 429 }
+    );
+  }
 
   if (!username || !password) {
+    registerLoginFailure(rateLimitKey);
     return NextResponse.json({ code: 'INVALID_CREDENTIALS' }, { status: 401 });
   }
 
@@ -22,6 +52,7 @@ export async function POST(request: Request) {
   });
 
   if (error) {
+    registerLoginFailure(rateLimitKey);
     const code = getErrorCode(error.message, error.code);
     const status = code === 'INACTIVE' ? 403 : 401;
     return NextResponse.json({ code }, { status });
@@ -29,8 +60,13 @@ export async function POST(request: Request) {
 
   const row = (Array.isArray(data) ? data[0] : data) as DbUserRow | null;
   if (!row) {
+    registerLoginFailure(rateLimitKey);
     return NextResponse.json({ code: 'INVALID_CREDENTIALS' }, { status: 401 });
   }
 
-  return NextResponse.json(mapDbUser(row));
+  clearLoginFailures(rateLimitKey);
+  const user = mapDbUser(row);
+  const response = NextResponse.json(user);
+  setSessionCookie(response, user.id, rememberMe);
+  return response;
 }

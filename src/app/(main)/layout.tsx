@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
@@ -7,24 +7,33 @@ import { Topbar } from '@/components/layout/Topbar';
 import { ContentScrim } from '@/components/ui/ContentScrim';
 import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
-import { canAccessWarehouse, canSeeTab, getWarehouseLabel, isAdmin } from '@/lib/auth/access';
+import {
+  canAccessWarehouse,
+  canSeeTab,
+  getAdminWarehouses,
+  getWarehouseLabel,
+  isHeadAdmin,
+  isWarehouseAdmin
+} from '@/lib/auth/access';
 import type { WarehouseKey, WarehouseTab } from '@/lib/api/types';
 import Link from 'next/link';
+import { getCurrentSessionUser } from '@/lib/api';
 
 const getTitle = (pathname: string) => {
   if (pathname.startsWith('/dashboard')) return 'Pulpit';
-  if (pathname.startsWith('/spis-oryginalow')) return 'Spis oryginałów';
-  if (pathname.startsWith('/spis')) return 'Spis przemiałów';
-  if (pathname.startsWith('/przesuniecia')) return 'Przesunięcia';
+  if (pathname.startsWith('/spis-oryginalow')) return 'Spis oryginalow';
+  if (pathname.startsWith('/spis')) return 'Spis przemialow';
+  if (pathname.startsWith('/przesuniecia-magazynowe')) return 'Przesunięcia magazynowe ERP';
+  if (pathname.startsWith('/przesuniecia')) return 'Przesunięcia przemiałowe';
   if (pathname.startsWith('/wymieszane')) return 'Wymieszane tworzywa';
   if (pathname.startsWith('/raporty')) return 'Raporty';
   if (pathname.startsWith('/kartoteka')) return 'Stany magazynowe';
   if (pathname.startsWith('/suszarki')) return 'Suszarki';
   if (pathname.startsWith('/czesci/historia')) return 'Historia';
   if (pathname.startsWith('/czesci/stany')) return 'Stany magazynowe';
-  if (pathname.startsWith('/czesci/uzupelnij')) return 'Uzupełnij';
+  if (pathname.startsWith('/czesci/uzupelnij')) return 'Uzupe\u0142nij';
   if (pathname.startsWith('/czesci/pobierz')) return 'Pobierz';
-  if (pathname.startsWith('/czesci')) return 'Części zamienne';
+  if (pathname.startsWith('/czesci')) return 'Czesci zamienne';
   if (pathname.startsWith('/raport-zmianowy')) return 'Raport zmianowy';
   if (pathname.startsWith('/admin')) return 'Admin';
   return 'Pulpit';
@@ -41,6 +50,7 @@ const getTabFromPath = (pathname: string): WarehouseTab | null => {
   if (pathname.startsWith('/dashboard')) return 'dashboard';
   if (pathname.startsWith('/spis-oryginalow')) return 'spis-oryginalow';
   if (pathname.startsWith('/spis')) return 'spis';
+  if (pathname.startsWith('/przesuniecia-magazynowe')) return 'przesuniecia';
   if (pathname.startsWith('/przesuniecia')) return 'przesuniecia';
   if (pathname.startsWith('/raporty')) return 'raporty';
   if (pathname.startsWith('/kartoteka')) return 'kartoteka';
@@ -62,9 +72,10 @@ type MobileNavItem = {
 
 const navItemsPrzemialy: MobileNavItem[] = [
   { label: 'Pulpit', href: '/dashboard', tab: 'dashboard' },
-  { label: 'Spis przemiałów', href: '/spis', tab: 'spis' },
-  { label: 'Spis oryginałów', href: '/spis-oryginalow', tab: 'spis-oryginalow' },
-  { label: 'Przesunięcia', href: '/przesuniecia', tab: 'przesuniecia' },
+  { label: 'Spis przemialow', href: '/spis', tab: 'spis' },
+  { label: 'Spis oryginalow', href: '/spis-oryginalow', tab: 'spis-oryginalow' },
+  { label: 'Przesunięcia przemiałowe', href: '/przesuniecia', tab: 'przesuniecia' },
+  { label: 'Przesunięcia magazynowe ERP', href: '/przesuniecia-magazynowe', tab: 'przesuniecia' },
   { label: 'Raporty', href: '/raporty', tab: 'raporty' },
   { label: 'Stany magazynowe', href: '/kartoteka', tab: 'kartoteka' },
   { label: 'Suszarki', href: '/suszarki', tab: 'suszarki' },
@@ -85,7 +96,15 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   const pathname = usePathname();
   const router = useRouter();
   const title = getTitle(pathname);
-  const { sidebarCollapsed, setSidebarCollapsed, user, role, hydrated, activeWarehouse } = useUiStore();
+  const {
+    sidebarCollapsed,
+    setSidebarCollapsed,
+    user,
+    logout,
+    hydrated,
+    activeWarehouse,
+    setActiveWarehouse
+  } = useUiStore();
   const warehouseFromPath = getWarehouseFromPath(pathname);
   const tabFromPath = getTabFromPath(pathname);
   const autoCollapseDone = useRef(false);
@@ -146,8 +165,14 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       return;
     }
     if (pathname.startsWith('/admin')) {
-      if (!isAdmin(user) && role !== 'HEAD_ADMIN') {
+      if (isHeadAdmin(user)) return;
+      const adminWarehouses = getAdminWarehouses(user);
+      if (adminWarehouses.length === 0) {
         router.replace('/magazyny');
+        return;
+      }
+      if (!activeWarehouse || !isWarehouseAdmin(user, activeWarehouse)) {
+        setActiveWarehouse(adminWarehouses[0]);
       }
       return;
     }
@@ -162,7 +187,45 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     if (tabFromPath && !canSeeTab(user, warehouseFromPath, tabFromPath)) {
       router.replace('/magazyny');
     }
-  }, [activeWarehouse, hydrated, pathname, role, router, user, warehouseFromPath, tabFromPath]);
+  }, [
+    activeWarehouse,
+    hydrated,
+    pathname,
+    router,
+    setActiveWarehouse,
+    user,
+    warehouseFromPath,
+    tabFromPath
+  ]);
+
+  useEffect(() => {
+    if (!hydrated || !user) return;
+    let cancelled = false;
+    getCurrentSessionUser()
+      .then(() => {
+        // session is valid
+      })
+      .catch(() => {
+        if (cancelled) return;
+        logout();
+        router.replace('/login');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, logout, router, user]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onAuthExpired = () => {
+      logout();
+      router.replace('/login');
+    };
+    window.addEventListener('apka:auth-expired', onAuthExpired);
+    return () => {
+      window.removeEventListener('apka:auth-expired', onAuthExpired);
+    };
+  }, [logout, router]);
 
   if (!hydrated) {
     return <div className="min-h-screen bg-bg" />;
@@ -182,6 +245,15 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     if (href === '/spis') return pathname === '/spis' || pathname.startsWith('/spis/');
     if (href === '/spis-oryginalow') {
       return pathname === '/spis-oryginalow' || pathname.startsWith('/spis-oryginalow/');
+    }
+    if (href === '/przesuniecia-magazynowe') {
+      return (
+        pathname === '/przesuniecia-magazynowe' ||
+        pathname.startsWith('/przesuniecia-magazynowe/')
+      );
+    }
+    if (href === '/przesuniecia') {
+      return pathname === '/przesuniecia' || pathname.startsWith('/przesuniecia/');
     }
     return pathname.startsWith(href);
   };

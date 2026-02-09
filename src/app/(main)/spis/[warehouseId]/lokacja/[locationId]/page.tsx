@@ -188,7 +188,7 @@ export default function LocationDetailPage() {
     toast({ title: 'Zatwierdzono lokację', tone: 'success' });
   };
 
-  const catalogList = catalog ?? [];
+  const catalogList = useMemo(() => catalog ?? [], [catalog]);
   const catalogGroups = useMemo(
     () =>
       Array.from(new Set((catalog ?? []).map((item) => item.code))).sort((a, b) =>

@@ -35,7 +35,6 @@ type PersistedUiState = Pick<
 
 const roleFromUser = (user: AppUser | null): Role => {
   if (!user) return 'VIEWER';
-  if (user.access?.admin || user.role === 'HEAD_ADMIN') return 'HEAD_ADMIN';
   return user.role ?? 'VIEWER';
 };
 const storageKey = 'apka-ui';

@@ -16,7 +16,6 @@ import type {
   MaterialCatalogImportResult,
   MaterialImportResult,
   MaterialLocationsMap,
-  MaterialReportRow,
   MaterialTotal,
   MixedMaterial,
   MonthlyDelta,
@@ -36,6 +35,10 @@ import type {
   SparePartHistory,
   Transfer,
   TransferKind,
+  WarehouseTransferDocument,
+  WarehouseTransferDocumentDetails,
+  WarehouseTransferDocumentSummary,
+  WarehouseTransferItemReceipt,
   UserAccess,
   Warehouse,
   YearlyReport
@@ -45,6 +48,7 @@ import { formatDate } from '../utils/format';
 const apiRequest = async <T,>(path: string, options?: RequestInit): Promise<T> => {
   const response = await fetch(path, {
     ...options,
+    credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
       ...(options?.headers ?? {})
@@ -57,6 +61,12 @@ const apiRequest = async <T,>(path: string, options?: RequestInit): Promise<T> =
       if (data?.code) code = String(data.code);
     } catch {
       // ignore
+    }
+    if (
+      typeof window !== 'undefined' &&
+      (code === 'UNAUTHORIZED' || code === 'SESSION_EXPIRED')
+    ) {
+      window.dispatchEvent(new CustomEvent('apka:auth-expired'));
     }
     throw new Error(code);
   }
@@ -232,6 +242,50 @@ export const addTransfer = async (payload: {
   note?: string;
 }): Promise<Transfer> => appRequest('addTransfer', payload);
 
+export const getWarehouseTransferDocuments = async (): Promise<WarehouseTransferDocumentSummary[]> =>
+  appRequest('getWarehouseTransferDocuments');
+
+export const getWarehouseTransferDocument = async (
+  documentId: string
+): Promise<WarehouseTransferDocumentDetails> =>
+  appRequest('getWarehouseTransferDocument', { documentId });
+
+export const createWarehouseTransferDocument = async (payload: {
+  documentNumber: string;
+  sourceWarehouse?: string;
+  targetWarehouse?: string;
+  note?: string;
+  items: Array<{
+    lineNo?: number;
+    indexCode: string;
+    indexCode2?: string;
+    name: string;
+    batch?: string;
+    location?: string;
+    unit?: string;
+    plannedQty: number;
+    note?: string;
+  }>;
+}): Promise<WarehouseTransferDocumentDetails> =>
+  appRequest('createWarehouseTransferDocument', payload);
+
+export const addWarehouseTransferItemReceipt = async (payload: {
+  documentId: string;
+  itemId: string;
+  qty: number;
+  note?: string;
+}): Promise<WarehouseTransferItemReceipt> =>
+  appRequest('addWarehouseTransferItemReceipt', payload);
+
+export const closeWarehouseTransferDocument = async (payload: {
+  documentId: string;
+}): Promise<WarehouseTransferDocument> =>
+  appRequest('closeWarehouseTransferDocument', payload);
+
+export const removeWarehouseTransferDocument = async (payload: {
+  documentId: string;
+}): Promise<void> => appRequest('removeWarehouseTransferDocument', payload);
+
 export const getInventoryAdjustments = async (): Promise<InventoryAdjustment[]> =>
   appRequest('getInventoryAdjustments');
 
@@ -329,10 +383,21 @@ export const removeUser = async (id: string): Promise<AppUser> =>
 export const authenticateUser = async (payload: {
   username: string;
   password: string;
+  rememberMe?: boolean;
 }): Promise<AppUser> =>
   apiRequest('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify(payload)
+  });
+
+export const logoutUser = async (): Promise<void> =>
+  apiRequest('/api/auth/logout', {
+    method: 'POST'
+  });
+
+export const getCurrentSessionUser = async (): Promise<AppUser> =>
+  apiRequest('/api/auth/session', {
+    cache: 'no-store'
   });
 
 export const getSpareParts = async (): Promise<SparePart[]> => appRequest('getSpareParts');
@@ -355,7 +420,7 @@ export const addOriginalInventory = async (payload: {
   note?: string;
   at?: string;
   dateKey?: string;
-  user: string;
+  user?: string;
 }): Promise<OriginalInventoryEntry> => appRequest('addOriginalInventory', payload);
 
 export const addOriginalInventoryCatalog = async (payload: {
@@ -403,7 +468,7 @@ export const removeSparePart = async (id: string): Promise<SparePart> =>
 export const setSparePartQty = async (payload: {
   partId: string;
   qty: number;
-  user: string;
+  user?: string;
   note?: string;
 }): Promise<SparePart> => appRequest('setSparePartQty', payload);
 
@@ -411,7 +476,7 @@ export const adjustSparePart = async (payload: {
   partId: string;
   qty: number;
   kind: 'IN' | 'OUT';
-  user: string;
+  user?: string;
   note?: string;
 }): Promise<SparePart> => appRequest('adjustSparePart', payload);
 
@@ -451,7 +516,7 @@ export const createRaportZmianowySession = async (payload: {
   dateKey?: string;
   planSheet: string;
   fileName?: string | null;
-  createdBy: string;
+  createdBy?: string;
   items?: Array<{
     indexCode: string;
     description?: string | null;
@@ -481,7 +546,7 @@ export const addRaportZmianowyEntry = async (payload: {
   itemId: string;
   note: string;
   authorId?: string | null;
-  authorName: string;
+  authorName?: string;
 }): Promise<RaportZmianowyEntry> => appRequest('addRaportZmianowyEntry', payload);
 
 export const updateRaportZmianowyEntry = async (payload: {

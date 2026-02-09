@@ -5,12 +5,23 @@ import { useRouter } from 'next/navigation';
 import { useUiStore } from '@/lib/store/ui';
 import { Button } from '@/components/ui/Button';
 import { getAccessibleWarehouses } from '@/lib/auth/access';
+import { logoutUser } from '@/lib/api';
 
 export const Topbar = ({ title, breadcrumb }: { title: string; breadcrumb?: string }) => {
   const router = useRouter();
   const { toggleSidebar, sidebarCollapsed, user, clearActiveWarehouse, logout } = useUiStore();
   const warehouses = getAccessibleWarehouses(user);
   const canSwitch = warehouses.length > 1;
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+    } catch {
+      // ignore logout transport errors and clear local state anyway
+    } finally {
+      logout();
+      router.replace('/login');
+    }
+  };
 
   return (
     <header className="sticky top-0 z-30 flex flex-wrap items-center gap-3 border-b border-border bg-surface px-4 py-3 backdrop-blur md:gap-6 md:px-6 md:py-4">
@@ -40,7 +51,7 @@ export const Topbar = ({ title, breadcrumb }: { title: string; breadcrumb?: stri
         {user && (
           <Button
             variant="ghost"
-            onClick={logout}
+            onClick={handleLogout}
             className="ml-auto md:hidden"
             aria-label="Wyloguj"
           >

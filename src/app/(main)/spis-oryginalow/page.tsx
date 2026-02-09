@@ -335,7 +335,7 @@ export default function OriginalInventoryPage() {
         description: `Dodano: ${result.inserted}, pominieto: ${result.skipped}.`,
         tone: 'success'
       });
-    } catch (err) {
+    } catch {
       toast({ title: 'Nie udalo sie zaimportowac pliku', tone: 'error' });
     } finally {
       setCatalogImporting(false);

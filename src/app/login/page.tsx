@@ -1,6 +1,7 @@
 ﻿'use client';
 
 import { useEffect, useState } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useMutation } from '@tanstack/react-query';
 import { authenticateUser } from '@/lib/api';
@@ -36,7 +37,8 @@ export default function LoginPage() {
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
         INVALID_CREDENTIALS: 'Nieprawidlowy login lub haslo.',
-        INACTIVE: 'Twoje konto jest nieaktywne.'
+        INACTIVE: 'Twoje konto jest nieaktywne.',
+        RATE_LIMITED: 'Za duzo prob logowania. Odczekaj chwile i sprobuj ponownie.'
       };
       toast({
         title: 'Nie udalo sie zalogowac',
@@ -52,7 +54,7 @@ export default function LoginPage() {
       toast({ title: 'Wpisz login i haslo', tone: 'error' });
       return;
     }
-    loginMutation.mutate({ username, password });
+    loginMutation.mutate({ username, password, rememberMe });
   };
 
   if (!hydrated) {
@@ -99,11 +101,13 @@ export default function LoginPage() {
             </Button>
           </form>
         </Card>
-        <img
+        <Image
           src="/logo.png"
           alt=""
           aria-hidden="true"
-          className="w-full max-w-md -mt-2 opacity-30 grayscale"
+          width={640}
+          height={320}
+          className="w-full max-w-md -mt-2 h-auto opacity-30 grayscale"
         />
       </div>
     </div>

@@ -14,13 +14,52 @@ import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAx
 
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
 const REPORTS_TAB_STORAGE_KEY = 'raporty-tab';
+const parseDateKey = (dateKey: string) => {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  return new Date(year, month - 1, day);
+};
+
+const formatDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getWeekRange = (dateKey: string) => {
+  const date = parseDateKey(dateKey);
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const start = new Date(date);
+  start.setDate(date.getDate() + diff);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { from: formatDateKey(start), to: formatDateKey(end) };
+};
+
+const getMonthRange = (dateKey: string) => {
+  const date = parseDateKey(dateKey);
+  const start = new Date(date.getFullYear(), date.getMonth(), 1);
+  const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  return { from: formatDateKey(start), to: formatDateKey(end) };
+};
+
+const getYearRange = (dateKey: string) => {
+  const date = parseDateKey(dateKey);
+  const start = new Date(date.getFullYear(), 0, 1);
+  const end = new Date(date.getFullYear(), 11, 31);
+  return { from: formatDateKey(start), to: formatDateKey(end) };
+};
 
 export default function ReportsPage() {
   const { data } = useQuery({ queryKey: ['reports'], queryFn: getReports });
   const { data: history } = useQuery({ queryKey: ['daily-history'], queryFn: getDailyHistory });
   const [summaryMode, setSummaryMode] = useState<'weekly' | 'monthly' | 'yearly'>('weekly');
-  const [activeTab, setActiveTab] = useState<'daily' | 'summary' | 'overall'>('daily');
-  const [tabReady, setTabReady] = useState(false);
+  const [activeTab, setActiveTab] = useState<'daily' | 'summary' | 'overall'>(() => {
+    if (typeof window === 'undefined') return 'daily';
+    const saved = window.localStorage.getItem(REPORTS_TAB_STORAGE_KEY);
+    return saved === 'daily' || saved === 'summary' || saved === 'overall' ? saved : 'daily';
+  });
   const [dailySort, setDailySort] = useState<{
     key: 'alpha' | 'added' | 'removed';
     direction: 'asc' | 'desc';
@@ -63,38 +102,6 @@ export default function ReportsPage() {
   const latestDate = history?.[0]?.date;
   const exportTitle =
     summaryMode === 'weekly' ? 'Raport tygodniowy' : summaryMode === 'monthly' ? 'Raport miesieczny' : 'Raport roczny';
-  const parseDateKey = (dateKey: string) => {
-    const [year, month, day] = dateKey.split('-').map(Number);
-    return new Date(year, month - 1, day);
-  };
-  const formatDateKey = (date: Date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-  const getWeekRange = (dateKey: string) => {
-    const date = parseDateKey(dateKey);
-    const day = date.getDay();
-    const diff = day === 0 ? -6 : 1 - day;
-    const start = new Date(date);
-    start.setDate(date.getDate() + diff);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    return { from: formatDateKey(start), to: formatDateKey(end) };
-  };
-  const getMonthRange = (dateKey: string) => {
-    const date = parseDateKey(dateKey);
-    const start = new Date(date.getFullYear(), date.getMonth(), 1);
-    const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-    return { from: formatDateKey(start), to: formatDateKey(end) };
-  };
-  const getYearRange = (dateKey: string) => {
-    const date = parseDateKey(dateKey);
-    const start = new Date(date.getFullYear(), 0, 1);
-    const end = new Date(date.getFullYear(), 11, 31);
-    return { from: formatDateKey(start), to: formatDateKey(end) };
-  };
   const applyPreset = (mode: 'weekly' | 'monthly' | 'yearly') => {
     setSummaryMode(mode);
     const anchor = latestDate ?? formatDateKey(new Date());
@@ -106,21 +113,18 @@ export default function ReportsPage() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const saved = window.localStorage.getItem(REPORTS_TAB_STORAGE_KEY);
-    if (saved === 'daily' || saved === 'summary' || saved === 'overall') {
-      setActiveTab(saved);
-    }
-    setTabReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !tabReady) return;
     window.localStorage.setItem(REPORTS_TAB_STORAGE_KEY, activeTab);
-  }, [activeTab, tabReady]);
+  }, [activeTab]);
 
   useEffect(() => {
     if (rangeFrom || rangeTo || !latestDate) return;
-    applyPreset('weekly');
+    const timer = setTimeout(() => {
+      const range = getWeekRange(latestDate);
+      setSummaryMode('weekly');
+      setRangeFrom(range.from);
+      setRangeTo(range.to);
+    }, 0);
+    return () => clearTimeout(timer);
   }, [latestDate, rangeFrom, rangeTo]);
 
   const safeFilename = (value: string) =>
@@ -129,6 +133,13 @@ export default function ReportsPage() {
       .replace(/[^a-z0-9-_]+/g, '_')
       .replace(/_+/g, '_')
       .replace(/^_+|_+$/g, '');
+  const escapeHtml = (value: string) =>
+    value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
   const formatDelta = (value: number) => `${value >= 0 ? '+' : '-'}${formatKg(Math.abs(value))}`;
 
   const buildCsv = (headers: string[], rows: string[][]) => {
@@ -137,24 +148,34 @@ export default function ReportsPage() {
   };
 
   const buildHtmlTable = (headers: string[], rows: string[][], subtitle?: string) => {
-    const head = headers.map((col) => `<th style="text-align:left;padding:6px 8px;border:1px solid #ddd;">${col}</th>`).join('');
+    const head = headers
+      .map(
+        (col) =>
+          `<th style="text-align:left;padding:6px 8px;border:1px solid #ddd;">${escapeHtml(col)}</th>`
+      )
+      .join('');
     const body = rows
       .map(
         (row) =>
           `<tr>${row
-            .map((cell) => `<td style="padding:6px 8px;border:1px solid #ddd;">${cell}</td>`)
+            .map(
+              (cell) =>
+                `<td style="padding:6px 8px;border:1px solid #ddd;">${escapeHtml(cell)}</td>`
+            )
             .join('')}</tr>`
       )
       .join('');
-    const subtitleHtml = subtitle ? `<p style="margin:0 0 12px 0;color:#666;">${subtitle}</p>` : '';
+    const subtitleHtml = subtitle
+      ? `<p style="margin:0 0 12px 0;color:#666;">${escapeHtml(subtitle)}</p>`
+      : '';
     return `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>${exportTitle}</title>
+    <title>${escapeHtml(exportTitle)}</title>
   </head>
   <body style="font-family:Arial, sans-serif;margin:24px;">
-    <h2 style="margin:0 0 8px 0;">${exportTitle}</h2>
+    <h2 style="margin:0 0 8px 0;">${escapeHtml(exportTitle)}</h2>
     ${subtitleHtml}
     <table style="border-collapse:collapse;width:100%;">${`<tr>${head}</tr>`}${body}</table>
   </body>

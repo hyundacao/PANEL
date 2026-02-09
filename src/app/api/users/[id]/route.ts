@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { getErrorCode, mapDbUser, type DbUserRow } from '@/lib/supabase/users';
 import type { Role, UserAccess } from '@/lib/api/types';
+import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
+import { isHeadAdmin } from '@/lib/auth/access';
 
 type UpdateUserPayload = {
   name?: string;
@@ -17,10 +19,34 @@ const normalizeRole = (role?: Role) =>
     ? role
     : null;
 
+const requireHeadAdmin = async (request: Request) => {
+  const auth = await getAuthenticatedUser(request);
+  if (!auth.user) {
+    const response = NextResponse.json({ code: auth.code }, { status: 401 });
+    if (auth.code === 'SESSION_EXPIRED') {
+      clearSessionCookie(response);
+    }
+    return {
+      denied: response,
+      userId: null as string | null
+    };
+  }
+  if (!isHeadAdmin(auth.user)) {
+    return {
+      denied: NextResponse.json({ code: 'FORBIDDEN' }, { status: 403 }),
+      userId: null as string | null
+    };
+  }
+  return { denied: null, userId: auth.user.id };
+};
+
 export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireHeadAdmin(request);
+  if (auth.denied) return auth.denied;
+
   const { id } = await context.params;
   const userId = id ?? '';
   if (!userId) {
@@ -37,6 +63,9 @@ export async function PATCH(
   }
   if (payload?.username !== undefined && !username) {
     return NextResponse.json({ code: 'USERNAME_REQUIRED' }, { status: 400 });
+  }
+  if (payload?.isActive === false && auth.userId === userId) {
+    return NextResponse.json({ code: 'SELF_DISABLE_FORBIDDEN' }, { status: 400 });
   }
 
   const { data, error } = await supabaseAdmin.rpc('update_app_user', {
@@ -82,13 +111,19 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireHeadAdmin(request);
+  if (auth.denied) return auth.denied;
+
   const { id } = await context.params;
   const userId = id ?? '';
   if (!userId) {
     return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+  }
+  if (auth.userId === userId) {
+    return NextResponse.json({ code: 'SELF_DELETE_FORBIDDEN' }, { status: 400 });
   }
 
   const { data, error } = await supabaseAdmin

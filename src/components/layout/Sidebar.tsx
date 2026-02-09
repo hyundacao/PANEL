@@ -1,6 +1,7 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import {
   LayoutGrid,
@@ -13,15 +14,13 @@ import {
   Shuffle,
   Wind,
   LogOut,
-  ArrowDownToLine,
-  ArrowUpToLine,
   History
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
-import { Button } from '@/components/ui/Button';
 import { useUiStore } from '@/lib/store/ui';
-import { canSeeTab, getRoleLabel, getWarehouseLabel, isAdmin } from '@/lib/auth/access';
+import { canSeeTab, getRoleLabel, getWarehouseLabel, hasAnyAdminAccess } from '@/lib/auth/access';
 import type { WarehouseKey, WarehouseTab } from '@/lib/api/types';
+import { logoutUser } from '@/lib/api';
 
 type NavItem = {
   label: string;
@@ -32,9 +31,20 @@ type NavItem = {
 
 const navItemsPrzemialy: NavItem[] = [
   { label: 'Pulpit', href: '/dashboard', icon: LayoutGrid, tab: 'dashboard' },
-  { label: 'Spis przemiałów', href: '/spis', icon: ClipboardList, tab: 'spis' },
-  { label: 'Spis oryginałów', href: '/spis-oryginalow', icon: ClipboardCheck, tab: 'spis-oryginalow' },
-  { label: 'Przesunięcia', href: '/przesuniecia', icon: ArrowLeftRight, tab: 'przesuniecia' },
+  { label: 'Spis przemialow', href: '/spis', icon: ClipboardList, tab: 'spis' },
+  { label: 'Spis oryginalow', href: '/spis-oryginalow', icon: ClipboardCheck, tab: 'spis-oryginalow' },
+  {
+    label: 'Przesunięcia przemiałowe',
+    href: '/przesuniecia',
+    icon: ArrowLeftRight,
+    tab: 'przesuniecia'
+  },
+  {
+    label: 'Przesunięcia magazynowe ERP',
+    href: '/przesuniecia-magazynowe',
+    icon: ArrowLeftRight,
+    tab: 'przesuniecia'
+  },
   { label: 'Raporty', href: '/raporty', icon: FileText, tab: 'raporty' },
   { label: 'Stany magazynowe', href: '/kartoteka', icon: Layers, tab: 'kartoteka' },
   { label: 'Suszarki', href: '/suszarki', icon: Wind, tab: 'suszarki' },
@@ -53,10 +63,10 @@ const navItemsRaport: NavItem[] = [
 
 export const Sidebar = () => {
   const pathname = usePathname();
-  const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse, role } = useUiStore();
+  const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse } = useUiStore();
   const warehouse = activeWarehouse as WarehouseKey | null;
   const roleLabel = getRoleLabel(user, warehouse);
-  const displayName = user?.name ?? 'Gość';
+  const displayName = user?.name ?? 'Gosc';
   const items =
     warehouse === 'CZESCI'
       ? navItemsCzesci
@@ -68,7 +78,7 @@ export const Sidebar = () => {
     if (!item.tab) return true;
     return canSeeTab(user, warehouse, item.tab);
   });
-  const showAdmin = isAdmin(user) || role === 'HEAD_ADMIN';
+  const showAdmin = hasAnyAdminAccess(user);
   const warehouseLabel = getWarehouseLabel(warehouse);
   const isActivePath = (href: string) => {
     if (href === '/czesci') return pathname === '/czesci';
@@ -76,13 +86,22 @@ export const Sidebar = () => {
     if (href === '/spis-oryginalow') {
       return pathname === '/spis-oryginalow' || pathname.startsWith('/spis-oryginalow/');
     }
+    if (href === '/przesuniecia-magazynowe') {
+      return (
+        pathname === '/przesuniecia-magazynowe' ||
+        pathname.startsWith('/przesuniecia-magazynowe/')
+      );
+    }
+    if (href === '/przesuniecia') {
+      return pathname === '/przesuniecia' || pathname.startsWith('/przesuniecia/');
+    }
     return pathname.startsWith(href);
   };
   const panelLabel =
     warehouse === 'CZESCI'
-      ? 'PANEL MAGAZYNU CZĘŚCI ZAMIENNYCH'
+      ? 'PANEL MAGAZYNU CZ\u0118\u015aCI ZAMIENNYCH'
       : warehouse === 'PRZEMIALY'
-        ? 'PANEL MAGAZYNU PRZEMIAŁÓW'
+        ? 'PANEL MAGAZYNU PRZEMIA\u0141\u00d3W'
         : warehouse === 'RAPORT_ZMIANOWY'
           ? 'PANEL RAPORTU ZMIANOWEGO'
           : 'Panel produkcji';
@@ -90,6 +109,15 @@ export const Sidebar = () => {
     if (typeof window === 'undefined') return;
     if (window.matchMedia('(max-width: 767px)').matches) {
       setSidebarCollapsed(true);
+    }
+  };
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+    } catch {
+      // ignore logout transport errors and clear local state anyway
+    } finally {
+      logout();
     }
   };
 
@@ -164,14 +192,16 @@ export const Sidebar = () => {
                   )}
                 />
                 <Shield className="h-4 w-4" style={{ color: 'var(--brand)' }} />
-                {!sidebarCollapsed && <span style={{ color: 'var(--brand)' }}>ZARZĄDZANIE</span>}
+                {!sidebarCollapsed && <span style={{ color: 'var(--brand)' }}>ZARZ\u0104DZANIE</span>}
               </Link>
               {!sidebarCollapsed && (
                 <div className="flex justify-center pt-3">
-                  <img
+                  <Image
                     src="/logo.png"
                     alt=""
                     aria-hidden="true"
+                    width={260}
+                    height={120}
                     className="w-full max-w-[260px] opacity-45 grayscale"
                   />
                 </div>
@@ -190,7 +220,7 @@ export const Sidebar = () => {
                 {user && (
                   <button
                     type="button"
-                    onClick={logout}
+                    onClick={handleLogout}
                     className="mt-2 flex h-8 w-[calc(100%+3.25rem)] -ml-[3.25rem] items-center rounded-lg pr-2 text-xs text-dim transition hover:bg-[rgba(255,255,255,0.06)] hover:text-title"
                   >
                     <span className="flex items-center pl-[3.25rem]">
@@ -207,3 +237,4 @@ export const Sidebar = () => {
     </aside>
   );
 };
+

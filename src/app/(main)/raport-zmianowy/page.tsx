@@ -33,7 +33,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 import { useToastStore } from '@/components/ui/Toast';
 import { useUiStore } from '@/lib/store/ui';
-import { isAdmin, isReadOnly } from '@/lib/auth/access';
+import { isReadOnly, isWarehouseAdmin } from '@/lib/auth/access';
 import { cn } from '@/lib/utils/cn';
 
 type ParsedItem = {
@@ -195,10 +195,17 @@ export default function RaportZmianowyPage() {
   const queryClient = useQueryClient();
   const { user } = useUiStore();
   const readOnly = isReadOnly(user, 'RAPORT_ZMIANOWY');
-  const adminMode = isAdmin(user);
+  const adminMode = isWarehouseAdmin(user, 'RAPORT_ZMIANOWY');
 
-  const [activeTab, setActiveTab] = useState<'plan' | 'live' | 'summary'>('live');
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'plan' | 'live' | 'summary'>(() => {
+    if (typeof window === 'undefined') return 'live';
+    const stored = window.localStorage.getItem('raport-zmianowy-tab');
+    return stored === 'plan' || stored === 'live' || stored === 'summary' ? stored : 'live';
+  });
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return window.localStorage.getItem('raport-zmianowy-active-session');
+  });
   const [sessionDate, setSessionDate] = useState(() => getTodayKey());
   const [fileName, setFileName] = useState('');
   const [sheetName, setSheetName] = useState('');
@@ -224,14 +231,6 @@ export default function RaportZmianowyPage() {
   const [summaryGroupBy, setSummaryGroupBy] = useState<'station' | 'plan'>('station');
   const [summaryRows, setSummaryRows] = useState<RaportZmianowyEntryLog[]>([]);
   const [planOrderKeys, setPlanOrderKeys] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const stored = window.localStorage.getItem('raport-zmianowy-tab');
-    if (stored === 'plan' || stored === 'live' || stored === 'summary') {
-      setActiveTab(stored);
-    }
-  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -272,7 +271,8 @@ export default function RaportZmianowyPage() {
     const fallback = sessions[0]?.id ?? null;
     const next = stored && sessions.some((session) => session.id === stored) ? stored : fallback;
     if (next) {
-      setActiveSessionId(next);
+      const timer = setTimeout(() => setActiveSessionId(next), 0);
+      return () => clearTimeout(timer);
     }
   }, [activeSessionId, sessions]);
 
@@ -284,7 +284,10 @@ export default function RaportZmianowyPage() {
 
   useEffect(() => {
     if (!sessionData) return;
-    setStickySessionData(sessionData);
+    const timer = setTimeout(() => {
+      setStickySessionData((prev) => (prev === sessionData ? prev : sessionData));
+    }, 0);
+    return () => clearTimeout(timer);
   }, [sessionData]);
 
   useEffect(() => {
@@ -300,15 +303,19 @@ export default function RaportZmianowyPage() {
   useEffect(() => {
     let cancelled = false;
     if (summaryGroupBy !== 'plan') {
-      setPlanOrderKeys([]);
-      return undefined;
+      const timer = setTimeout(() => {
+        setPlanOrderKeys((prev) => (prev.length === 0 ? prev : []));
+      }, 0);
+      return () => clearTimeout(timer);
     }
     const sessionIds = Array.from(
       new Set(summaryRows.map((entry) => entry.sessionId).filter(Boolean))
     ) as string[];
     if (sessionIds.length === 0) {
-      setPlanOrderKeys([]);
-      return undefined;
+      const timer = setTimeout(() => {
+        setPlanOrderKeys((prev) => (prev.length === 0 ? prev : []));
+      }, 0);
+      return () => clearTimeout(timer);
     }
     const loadPlanOrder = async () => {
       const sessionsData = await Promise.all(

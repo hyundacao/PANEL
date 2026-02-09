@@ -24,6 +24,7 @@ export type WarehouseAccess = {
   role: WarehouseRole;
   readOnly: boolean;
   tabs: WarehouseTab[];
+  admin?: boolean;
 };
 
 export type UserAccess = {
@@ -333,6 +334,64 @@ export type Transfer = {
   toLocationId?: string;
   partner?: string;
   note?: string;
+};
+
+export type WarehouseTransferDocumentStatus = 'OPEN' | 'CLOSED';
+
+export type WarehouseTransferItemStatus = 'PENDING' | 'PARTIAL' | 'DONE' | 'OVER';
+
+export type WarehouseTransferDocument = {
+  id: string;
+  createdAt: string;
+  createdById?: string | null;
+  createdByName: string;
+  documentNumber: string;
+  sourceWarehouse?: string;
+  targetWarehouse?: string;
+  note?: string;
+  status: WarehouseTransferDocumentStatus;
+  closedAt?: string | null;
+  closedByName?: string | null;
+};
+
+export type WarehouseTransferDocumentSummary = WarehouseTransferDocument & {
+  itemsCount: number;
+  completedItemsCount: number;
+  plannedQtyTotal: number;
+  receivedQtyTotal: number;
+};
+
+export type WarehouseTransferItemReceipt = {
+  id: string;
+  itemId: string;
+  createdAt: string;
+  receiverId?: string | null;
+  receiverName: string;
+  qty: number;
+  note?: string;
+};
+
+export type WarehouseTransferDocumentItem = {
+  id: string;
+  documentId: string;
+  lineNo: number;
+  indexCode: string;
+  indexCode2?: string;
+  name: string;
+  batch?: string;
+  location?: string;
+  unit: string;
+  plannedQty: number;
+  note?: string;
+  receivedQty: number;
+  diffQty: number;
+  status: WarehouseTransferItemStatus;
+  receipts: WarehouseTransferItemReceipt[];
+};
+
+export type WarehouseTransferDocumentDetails = {
+  document: WarehouseTransferDocumentSummary;
+  items: WarehouseTransferDocumentItem[];
 };
 
 export type LocationOption = {

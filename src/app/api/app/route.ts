@@ -1,9 +1,19 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { randomUUID } from 'crypto';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { formatDate } from '@/lib/utils/format';
+import {
+  canAccessWarehouse,
+  canSeeTab,
+  isReadOnly,
+  isWarehouseAdmin
+} from '@/lib/auth/access';
+import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import type {
   AuditEvent,
+  AppUser,
   CatalogTotal,
   DailyTotals,
   DashboardSummary,
@@ -35,7 +45,16 @@ import type {
   SparePartHistory,
   Transfer,
   TransferKind,
+  WarehouseTransferDocument,
+  WarehouseTransferDocumentDetails,
+  WarehouseTransferDocumentItem,
+  WarehouseTransferDocumentStatus,
+  WarehouseTransferDocumentSummary,
+  WarehouseTransferItemReceipt,
+  WarehouseTransferItemStatus,
   Warehouse,
+  WarehouseKey,
+  WarehouseTab,
   YearlyReport,
   YearlyReportRow
 } from '@/lib/api/types';
@@ -49,6 +68,10 @@ type TransferAdjustmentsByDate = Record<string, Record<string, TransferAdjustmen
 type TransferAdjustmentsByWarehouse = Record<string, Record<string, TransferAdjustment>>;
 type TransferCommentsByDate = Record<string, Record<string, string[]>>;
 type TransferDeltasByDate = Record<string, Record<string, Record<string, number>>>;
+type WarehouseTransferDocumentItemBase = Omit<
+  WarehouseTransferDocumentItem,
+  'receivedQty' | 'diffQty' | 'status' | 'receipts'
+>;
 
 const toNumber = (value: unknown) => {
   if (typeof value === 'number') return value;
@@ -147,6 +170,48 @@ const mapTransfer = (row: any): Transfer => ({
   fromLocationId: row.from_location_id ?? undefined,
   toLocationId: row.to_location_id ?? undefined,
   partner: row.partner ?? undefined,
+  note: row.note ?? undefined
+});
+
+const mapWarehouseTransferDocument = (row: any): WarehouseTransferDocument => {
+  const status: WarehouseTransferDocumentStatus =
+    row.status === 'CLOSED' ? 'CLOSED' : 'OPEN';
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    createdById: row.created_by_id ?? null,
+    createdByName: row.created_by_name ?? 'nieznany',
+    documentNumber: row.document_number ?? '',
+    sourceWarehouse: row.source_warehouse ?? undefined,
+    targetWarehouse: row.target_warehouse ?? undefined,
+    note: row.note ?? undefined,
+    status,
+    closedAt: row.closed_at ?? null,
+    closedByName: row.closed_by_name ?? null
+  };
+};
+
+const mapWarehouseTransferDocumentItem = (row: any): WarehouseTransferDocumentItemBase => ({
+  id: row.id,
+  documentId: row.document_id,
+  lineNo: toNumber(row.line_no),
+  indexCode: row.index_code ?? '',
+  indexCode2: row.index_code2 ?? undefined,
+  name: row.name ?? '',
+  batch: row.batch ?? undefined,
+  location: row.location ?? undefined,
+  unit: row.unit ?? 'kg',
+  plannedQty: toNumber(row.planned_qty),
+  note: row.note ?? undefined
+});
+
+const mapWarehouseTransferItemReceipt = (row: any): WarehouseTransferItemReceipt => ({
+  id: row.id,
+  itemId: row.item_id,
+  createdAt: row.created_at,
+  receiverId: row.receiver_id ?? null,
+  receiverName: row.receiver_name ?? 'nieznany',
+  qty: toNumber(row.qty),
   note: row.note ?? undefined
 });
 
@@ -269,6 +334,8 @@ const buildEntriesByDate = (rows: any[]): EntriesByDate => {
 };
 
 const statusCodeFromError = (code: string) => {
+  if (code === 'UNAUTHORIZED' || code === 'SESSION_EXPIRED') return 401;
+  if (code === 'FORBIDDEN') return 403;
   if (code === 'NOT_FOUND' || code === 'ENTRY_MISSING') return 404;
   if (code === 'DUPLICATE') return 409;
   if (code === 'INVALID_CREDENTIALS') return 401;
@@ -284,6 +351,466 @@ const errorCodeFromError = (error: unknown) => {
   }
   if (error instanceof Error) return error.message || 'UNKNOWN';
   return 'UNKNOWN';
+};
+
+const ALL_PRZEMIALY_TABS: WarehouseTab[] = [
+  'dashboard',
+  'spis',
+  'spis-oryginalow',
+  'przesuniecia',
+  'raporty',
+  'kartoteka',
+  'wymieszane',
+  'suszarki'
+];
+
+const requireWarehouseAccess = (user: AppUser, warehouse: WarehouseKey) => {
+  if (!canAccessWarehouse(user, warehouse)) {
+    throw new Error('FORBIDDEN');
+  }
+};
+
+const requireAnyTabAccess = (
+  user: AppUser,
+  warehouse: WarehouseKey,
+  tabs: WarehouseTab[]
+) => {
+  requireWarehouseAccess(user, warehouse);
+  if (!tabs.some((tab) => canSeeTab(user, warehouse, tab))) {
+    throw new Error('FORBIDDEN');
+  }
+};
+
+const requireWarehouseWriteAccess = (user: AppUser, warehouse: WarehouseKey) => {
+  requireWarehouseAccess(user, warehouse);
+  if (isReadOnly(user, warehouse)) {
+    throw new Error('FORBIDDEN');
+  }
+};
+
+const requireTabWriteAccess = (
+  user: AppUser,
+  warehouse: WarehouseKey,
+  tabs: WarehouseTab[]
+) => {
+  requireAnyTabAccess(user, warehouse, tabs);
+  if (isReadOnly(user, warehouse)) {
+    throw new Error('FORBIDDEN');
+  }
+};
+
+const requireWarehouseAdminAccess = (user: AppUser, warehouse: WarehouseKey) => {
+  if (!isWarehouseAdmin(user, warehouse)) {
+    throw new Error('FORBIDDEN');
+  }
+};
+
+const getActorName = (user: AppUser) =>
+  user.name?.trim() || user.username?.trim() || 'nieznany';
+
+const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
+  switch (action) {
+    case 'getDashboard':
+    case 'getTotalsHistory':
+    case 'getMonthlyDelta':
+    case 'getMonthlyMaterialBreakdown':
+    case 'getTopCatalogTotal':
+      requireAnyTabAccess(user, 'PRZEMIALY', ['dashboard']);
+      return;
+    case 'getReports':
+    case 'getDailyHistory':
+    case 'getPeriodReport':
+    case 'getYearlyReport':
+      requireAnyTabAccess(user, 'PRZEMIALY', ['raporty']);
+      return;
+    case 'getCurrentMaterialTotals':
+      if (payload?.scope === 'all') {
+        requireAnyTabAccess(user, 'PRZEMIALY', ['kartoteka']);
+      } else {
+        requireAnyTabAccess(user, 'PRZEMIALY', ['dashboard', 'kartoteka']);
+      }
+      return;
+    case 'getMaterialLocations':
+      requireAnyTabAccess(user, 'PRZEMIALY', ['kartoteka']);
+      return;
+    case 'getLocationsOverview':
+    case 'getLocationDetail':
+      requireAnyTabAccess(user, 'PRZEMIALY', ['spis']);
+      return;
+    case 'upsertEntry':
+    case 'confirmNoChangeEntry':
+    case 'confirmNoChangeLocation':
+    case 'closeSpis':
+      requireTabWriteAccess(user, 'PRZEMIALY', ['spis']);
+      return;
+    case 'getTransfers':
+    case 'getWarehouseTransferDocuments':
+    case 'getWarehouseTransferDocument':
+      requireAnyTabAccess(user, 'PRZEMIALY', ['przesuniecia']);
+      return;
+    case 'addTransfer':
+    case 'createWarehouseTransferDocument':
+    case 'addWarehouseTransferItemReceipt':
+    case 'closeWarehouseTransferDocument':
+    case 'removeWarehouseTransferDocument':
+      requireTabWriteAccess(user, 'PRZEMIALY', ['przesuniecia']);
+      return;
+    case 'getMixedMaterials':
+      requireAnyTabAccess(user, 'PRZEMIALY', ['wymieszane']);
+      return;
+    case 'addMixedMaterial':
+    case 'removeMixedMaterial':
+    case 'deleteMixedMaterial':
+    case 'transferMixedMaterial':
+      requireTabWriteAccess(user, 'PRZEMIALY', ['wymieszane']);
+      return;
+    case 'getDryers':
+      requireAnyTabAccess(user, 'PRZEMIALY', ['suszarki']);
+      return;
+    case 'setDryerMaterial':
+      requireTabWriteAccess(user, 'PRZEMIALY', ['suszarki']);
+      return;
+    case 'getOriginalInventory':
+      requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      return;
+    case 'getOriginalInventoryCatalog':
+      requireAnyTabAccess(user, 'PRZEMIALY', [
+        'spis-oryginalow',
+        'suszarki'
+      ]);
+      return;
+    case 'addOriginalInventory':
+      requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      return;
+    case 'addOriginalInventoryCatalog':
+      requireTabWriteAccess(user, 'PRZEMIALY', [
+        'spis-oryginalow',
+        'suszarki'
+      ]);
+      return;
+    case 'addOriginalInventoryCatalogBulk':
+    case 'updateOriginalInventory':
+    case 'removeOriginalInventory':
+    case 'removeOriginalInventoryCatalog':
+      requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      return;
+    case 'getCatalog':
+      requireAnyTabAccess(user, 'PRZEMIALY', ALL_PRZEMIALY_TABS);
+      return;
+    case 'addMaterial':
+      requireTabWriteAccess(user, 'PRZEMIALY', ['suszarki']);
+      return;
+    case 'getLocations':
+    case 'getWarehouses':
+    case 'getWarehouse':
+    case 'getLocation':
+    case 'getMaterials':
+      requireWarehouseAccess(user, 'PRZEMIALY');
+      return;
+    case 'getAudit':
+    case 'getLocationsAdmin':
+    case 'getWarehousesAdmin':
+    case 'addCatalog':
+    case 'addMaterialCatalogBulk':
+    case 'getCatalogs':
+    case 'addMaterialBulk':
+    case 'removeMaterial':
+    case 'updateMaterialCatalog':
+    case 'updateMaterial':
+    case 'removeCatalog':
+    case 'addWarehouse':
+    case 'updateWarehouse':
+    case 'removeWarehouse':
+    case 'addLocation':
+    case 'updateLocation':
+    case 'removeLocation':
+    case 'applyInventoryAdjustment':
+    case 'getInventoryAdjustments':
+    case 'addDryer':
+    case 'updateDryer':
+    case 'removeDryer':
+      requireWarehouseAdminAccess(user, 'PRZEMIALY');
+      return;
+    case 'getSpareParts':
+      requireAnyTabAccess(user, 'CZESCI', ['stany', 'pobierz', 'uzupelnij']);
+      return;
+    case 'getSparePartHistory':
+      requireAnyTabAccess(user, 'CZESCI', ['historia']);
+      return;
+    case 'adjustSparePart':
+      requireWarehouseWriteAccess(user, 'CZESCI');
+      if (payload?.kind === 'OUT') {
+        requireAnyTabAccess(user, 'CZESCI', ['pobierz']);
+      } else {
+        requireAnyTabAccess(user, 'CZESCI', ['uzupelnij']);
+      }
+      return;
+    case 'addSparePart':
+    case 'updateSparePart':
+    case 'removeSparePart':
+    case 'setSparePartQty':
+      requireWarehouseAdminAccess(user, 'CZESCI');
+      return;
+    case 'getRaportZmianowySessions':
+    case 'getRaportZmianowySession':
+    case 'getRaportZmianowyEntries':
+      requireAnyTabAccess(user, 'RAPORT_ZMIANOWY', ['raport-zmianowy']);
+      return;
+    case 'createRaportZmianowySession':
+    case 'addRaportZmianowyItem':
+    case 'updateRaportZmianowyItem':
+    case 'addRaportZmianowyEntry':
+    case 'updateRaportZmianowyEntry':
+      requireTabWriteAccess(user, 'RAPORT_ZMIANOWY', ['raport-zmianowy']);
+      return;
+    case 'removeRaportZmianowySession':
+    case 'removeRaportZmianowyEntry':
+      requireWarehouseAdminAccess(user, 'RAPORT_ZMIANOWY');
+      return;
+    default:
+      return;
+  }
+};
+
+const AUDITABLE_ACTIONS = new Set<string>([
+  'upsertEntry',
+  'confirmNoChangeEntry',
+  'confirmNoChangeLocation',
+  'closeSpis',
+  'addCatalog',
+  'addMaterialCatalogBulk',
+  'addMaterial',
+  'addMaterialBulk',
+  'removeMaterial',
+  'updateMaterialCatalog',
+  'updateMaterial',
+  'removeCatalog',
+  'addWarehouse',
+  'updateWarehouse',
+  'removeWarehouse',
+  'addLocation',
+  'updateLocation',
+  'removeLocation',
+  'addTransfer',
+  'createWarehouseTransferDocument',
+  'addWarehouseTransferItemReceipt',
+  'closeWarehouseTransferDocument',
+  'removeWarehouseTransferDocument',
+  'applyInventoryAdjustment',
+  'addMixedMaterial',
+  'removeMixedMaterial',
+  'deleteMixedMaterial',
+  'transferMixedMaterial',
+  'addDryer',
+  'updateDryer',
+  'removeDryer',
+  'setDryerMaterial',
+  'addOriginalInventory',
+  'addOriginalInventoryCatalog',
+  'addOriginalInventoryCatalogBulk',
+  'updateOriginalInventory',
+  'removeOriginalInventory',
+  'removeOriginalInventoryCatalog',
+  'addSparePart',
+  'updateSparePart',
+  'removeSparePart',
+  'setSparePartQty',
+  'adjustSparePart',
+  'createRaportZmianowySession',
+  'removeRaportZmianowySession',
+  'addRaportZmianowyItem',
+  'updateRaportZmianowyItem',
+  'addRaportZmianowyEntry',
+  'updateRaportZmianowyEntry',
+  'removeRaportZmianowyEntry'
+]);
+
+const CZESCI_AUDIT_ACTIONS = new Set<string>([
+  'addSparePart',
+  'updateSparePart',
+  'removeSparePart',
+  'setSparePartQty',
+  'adjustSparePart'
+]);
+
+const RAPORT_ZMIANOWY_AUDIT_ACTIONS = new Set<string>([
+  'createRaportZmianowySession',
+  'removeRaportZmianowySession',
+  'addRaportZmianowyItem',
+  'updateRaportZmianowyItem',
+  'addRaportZmianowyEntry',
+  'updateRaportZmianowyEntry',
+  'removeRaportZmianowyEntry'
+]);
+
+const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
+  upsertEntry: 'Spis: zapis pozycji',
+  confirmNoChangeEntry: 'Spis: potwierdzenie bez zmian',
+  confirmNoChangeLocation: 'Spis: potwierdzenie lokalizacji',
+  addTransfer: 'Przesuniecia: nowy ruch',
+  createWarehouseTransferDocument: 'Przesuniecia magazynowe: nowy dokument',
+  addWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: przyjecie pozycji',
+  closeWarehouseTransferDocument: 'Przesuniecia magazynowe: zamkniecie dokumentu',
+  removeWarehouseTransferDocument: 'Przesuniecia magazynowe: usuniecie dokumentu',
+  applyInventoryAdjustment: 'Inwentaryzacja: korekta stanu',
+  addMixedMaterial: 'Wymieszane: dodanie',
+  removeMixedMaterial: 'Wymieszane: rozchod',
+  transferMixedMaterial: 'Wymieszane: transfer',
+  setDryerMaterial: 'Suszarki: przypisanie tworzywa',
+  addOriginalInventory: 'Spis oryginalow: dodanie wpisu',
+  updateOriginalInventory: 'Spis oryginalow: aktualizacja wpisu',
+  removeOriginalInventory: 'Spis oryginalow: usuniecie wpisu',
+  addSparePart: 'Czesci: dodanie pozycji',
+  updateSparePart: 'Czesci: aktualizacja pozycji',
+  removeSparePart: 'Czesci: usuniecie pozycji',
+  setSparePartQty: 'Czesci: ustawienie stanu',
+  adjustSparePart: 'Czesci: ruch magazynowy',
+  createRaportZmianowySession: 'Raport zmianowy: utworzenie sesji',
+  addRaportZmianowyEntry: 'Raport zmianowy: dodanie wpisu',
+  updateRaportZmianowyEntry: 'Raport zmianowy: edycja wpisu',
+  removeRaportZmianowyEntry: 'Raport zmianowy: usuniecie wpisu'
+};
+
+const toAuditText = (value: unknown) => {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  return text.slice(0, 240);
+};
+
+const toAuditNumber = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const getAuditWarehouse = (action: string): WarehouseKey => {
+  if (CZESCI_AUDIT_ACTIONS.has(action)) return 'CZESCI';
+  if (RAPORT_ZMIANOWY_AUDIT_ACTIONS.has(action)) return 'RAPORT_ZMIANOWY';
+  return 'PRZEMIALY';
+};
+
+const getAuditLocation = (payload: any) => {
+  const directLocation =
+    toAuditText(payload?.locationId) ??
+    toAuditText(payload?.location) ??
+    toAuditText(payload?.warehouseId);
+  if (directLocation) return directLocation;
+
+  const fromLocation = toAuditText(payload?.fromLocationId);
+  const toLocation = toAuditText(payload?.toLocationId);
+  if (fromLocation || toLocation) {
+    return `${fromLocation ?? '-'} -> ${toLocation ?? '-'}`;
+  }
+
+  const documentId = toAuditText(payload?.documentId);
+  if (documentId) return `dokument:${documentId}`;
+
+  const sessionId = toAuditText(payload?.sessionId);
+  if (sessionId) return `sesja:${sessionId}`;
+  const itemId = toAuditText(payload?.itemId);
+  if (itemId) return `pozycja:${itemId}`;
+  const entryId = toAuditText(payload?.entryId);
+  if (entryId) return `wpis:${entryId}`;
+
+  return null;
+};
+
+const getAuditMaterial = (action: string, payload: any) => {
+  const materialId = toAuditText(payload?.materialId);
+  if (materialId) return materialId;
+
+  const partId = toAuditText(payload?.partId);
+  if (partId) return `czesc:${partId}`;
+
+  const indexCode = toAuditText(payload?.indexCode);
+  if (indexCode) return indexCode;
+
+  const transferItemId = toAuditText(payload?.itemId);
+  if (transferItemId) return `pozycja:${transferItemId}`;
+
+  const documentNumber = toAuditText(payload?.documentNumber);
+  if (documentNumber) return `dok:${documentNumber}`;
+
+  const name = toAuditText(payload?.name);
+  if (name) return name;
+
+  if (action === 'setDryerMaterial' && payload?.materialId === null) {
+    return 'wyczyszczono';
+  }
+
+  return null;
+};
+
+const getAuditQty = (action: string, payload: any, data: unknown) => {
+  if (action === 'applyInventoryAdjustment') {
+    const entry = data as InventoryAdjustment | null | undefined;
+    return {
+      prevQty: toAuditNumber(entry?.prevQty),
+      nextQty: toAuditNumber(entry?.nextQty)
+    };
+  }
+
+  if (action === 'adjustSparePart') {
+    const entry = data as SparePart | null | undefined;
+    const delta = toAuditNumber(payload?.qty);
+    const nextQty = toAuditNumber(entry?.qty);
+    if (delta === null || nextQty === null) {
+      return { prevQty: null, nextQty };
+    }
+    const prevQty = payload?.kind === 'OUT' ? nextQty + delta : nextQty - delta;
+    return { prevQty, nextQty };
+  }
+
+  if (action === 'setSparePartQty') {
+    return { prevQty: null, nextQty: toAuditNumber(payload?.qty) };
+  }
+
+  if (
+    action === 'upsertEntry' ||
+    action === 'addTransfer' ||
+    action === 'addWarehouseTransferItemReceipt' ||
+    action === 'addMixedMaterial' ||
+    action === 'removeMixedMaterial' ||
+    action === 'addOriginalInventory'
+  ) {
+    return { prevQty: null, nextQty: toAuditNumber(payload?.qty) };
+  }
+
+  return { prevQty: null, nextQty: null };
+};
+
+const writeAuditLog = async (
+  action: string,
+  payload: any,
+  data: unknown,
+  user: AppUser
+) => {
+  if (!AUDITABLE_ACTIONS.has(action)) return;
+
+  const warehouse = getAuditWarehouse(action);
+  const location = getAuditLocation(payload);
+  const material = getAuditMaterial(action, payload);
+  const qty = getAuditQty(action, payload, data);
+  const actionLabel = AUDIT_ACTION_LABELS[action] ?? action;
+
+  const auditPayload = {
+    at: new Date().toISOString(),
+    user_name: getActorName(user),
+    action: actionLabel,
+    warehouse,
+    location,
+    material,
+    prev_qty: qty.prevQty,
+    next_qty: qty.nextQty
+  };
+
+  const { error } = await supabaseAdmin.from('audit_logs').insert(auditPayload);
+  if (error) {
+    console.error('AUDIT_LOG_WRITE_FAILED', {
+      action,
+      message: error.message
+    });
+  }
 };
 
 const getActiveStatsLocations = (warehouses: Warehouse[], locations: Location[]) => {
@@ -535,6 +1062,174 @@ const fetchOriginalCatalog = async () => {
   return (data ?? []).map(mapOriginalInventoryCatalogEntry);
 };
 
+const isWarehouseTransferItemCompleted = (plannedQty: number, receivedQty: number) => {
+  if (plannedQty <= 0) return receivedQty > 0;
+  return receivedQty >= plannedQty;
+};
+
+const resolveWarehouseTransferItemStatus = (
+  plannedQty: number,
+  receivedQty: number
+): WarehouseTransferItemStatus => {
+  if (receivedQty <= 0) return 'PENDING';
+  if (plannedQty <= 0) return 'OVER';
+  const delta = receivedQty - plannedQty;
+  if (Math.abs(delta) < 0.000001) return 'DONE';
+  if (delta < 0) return 'PARTIAL';
+  return 'OVER';
+};
+
+const buildWarehouseTransferDocumentSummary = (
+  document: WarehouseTransferDocument,
+  items: WarehouseTransferDocumentItemBase[],
+  receivedByItem: Map<string, number>
+): WarehouseTransferDocumentSummary => {
+  let plannedQtyTotal = 0;
+  let receivedQtyTotal = 0;
+  let completedItemsCount = 0;
+
+  items.forEach((item) => {
+    const receivedQty = receivedByItem.get(item.id) ?? 0;
+    plannedQtyTotal += item.plannedQty;
+    receivedQtyTotal += receivedQty;
+    if (isWarehouseTransferItemCompleted(item.plannedQty, receivedQty)) {
+      completedItemsCount += 1;
+    }
+  });
+
+  return {
+    ...document,
+    itemsCount: items.length,
+    completedItemsCount,
+    plannedQtyTotal,
+    receivedQtyTotal
+  };
+};
+
+const fetchWarehouseTransferItemsByDocumentIds = async (
+  documentIds: string[]
+): Promise<WarehouseTransferDocumentItemBase[]> => {
+  if (documentIds.length === 0) return [];
+  const items: WarehouseTransferDocumentItemBase[] = [];
+  const chunkSize = 500;
+  for (let i = 0; i < documentIds.length; i += chunkSize) {
+    const chunk = documentIds.slice(i, i + chunkSize);
+    const { data, error } = await supabaseAdmin
+      .from('warehouse_transfer_document_items')
+      .select('*')
+      .in('document_id', chunk)
+      .order('line_no', { ascending: true });
+    if (error) throw error;
+    items.push(...(data ?? []).map(mapWarehouseTransferDocumentItem));
+  }
+  return items;
+};
+
+const fetchWarehouseTransferReceiptsByItemIds = async (
+  itemIds: string[]
+): Promise<WarehouseTransferItemReceipt[]> => {
+  if (itemIds.length === 0) return [];
+  const receipts: WarehouseTransferItemReceipt[] = [];
+  const chunkSize = 500;
+  for (let i = 0; i < itemIds.length; i += chunkSize) {
+    const chunk = itemIds.slice(i, i + chunkSize);
+    const { data, error } = await supabaseAdmin
+      .from('warehouse_transfer_item_receipts')
+      .select('*')
+      .in('item_id', chunk)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    receipts.push(...(data ?? []).map(mapWarehouseTransferItemReceipt));
+  }
+  return receipts;
+};
+
+const fetchWarehouseTransferDocumentDetails = async (
+  documentId: string
+): Promise<WarehouseTransferDocumentDetails> => {
+  const { data: documentRow, error: documentError } = await supabaseAdmin
+    .from('warehouse_transfer_documents')
+    .select('*')
+    .eq('id', documentId)
+    .maybeSingle();
+  if (documentError) throw documentError;
+  if (!documentRow) throw new Error('NOT_FOUND');
+  const document = mapWarehouseTransferDocument(documentRow);
+
+  const { data: itemRows, error: itemsError } = await supabaseAdmin
+    .from('warehouse_transfer_document_items')
+    .select('*')
+    .eq('document_id', documentId)
+    .order('line_no', { ascending: true });
+  if (itemsError) throw itemsError;
+  const itemBases = (itemRows ?? []).map(mapWarehouseTransferDocumentItem);
+  const itemIds = itemBases.map((item) => item.id);
+  const receipts = await fetchWarehouseTransferReceiptsByItemIds(itemIds);
+
+  const receiptByItem = new Map<string, WarehouseTransferItemReceipt[]>();
+  const receivedByItem = new Map<string, number>();
+  receipts.forEach((receipt) => {
+    const existing = receiptByItem.get(receipt.itemId) ?? [];
+    existing.push(receipt);
+    receiptByItem.set(receipt.itemId, existing);
+    receivedByItem.set(receipt.itemId, (receivedByItem.get(receipt.itemId) ?? 0) + receipt.qty);
+  });
+
+  const items: WarehouseTransferDocumentItem[] = itemBases.map((item) => {
+    const itemReceipts = receiptByItem.get(item.id) ?? [];
+    const receivedQty = receivedByItem.get(item.id) ?? 0;
+    return {
+      ...item,
+      receivedQty,
+      diffQty: receivedQty - item.plannedQty,
+      status: resolveWarehouseTransferItemStatus(item.plannedQty, receivedQty),
+      receipts: itemReceipts
+    };
+  });
+
+  return {
+    document: buildWarehouseTransferDocumentSummary(document, itemBases, receivedByItem),
+    items
+  };
+};
+
+const fetchWarehouseTransferDocumentSummaries = async (): Promise<
+  WarehouseTransferDocumentSummary[]
+> => {
+  const { data: documentRows, error: documentError } = await supabaseAdmin
+    .from('warehouse_transfer_documents')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (documentError) throw documentError;
+  const documents = (documentRows ?? []).map(mapWarehouseTransferDocument);
+  if (documents.length === 0) return [];
+
+  const documentIds = documents.map((document) => document.id);
+  const items = await fetchWarehouseTransferItemsByDocumentIds(documentIds);
+  const itemIds = items.map((item) => item.id);
+  const receipts = await fetchWarehouseTransferReceiptsByItemIds(itemIds);
+
+  const itemsByDocumentId = new Map<string, WarehouseTransferDocumentItemBase[]>();
+  items.forEach((item) => {
+    const existing = itemsByDocumentId.get(item.documentId) ?? [];
+    existing.push(item);
+    itemsByDocumentId.set(item.documentId, existing);
+  });
+
+  const receivedByItem = new Map<string, number>();
+  receipts.forEach((receipt) => {
+    receivedByItem.set(receipt.itemId, (receivedByItem.get(receipt.itemId) ?? 0) + receipt.qty);
+  });
+
+  return documents.map((document) =>
+    buildWarehouseTransferDocumentSummary(
+      document,
+      itemsByDocumentId.get(document.id) ?? [],
+      receivedByItem
+    )
+  );
+};
+
 const fetchEntries = async (fromKey: string, toKey?: string) => {
   let query = supabaseAdmin.from('daily_entries').select('*');
   query = toKey ? query.gte('date_key', fromKey).lte('date_key', toKey) : query.eq('date_key', fromKey);
@@ -635,7 +1330,7 @@ const upsertTransferEntry = async (
     .eq('location_id', locationId);
 };
 
-const handleAction = async (action: string, payload: any) => {
+const handleAction = async (action: string, payload: any, currentUser: AppUser) => {
   switch (action) {
     case 'getDashboard': {
       const dateKey = String(payload?.date ?? getTodayKey());
@@ -2052,9 +2747,20 @@ const handleAction = async (action: string, payload: any) => {
       return mapLocation(data);
     }
     case 'getAudit': {
+      const retentionCutoff = new Date();
+      retentionCutoff.setMonth(retentionCutoff.getMonth() - 2);
+      const retentionCutoffIso = retentionCutoff.toISOString();
+
+      const { error: purgeError } = await supabaseAdmin
+        .from('audit_logs')
+        .delete()
+        .lt('at', retentionCutoffIso);
+      if (purgeError) throw purgeError;
+
       const { data, error } = await supabaseAdmin
         .from('audit_logs')
         .select('*')
+        .gte('at', retentionCutoffIso)
         .order('at', { ascending: false });
       if (error) throw error;
       return (data ?? []).map(mapAuditEvent);
@@ -2090,6 +2796,213 @@ const handleAction = async (action: string, payload: any) => {
         if (warehouseOrder !== 0) return warehouseOrder;
         return a.orderNo - b.orderNo;
       });
+    }
+    case 'getWarehouseTransferDocuments': {
+      return fetchWarehouseTransferDocumentSummaries();
+    }
+    case 'getWarehouseTransferDocument': {
+      const documentId = String(payload?.documentId ?? '').trim();
+      if (!documentId) throw new Error('NOT_FOUND');
+      return fetchWarehouseTransferDocumentDetails(documentId);
+    }
+    case 'createWarehouseTransferDocument': {
+      const documentNumber = String(payload?.documentNumber ?? '').trim();
+      if (!documentNumber) throw new Error('DOCUMENT_NUMBER_REQUIRED');
+      const rawItems: Array<{
+        lineNo?: number;
+        indexCode?: string;
+        indexCode2?: string;
+        name?: string;
+        batch?: string;
+        location?: string;
+        unit?: string;
+        plannedQty?: number;
+        note?: string;
+      }> = Array.isArray(payload?.items) ? payload.items : [];
+      if (rawItems.length === 0) throw new Error('ITEMS_REQUIRED');
+
+      const normalizedItems = rawItems.map((item, index) => {
+        const lineNoCandidate = toNumber(item?.lineNo ?? index + 1);
+        const lineNo =
+          Number.isFinite(lineNoCandidate) && lineNoCandidate > 0
+            ? Math.round(lineNoCandidate)
+            : index + 1;
+        const indexCode = String(item?.indexCode ?? '').trim();
+        const name = String(item?.name ?? '').trim();
+        const plannedQty = toNumber(item?.plannedQty);
+        if (!indexCode || !name) throw new Error('INVALID_ITEM');
+        if (!Number.isFinite(plannedQty) || plannedQty <= 0) throw new Error('INVALID_QTY');
+        return {
+          id: randomUUID(),
+          document_id: '',
+          line_no: lineNo,
+          index_code: indexCode,
+          index_code2: item?.indexCode2 ? String(item.indexCode2).trim() || null : null,
+          name,
+          batch: item?.batch ? String(item.batch).trim() || null : null,
+          location: item?.location ? String(item.location).trim() || null : null,
+          unit: item?.unit ? String(item.unit).trim() || 'kg' : 'kg',
+          planned_qty: plannedQty,
+          note: item?.note ? String(item.note).trim() || null : null,
+          created_at: new Date().toISOString()
+        };
+      });
+
+      const nowIso = new Date().toISOString();
+      const documentId = randomUUID();
+      const documentPayload = {
+        id: documentId,
+        created_at: nowIso,
+        created_by_id: currentUser.id ?? null,
+        created_by_name: getActorName(currentUser),
+        document_number: documentNumber,
+        source_warehouse: payload?.sourceWarehouse
+          ? String(payload.sourceWarehouse).trim() || null
+          : null,
+        target_warehouse: payload?.targetWarehouse
+          ? String(payload.targetWarehouse).trim() || null
+          : null,
+        note: payload?.note ? String(payload.note).trim() || null : null,
+        status: 'OPEN',
+        closed_at: null,
+        closed_by_name: null
+      };
+
+      const { error: insertDocumentError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .insert(documentPayload);
+      if (insertDocumentError) throw insertDocumentError;
+
+      const itemsPayload = normalizedItems.map((item) => ({
+        ...item,
+        document_id: documentId
+      }));
+      const { error: insertItemsError } = await supabaseAdmin
+        .from('warehouse_transfer_document_items')
+        .insert(itemsPayload);
+      if (insertItemsError) {
+        await supabaseAdmin.from('warehouse_transfer_documents').delete().eq('id', documentId);
+        throw insertItemsError;
+      }
+
+      return fetchWarehouseTransferDocumentDetails(documentId);
+    }
+    case 'addWarehouseTransferItemReceipt': {
+      const documentId = String(payload?.documentId ?? '').trim();
+      const itemId = String(payload?.itemId ?? '').trim();
+      const qty = toNumber(payload?.qty);
+      if (!documentId || !itemId) throw new Error('NOT_FOUND');
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error('INVALID_QTY');
+
+      const { data: documentRow, error: documentError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .select('id, status')
+        .eq('id', documentId)
+        .maybeSingle();
+      if (documentError) throw documentError;
+      if (!documentRow) throw new Error('NOT_FOUND');
+      if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+
+      const { data: itemRow, error: itemError } = await supabaseAdmin
+        .from('warehouse_transfer_document_items')
+        .select('id, document_id')
+        .eq('id', itemId)
+        .maybeSingle();
+      if (itemError) throw itemError;
+      if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+
+      const { data, error } = await supabaseAdmin
+        .from('warehouse_transfer_item_receipts')
+        .insert({
+          id: randomUUID(),
+          item_id: itemId,
+          created_at: new Date().toISOString(),
+          receiver_id: currentUser.id ?? null,
+          receiver_name: getActorName(currentUser),
+          qty,
+          note: payload?.note ? String(payload.note).trim() || null : null
+        })
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapWarehouseTransferItemReceipt(data);
+    }
+    case 'closeWarehouseTransferDocument': {
+      const documentId = String(payload?.documentId ?? '').trim();
+      if (!documentId) throw new Error('NOT_FOUND');
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .select('*')
+        .eq('id', documentId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) throw new Error('NOT_FOUND');
+      if (existing.status === 'CLOSED') {
+        return mapWarehouseTransferDocument(existing);
+      }
+
+      const updates: Record<string, unknown> = {
+        status: 'CLOSED',
+        closed_at: new Date().toISOString(),
+        closed_by_name: getActorName(currentUser)
+      };
+      if (payload?.note !== undefined) {
+        updates.note = payload.note ? String(payload.note).trim() || null : null;
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .update(updates)
+        .eq('id', documentId)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapWarehouseTransferDocument(data);
+    }
+    case 'removeWarehouseTransferDocument': {
+      const documentId = String(payload?.documentId ?? '').trim();
+      if (!documentId) throw new Error('NOT_FOUND');
+
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .select('id')
+        .eq('id', documentId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) throw new Error('NOT_FOUND');
+
+      const { data: itemRows, error: itemsError } = await supabaseAdmin
+        .from('warehouse_transfer_document_items')
+        .select('id')
+        .eq('document_id', documentId);
+      if (itemsError) throw itemsError;
+
+      const itemIds = (itemRows ?? []).map((row) => String(row.id));
+      const chunkSize = 500;
+      for (let i = 0; i < itemIds.length; i += chunkSize) {
+        const chunk = itemIds.slice(i, i + chunkSize);
+        const { error: receiptsError } = await supabaseAdmin
+          .from('warehouse_transfer_item_receipts')
+          .delete()
+          .in('item_id', chunk);
+        if (receiptsError) throw receiptsError;
+      }
+
+      const { error: deleteItemsError } = await supabaseAdmin
+        .from('warehouse_transfer_document_items')
+        .delete()
+        .eq('document_id', documentId);
+      if (deleteItemsError) throw deleteItemsError;
+
+      const { error: deleteDocumentError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .delete()
+        .eq('id', documentId);
+      if (deleteDocumentError) throw deleteDocumentError;
+
+      return;
     }
     case 'getTransfers': {
       const dateKey = payload?.dateKey ? String(payload.dateKey) : null;
@@ -2532,9 +3445,19 @@ const handleAction = async (action: string, payload: any) => {
       return mapDryer(data);
     }
     case 'setDryerMaterial': {
-      const id = String(payload?.id ?? '');
+      const id = String(payload?.id ?? '').trim();
       if (!id) throw new Error('NOT_FOUND');
-      return handleAction('updateDryer', payload);
+      const materialId =
+        payload?.materialId === null ? null : String(payload?.materialId ?? '').trim() || null;
+      const { data, error } = await supabaseAdmin
+        .from('dryers')
+        .update({ material_id: materialId })
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapDryer(data);
     }
     case 'getSpareParts': {
       const { data, error } = await supabaseAdmin.from('spare_parts').select('*');
@@ -2552,12 +3475,20 @@ const handleAction = async (action: string, payload: any) => {
       return (data ?? []).map(mapSparePartHistory);
     }
     case 'getOriginalInventory': {
-      const cutoff = new Date();
-      cutoff.setFullYear(cutoff.getFullYear() - 1);
+      const retentionCutoff = new Date();
+      retentionCutoff.setMonth(retentionCutoff.getMonth() - 2);
+      const retentionCutoffIso = retentionCutoff.toISOString();
+
+      const { error: purgeError } = await supabaseAdmin
+        .from('original_inventory_entries')
+        .delete()
+        .lt('at', retentionCutoffIso);
+      if (purgeError) throw purgeError;
+
       const { data, error } = await supabaseAdmin
         .from('original_inventory_entries')
         .select('*')
-        .gte('at', cutoff.toISOString())
+        .gte('at', retentionCutoffIso)
         .order('at', { ascending: false });
       if (error) throw error;
       return (data ?? []).map(mapOriginalInventoryEntry);
@@ -2613,7 +3544,7 @@ const handleAction = async (action: string, payload: any) => {
           unit,
           location: payload?.location ? String(payload.location).trim() || null : null,
           note: payload?.note ? String(payload.note).trim() || null : null,
-          user_name: String(payload?.user ?? '').trim() || 'nieznany'
+          user_name: getActorName(currentUser)
         })
         .select('*')
         .maybeSingle();
@@ -2853,7 +3784,7 @@ const handleAction = async (action: string, payload: any) => {
         await supabaseAdmin.from('spare_part_history').insert({
           id: randomUUID(),
           at: new Date().toISOString(),
-          user_name: String(payload?.user ?? '').trim() || 'nieznany',
+          user_name: getActorName(currentUser),
           part_id: partId,
           part_name: part.name,
           qty: Math.abs(diff),
@@ -2889,7 +3820,7 @@ const handleAction = async (action: string, payload: any) => {
       await supabaseAdmin.from('spare_part_history').insert({
         id: randomUUID(),
         at: new Date().toISOString(),
-        user_name: String(payload?.user ?? '').trim() || 'nieznany',
+        user_name: getActorName(currentUser),
         part_id: partId,
         part_name: part.name,
         qty,
@@ -2992,7 +3923,7 @@ const handleAction = async (action: string, payload: any) => {
     }
     case 'createRaportZmianowySession': {
       const planSheet = String(payload?.planSheet ?? '').trim();
-      const createdBy = String(payload?.createdBy ?? '').trim() || 'nieznany';
+      const createdBy = getActorName(currentUser);
       const fileName = payload?.fileName ? String(payload.fileName).trim() : null;
       const dateKeyRaw = typeof payload?.dateKey === 'string' ? payload.dateKey.trim() : '';
       const dateKeyMatch = dateKeyRaw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -3129,8 +4060,8 @@ const handleAction = async (action: string, payload: any) => {
     case 'addRaportZmianowyEntry': {
       const itemId = String(payload?.itemId ?? '').trim();
       const note = payload?.note ? String(payload.note).trim() : '';
-      const authorName = String(payload?.authorName ?? '').trim() || 'nieznany';
-      const authorId = payload?.authorId ? String(payload.authorId).trim() : null;
+      const authorName = getActorName(currentUser);
+      const authorId = currentUser.id;
       if (!itemId) throw new Error('NOT_FOUND');
       if (!note) throw new Error('NOTE_REQUIRED');
       const now = new Date().toISOString();
@@ -3161,8 +4092,8 @@ const handleAction = async (action: string, payload: any) => {
       const updates: Record<string, unknown> = {
         note,
         edited_at: new Date().toISOString(),
-        edited_by_id: payload?.editedById ? String(payload.editedById).trim() : null,
-        edited_by_name: payload?.editedByName ? String(payload.editedByName).trim() : null
+        edited_by_id: currentUser.id,
+        edited_by_name: getActorName(currentUser)
       };
       const { data, error } = await supabaseAdmin
         .from('raport_zmianowy_entries')
@@ -3227,14 +4158,25 @@ const handleAction = async (action: string, payload: any) => {
   }
 };
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
+    const auth = await getAuthenticatedUser(request);
+    if (!auth.user) {
+      const response = NextResponse.json({ code: auth.code }, { status: 401 });
+      if (auth.code === 'SESSION_EXPIRED') {
+        clearSessionCookie(response);
+      }
+      return response;
+    }
+
     const body = (await request.json().catch(() => ({}))) as { action?: string; payload?: any };
     const action = body.action ?? '';
     if (!action) {
       return NextResponse.json({ code: 'UNKNOWN_ACTION' }, { status: 400 });
     }
-    const data = await handleAction(action, body.payload);
+    ensureActionAccess(action, auth.user, body.payload);
+    const data = await handleAction(action, body.payload, auth.user);
+    await writeAuditLog(action, body.payload, data, auth.user);
     return NextResponse.json(data ?? null);
   } catch (error) {
     const code = errorCodeFromError(error);

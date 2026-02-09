@@ -122,19 +122,27 @@ export default function DryersPage() {
 
   useEffect(() => {
     if (!assignDryerId) {
-      setAssignMaterialId('');
-      setMaterialSearch('');
-      return;
+      const timer = setTimeout(() => {
+        setAssignMaterialId('');
+        setMaterialSearch('');
+      }, 0);
+      return () => clearTimeout(timer);
     }
     const current = dryers.find((dryer) => dryer.id === assignDryerId);
     const materialId = current?.materialId ?? '';
-    setAssignMaterialId(materialId);
-    setMaterialSearch(materialId ? materialLabels.get(materialId) ?? '' : '');
+    const timer = setTimeout(() => {
+      setAssignMaterialId(materialId);
+      setMaterialSearch(materialId ? materialLabels.get(materialId) ?? '' : '');
+    }, 0);
+    return () => clearTimeout(timer);
   }, [assignDryerId, dryers, materialLabels]);
 
   useEffect(() => {
     if (!materialSearch.trim()) return;
-    setNewMaterialName((prev) => (prev ? prev : materialSearch));
+    const timer = setTimeout(() => {
+      setNewMaterialName((prev) => (prev ? prev : materialSearch));
+    }, 0);
+    return () => clearTimeout(timer);
   }, [materialSearch]);
 
   const assignMutation = useMutation({

@@ -62,8 +62,11 @@ export default function MixedMaterialsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MixedMaterial | null>(null);
   const [confirmReady, setConfirmReady] = useState(false);
-  const [activeTab, setActiveTab] = useState<'add' | 'transfer'>('add');
-  const [tabReady, setTabReady] = useState(false);
+  const [activeTab, setActiveTab] = useState<'add' | 'transfer'>(() => {
+    if (typeof window === 'undefined') return 'add';
+    const saved = window.localStorage.getItem(MIXED_TAB_STORAGE_KEY);
+    return saved === 'add' || saved === 'transfer' ? saved : 'add';
+  });
 
   const locationLabel = (warehouse: string, name: string) => `${warehouse} - ${name}`;
   const locationMap = useMemo(() => {
@@ -155,6 +158,7 @@ export default function MixedMaterialsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mixed-materials'] });
       setSelectedId(null);
+      setConfirmReady(false);
       setDeleteTarget(null);
       toast({ title: 'Usunięto pozycję', tone: 'success' });
     },
@@ -169,35 +173,18 @@ export default function MixedMaterialsPage() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const saved = window.localStorage.getItem(MIXED_TAB_STORAGE_KEY);
-    if (saved === 'add' || saved === 'transfer') {
-      setActiveTab(saved);
-    }
-    setTabReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !tabReady) return;
     window.localStorage.setItem(MIXED_TAB_STORAGE_KEY, activeTab);
-  }, [activeTab, tabReady]);
+  }, [activeTab]);
 
   useEffect(() => {
     if (selectedId && !mixedMaterials.some((item) => item.id === selectedId)) {
-      setSelectedId(null);
+      const timer = setTimeout(() => setSelectedId(null), 0);
+      return () => clearTimeout(timer);
     }
   }, [mixedMaterials, selectedId]);
 
   useEffect(() => {
-    setTransferFromWarehouseId('');
-    setTransferFromLocationId('');
-  }, [transferName]);
-
-  useEffect(() => {
-    if (!deleteTarget) {
-      setConfirmReady(false);
-      return;
-    }
-    setConfirmReady(false);
+    if (!deleteTarget) return;
     const timer = setTimeout(() => setConfirmReady(true), 180);
     return () => clearTimeout(timer);
   }, [deleteTarget]);
@@ -214,6 +201,7 @@ export default function MixedMaterialsPage() {
       toast({ title: 'Zaznacz pozycję do usunięcia', tone: 'error' });
       return;
     }
+    setConfirmReady(false);
     setDeleteTarget(target);
   };
 
@@ -470,7 +458,11 @@ export default function MixedMaterialsPage() {
                   <div className="relative">
                     <Input
                       value={transferName}
-                      onChange={(event) => setTransferName(event.target.value)}
+                      onChange={(event) => {
+                        setTransferName(event.target.value);
+                        setTransferFromWarehouseId('');
+                        setTransferFromLocationId('');
+                      }}
                       list="mixed-materials-names"
                       placeholder="Wybierz z listy"
                       className={transferName ? 'pr-10' : undefined}
@@ -481,7 +473,11 @@ export default function MixedMaterialsPage() {
                         aria-label="Wyczysc mieszanke"
                         className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
                         onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => setTransferName('')}
+                        onClick={() => {
+                          setTransferName('');
+                          setTransferFromWarehouseId('');
+                          setTransferFromLocationId('');
+                        }}
                       >
                         X
                       </button>
@@ -586,7 +582,10 @@ export default function MixedMaterialsPage() {
       {deleteTarget && (
         <div
           className="fixed inset-0 z-[999] flex items-start justify-center bg-[rgba(5,6,10,0.78)] px-4 pt-[8vh]"
-          onClick={() => setDeleteTarget(null)}
+          onClick={() => {
+            setConfirmReady(false);
+            setDeleteTarget(null);
+          }}
         >
           <div
             className="w-full max-w-md rounded-2xl border border-border bg-[rgba(10,11,15,0.98)] p-6 shadow-[inset_0_1px_0_var(--inner-highlight)]"
@@ -600,7 +599,13 @@ export default function MixedMaterialsPage() {
                 </p>
               </div>
               <div className="flex items-center justify-end gap-2">
-                <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setConfirmReady(false);
+                    setDeleteTarget(null);
+                  }}
+                >
                   Anuluj
                 </Button>
                 <Button

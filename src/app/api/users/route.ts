@@ -1,7 +1,9 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { getErrorCode, mapDbUser, type DbUserRow } from '@/lib/supabase/users';
 import type { Role, UserAccess } from '@/lib/api/types';
+import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
+import { isHeadAdmin } from '@/lib/auth/access';
 
 type CreateUserPayload = {
   name?: string;
@@ -16,10 +18,28 @@ const normalizeRole = (role?: Role) =>
     ? role
     : 'USER';
 
-export async function GET() {
+const requireHeadAdmin = async (request: Request) => {
+  const auth = await getAuthenticatedUser(request);
+  if (!auth.user) {
+    const response = NextResponse.json({ code: auth.code }, { status: 401 });
+    if (auth.code === 'SESSION_EXPIRED') {
+      clearSessionCookie(response);
+    }
+    return response;
+  }
+  if (!isHeadAdmin(auth.user)) {
+    return NextResponse.json({ code: 'FORBIDDEN' }, { status: 403 });
+  }
+  return null;
+};
+
+export async function GET(request: NextRequest) {
+  const denied = await requireHeadAdmin(request);
+  if (denied) return denied;
+
   const { data, error } = await supabaseAdmin.rpc('list_app_users');
 
-if (error) {
+  if (error) {
     const code = getErrorCode(error.message, error.code);
     return NextResponse.json({ code }, { status: 500 });
   }
@@ -28,7 +48,10 @@ if (error) {
   return NextResponse.json(rows.map(mapDbUser));
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const denied = await requireHeadAdmin(request);
+  if (denied) return denied;
+
   const payload = (await request.json().catch(() => null)) as CreateUserPayload | null;
   const name = payload?.name?.trim() ?? '';
   const username = payload?.username?.trim() ?? '';
