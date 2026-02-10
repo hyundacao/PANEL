@@ -12,6 +12,7 @@ const SESSION_REMEMBER_TTL_SECONDS = 60 * 60 * 24 * 30;
 type SessionPayload = {
   v: number;
   sub: string;
+  sid: string;
   iat: number;
   exp: number;
 };
@@ -19,6 +20,7 @@ type SessionPayload = {
 type SessionTokenState =
   | {
       userId: string;
+      sessionId: string;
       expired: boolean;
     }
   | null;
@@ -53,12 +55,13 @@ const decodeBase64Url = (value: string) =>
 const signPayloadPart = (payloadPart: string) =>
   createHmac('sha256', getSessionSecret()).update(payloadPart).digest();
 
-const buildSessionToken = (userId: string, rememberMe: boolean) => {
+const buildSessionToken = (userId: string, sessionId: string, rememberMe: boolean) => {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const ttl = rememberMe ? SESSION_REMEMBER_TTL_SECONDS : SESSION_TTL_SECONDS;
   const payload: SessionPayload = {
     v: SESSION_VERSION,
     sub: userId,
+    sid: sessionId,
     iat: nowSeconds,
     exp: nowSeconds + ttl
   };
@@ -67,8 +70,7 @@ const buildSessionToken = (userId: string, rememberMe: boolean) => {
   return `${payloadPart}.${signaturePart}`;
 };
 
-const parseSessionToken = (token: string | null | undefined): SessionTokenState => {
-  if (!token) return null;
+const parseSessionToken = (token: string): SessionTokenState => {
   const [payloadPart, signaturePart, ...rest] = token.split('.');
   if (!payloadPart || !signaturePart || rest.length > 0) return null;
   let signature: Buffer;
@@ -90,15 +92,17 @@ const parseSessionToken = (token: string | null | undefined): SessionTokenState 
     payload?.v !== SESSION_VERSION ||
     typeof payload?.sub !== 'string' ||
     !payload.sub.trim() ||
+    typeof payload?.sid !== 'string' ||
+    !payload.sid.trim() ||
     typeof payload?.exp !== 'number'
   ) {
     return null;
   }
   const nowSeconds = Math.floor(Date.now() / 1000);
   if (payload.exp <= nowSeconds) {
-    return { userId: payload.sub, expired: true };
+    return { userId: payload.sub, sessionId: payload.sid, expired: true };
   }
-  return { userId: payload.sub, expired: false };
+  return { userId: payload.sub, sessionId: payload.sid, expired: false };
 };
 
 const readCookieValue = (request: Request, name: string) => {
@@ -124,12 +128,13 @@ const readCookieValue = (request: Request, name: string) => {
 export const setSessionCookie = (
   response: NextResponse,
   userId: string,
+  sessionId: string,
   rememberMe = false
 ) => {
   const ttl = rememberMe ? SESSION_REMEMBER_TTL_SECONDS : SESSION_TTL_SECONDS;
   response.cookies.set({
     name: SESSION_COOKIE_NAME,
-    value: buildSessionToken(userId, rememberMe),
+    value: buildSessionToken(userId, sessionId, rememberMe),
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
@@ -152,9 +157,13 @@ export const clearSessionCookie = (response: NextResponse) => {
 
 export const getAuthenticatedUser = async (request: Request): Promise<AuthResult> => {
   const token = readCookieValue(request, SESSION_COOKIE_NAME);
+  if (!token) {
+    return { user: null, code: 'UNAUTHORIZED' };
+  }
+
   const parsed = parseSessionToken(token);
   if (!parsed) {
-    return { user: null, code: 'UNAUTHORIZED' };
+    return { user: null, code: 'SESSION_EXPIRED' };
   }
   if (parsed.expired) {
     return { user: null, code: 'SESSION_EXPIRED' };
@@ -163,7 +172,7 @@ export const getAuthenticatedUser = async (request: Request): Promise<AuthResult
   const { data, error } = await supabaseAdmin
     .from('app_users')
     .select(
-      'id, name, username, role, access, is_active, created_at, last_login'
+      'id, name, username, role, access, is_active, created_at, last_login, active_session_id'
     )
     .eq('id', parsed.userId)
     .maybeSingle();
@@ -175,7 +184,12 @@ export const getAuthenticatedUser = async (request: Request): Promise<AuthResult
     return { user: null, code: 'UNAUTHORIZED' };
   }
 
-  const user = mapDbUser(data as DbUserRow);
+  const row = data as DbUserRow & { active_session_id: string | null };
+  if (!row.active_session_id || row.active_session_id !== parsed.sessionId) {
+    return { user: null, code: 'SESSION_EXPIRED' };
+  }
+
+  const user = mapDbUser(row);
   if (!user.isActive) {
     return { user: null, code: 'UNAUTHORIZED' };
   }

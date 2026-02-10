@@ -38,6 +38,8 @@ import type {
   WarehouseTransferDocument,
   WarehouseTransferDocumentDetails,
   WarehouseTransferDocumentSummary,
+  WarehouseTransferItemIssue,
+  WarehouseTransferItemPriority,
   WarehouseTransferItemReceipt,
   UserAccess,
   Warehouse,
@@ -257,6 +259,7 @@ export const createWarehouseTransferDocument = async (payload: {
   note?: string;
   items: Array<{
     lineNo?: number;
+    priority?: WarehouseTransferItemPriority;
     indexCode: string;
     indexCode2?: string;
     name: string;
@@ -269,6 +272,23 @@ export const createWarehouseTransferDocument = async (payload: {
 }): Promise<WarehouseTransferDocumentDetails> =>
   appRequest('createWarehouseTransferDocument', payload);
 
+export const addWarehouseTransferItemIssue = async (payload: {
+  documentId: string;
+  itemId: string;
+  qty: number;
+  note?: string;
+}): Promise<WarehouseTransferItemIssue> =>
+  appRequest('addWarehouseTransferItemIssue', payload);
+
+export const updateWarehouseTransferItemIssue = async (payload: {
+  documentId: string;
+  itemId: string;
+  issueId: string;
+  qty: number;
+  note?: string;
+}): Promise<WarehouseTransferItemIssue> =>
+  appRequest('updateWarehouseTransferItemIssue', payload);
+
 export const addWarehouseTransferItemReceipt = async (payload: {
   documentId: string;
   itemId: string;
@@ -276,6 +296,15 @@ export const addWarehouseTransferItemReceipt = async (payload: {
   note?: string;
 }): Promise<WarehouseTransferItemReceipt> =>
   appRequest('addWarehouseTransferItemReceipt', payload);
+
+export const updateWarehouseTransferItemReceipt = async (payload: {
+  documentId: string;
+  itemId: string;
+  receiptId: string;
+  qty: number;
+  note?: string;
+}): Promise<WarehouseTransferItemReceipt> =>
+  appRequest('updateWarehouseTransferItemReceipt', payload);
 
 export const closeWarehouseTransferDocument = async (payload: {
   documentId: string;

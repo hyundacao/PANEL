@@ -7,7 +7,15 @@ import { Button } from '@/components/ui/Button';
 import { getAccessibleWarehouses } from '@/lib/auth/access';
 import { logoutUser } from '@/lib/api';
 
-export const Topbar = ({ title, breadcrumb }: { title: string; breadcrumb?: string }) => {
+export const Topbar = ({
+  title,
+  breadcrumb,
+  showSidebarToggle = true
+}: {
+  title: string;
+  breadcrumb?: string;
+  showSidebarToggle?: boolean;
+}) => {
   const router = useRouter();
   const { toggleSidebar, sidebarCollapsed, user, clearActiveWarehouse, logout } = useUiStore();
   const warehouses = getAccessibleWarehouses(user);
@@ -31,7 +39,7 @@ export const Topbar = ({ title, breadcrumb }: { title: string; breadcrumb?: stri
           onClick={toggleSidebar}
           aria-label="Przelacz menu"
           aria-expanded={!sidebarCollapsed}
-          className="hidden md:inline-flex"
+          className={showSidebarToggle ? 'hidden md:inline-flex' : 'hidden'}
         >
           <Menu className="h-4 w-4" style={{ color: 'var(--brand)' }} />
         </Button>

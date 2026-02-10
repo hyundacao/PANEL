@@ -23,6 +23,7 @@ create table if not exists public.warehouse_transfer_document_items (
   id uuid primary key default gen_random_uuid(),
   document_id uuid not null references public.warehouse_transfer_documents(id) on delete cascade,
   line_no integer not null default 1,
+  priority text not null default 'NORMAL' check (priority in ('LOW', 'NORMAL', 'HIGH', 'CRITICAL')),
   index_code text not null,
   index_code2 text,
   name text not null,
@@ -38,6 +39,21 @@ create index if not exists warehouse_transfer_document_items_document_idx
   on public.warehouse_transfer_document_items (document_id);
 create index if not exists warehouse_transfer_document_items_index_idx
   on public.warehouse_transfer_document_items (index_code);
+
+create table if not exists public.warehouse_transfer_item_issues (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references public.warehouse_transfer_document_items(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  issuer_id uuid,
+  issuer_name text not null,
+  qty numeric not null check (qty > 0),
+  note text
+);
+
+create index if not exists warehouse_transfer_item_issues_item_idx
+  on public.warehouse_transfer_item_issues (item_id);
+create index if not exists warehouse_transfer_item_issues_created_idx
+  on public.warehouse_transfer_item_issues (created_at);
 
 create table if not exists public.warehouse_transfer_item_receipts (
   id uuid primary key default gen_random_uuid(),
@@ -56,6 +72,7 @@ create index if not exists warehouse_transfer_item_receipts_created_idx
 
 alter table if exists public.warehouse_transfer_documents enable row level security;
 alter table if exists public.warehouse_transfer_document_items enable row level security;
+alter table if exists public.warehouse_transfer_item_issues enable row level security;
 alter table if exists public.warehouse_transfer_item_receipts enable row level security;
 
 commit;

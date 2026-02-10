@@ -23,7 +23,6 @@ const getTitle = (pathname: string) => {
   if (pathname.startsWith('/dashboard')) return 'Pulpit';
   if (pathname.startsWith('/spis-oryginalow')) return 'Spis oryginalow';
   if (pathname.startsWith('/spis')) return 'Spis przemialow';
-  if (pathname.startsWith('/przesuniecia-magazynowe')) return 'Przesunięcia magazynowe ERP';
   if (pathname.startsWith('/przesuniecia')) return 'Przesunięcia przemiałowe';
   if (pathname.startsWith('/wymieszane')) return 'Wymieszane tworzywa';
   if (pathname.startsWith('/raporty')) return 'Raporty';
@@ -50,7 +49,6 @@ const getTabFromPath = (pathname: string): WarehouseTab | null => {
   if (pathname.startsWith('/dashboard')) return 'dashboard';
   if (pathname.startsWith('/spis-oryginalow')) return 'spis-oryginalow';
   if (pathname.startsWith('/spis')) return 'spis';
-  if (pathname.startsWith('/przesuniecia-magazynowe')) return 'przesuniecia';
   if (pathname.startsWith('/przesuniecia')) return 'przesuniecia';
   if (pathname.startsWith('/raporty')) return 'raporty';
   if (pathname.startsWith('/kartoteka')) return 'kartoteka';
@@ -75,7 +73,6 @@ const navItemsPrzemialy: MobileNavItem[] = [
   { label: 'Spis przemialow', href: '/spis', tab: 'spis' },
   { label: 'Spis oryginalow', href: '/spis-oryginalow', tab: 'spis-oryginalow' },
   { label: 'Przesunięcia przemiałowe', href: '/przesuniecia', tab: 'przesuniecia' },
-  { label: 'Przesunięcia magazynowe ERP', href: '/przesuniecia-magazynowe', tab: 'przesuniecia' },
   { label: 'Raporty', href: '/raporty', tab: 'raporty' },
   { label: 'Stany magazynowe', href: '/kartoteka', tab: 'kartoteka' },
   { label: 'Suszarki', href: '/suszarki', tab: 'suszarki' },
@@ -245,12 +242,6 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     if (href === '/spis') return pathname === '/spis' || pathname.startsWith('/spis/');
     if (href === '/spis-oryginalow') {
       return pathname === '/spis-oryginalow' || pathname.startsWith('/spis-oryginalow/');
-    }
-    if (href === '/przesuniecia-magazynowe') {
-      return (
-        pathname === '/przesuniecia-magazynowe' ||
-        pathname.startsWith('/przesuniecia-magazynowe/')
-      );
     }
     if (href === '/przesuniecia') {
       return pathname === '/przesuniecia' || pathname.startsWith('/przesuniecia/');

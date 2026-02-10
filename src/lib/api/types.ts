@@ -340,6 +340,8 @@ export type WarehouseTransferDocumentStatus = 'OPEN' | 'CLOSED';
 
 export type WarehouseTransferItemStatus = 'PENDING' | 'PARTIAL' | 'DONE' | 'OVER';
 
+export type WarehouseTransferItemPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'CRITICAL';
+
 export type WarehouseTransferDocument = {
   id: string;
   createdAt: string;
@@ -358,7 +360,18 @@ export type WarehouseTransferDocumentSummary = WarehouseTransferDocument & {
   itemsCount: number;
   completedItemsCount: number;
   plannedQtyTotal: number;
+  issuedQtyTotal: number;
   receivedQtyTotal: number;
+};
+
+export type WarehouseTransferItemIssue = {
+  id: string;
+  itemId: string;
+  createdAt: string;
+  issuerId?: string | null;
+  issuerName: string;
+  qty: number;
+  note?: string;
 };
 
 export type WarehouseTransferItemReceipt = {
@@ -375,6 +388,7 @@ export type WarehouseTransferDocumentItem = {
   id: string;
   documentId: string;
   lineNo: number;
+  priority: WarehouseTransferItemPriority;
   indexCode: string;
   indexCode2?: string;
   name: string;
@@ -383,9 +397,11 @@ export type WarehouseTransferDocumentItem = {
   unit: string;
   plannedQty: number;
   note?: string;
+  issuedQty: number;
   receivedQty: number;
   diffQty: number;
   status: WarehouseTransferItemStatus;
+  issues: WarehouseTransferItemIssue[];
   receipts: WarehouseTransferItemReceipt[];
 };
 

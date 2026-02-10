@@ -1,18 +1,22 @@
-'use client';
+﻿'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
 import {
+  addWarehouseTransferItemIssue,
   addWarehouseTransferItemReceipt,
   closeWarehouseTransferDocument,
   createWarehouseTransferDocument,
   getWarehouseTransferDocument,
   getWarehouseTransferDocuments,
-  removeWarehouseTransferDocument
+  removeWarehouseTransferDocument,
+  updateWarehouseTransferItemIssue,
+  updateWarehouseTransferItemReceipt
 } from '@/lib/api';
 import type {
   WarehouseTransferDocumentDetails,
+  WarehouseTransferItemPriority,
   WarehouseTransferItemStatus
 } from '@/lib/api/types';
 import { Card } from '@/components/ui/Card';
@@ -21,11 +25,13 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
+import { Toggle } from '@/components/ui/Toggle';
 import { useToastStore } from '@/components/ui/Toast';
+import { useUiStore } from '@/lib/store/ui';
 
 type ParsedItemInput = {
   lineNo: number;
+  priority?: WarehouseTransferItemPriority;
   erpCode?: string;
   indexCode: string;
   indexCode2?: string;
@@ -89,9 +95,9 @@ const itemStatusConfig: Record<
   { label: string; tone: 'default' | 'warning' | 'success' | 'danger' }
 > = {
   PENDING: { label: 'Oczekuje', tone: 'default' },
-  PARTIAL: { label: 'Częściowo', tone: 'warning' },
+  PARTIAL: { label: 'Cz臋艣ciowo', tone: 'warning' },
   DONE: { label: 'Zrealizowane', tone: 'success' },
-  OVER: { label: 'Nadwyżka', tone: 'danger' }
+  OVER: { label: 'Nadwy偶ka', tone: 'danger' }
 };
 
 const documentStatusConfig: Record<
@@ -99,8 +105,36 @@ const documentStatusConfig: Record<
   { label: string; tone: 'info' | 'default' }
 > = {
   OPEN: { label: 'Otwarte', tone: 'info' },
-  CLOSED: { label: 'Zamknięte', tone: 'default' }
+  CLOSED: { label: 'Zamkni臋te', tone: 'default' }
 };
+
+const warehouseTransferPriorityConfig: Record<
+  WarehouseTransferItemPriority,
+  { label: string; tone: 'default' | 'info' | 'danger'; order: number }
+> = {
+  CRITICAL: { label: 'Pilny', tone: 'danger', order: 0 },
+  HIGH: { label: 'Pilny', tone: 'danger', order: 0 },
+  NORMAL: { label: 'Normalny', tone: 'info', order: 1 },
+  LOW: { label: 'Normalny', tone: 'default', order: 1 }
+};
+
+const normalizeWarehouseTransferPriority = (value: unknown): WarehouseTransferItemPriority => {
+  const normalized = String(value ?? '')
+    .trim()
+    .toUpperCase();
+  if (normalized in warehouseTransferPriorityConfig) {
+    return normalized as WarehouseTransferItemPriority;
+  }
+  return 'NORMAL';
+};
+
+const toBinaryWarehouseTransferPriority = (value: unknown): WarehouseTransferItemPriority =>
+  warehouseTransferPriorityConfig[normalizeWarehouseTransferPriority(value)].order === 0
+    ? 'CRITICAL'
+    : 'NORMAL';
+
+const getParsedItemPriorityKey = (item: ParsedItemInput, index: number) =>
+  `${item.lineNo}|${item.indexCode}|${item.name}|${index}`;
 
 const formatValue = (value: number) =>
   new Intl.NumberFormat('pl-PL', {
@@ -210,7 +244,7 @@ const cleanStreamToken = (value: string) =>
 
 const cleanWordToken = (value: string) =>
   String(value ?? '')
-    .replace(/[|¦]/g, ' ')
+    .replace(/[|娄]/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/^[,;:._]+/, '')
     .replace(/[,;:._]+$/, '')
@@ -279,18 +313,50 @@ const tryParseQtyFromParts = (parts: string[]) => {
   return Math.min(...parsedCandidates);
 };
 
+const areReasonableQtyParts = (parts: string[]) => {
+  const cleaned = parts.map((part) => String(part ?? '').trim()).filter(Boolean);
+  if (cleaned.length === 0) return false;
+  if (!cleaned.every((part) => /^[0-9.,-]+$/.test(part))) return false;
+  if (cleaned.length === 1) return true;
+
+  const prefixes = cleaned.slice(0, -1);
+  if (!prefixes.every((part) => /^\d{1,3}$/.test(part))) return false;
+
+  const tail = cleaned[cleaned.length - 1];
+  return /^\d{1,3}(?:[.,]\d+)?$/.test(tail) || /^\d{3}$/.test(tail);
+};
+
 const findQtyTokenFromEnd = (tokens: string[], minIndex = 0) => {
   for (let end = tokens.length - 1; end >= minIndex; end -= 1) {
+    for (let start = end - 1; start >= Math.max(minIndex, end - 2); start -= 1) {
+      const slice = tokens.slice(start, end + 1);
+      if (!areReasonableQtyParts(slice)) continue;
+      const qtyCombined = tryParseQtyFromParts(slice);
+      if (qtyCombined !== null) {
+        return { qty: qtyCombined, qtyStartIndex: start, qtyEndIndex: end };
+      }
+    }
+
     const qtySingle = parseQtyToken(tokens[end]);
     if (qtySingle !== null && qtySingle > 0) {
       return { qty: qtySingle, qtyStartIndex: end, qtyEndIndex: end };
     }
+  }
+  return null;
+};
 
-    for (let start = end - 1; start >= Math.max(minIndex, end - 2); start -= 1) {
-      const qtyCombined = tryParseQtyFromParts(tokens.slice(start, end + 1));
-      if (qtyCombined !== null) {
-        return { qty: qtyCombined, qtyStartIndex: start, qtyEndIndex: end };
-      }
+const findQtyBeforeUnitToken = (tokens: string[], unitIndex: number, minIndex = 0) => {
+  const maxWidth = Math.min(3, unitIndex - minIndex);
+  for (let width = maxWidth; width >= 1; width -= 1) {
+    const start = unitIndex - width;
+    if (start < minIndex) continue;
+    const slice = tokens.slice(start, unitIndex);
+    if (slice.length === 0) continue;
+    if (!slice.every((token) => /\d/.test(token) && !/[A-Za-z]/.test(token))) continue;
+    if (!areReasonableQtyParts(slice)) continue;
+    const qty = tryParseQtyFromParts(slice);
+    if (qty !== null && qty > 0) {
+      return { qty, qtyStartIndex: start, qtyEndIndex: unitIndex - 1 };
     }
   }
   return null;
@@ -298,7 +364,7 @@ const findQtyTokenFromEnd = (tokens: string[], minIndex = 0) => {
 
 const normalizeOcrLine = (value: string) =>
   value
-    .replace(/[|¦]/g, ' ')
+    .replace(/[|娄]/g, ' ')
     .replace(/\u00a0/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -1453,6 +1519,152 @@ const parseDocumentItemsFromSheetRows = (rows: Array<Array<unknown>>): ParsedDoc
   };
 };
 
+const parseDocumentItemsFromFixedColumns = (raw: string): ParsedDocumentItems => {
+  const lines = raw.split(/\r?\n/).map((line) => line.replace(/\t/g, ' ').trimEnd());
+  if (lines.length === 0) return { items: [], skipped: 0, total: 0 };
+
+  const normalizeHeaderLine = (value: string) =>
+    value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const isHeaderLine = (value: string) => {
+    const normalized = normalizeHeaderLine(value);
+    if (!normalized) return false;
+    const hasLp = /\blp\b/.test(normalized);
+    const hasKod = /\bkod\b/.test(normalized);
+    const hasIndeks = /\bindeks\b/.test(normalized);
+    const hasNazwa = /\bnazwa\b/.test(normalized);
+    const hasIlosc = /\bilosc\b/.test(normalized);
+    const hasJm = /\bjm\b/.test(normalized);
+    return hasLp && hasKod && hasIndeks && hasNazwa && (hasIlosc || hasJm);
+  };
+
+  let headerIndex = -1;
+  for (let idx = 0; idx < Math.min(lines.length, 8); idx += 1) {
+    if (isHeaderLine(lines[idx] ?? '')) {
+      headerIndex = idx;
+      break;
+    }
+  }
+  if (headerIndex < 0) return { items: [], skipped: 0, total: 0 };
+
+  const dataLines = lines.slice(headerIndex + 1).filter((line) => line.trim().length > 0);
+  const items: ParsedItemInput[] = [];
+  let skipped = 0;
+  let autoLineNo = 1;
+
+  const isIndexToken = (token: string) => isLikelyIndexCode(token) || /^\d{2,}$/.test(token);
+  const looksLikeIndex2Token = (token: string, primaryIndex: string) => {
+    if (!token) return false;
+    if (token === '-') return true;
+    if (token === primaryIndex) return true;
+    if (normalizeUnitToken(token)) return false;
+    return isLikelyIndex2Token(token, primaryIndex) || /^\d{2,}$/.test(token);
+  };
+
+  dataLines.forEach((line) => {
+    if (isHeaderLine(line)) return;
+    const normalizedLine = normalizeHeaderLine(line);
+    if (!normalizedLine || normalizedLine.startsWith('razem')) return;
+
+    const tokens = line
+      .split(/\s+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (tokens.length < 6) {
+      skipped += 1;
+      return;
+    }
+
+    let cursor = 0;
+    const parsedLineNo = parseLineNoToken(tokens[0] ?? '');
+    const lineNo = parsedLineNo ?? autoLineNo;
+    if (parsedLineNo !== null) cursor = 1;
+
+    let erpCode: string | undefined;
+    if (/^\d+$/.test(tokens[cursor] ?? '')) {
+      erpCode = tokens[cursor];
+      cursor += 1;
+    }
+
+    if (!isIndexToken(tokens[cursor] ?? '') && isIndexToken(tokens[cursor + 1] ?? '')) {
+      cursor += 1;
+    }
+
+    const indexCode = tokens[cursor] ?? '';
+    if (!indexCode) {
+      skipped += 1;
+      return;
+    }
+    cursor += 1;
+
+    let indexCode2: string | undefined;
+    const maybeIndex2 = tokens[cursor] ?? '';
+    if (
+      looksLikeIndex2Token(maybeIndex2, indexCode) &&
+      tokens.length - (cursor + 1) >= 4
+    ) {
+      indexCode2 = maybeIndex2 === '-' ? undefined : maybeIndex2;
+      cursor += 1;
+    }
+
+    const payload = tokens.slice(cursor);
+    if (payload.length < 3) {
+      skipped += 1;
+      return;
+    }
+
+    let qty: number | null = null;
+    let unit = 'kg';
+    let qtyStartIndex = -1;
+
+    for (let index = 0; index < payload.length; index += 1) {
+      const normalizedUnit = normalizeUnitToken(payload[index] ?? '');
+      if (!normalizedUnit) continue;
+      const qtyToken = findQtyBeforeUnitToken(payload, index, 0);
+      if (!qtyToken) continue;
+      if (qtyToken.qtyStartIndex <= 0) continue;
+      qty = qtyToken.qty;
+      unit = normalizedUnit;
+      qtyStartIndex = qtyToken.qtyStartIndex;
+      break;
+    }
+
+    if (qty === null || qty <= 0 || qtyStartIndex <= 0) {
+      skipped += 1;
+      return;
+    }
+
+    const name = payload
+      .slice(0, qtyStartIndex)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!name) {
+      skipped += 1;
+      return;
+    }
+
+    items.push({
+      lineNo,
+      erpCode,
+      indexCode,
+      indexCode2,
+      name,
+      unit,
+      plannedQty: qty
+    });
+    autoLineNo = lineNo + 1;
+  });
+
+  return { items, skipped, total: dataLines.length };
+};
+
 const parseDocumentItemsByLines = (raw: string): ParsedDocumentItems => {
   const sourceLines = raw.split(/\r?\n/);
   const lines = mergeWrappedLines(sourceLines);
@@ -1695,6 +1907,10 @@ const parseDocumentItems = (raw: string): ParsedDocumentItems => {
   if (byColumns.items.length > 0) {
     return byColumns;
   }
+  const byFixedColumns = parseDocumentItemsFromFixedColumns(raw);
+  if (byFixedColumns.items.length > 0) {
+    return byFixedColumns;
+  }
   const byLines = parseDocumentItemsByLines(raw);
   const byStream = parseDocumentItemsFromTokenStream(raw);
 
@@ -1809,26 +2025,85 @@ export function WarehouseTransferDocumentsPanel() {
     itemsRaw: ''
   });
   const [ocrInProgress, setOcrInProgress] = useState(false);
-  const [lastImportedImage, setLastImportedImage] = useState('');
+  const [issueDrafts, setIssueDrafts] = useState<Record<string, { qty: string; note: string }>>(
+    {}
+  );
+  const [issueEditDrafts, setIssueEditDrafts] = useState<Record<string, string>>({});
+  const [receiptEditDrafts, setReceiptEditDrafts] = useState<Record<string, string>>({});
   const [receiptDrafts, setReceiptDrafts] = useState<Record<string, { qty: string; note: string }>>(
     {}
   );
-  const [documentListTab, setDocumentListTab] = useState<'active' | 'history'>('active');
+  const currentUser = useUiStore((state) => state.user);
+  const workspaceTab = useUiStore((state) => state.erpWorkspaceTab);
+  const setWorkspaceTab = useUiStore((state) => state.setErpWorkspaceTab);
   const [collapsedDocumentIds, setCollapsedDocumentIds] = useState<Record<string, boolean>>({});
+  const [expandedItemIds, setExpandedItemIds] = useState<Record<string, string | null>>({});
+  const [priorityOverrides, setPriorityOverrides] = useState<
+    Record<string, WarehouseTransferItemPriority>
+  >({});
 
   const parsed = useMemo(() => parseDocumentItems(form.itemsRaw), [form.itemsRaw]);
+  const parsedItemsWithPriority = useMemo(
+    () =>
+      parsed.items.map((item, index) => {
+        const priorityKey = getParsedItemPriorityKey(item, index);
+        return {
+          ...item,
+          priorityKey,
+          priority:
+            priorityOverrides[priorityKey] ??
+            toBinaryWarehouseTransferPriority(item.priority)
+        };
+      }),
+    [parsed.items, priorityOverrides]
+  );
+
+  useEffect(() => {
+    const activeKeys = new Set(
+      parsed.items.map((item, index) => getParsedItemPriorityKey(item, index))
+    );
+    setPriorityOverrides((prev) => {
+      let changed = false;
+      const next: Record<string, WarehouseTransferItemPriority> = {};
+      Object.entries(prev).forEach(([key, value]) => {
+        if (!activeKeys.has(key)) {
+          changed = true;
+          return;
+        }
+        next[key] = value;
+      });
+      return changed ? next : prev;
+    });
+  }, [parsed.items]);
+
+  const handlePriorityToggle = useCallback((priorityKey: string, checked: boolean) => {
+    const normalized: WarehouseTransferItemPriority = checked ? 'CRITICAL' : 'NORMAL';
+    setPriorityOverrides((prev) =>
+      prev[priorityKey] === normalized ? prev : { ...prev, [priorityKey]: normalized }
+    );
+  }, []);
+
   const previewRows = useMemo(
     () =>
-      parsed.items.slice(0, 8).map((item) => [
+      parsedItemsWithPriority.map((item) => [
         item.lineNo,
         item.erpCode || '-',
         item.indexCode,
         item.indexCode2 || '-',
         item.name,
         formatValue(item.plannedQty),
-        item.unit
+        item.unit,
+        <div key={`${item.priorityKey}-priority`} className="flex items-center gap-2">
+          <Toggle
+            checked={item.priority === 'CRITICAL'}
+            onCheckedChange={(checked) => handlePriorityToggle(item.priorityKey, checked)}
+          />
+          <span className="text-xs font-semibold text-title">
+            {item.priority === 'CRITICAL' ? 'Pilny' : 'Normalny'}
+          </span>
+        </div>
       ]),
-    [parsed.items]
+    [handlePriorityToggle, parsedItemsWithPriority]
   );
 
   const { data: documents = [], isLoading: documentsLoading } = useQuery({
@@ -1843,12 +2118,17 @@ export function WarehouseTransferDocumentsPanel() {
     () => documents.filter((document) => document.status === 'CLOSED'),
     [documents]
   );
+  const visibleDocuments = useMemo(() => {
+    if (workspaceTab === 'warehouseman' || workspaceTab === 'dispatcher') return activeDocuments;
+    if (workspaceTab === 'history') return historyDocuments;
+    return [];
+  }, [activeDocuments, historyDocuments, workspaceTab]);
 
   const activeDocumentId = useMemo(() => {
     if (!selectedDocumentId) return null;
-    if (!documents.some((doc) => doc.id === selectedDocumentId)) return null;
+    if (!visibleDocuments.some((doc) => doc.id === selectedDocumentId)) return null;
     return selectedDocumentId;
-  }, [documents, selectedDocumentId]);
+  }, [selectedDocumentId, visibleDocuments]);
 
   const { data: details, isLoading: detailsLoading } = useQuery({
     queryKey: ['warehouse-transfer-document', activeDocumentId],
@@ -1858,6 +2138,16 @@ export function WarehouseTransferDocumentsPanel() {
   const isActiveDocumentCollapsed = activeDocumentId
     ? Boolean(collapsedDocumentIds[activeDocumentId])
     : false;
+  const sortedDetailsItems = useMemo(() => {
+    if (!details) return [];
+    return [...details.items].sort((a, b) => {
+      const priorityDiff =
+        warehouseTransferPriorityConfig[normalizeWarehouseTransferPriority(a.priority)].order -
+        warehouseTransferPriorityConfig[normalizeWarehouseTransferPriority(b.priority)].order;
+      if (priorityDiff !== 0) return priorityDiff;
+      return a.lineNo - b.lineNo;
+    });
+  }, [details]);
 
   const createDocumentMutation = useMutation({
     mutationFn: createWarehouseTransferDocument,
@@ -1867,22 +2157,84 @@ export function WarehouseTransferDocumentsPanel() {
         queryKey: ['warehouse-transfer-document', data.document.id]
       });
       setSelectedDocumentId(data.document.id);
+      setWorkspaceTab('warehouseman');
       setForm({
         documentNumber: '',
         sourceWarehouse: '',
         itemsRaw: ''
       });
-      toast({ title: 'Utworzono dokument przesunięcia', tone: 'success' });
+      setPriorityOverrides({});
+      toast({ title: 'Utworzono dokument przesuni臋cia', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
         DOCUMENT_NUMBER_REQUIRED: 'Podaj numer dokumentu.',
-        ITEMS_REQUIRED: 'Dodaj co najmniej jedną pozycję.',
+        ITEMS_REQUIRED: 'Dodaj co najmniej jedn膮 pozycj臋.',
         INVALID_ITEM: 'Przynajmniej jedna pozycja jest niepoprawna.',
-        INVALID_QTY: 'Każda pozycja musi mieć ilość większą od zera.'
+        MIGRATION_REQUIRED_PRIORITY: 'Brakuje migracji bazy dla priorytetow. Uruchom migracje SQL.',
+        '42703': 'Brakuje migracji bazy dla priorytetow. Uruchom migracje SQL.',
+        PGRST204: 'Brakuje migracji bazy dla priorytetow. Uruchom migracje SQL.',
+        INVALID_QTY: 'Ka偶da pozycja musi mie膰 ilo艣膰 wi臋ksz膮 od zera.'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie udało się utworzyć dokumentu.',
+        title: messageMap[err.message] ?? 'Nie uda艂o si臋 utworzy膰 dokumentu.',
+        tone: 'error'
+      });
+    }
+  });
+
+  const addIssueMutation = useMutation({
+    mutationFn: addWarehouseTransferItemIssue,
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['warehouse-transfer-documents'] });
+      queryClient.invalidateQueries({
+        queryKey: ['warehouse-transfer-document', variables.documentId]
+      });
+      setIssueDrafts((prev) => ({
+        ...prev,
+        [variables.itemId]: { qty: '', note: '' }
+      }));
+      toast({ title: 'Dodano wydanie', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        INVALID_QTY: 'Podaj ilosc wieksza od zera.',
+        DOCUMENT_CLOSED: 'Dokument jest juz zamkniety.',
+        NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
+        MIGRATION_REQUIRED: 'Brakuje migracji bazy dla wydan. Uruchom migracje SQL.'
+      };
+      toast({
+        title: messageMap[err.message] ?? 'Nie udalo sie zapisac wydania.',
+        tone: 'error'
+      });
+    }
+  });
+
+  const updateIssueMutation = useMutation({
+    mutationFn: updateWarehouseTransferItemIssue,
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['warehouse-transfer-documents'] });
+      queryClient.invalidateQueries({
+        queryKey: ['warehouse-transfer-document', variables.documentId]
+      });
+      setIssueEditDrafts((prev) => {
+        if (prev[variables.issueId] === undefined) return prev;
+        const next = { ...prev };
+        delete next[variables.issueId];
+        return next;
+      });
+      toast({ title: 'Zaktualizowano wydanie', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        INVALID_QTY: 'Podaj ilosc wieksza od zera.',
+        DOCUMENT_CLOSED: 'Dokument jest juz zamkniety.',
+        NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
+        ISSUE_BELOW_RECEIVED: 'Nie mozna ustawic wydania ponizej ilosci juz przyjetej.',
+        MIGRATION_REQUIRED: 'Brakuje migracji bazy dla wydan. Uruchom migracje SQL.'
+      };
+      toast({
+        title: messageMap[err.message] ?? 'Nie udalo sie zaktualizowac wydania.',
         tone: 'error'
       });
     }
@@ -1899,16 +2251,46 @@ export function WarehouseTransferDocumentsPanel() {
         ...prev,
         [variables.itemId]: { qty: '', note: '' }
       }));
-      toast({ title: 'Dodano przyjęcie', tone: 'success' });
+      toast({ title: 'Dodano przyj臋cie', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        INVALID_QTY: 'Podaj ilość większą od zera.',
-        DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
+        INVALID_QTY: 'Podaj ilo艣膰 wi臋ksz膮 od zera.',
+        DOCUMENT_CLOSED: 'Dokument jest ju偶 zamkni臋ty.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie udało się zapisać przyjęcia.',
+        title: messageMap[err.message] ?? 'Nie uda艂o si臋 zapisa膰 przyj臋cia.',
+        tone: 'error'
+      });
+    }
+  });
+
+  const updateReceiptMutation = useMutation({
+    mutationFn: updateWarehouseTransferItemReceipt,
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['warehouse-transfer-documents'] });
+      queryClient.invalidateQueries({
+        queryKey: ['warehouse-transfer-document', variables.documentId]
+      });
+      setReceiptEditDrafts((prev) => {
+        if (prev[variables.receiptId] === undefined) return prev;
+        const next = { ...prev };
+        delete next[variables.receiptId];
+        return next;
+      });
+      toast({ title: 'Zaktualizowano przyjecie', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        INVALID_QTY: 'Podaj ilosc wieksza od zera.',
+        DOCUMENT_CLOSED: 'Dokument jest juz zamkniety.',
+        NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
+        FORBIDDEN: 'Mozesz edytowac tylko swoje przyjecia.',
+        MIGRATION_REQUIRED: 'Brakuje migracji bazy dla przyjec. Uruchom migracje SQL.'
+      };
+      toast({
+        title: messageMap[err.message] ?? 'Nie udalo sie zaktualizowac przyjecia.',
         tone: 'error'
       });
     }
@@ -1921,10 +2303,10 @@ export function WarehouseTransferDocumentsPanel() {
       queryClient.invalidateQueries({
         queryKey: ['warehouse-transfer-document', data.id]
       });
-      toast({ title: 'Dokument został zamknięty', tone: 'success' });
+      toast({ title: 'Dokument zosta艂 zamkni臋ty', tone: 'success' });
     },
     onError: () => {
-      toast({ title: 'Nie udało się zamknąć dokumentu.', tone: 'error' });
+      toast({ title: 'Nie uda艂o si臋 zamkn膮膰 dokumentu.', tone: 'error' });
     }
   });
 
@@ -1935,9 +2317,18 @@ export function WarehouseTransferDocumentsPanel() {
       queryClient.removeQueries({
         queryKey: ['warehouse-transfer-document', variables.documentId]
       });
+      setIssueDrafts({});
+      setIssueEditDrafts({});
       setReceiptDrafts({});
+      setReceiptEditDrafts({});
       setCollapsedDocumentIds((prev) => {
         if (!prev[variables.documentId]) return prev;
+        const next = { ...prev };
+        delete next[variables.documentId];
+        return next;
+      });
+      setExpandedItemIds((prev) => {
+        if (!(variables.documentId in prev)) return prev;
         const next = { ...prev };
         delete next[variables.documentId];
         return next;
@@ -1945,15 +2336,15 @@ export function WarehouseTransferDocumentsPanel() {
       setSelectedDocumentId((current) =>
         current === variables.documentId ? null : current
       );
-      toast({ title: 'Dokument został usunięty', tone: 'success' });
+      toast({ title: 'Dokument zosta艂 usuni臋ty', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
         NOT_FOUND: 'Nie znaleziono dokumentu.',
-        FORBIDDEN: 'Nie masz uprawnień do usunięcia dokumentu.'
+        FORBIDDEN: 'Nie masz uprawnie艅 do usuni臋cia dokumentu.'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie udało się usunąć dokumentu.',
+        title: messageMap[err.message] ?? 'Nie uda艂o si臋 usun膮膰 dokumentu.',
         tone: 'error'
       });
     }
@@ -1964,11 +2355,11 @@ export function WarehouseTransferDocumentsPanel() {
       toast({ title: 'Podaj numer dokumentu.', tone: 'error' });
       return;
     }
-    if (parsed.items.length === 0) {
+    if (parsedItemsWithPriority.length === 0) {
       toast({
         title: 'Brak poprawnych pozycji.',
         description:
-          'Sprawdź, czy OCR poprawnie odczytał kolumny: Kod, Indeks, Indeks2, Nazwa, Ilość i JM.',
+          'Sprawd藕, czy OCR poprawnie odczyta艂 kolumny: Kod, Indeks, Indeks2, Nazwa, Ilo艣膰 i JM.',
         tone: 'error'
       });
       return;
@@ -1977,8 +2368,9 @@ export function WarehouseTransferDocumentsPanel() {
     createDocumentMutation.mutate({
       documentNumber: form.documentNumber.trim(),
       sourceWarehouse: form.sourceWarehouse.trim() || undefined,
-      items: parsed.items.map((item) => ({
+      items: parsedItemsWithPriority.map((item) => ({
         lineNo: item.lineNo,
+        priority: item.priority,
         indexCode: item.indexCode,
         name: item.name,
         batch: item.indexCode2 || item.batch,
@@ -1996,7 +2388,7 @@ export function WarehouseTransferDocumentsPanel() {
       if (!ocrText.trim()) {
         toast({
           title: 'Nie wykryto tekstu na screenie.',
-          description: 'Upewnij się, że tabela jest czytelna i zajmuje większość obrazu.',
+          description: 'Upewnij si臋, 偶e tabela jest czytelna i zajmuje wi臋kszo艣膰 obrazu.',
           tone: 'error'
         });
         return;
@@ -2025,20 +2417,19 @@ export function WarehouseTransferDocumentsPanel() {
         sourceWarehouse: prev.sourceWarehouse || detectedMeta.sourceWarehouse || '',
         itemsRaw: preparedItemsRaw
       }));
-      setLastImportedImage(file.name || 'schowek');
       toast({
         title: 'Wczytano screen dokumentu.',
         description:
           engine === 'native'
-            ? 'Pozycje zostały wypełnione automatycznie. Sprawdź i zapisz dokument.'
-            : 'Pozycje zostały wypełnione automatycznie (OCR fallback). Sprawdź i zapisz dokument.',
+            ? 'Pozycje zosta艂y wype艂nione automatycznie. Sprawd藕 i zapisz dokument.'
+            : 'Pozycje zosta艂y wype艂nione automatycznie (OCR fallback). Sprawd藕 i zapisz dokument.',
         tone: 'success'
       });
     } catch {
       toast({
-        title: 'Nie udało się odczytać obrazu.',
+        title: 'Nie uda艂o si臋 odczyta膰 obrazu.',
         description:
-          'Spróbuj ponownie na wyraźniejszym screenie. Jeśli obraz jest ciemny lub rozmyty, OCR może pominąć pozycje.',
+          'Spr贸buj ponownie na wyra藕niejszym screenie. Je艣li obraz jest ciemny lub rozmyty, OCR mo偶e pomin膮膰 pozycje.',
         tone: 'error'
       });
     } finally {
@@ -2071,7 +2462,7 @@ export function WarehouseTransferDocumentsPanel() {
       if (parsedFromSheet.items.length === 0) {
         toast({
           title: 'Nie znaleziono poprawnych pozycji w pliku.',
-          description: 'Plik musi mieć kolumny: Kod, Indeks, Indeks2, Nazwa, Ilość, JM.',
+          description: 'Plik musi mie膰 kolumny: Kod, Indeks, Indeks2, Nazwa, Ilo艣膰, JM.',
           tone: 'error'
         });
         return;
@@ -2081,16 +2472,15 @@ export function WarehouseTransferDocumentsPanel() {
         ...prev,
         itemsRaw: toCanonicalItemsRaw(parsedFromSheet.items)
       }));
-      setLastImportedImage(file.name || 'plik');
       toast({
         title: 'Wczytano pozycje z pliku ERP.',
-        description: 'Import CSV/XLSX jest dokładniejszy niż OCR ze screena.',
+        description: 'Import CSV/XLSX jest dok艂adniejszy ni偶 OCR ze screena.',
         tone: 'success'
       });
     } catch {
       toast({
-        title: 'Nie udało się odczytać pliku.',
-        description: 'Spróbuj wyeksportować jeszcze raz do CSV albo XLSX.',
+        title: 'Nie uda艂o si臋 odczyta膰 pliku.',
+        description: 'Spr贸buj wyeksportowa膰 jeszcze raz do CSV albo XLSX.',
         tone: 'error'
       });
     } finally {
@@ -2120,6 +2510,66 @@ export function WarehouseTransferDocumentsPanel() {
     };
   }, [handleImageImport, ocrInProgress]);
 
+  const updateIssueDraft = (
+    itemId: string,
+    patch: Partial<{ qty: string; note: string }>
+  ) => {
+    setIssueDrafts((prev) => ({
+      ...prev,
+      [itemId]: {
+        qty: prev[itemId]?.qty ?? '',
+        note: prev[itemId]?.note ?? '',
+        ...patch
+      }
+    }));
+  };
+
+  const startIssueEdit = (issueId: string, qty: number) => {
+    setIssueEditDrafts((prev) => ({
+      ...prev,
+      [issueId]: String(qty).replace('.', ',')
+    }));
+  };
+
+  const updateIssueEditDraft = (issueId: string, value: string) => {
+    setIssueEditDrafts((prev) => ({
+      ...prev,
+      [issueId]: value
+    }));
+  };
+
+  const cancelIssueEdit = (issueId: string) => {
+    setIssueEditDrafts((prev) => {
+      if (prev[issueId] === undefined) return prev;
+      const next = { ...prev };
+      delete next[issueId];
+      return next;
+    });
+  };
+
+  const startReceiptEdit = (receiptId: string, qty: number) => {
+    setReceiptEditDrafts((prev) => ({
+      ...prev,
+      [receiptId]: String(qty).replace('.', ',')
+    }));
+  };
+
+  const updateReceiptEditDraft = (receiptId: string, value: string) => {
+    setReceiptEditDrafts((prev) => ({
+      ...prev,
+      [receiptId]: value
+    }));
+  };
+
+  const cancelReceiptEdit = (receiptId: string) => {
+    setReceiptEditDrafts((prev) => {
+      if (prev[receiptId] === undefined) return prev;
+      const next = { ...prev };
+      delete next[receiptId];
+      return next;
+    });
+  };
+
   const updateReceiptDraft = (
     itemId: string,
     patch: Partial<{ qty: string; note: string }>
@@ -2134,27 +2584,89 @@ export function WarehouseTransferDocumentsPanel() {
     }));
   };
 
-  const handleAddReceipt = (itemId: string) => {
+  const addIssueForItem = useCallback(
+    (itemId: string, qty: number, note?: string) => {
+      if (!details?.document.id) return;
+      addIssueMutation.mutate({
+        documentId: details.document.id,
+        itemId,
+        qty,
+        note: note?.trim() || undefined
+      });
+    },
+    [addIssueMutation, details?.document.id]
+  );
+
+  const addReceiptForItem = useCallback(
+    (itemId: string, qty: number, note?: string) => {
+      if (!details?.document.id) return;
+      addReceiptMutation.mutate({
+        documentId: details.document.id,
+        itemId,
+        qty,
+        note: note?.trim() || undefined
+      });
+    },
+    [addReceiptMutation, details?.document.id]
+  );
+
+  const handleAddIssue = (itemId: string) => {
+    const draft = issueDrafts[itemId] ?? { qty: '', note: '' };
+    const qty = parseQtyToken(draft.qty);
+    if (!qty || qty <= 0) {
+      toast({ title: 'Podaj ilosc wieksza od zera.', tone: 'error' });
+      return;
+    }
+    addIssueForItem(itemId, qty, draft.note);
+  };
+
+  const handleSaveIssueEdit = (itemId: string, issueId: string) => {
     if (!details?.document.id) return;
+    const rawQty = issueEditDrafts[issueId];
+    const qty = parseQtyToken(rawQty ?? '');
+    if (!qty || qty <= 0) {
+      toast({ title: 'Podaj ilosc wieksza od zera.', tone: 'error' });
+      return;
+    }
+    updateIssueMutation.mutate({
+      documentId: details.document.id,
+      itemId,
+      issueId,
+      qty
+    });
+  };
+
+  const handleSaveReceiptEdit = (itemId: string, receiptId: string) => {
+    if (!details?.document.id) return;
+    const rawQty = receiptEditDrafts[receiptId];
+    const qty = parseQtyToken(rawQty ?? '');
+    if (!qty || qty <= 0) {
+      toast({ title: 'Podaj ilosc wieksza od zera.', tone: 'error' });
+      return;
+    }
+    updateReceiptMutation.mutate({
+      documentId: details.document.id,
+      itemId,
+      receiptId,
+      qty
+    });
+  };
+
+  const handleAddReceipt = (itemId: string) => {
     const draft = receiptDrafts[itemId] ?? { qty: '', note: '' };
     const qty = parseQtyToken(draft.qty);
     if (!qty || qty <= 0) {
-      toast({ title: 'Podaj ilość większą od zera.', tone: 'error' });
+      toast({ title: 'Podaj ilo艣膰 wi臋ksz膮 od zera.', tone: 'error' });
       return;
     }
-    addReceiptMutation.mutate({
-      documentId: details.document.id,
-      itemId,
-      qty,
-      note: draft.note.trim() || undefined
-    });
+    addReceiptForItem(itemId, qty, draft.note);
   };
 
   const handleRemoveDocument = () => {
     if (!details?.document.id) return;
     const label = details.document.documentNumber || details.document.id;
     const confirmed = window.confirm(
-      `Usunąć dokument ${label}? Tej operacji nie da się cofnąć.`
+      `Usun膮膰 dokument ${label}? Tej operacji nie da si臋 cofn膮膰.`
     );
     if (!confirmed) return;
     removeDocumentMutation.mutate({ documentId: details.document.id });
@@ -2177,14 +2689,24 @@ export function WarehouseTransferDocumentsPanel() {
       }));
       return;
     }
-
     setSelectedDocumentId(clickedDocumentId);
     setCollapsedDocumentIds((prev) => ({
       ...prev,
       [clickedDocumentId]: false
     }));
   };
+
+  const handleToggleItemExpand = useCallback((documentId: string, itemId: string) => {
+    setExpandedItemIds((prev) => ({
+      ...prev,
+      [documentId]: prev[documentId] === itemId ? null : itemId
+    }));
+  }, []);
+
   const activeDocumentRows = activeDocuments.map((document) => [
+    <span key={`${document.id}-sourceWarehouse`} className="font-medium text-title">
+      {document.sourceWarehouse?.trim() || '-'}
+    </span>,
     formatDateTime(document.createdAt),
     <span key={`${document.id}-number`} className="font-semibold text-title">
       {document.documentNumber}
@@ -2197,15 +2719,12 @@ export function WarehouseTransferDocumentsPanel() {
     </Badge>,
     <span key={`${document.id}-items`} className="tabular-nums">
       {document.itemsCount}
-    </span>,
-    <span key={`${document.id}-planned`} className="tabular-nums">
-      {formatValue(document.plannedQtyTotal)}
-    </span>,
-    <span key={`${document.id}-received`} className="tabular-nums">
-      {formatValue(document.receivedQtyTotal)}
     </span>
   ]);
   const historyDocumentRows = historyDocuments.map((document) => [
+    <span key={`${document.id}-sourceWarehouse`} className="font-medium text-title">
+      {document.sourceWarehouse?.trim() || '-'}
+    </span>,
     formatDateTime(document.createdAt),
     <span key={`${document.id}-number`} className="font-semibold text-title">
       {document.documentNumber}
@@ -2218,365 +2737,766 @@ export function WarehouseTransferDocumentsPanel() {
     </Badge>,
     <span key={`${document.id}-items`} className="tabular-nums">
       {document.itemsCount}
-    </span>,
-    <span key={`${document.id}-planned`} className="tabular-nums">
-      {formatValue(document.plannedQtyTotal)}
-    </span>,
-    <span key={`${document.id}-received`} className="tabular-nums">
-      {formatValue(document.receivedQtyTotal)}
     </span>
   ]);
 
-  return (
-    <div className="space-y-4">
-      <Card className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-            Nowy dokument ERP (przesunięcia magazynowe)
-          </p>
-          <p className="text-sm text-dim">
-            Pozycje wykryte: <span className="font-semibold text-title">{parsed.items.length}</span>
-          </p>
-        </div>
+  const isWarehousemanTab = workspaceTab === 'warehouseman';
+  const isDispatcherTab = workspaceTab === 'dispatcher';
+  const isHistoryTab = workspaceTab === 'history';
+  const currentActorName = currentUser?.name?.trim() || currentUser?.username?.trim() || '';
 
-        <input
-          ref={imageInputRef}
-          type="file"
-          accept="image/*"
-          onChange={handleImageFileChange}
-          className="hidden"
-        />
-        <input
-          ref={tableFileInputRef}
-          type="file"
-          accept=".xlsx,.xls,.csv"
-          onChange={handleTableFileChange}
-          className="hidden"
-        />
-        <div className="rounded-2xl border border-border bg-surface2 p-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() => imageInputRef.current?.click()}
-              disabled={ocrInProgress}
-            >
-              {ocrInProgress ? 'Przetwarzam screen...' : 'Wczytaj screen dokumentu'}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => tableFileInputRef.current?.click()}
-              disabled={ocrInProgress}
-            >
-              Importuj CSV/XLSX z ERP
-            </Button>
-            <p className="text-xs text-dim">
-              OCR ze screena może się mylić. Najdokładniej: eksport z ERP do CSV/XLSX i import
-              pliku.
-            </p>
-          </div>
-          {lastImportedImage && (
-            <p className="mt-2 text-xs text-dim">
-              Ostatni import: <span className="font-semibold text-title">{lastImportedImage}</span>
-            </p>
-          )}
-        </div>
+  const detailsEmptyDescription = isHistoryTab
+    ? 'Kliknij dokument z historii, aby zobaczyc szczegoly.'
+    : isWarehousemanTab
+      ? 'Kliknij dokument, aby zobaczyc liste rzeczy do wydania.'
+      : isDispatcherTab
+        ? 'Kliknij dokument, aby zobaczyc liste rzeczy do przyjecia na hale.'
+        : 'Kliknij dokument do realizacji, aby zobaczyc szczegoly.';
 
-        <div className="grid gap-3 md:grid-cols-2">
-          <div>
-            <label className="text-xs uppercase tracking-wide text-dim">Numer dokumentu</label>
-            <Input
-              value={form.documentNumber}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, documentNumber: event.target.value }))
-              }
-              placeholder="np. 13168 / MMZ / 0/2025"
-            />
-          </div>
-          <div>
-            <label className="text-xs uppercase tracking-wide text-dim">
-              Magazyn źródłowy (opcjonalnie)
-            </label>
-            <Input
-              value={form.sourceWarehouse}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, sourceWarehouse: event.target.value }))
-              }
-              placeholder="np. 51"
-            />
-          </div>
-        </div>
+  const renderDetailsCard = () => {
+    if (!activeDocumentId) {
+      return (
+        <Card className="space-y-4">
+          <EmptyState title="Wybierz dokument" description={detailsEmptyDescription} />
+        </Card>
+      );
+    }
 
-        <div>
-          <label className="text-xs uppercase tracking-wide text-dim">
-            Pozycje dokumentu (uzupełnione ze screena lub wklejone ręcznie)
-          </label>
-          <textarea
-            value={form.itemsRaw}
-            onChange={(event) => setForm((prev) => ({ ...prev, itemsRaw: event.target.value }))}
-            className={textAreaClass}
-            rows={8}
-            placeholder={`LP;KOD;INDEKS;INDEKS2;NAZWA;ILOŚĆ;JM\n1;7024;M-1-KAR-MAX-7024;7024;KARTON 62[...];606,000;szt`}
-          />
-          <p className="mt-2 text-xs text-dim">
-            Przetworzone linie: {parsed.total}. Pominięte: {parsed.skipped}.
-          </p>
-        </div>
+    if (detailsLoading) {
+      return (
+        <Card className="space-y-4">
+          <p className="text-sm text-dim">Ladowanie szczegolow dokumentu...</p>
+        </Card>
+      );
+    }
 
-        {previewRows.length > 0 && (
-          <DataTable
-            columns={['LP', 'Kod', 'Indeks', 'Indeks2', 'Nazwa', 'Ilość', 'JM']}
-            rows={previewRows}
-          />
-        )}
-
-        <div className="flex justify-end">
-          <Button onClick={handleCreateDocument} disabled={createDocumentMutation.isPending}>
-            Utwórz dokument
-          </Button>
-        </div>
-      </Card>
-
-      <Card className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-            Dokumenty przesunięć
-          </p>
-          <p className="text-sm text-dim">
-            Aktywne: {activeDocuments.length} | Historia: {historyDocuments.length}
-          </p>
-        </div>
-
-        <Tabs
-          value={documentListTab}
-          onValueChange={(value) => setDocumentListTab(value as 'active' | 'history')}
-          className="space-y-3"
-        >
-          <TabsList className="w-fit">
-            <TabsTrigger value="active">Aktywne ({activeDocuments.length})</TabsTrigger>
-            <TabsTrigger value="history">Historia ({historyDocuments.length})</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="active">
-            {documentsLoading ? (
-              <p className="text-sm text-dim">Ładowanie dokumentów...</p>
-            ) : activeDocuments.length === 0 ? (
-              <EmptyState
-                title="Brak aktywnych dokumentów"
-                description="Zamknięte dokumenty znajdziesz w zakładce Historia."
-              />
-            ) : (
-              <DataTable
-                columns={['Data', 'Dokument', 'Status', 'Pozycje', 'Plan', 'Przyjęte']}
-                rows={activeDocumentRows}
-                onRowClick={(rowIndex) => handleDocumentClick(activeDocuments[rowIndex]?.id)}
-              />
-            )}
-          </TabsContent>
-
-          <TabsContent value="history">
-            {documentsLoading ? (
-              <p className="text-sm text-dim">Ładowanie dokumentów...</p>
-            ) : historyDocuments.length === 0 ? (
-              <EmptyState
-                title="Historia jest pusta"
-                description="Zamknięte dokumenty pojawią się tutaj automatycznie."
-              />
-            ) : (
-              <DataTable
-                columns={['Data', 'Dokument', 'Status', 'Pozycje', 'Plan', 'Przyjęte']}
-                rows={historyDocumentRows}
-                onRowClick={(rowIndex) => handleDocumentClick(historyDocuments[rowIndex]?.id)}
-              />
-            )}
-          </TabsContent>
-        </Tabs>
-      </Card>
-
-      <Card className="space-y-4">
-        {!activeDocumentId ? (
-          <EmptyState
-            title="Wybierz dokument"
-            description="Kliknij dokument z listy aktywnych lub historii, aby zobaczyć szczegóły."
-          />
-        ) : detailsLoading ? (
-          <p className="text-sm text-dim">Ładowanie szczegółów dokumentu...</p>
-        ) : !details ? (
+    if (!details) {
+      return (
+        <Card className="space-y-4">
           <EmptyState title="Brak danych dokumentu" />
+        </Card>
+      );
+    }
+
+    const expandedItemId = expandedItemIds[details.document.id] ?? null;
+    const canEditIssue = isWarehousemanTab && details.document.status === 'OPEN';
+    const canEditReceipt = isDispatcherTab && details.document.status === 'OPEN';
+    const itemListTitle = isWarehousemanTab
+      ? 'Lista rzeczy do wydania'
+      : isDispatcherTab
+        ? 'Lista rzeczy do przyjecia na hale'
+        : 'Pozycje dokumentu';
+
+    return (
+      <Card className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-lg font-semibold text-title">{details.document.documentNumber}</p>
+            <p className="text-sm text-dim">
+              Utworzyl: {details.document.createdByName} | {formatDateTime(details.document.createdAt)}
+            </p>
+          </div>
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+            <Badge tone={documentStatusConfig[details.document.status].tone}>
+              {documentStatusConfig[details.document.status].label}
+            </Badge>
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={handleToggleDocumentCollapse}
+              disabled={removeDocumentMutation.isPending}
+            >
+              {isActiveDocumentCollapsed ? 'Rozwin dokument' : 'Zwin dokument'}
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_12%,transparent)] sm:w-auto"
+              onClick={handleRemoveDocument}
+              disabled={removeDocumentMutation.isPending}
+            >
+              Usun dokument
+            </Button>
+            {details.document.status === 'OPEN' && (
+              <Button
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={() =>
+                  closeDocumentMutation.mutate({ documentId: details.document.id })
+                }
+                disabled={closeDocumentMutation.isPending || removeDocumentMutation.isPending}
+              >
+                Zamknij dokument
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {isActiveDocumentCollapsed ? (
+          <div className="rounded-2xl border border-border bg-surface2 px-4 py-3 text-sm text-dim">
+            Dokument jest zwiniety. Kliknij Rozwin dokument, aby zobaczyc pozycje.
+          </div>
+        ) : sortedDetailsItems.length === 0 ? (
+          <EmptyState
+            title="Dokument nie ma pozycji"
+            description="Dodaj pozycje przy tworzeniu kolejnego dokumentu."
+          />
         ) : (
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-lg font-semibold text-title">{details.document.documentNumber}</p>
-                <p className="text-sm text-dim">
-                  Utworzył: {details.document.createdByName} | {formatDateTime(details.document.createdAt)}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge tone={documentStatusConfig[details.document.status].tone}>
-                  {documentStatusConfig[details.document.status].label}
-                </Badge>
-                <Button
-                  variant="outline"
-                  onClick={handleToggleDocumentCollapse}
-                  disabled={removeDocumentMutation.isPending}
-                >
-                  {isActiveDocumentCollapsed ? 'Rozwiń dokument' : 'Zwiń dokument'}
-                </Button>
-                <Button
-                  variant="outline"
-                  className="border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_12%,transparent)]"
-                  onClick={handleRemoveDocument}
-                  disabled={removeDocumentMutation.isPending}
-                >
-                  Usuń dokument
-                </Button>
-                {details.document.status === 'OPEN' && (
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      closeDocumentMutation.mutate({ documentId: details.document.id })
-                    }
-                    disabled={closeDocumentMutation.isPending || removeDocumentMutation.isPending}
-                  >
-                    Zamknij dokument
-                  </Button>
-                )}
-              </div>
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-border bg-surface2 px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">{itemListTitle}</p>
             </div>
 
-            {isActiveDocumentCollapsed ? (
-              <div className="rounded-2xl border border-border bg-surface2 px-4 py-3 text-sm text-dim">
-                Dokument jest zwinięty. Kliknij Rozwiń dokument, aby zobaczyć pozycje i wpisać
-                przyjęcia.
-              </div>
-            ) : (
-              <>
-                <div className="grid gap-2">
-                  <div className="rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.04)] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
-                      Pozycje zakończone
-                    </p>
-                    <p className="mt-1 text-3xl font-black tabular-nums text-title">
-                      {details.document.completedItemsCount}/{details.document.itemsCount}
-                    </p>
-                  </div>
-                </div>
+            {sortedDetailsItems.map((item) => {
+              const issueDraft = issueDrafts[item.id] ?? { qty: '', note: '' };
+              const receiptDraft = receiptDrafts[item.id] ?? { qty: '', note: '' };
+              const isExpanded = expandedItemId === item.id;
+              const diffClasses =
+                item.diffQty > 0
+                  ? 'border-[color:color-mix(in_srgb,var(--danger)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--danger)_12%,transparent)] text-danger'
+                  : item.diffQty < 0
+                    ? 'border-[color:color-mix(in_srgb,var(--warning)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--warning)_12%,transparent)] text-warning'
+                    : 'border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_12%,transparent)] text-success';
+              const qtyToIssue = Math.max(item.plannedQty - item.issuedQty, 0);
+              const qtyToReceive = Math.max(item.issuedQty - item.receivedQty, 0);
 
-                {details.items.length === 0 ? (
-                  <EmptyState
-                    title="Dokument nie ma pozycji"
-                    description="Dodaj pozycje przy tworzeniu kolejnego dokumentu."
-                  />
-                ) : (
-                  <div className="space-y-3">
-                    {details.items.map((item) => {
-                      const draft = receiptDrafts[item.id] ?? { qty: '', note: '' };
-                      const diffClasses =
-                        item.diffQty > 0
-                          ? 'border-[color:color-mix(in_srgb,var(--danger)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--danger)_12%,transparent)] text-danger'
-                          : item.diffQty < 0
-                          ? 'border-[color:color-mix(in_srgb,var(--warning)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--warning)_12%,transparent)] text-warning'
-                          : 'border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_12%,transparent)] text-success';
-                      return (
-                        <div
-                          key={item.id}
-                          className="rounded-2xl border border-border bg-surface2 p-4 shadow-[inset_0_1px_0_var(--inner-highlight)]"
+              return (
+                <div
+                  key={item.id}
+                  className="rounded-2xl border border-border bg-surface2 p-3 shadow-[inset_0_1px_0_var(--inner-highlight)]"
+                >
+                  <div
+                    className={
+                      isWarehousemanTab || isDispatcherTab
+                        ? 'w-full px-2 py-2'
+                        : 'w-full rounded-xl border border-[rgba(255,255,255,0.1)] bg-[rgba(0,0,0,0.18)] px-3 py-3 transition hover:border-[rgba(255,122,26,0.55)]'
+                    }
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleItemExpand(details.document.id, item.id)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <p className="break-words text-base font-black tracking-wide text-title">
+                          LP {item.lineNo} | <span className="text-[color:var(--brand)]">{item.name}</span>
+                        </p>
+                        <p className="mt-2 break-words text-xs leading-relaxed text-dim">
+                          Indeks: {item.indexCode}
+                          {item.batch ? ` | Indeks2: ${item.batch}` : ''}
+                          {item.location ? ` | Kod: ${item.location}` : ''}
+                        </p>
+                      </button>
+                      <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+                        <Badge
+                          tone={
+                            warehouseTransferPriorityConfig[
+                              normalizeWarehouseTransferPriority(item.priority)
+                            ].tone
+                          }
                         >
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <div>
-                              <p className="font-semibold text-title">
-                                LP {item.lineNo} | {item.name}
-                              </p>
-                              <p className="text-xs text-dim">
-                                Indeks: {item.indexCode}
-                                {item.batch ? ` | Indeks2: ${item.batch}` : ''}
-                                {item.location ? ` | Kod: ${item.location}` : ''}
-                              </p>
-                            </div>
-                            <Badge tone={itemStatusConfig[item.status].tone}>
-                              {itemStatusConfig[item.status].label}
-                            </Badge>
-                          </div>
+                          Priorytet:{' '}
+                          {
+                            warehouseTransferPriorityConfig[
+                              normalizeWarehouseTransferPriority(item.priority)
+                            ].label
+                          }
+                        </Badge>
+                        {!isDispatcherTab && !isWarehousemanTab && (
+                          <Badge tone={itemStatusConfig[item.status].tone}>
+                            {itemStatusConfig[item.status].label}
+                          </Badge>
+                        )}
+                        {isWarehousemanTab && canEditIssue && (
+                          <Button
+                            className="min-h-[46px] flex-1 px-4 py-2 text-sm sm:min-h-[52px] sm:flex-none sm:px-5 sm:py-3"
+                            onClick={() => addIssueForItem(item.id, qtyToIssue)}
+                            disabled={qtyToIssue <= 0 || addIssueMutation.isPending}
+                          >
+                            Wydano
+                          </Button>
+                        )}
+                        {isDispatcherTab && canEditReceipt && (
+                          <Button
+                            className="min-h-[46px] flex-1 px-4 py-2 text-sm sm:min-h-[52px] sm:flex-none sm:px-5 sm:py-3"
+                            onClick={() => addReceiptForItem(item.id, qtyToReceive)}
+                            disabled={qtyToReceive <= 0 || addReceiptMutation.isPending}
+                          >
+                            Przyjmij
+                          </Button>
+                        )}
+                        <Button
+                          variant="outline"
+                          className="min-h-[46px] flex-1 px-4 py-2 text-sm sm:min-h-[52px] sm:flex-none sm:px-5 sm:py-3"
+                          onClick={() => handleToggleItemExpand(details.document.id, item.id)}
+                        >
+                          {isExpanded ? 'Zamknij' : 'Edytuj'}
+                        </Button>
+                      </div>
+                    </div>
 
-                          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                            <div className="rounded-xl border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.03)] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
-                                Powinno przyjechać
+                    {isWarehousemanTab && (
+                      <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-2">
+                        <div className="flex items-center rounded-lg border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.03)] px-3 py-2">
+                          <div className="flex items-baseline justify-start gap-2">
+                            <p className="text-xl font-black tracking-wide text-title">
+                              WYPISANE:
+                            </p>
+                            <p className="text-xl font-black leading-none tabular-nums text-title">
+                              {formatQty(item.plannedQty, item.unit)}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center rounded-lg border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-3 py-2">
+                          <div className="flex items-baseline justify-start gap-2">
+                            <p className="text-xl font-black tracking-wide text-title">
+                              WYDANE:
+                            </p>
+                            <p className="text-xl font-black leading-none tabular-nums text-title">
+                              {formatQty(item.issuedQty, item.unit)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {!isWarehousemanTab && (
+                      <div
+                        className={
+                          isDispatcherTab
+                            ? 'mt-3 grid grid-cols-2 gap-2 lg:grid-cols-3'
+                            : 'mt-3 grid grid-cols-2 gap-2 lg:grid-cols-5'
+                        }
+                      >
+                        <div
+                          className={
+                            isDispatcherTab
+                              ? 'flex items-center rounded-lg border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.03)] px-3 py-2'
+                              : 'rounded-lg border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.03)] px-2 py-2'
+                          }
+                        >
+                          {isDispatcherTab ? (
+                            <div className="flex items-baseline justify-start gap-2">
+                              <p className="text-xl font-black tracking-wide text-title">
+                                WYPISANE:
                               </p>
-                              <p className="mt-1 text-2xl font-black tabular-nums text-title">
+                              <p className="text-xl font-black leading-none tabular-nums text-title">
                                 {formatQty(item.plannedQty, item.unit)}
                               </p>
                             </div>
-                            <div className="rounded-xl border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
-                                Zliczyliśmy
+                          ) : (
+                            <>
+                              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-dim">
+                                Wypisana
                               </p>
-                              <p className="mt-1 text-2xl font-black tabular-nums text-title">
+                              <p className="text-sm font-bold tabular-nums text-title">
+                                {formatQty(item.plannedQty, item.unit)}
+                              </p>
+                            </>
+                          )}
+                        </div>
+                        <div
+                          className={
+                            isDispatcherTab
+                              ? 'flex items-center rounded-lg border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-3 py-2'
+                              : 'rounded-lg border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-2 py-2'
+                          }
+                        >
+                          {isDispatcherTab ? (
+                            <div className="flex items-baseline justify-start gap-2">
+                              <p className="text-xl font-black tracking-wide text-title">
+                                WYDANE:
+                              </p>
+                              <p className="text-xl font-black leading-none tabular-nums text-title">
+                                {formatQty(item.issuedQty, item.unit)}
+                              </p>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-dim">
+                                Wydana
+                              </p>
+                              <p className="text-sm font-bold tabular-nums text-title">
+                                {formatQty(item.issuedQty, item.unit)}
+                              </p>
+                            </>
+                          )}
+                        </div>
+                        <div
+                          className={
+                            isDispatcherTab
+                              ? 'flex items-center rounded-lg border border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_12%,transparent)] px-3 py-2'
+                              : 'rounded-lg border border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_12%,transparent)] px-2 py-2'
+                          }
+                        >
+                          {isDispatcherTab ? (
+                            <div className="flex items-baseline justify-start gap-2">
+                              <p className="text-xl font-black tracking-wide text-title">
+                                PRZYJETE:
+                              </p>
+                              <p className="text-xl font-black leading-none tabular-nums text-title">
                                 {formatQty(item.receivedQty, item.unit)}
                               </p>
                             </div>
-                            <div className={`rounded-xl border px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] ${diffClasses}`}>
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
-                                Różnica
+                          ) : (
+                            <>
+                              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-dim">
+                                Przyjeta
                               </p>
-                              <p className="mt-1 text-2xl font-black tabular-nums">
-                                {formatQty(item.diffQty, item.unit)}
+                              <p className="text-sm font-bold tabular-nums text-title">
+                                {formatQty(item.receivedQty, item.unit)}
                               </p>
-                            </div>
+                            </>
+                          )}
+                        </div>
+                        {!isDispatcherTab && (
+                          <div className="rounded-lg border border-[color:color-mix(in_srgb,var(--warning)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--warning)_12%,transparent)] px-2 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-dim">
+                              Do wydania
+                            </p>
+                            <p className="text-sm font-bold tabular-nums text-title">
+                              {formatQty(qtyToIssue, item.unit)}
+                            </p>
                           </div>
+                        )}
+                        {!isDispatcherTab && (
+                          <div className="rounded-lg border border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_12%,transparent)] px-2 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-dim">
+                              Na hale
+                            </p>
+                            <p className="text-sm font-bold tabular-nums text-title">
+                              {formatQty(qtyToReceive, item.unit)}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
 
-                          <div className="mt-3 space-y-1">
-                            {item.receipts.length === 0 ? (
-                              <p className="text-xs text-dim">Brak zapisanych przyjęć dla tej pozycji.</p>
+                  {isExpanded && (
+                    <div
+                      className={
+                        isWarehousemanTab || isDispatcherTab
+                          ? 'mt-3 space-y-3'
+                          : 'mt-3 rounded-xl border border-[rgba(255,255,255,0.14)] bg-[rgba(0,0,0,0.22)] px-3 py-3'
+                      }
+                    >
+                      {!isWarehousemanTab && !isDispatcherTab && (
+                        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+                          <div className="rounded-xl border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.03)] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
+                              Ilosc wypisana
+                            </p>
+                            <p className="mt-1 text-2xl font-black tabular-nums text-title">
+                              {formatQty(item.plannedQty, item.unit)}
+                            </p>
+                          </div>
+                          <div className="rounded-xl border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
+                              Ilosc wydana
+                            </p>
+                            <p className="mt-1 text-2xl font-black tabular-nums text-title">
+                              {formatQty(item.issuedQty, item.unit)}
+                            </p>
+                          </div>
+                          <div className="rounded-xl border border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_12%,transparent)] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
+                              Ilosc przyjeta
+                            </p>
+                            <p className="mt-1 text-2xl font-black tabular-nums text-title">
+                              {formatQty(item.receivedQty, item.unit)}
+                            </p>
+                          </div>
+                          <div className={`rounded-xl border px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] ${diffClasses}`}>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
+                              Roznica
+                            </p>
+                            <p className="mt-1 text-2xl font-black tabular-nums">
+                              {formatQty(item.diffQty, item.unit)}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {(!isWarehousemanTab || canEditIssue) && (
+                        <div
+                          className={
+                            isWarehousemanTab
+                              ? 'mt-3 space-y-2'
+                              : 'mt-3 grid gap-3 lg:grid-cols-2'
+                          }
+                        >
+                          <div className="space-y-1">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
+                              Historia wydan
+                            </p>
+                            {item.issues.length === 0 ? (
+                              <p className="text-xs text-dim">Brak zapisanych wydan dla tej pozycji.</p>
                             ) : (
-                              item.receipts
-                                .slice(-4)
+                              [...item.issues]
                                 .reverse()
-                                .map((receipt) => (
-                                  <p key={receipt.id} className="text-xs text-dim">
-                                    {formatDateTime(receipt.createdAt)} | {receipt.receiverName} |{' '}
-                                    {formatQty(receipt.qty, item.unit)}
-                                    {receipt.note ? ` | ${receipt.note}` : ''}
-                                  </p>
+                                .map((issue) => (
+                                  <div
+                                    key={issue.id}
+                                    className="rounded-lg border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.02)] px-3 py-2"
+                                  >
+                                    <p className="text-xs text-dim">
+                                      {formatDateTime(issue.createdAt)} | {issue.issuerName} |{' '}
+                                      {formatQty(issue.qty, item.unit)}
+                                    </p>
+                                    {issue.note && (
+                                      <p className="mt-1 break-words text-xs text-dim">
+                                        Uwagi: {issue.note}
+                                      </p>
+                                    )}
+                                    {canEditIssue && (
+                                      <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+                                        {issueEditDrafts[issue.id] !== undefined ? (
+                                          <>
+                                            <Input
+                                              value={issueEditDrafts[issue.id]}
+                                              onChange={(event) =>
+                                                updateIssueEditDraft(issue.id, event.target.value)
+                                              }
+                                              placeholder="Nowa ilosc wydana"
+                                              inputMode="decimal"
+                                              className="sm:max-w-[190px]"
+                                            />
+                                            <Button
+                                              variant="outline"
+                                              className="w-full sm:w-auto"
+                                              onClick={() => handleSaveIssueEdit(item.id, issue.id)}
+                                              disabled={updateIssueMutation.isPending}
+                                            >
+                                              Zapisz ilosc
+                                            </Button>
+                                            <Button
+                                              variant="ghost"
+                                              className="w-full sm:w-auto"
+                                              onClick={() => cancelIssueEdit(issue.id)}
+                                              disabled={updateIssueMutation.isPending}
+                                            >
+                                              Anuluj
+                                            </Button>
+                                          </>
+                                        ) : (
+                                          <Button
+                                            variant="outline"
+                                            className="w-full sm:w-auto"
+                                            onClick={() => startIssueEdit(issue.id, issue.qty)}
+                                            disabled={updateIssueMutation.isPending}
+                                          >
+                                            Edytuj ilosc
+                                          </Button>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
                                 ))
                             )}
                           </div>
 
-                          {details.document.status === 'OPEN' && (
-                            <div className="mt-3 grid gap-2 md:grid-cols-[160px_1fr_auto]">
-                              <Input
-                                value={draft.qty}
-                                onChange={(event) =>
-                                  updateReceiptDraft(item.id, { qty: event.target.value })
-                                }
-                                placeholder="Ilość"
-                                inputMode="decimal"
-                              />
-                              <Input
-                                value={draft.note}
-                                onChange={(event) =>
-                                  updateReceiptDraft(item.id, { note: event.target.value })
-                                }
-                                placeholder="Uwagi do przyjęcia (opcjonalnie)"
-                              />
-                              <Button
-                                onClick={() => handleAddReceipt(item.id)}
-                                disabled={addReceiptMutation.isPending}
-                              >
-                                Dodaj przyjęcie
-                              </Button>
+                          {!isWarehousemanTab && (
+                            <div className="space-y-1">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
+                                Historia przyjec
+                              </p>
+                              {item.receipts.length === 0 ? (
+                                <p className="text-xs text-dim">Brak zapisanych przyjec dla tej pozycji.</p>
+                              ) : (
+                                [...item.receipts]
+                                  .reverse()
+                                  .map((receipt) => {
+                                    const canEditReceiptEntry =
+                                      canEditReceipt &&
+                                      ((Boolean(currentUser?.id) &&
+                                        Boolean(receipt.receiverId) &&
+                                        String(receipt.receiverId) === String(currentUser?.id)) ||
+                                        (!receipt.receiverId &&
+                                          Boolean(currentActorName) &&
+                                          receipt.receiverName === currentActorName));
+                                    return (
+                                      <div
+                                        key={receipt.id}
+                                        className="rounded-lg border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.02)] px-3 py-2"
+                                      >
+                                        <p className="text-xs text-dim">
+                                          {formatDateTime(receipt.createdAt)} | {receipt.receiverName} |{' '}
+                                          {formatQty(receipt.qty, item.unit)}
+                                        </p>
+                                        {receipt.note && (
+                                          <p className="mt-1 break-words text-xs text-dim">
+                                            Uwagi: {receipt.note}
+                                          </p>
+                                        )}
+                                        {canEditReceiptEntry && (
+                                          <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+                                            {receiptEditDrafts[receipt.id] !== undefined ? (
+                                              <>
+                                                <Input
+                                                  value={receiptEditDrafts[receipt.id]}
+                                                  onChange={(event) =>
+                                                    updateReceiptEditDraft(receipt.id, event.target.value)
+                                                  }
+                                                  placeholder="Nowa ilosc przyjeta"
+                                                  inputMode="decimal"
+                                                  className="sm:max-w-[190px]"
+                                                />
+                                                <Button
+                                                  variant="outline"
+                                                  className="w-full sm:w-auto"
+                                                  onClick={() =>
+                                                    handleSaveReceiptEdit(item.id, receipt.id)
+                                                  }
+                                                  disabled={updateReceiptMutation.isPending}
+                                                >
+                                                  Zapisz ilosc
+                                                </Button>
+                                                <Button
+                                                  variant="ghost"
+                                                  className="w-full sm:w-auto"
+                                                  onClick={() => cancelReceiptEdit(receipt.id)}
+                                                  disabled={updateReceiptMutation.isPending}
+                                                >
+                                                  Anuluj
+                                                </Button>
+                                              </>
+                                            ) : (
+                                              <Button
+                                                variant="outline"
+                                                className="w-full sm:w-auto"
+                                                onClick={() => startReceiptEdit(receipt.id, receipt.qty)}
+                                                disabled={updateReceiptMutation.isPending}
+                                              >
+                                                Edytuj ilosc
+                                              </Button>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })
+                              )}
                             </div>
                           )}
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
-            )}
+                      )}
+
+                      {canEditIssue && (
+                        <div className="mt-3 grid gap-2 md:grid-cols-[160px_1fr_auto]">
+                          <Input
+                            value={issueDraft.qty}
+                            onChange={(event) =>
+                              updateIssueDraft(item.id, { qty: event.target.value })
+                            }
+                            placeholder="Ilosc wydana"
+                            inputMode="decimal"
+                          />
+                          <Input
+                            value={issueDraft.note}
+                            onChange={(event) =>
+                              updateIssueDraft(item.id, { note: event.target.value })
+                            }
+                            placeholder="Uwagi do wydania (opcjonalnie)"
+                          />
+                          <Button
+                            className="w-full md:w-auto"
+                            onClick={() => handleAddIssue(item.id)}
+                            disabled={addIssueMutation.isPending}
+                          >
+                            Zapisz wydanie
+                          </Button>
+                        </div>
+                      )}
+
+                      {canEditReceipt && (
+                        <div className="mt-3 grid gap-2 md:grid-cols-[160px_1fr_auto]">
+                          <Input
+                            value={receiptDraft.qty}
+                            onChange={(event) =>
+                              updateReceiptDraft(item.id, { qty: event.target.value })
+                            }
+                            placeholder="Ilosc przyjeta"
+                            inputMode="decimal"
+                          />
+                          <Input
+                            value={receiptDraft.note}
+                            onChange={(event) =>
+                              updateReceiptDraft(item.id, { note: event.target.value })
+                            }
+                            placeholder="Uwagi do przyjecia (opcjonalnie)"
+                          />
+                          <Button
+                            className="w-full md:w-auto"
+                            onClick={() => handleAddReceipt(item.id)}
+                            disabled={addReceiptMutation.isPending}
+                          >
+                            Zapisz przyjecie
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </Card>
+    );
+  };
+
+  const activeDocumentsCardTitle = isWarehousemanTab
+    ? 'Dokumenty do wydania'
+    : 'Dokumenty do przyjecia na hale';
+  const activeDocumentsEmptyDescription = isWarehousemanTab
+    ? 'Nowe dokumenty do wydania pojawia sie tutaj po przekazaniu do realizacji.'
+    : 'Nowe dokumenty do przyjecia pojawia sie tutaj po przekazaniu do realizacji.';
+
+  return (
+    <div className="space-y-4">
+      {workspaceTab === 'issuer' && (
+        <Card className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              Pole dla wypisujacej osoby
+            </p>
+            <p className="text-sm text-dim">
+              Pozycje wykryte: <span className="font-semibold text-title">{parsed.items.length}</span>
+            </p>
+          </div>
+
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleImageFileChange}
+            className="hidden"
+          />
+          <input
+            ref={tableFileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            onChange={handleTableFileChange}
+            className="hidden"
+          />
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="text-xs uppercase tracking-wide text-dim">Numer dokumentu</label>
+              <Input
+                value={form.documentNumber}
+                onChange={(event) =>
+                  setForm((prev) => ({ ...prev, documentNumber: event.target.value }))
+                }
+                placeholder="np. 13168 / MMZ / 0/2025"
+              />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-wide text-dim">
+                Magazyn zrodlowy (opcjonalnie)
+              </label>
+              <Input
+                value={form.sourceWarehouse}
+                onChange={(event) =>
+                  setForm((prev) => ({ ...prev, sourceWarehouse: event.target.value }))
+                }
+                placeholder="np. 51"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs uppercase tracking-wide text-dim">
+              Wklej dokument (pozycje do wydania)
+            </label>
+            <textarea
+              value={form.itemsRaw}
+              onChange={(event) => setForm((prev) => ({ ...prev, itemsRaw: event.target.value }))}
+              className={textAreaClass}
+              rows={8}
+              placeholder={`LP;KOD;INDEKS;INDEKS2;NAZWA;ILOSC;JM\n1;7024;M-1-KAR-MAX-7024;7024;KARTON 62[...];606,000;szt`}
+            />
+            <p className="mt-2 text-xs text-dim">
+              Przetworzone linie: {parsed.total}. Pominiete: {parsed.skipped}.
+            </p>
+          </div>
+
+          {previewRows.length > 0 && (
+            <DataTable
+              columns={['LP', 'Kod', 'Indeks', 'Indeks2', 'Nazwa', 'Ilosc', 'JM', 'Priorytet']}
+              rows={previewRows}
+            />
+          )}
+
+          <div className="flex justify-end">
+            <Button
+              className="w-full sm:w-auto"
+              onClick={handleCreateDocument}
+              disabled={createDocumentMutation.isPending}
+            >
+              Przekaz do realizacji
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {(isWarehousemanTab || isDispatcherTab) && (
+        <>
+          <Card className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                {activeDocumentsCardTitle}
+              </p>
+              <p className="text-sm text-dim">Aktywne: {activeDocuments.length}</p>
+            </div>
+            {documentsLoading ? (
+              <p className="text-sm text-dim">Ladowanie dokumentow...</p>
+            ) : activeDocuments.length === 0 ? (
+              <EmptyState
+                title="Brak aktywnych dokumentow"
+                description={activeDocumentsEmptyDescription}
+              />
+            ) : (
+              <DataTable
+                columns={['Magazyn', 'Data', 'Dokument', 'Status', 'Pozycje']}
+                rows={activeDocumentRows}
+                onRowClick={(rowIndex) => handleDocumentClick(activeDocuments[rowIndex]?.id)}
+              />
+            )}
+          </Card>
+
+          {renderDetailsCard()}
+        </>
+      )}
+
+      {workspaceTab === 'history' && (
+        <>
+          <Card className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                Historia dokumentow
+              </p>
+              <p className="text-sm text-dim">Zamkniete: {historyDocuments.length}</p>
+            </div>
+            {documentsLoading ? (
+              <p className="text-sm text-dim">Ladowanie dokumentow...</p>
+            ) : historyDocuments.length === 0 ? (
+              <EmptyState
+                title="Historia jest pusta"
+                description="Zamkniete dokumenty pojawia sie tutaj automatycznie."
+              />
+            ) : (
+              <DataTable
+                columns={['Magazyn', 'Data', 'Dokument', 'Status', 'Pozycje']}
+                rows={historyDocumentRows}
+                onRowClick={(rowIndex) => handleDocumentClick(historyDocuments[rowIndex]?.id)}
+              />
+            )}
+          </Card>
+
+          {renderDetailsCard()}
+        </>
+      )}
     </div>
   );
 }

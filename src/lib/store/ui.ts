@@ -9,6 +9,18 @@ export type UiFilters = {
   search: string;
 };
 
+export type ErpWorkspaceTab = 'issuer' | 'warehouseman' | 'dispatcher' | 'history';
+
+const normalizeErpWorkspaceTab = (value: unknown): ErpWorkspaceTab => {
+  if (value === 'issuer') return 'issuer';
+  if (value === 'warehouseman') return 'warehouseman';
+  if (value === 'dispatcher') return 'dispatcher';
+  if (value === 'history') return 'history';
+  // Backward compatibility with previously persisted tab key.
+  if (value === 'operator') return 'warehouseman';
+  return 'issuer';
+};
+
 type UiState = {
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
@@ -26,11 +38,19 @@ type UiState = {
   setRememberMe: (value: boolean) => void;
   filters: UiFilters;
   setFilters: (filters: Partial<UiFilters>) => void;
+  erpWorkspaceTab: ErpWorkspaceTab;
+  setErpWorkspaceTab: (value: ErpWorkspaceTab) => void;
 };
 
 type PersistedUiState = Pick<
   UiState,
-  'sidebarCollapsed' | 'user' | 'role' | 'activeWarehouse' | 'rememberMe' | 'filters'
+  | 'sidebarCollapsed'
+  | 'user'
+  | 'role'
+  | 'activeWarehouse'
+  | 'rememberMe'
+  | 'filters'
+  | 'erpWorkspaceTab'
 >;
 
 const roleFromUser = (user: AppUser | null): Role => {
@@ -90,7 +110,9 @@ export const useUiStore = create<UiState>()(
         set({ rememberMe: value });
       },
       filters: { onlyPending: false, search: '' },
-      setFilters: (filters) => set((state) => ({ filters: { ...state.filters, ...filters } }))
+      setFilters: (filters) => set((state) => ({ filters: { ...state.filters, ...filters } })),
+      erpWorkspaceTab: 'issuer',
+      setErpWorkspaceTab: (value) => set({ erpWorkspaceTab: normalizeErpWorkspaceTab(value) })
     }),
     {
       name: storageKey,
@@ -101,12 +123,14 @@ export const useUiStore = create<UiState>()(
         role: state.role,
         activeWarehouse: state.activeWarehouse,
         rememberMe: state.rememberMe,
-        filters: state.filters
+        filters: state.filters,
+        erpWorkspaceTab: state.erpWorkspaceTab
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated(true);
         if (state) {
           state.setRememberMe(getRememberFlag());
+          state.setErpWorkspaceTab(normalizeErpWorkspaceTab(state.erpWorkspaceTab));
         }
       }
     }

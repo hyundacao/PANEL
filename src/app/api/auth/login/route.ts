@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { randomUUID } from 'crypto';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { getErrorCode, mapDbUser, type DbUserRow } from '@/lib/supabase/users';
 import {
@@ -66,7 +67,23 @@ export async function POST(request: NextRequest) {
 
   clearLoginFailures(rateLimitKey);
   const user = mapDbUser(row);
+  const sessionId = randomUUID();
+  const { data: sessionRow, error: sessionError } = await supabaseAdmin
+    .from('app_users')
+    .update({ active_session_id: sessionId })
+    .eq('id', user.id)
+    .eq('is_active', true)
+    .select('id')
+    .maybeSingle();
+
+  if (sessionError) {
+    return NextResponse.json({ code: 'UNKNOWN' }, { status: 500 });
+  }
+  if (!sessionRow) {
+    return NextResponse.json({ code: 'INACTIVE' }, { status: 403 });
+  }
+
   const response = NextResponse.json(user);
-  setSessionCookie(response, user.id, rememberMe);
+  setSessionCookie(response, user.id, sessionId, rememberMe);
   return response;
 }

@@ -3,7 +3,14 @@
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { Boxes, FileText, Shield, Wrench, type LucideIcon } from 'lucide-react';
+import {
+  ArrowLeftRight,
+  Boxes,
+  FileText,
+  Shield,
+  Wrench,
+  type LucideIcon
+} from 'lucide-react';
 import { useUiStore } from '@/lib/store/ui';
 import { getCurrentSessionUser } from '@/lib/api';
 import { Card } from '@/components/ui/Card';
@@ -20,6 +27,7 @@ import {
 import type { WarehouseKey } from '@/lib/api/types';
 
 type ModuleOption = {
+  id: string;
   key: WarehouseKey;
   title: string;
   description: string;
@@ -32,30 +40,44 @@ type ModuleOption = {
 
 const moduleOptions: ModuleOption[] = [
   {
+    id: 'przemialy-core',
     key: 'PRZEMIALY',
-    title: 'Zarządzanie przemiałami i przygotowaniem produkcji',
-    description: 'Spisy, przesunięcia, raporty i bieżące stany hal produkcyjnych.',
-    action: 'Wejdź',
+    title: 'Zarzadzanie przemialami i przygotowaniem produkcji',
+    description: 'Spisy, przesuniecia, raporty i biezace stany hal produkcyjnych.',
+    action: 'Wejdz',
     href: '/dashboard',
     tags: ['Produkcja', 'Statystyki'],
     keywords: ['hala', 'spis', 'raporty', 'kartoteka', 'suszarki', 'wymieszane'],
     icon: Boxes
   },
   {
+    id: 'przemialy-erp',
+    key: 'PRZEMIALY',
+    title: 'Przesuniecia magazynowe ERP',
+    description: 'Osobny modul ERP MM/MMZ: dokumenty, pozycje i przyjecia.',
+    action: 'Wejdz',
+    href: '/przesuniecia-magazynowe',
+    tags: ['ERP', 'MM/MMZ'],
+    keywords: ['erp', 'mm', 'mmz', 'przesuniecia magazynowe', 'dokumenty'],
+    icon: ArrowLeftRight
+  },
+  {
+    id: 'czesci',
     key: 'CZESCI',
-    title: 'Magazyn części zamiennych',
-    description: 'Pobrania, uzupełnienia, historia ruchów i kontrola stanów.',
-    action: 'Wejdź',
+    title: 'Magazyn czesci zamiennych',
+    description: 'Pobrania, uzupelnienia, historia ruchow i kontrola stanow.',
+    action: 'Wejdz',
     href: '/czesci',
     tags: ['Utrzymanie ruchu', 'Magazyn'],
-    keywords: ['czesci', 'części', 'historia', 'stany', 'pobierz', 'uzupelnij', 'uzupełnij'],
+    keywords: ['czesci', 'historia', 'stany', 'pobierz', 'uzupelnij'],
     icon: Wrench
   },
   {
+    id: 'raport-zmianowy',
     key: 'RAPORT_ZMIANOWY',
     title: 'Raport zmianowy',
     description: 'Wpisy ze zmian, podsumowania i analiza przebiegu produkcji.',
-    action: 'Wejdź',
+    action: 'Wejdz',
     href: '/raport-zmianowy',
     tags: ['Raporty', 'Zmiany'],
     keywords: ['raport', 'zmiana', 'sesja', 'wpisy'],
@@ -115,7 +137,7 @@ export default function WarehousesPage() {
       });
 
   const adminHaystack = normalize(
-    'panel administratora uprawnienia konfiguracja konta zarządzanie'
+    'panel administratora uprawnienia konfiguracja konta zarzadzanie'
   );
   const showAdminCard = adminVisible && (!needle || adminHaystack.includes(needle));
   const visibleCount = filteredModules.length + (showAdminCard ? 1 : 0);
@@ -141,10 +163,10 @@ export default function WarehousesPage() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="space-y-1">
               <h1 className="text-2xl font-semibold text-title md:text-3xl">
-                Wybierz moduł do pracy
+                Wybierz modul do pracy
               </h1>
               <p className="text-sm text-dim">
-                Moduły będą przybywać, więc możesz je filtrować po nazwie lub opisie.
+                Moduly beda przybywac, wiec mozesz je filtrowac po nazwie lub opisie.
               </p>
             </div>
             <Badge tone="info">Widoczne: {visibleCount}</Badge>
@@ -152,20 +174,20 @@ export default function WarehousesPage() {
           <SearchInput
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Szukaj modułu (np. raport, części, spis...)"
+            placeholder="Szukaj modulu (np. raport, czesci, spis...)"
           />
         </Card>
 
         {visibleModules.length === 0 && !adminVisible ? (
           <EmptyState
-            title="Brak dostępu"
-            description="Skontaktuj się z administratorem, aby otrzymać dostęp do modułów."
+            title="Brak dostepu"
+            description="Skontaktuj sie z administratorem, aby otrzymac dostep do modulow."
           />
         ) : visibleCount === 0 ? (
           <EmptyState
-            title="Brak wyników"
-            description="Zmień frazę wyszukiwania albo wyczyść filtr."
-            actionLabel="Wyczyść filtr"
+            title="Brak wynikow"
+            description="Zmien fraze wyszukiwania albo wyczysc filtr."
+            actionLabel="Wyczysc filtr"
             onAction={() => setSearch('')}
           />
         ) : (
@@ -174,7 +196,7 @@ export default function WarehousesPage() {
               <section className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-semibold uppercase tracking-wide text-dim">
-                    Moduły robocze
+                    Moduly robocze
                   </h2>
                   <span className="text-xs text-dim">{filteredModules.length} szt.</span>
                 </div>
@@ -182,7 +204,7 @@ export default function WarehousesPage() {
                   {filteredModules.map((module) => {
                     const Icon = module.icon;
                     return (
-                      <Card key={module.key} className="flex h-full flex-col gap-4">
+                      <Card key={module.id} className="flex h-full flex-col gap-4">
                         <div className="flex items-start gap-3">
                           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-surface2">
                             <Icon className="h-5 w-5 text-brand" />
@@ -196,7 +218,7 @@ export default function WarehousesPage() {
                           <div className="flex flex-wrap gap-2">
                             {module.tags.map((tag) => (
                               <span
-                                key={`${module.key}-${tag}`}
+                                key={`${module.id}-${tag}`}
                                 className="rounded-full border border-border px-2.5 py-1 text-[11px] font-semibold text-dim"
                               >
                                 {tag}
@@ -227,12 +249,12 @@ export default function WarehousesPage() {
                     <div>
                       <h3 className="text-lg font-semibold text-title">Panel administratora</h3>
                       <p className="text-sm text-dim">
-                        Konfiguracja kont, uprawnień i ustawień systemowych.
+                        Konfiguracja kont, uprawnien i ustawien systemowych.
                       </p>
                     </div>
                   </div>
                   <Button onClick={openAdmin} className="w-full md:w-auto md:px-8">
-                    Wejdź
+                    Wejdz
                   </Button>
                 </Card>
               </section>

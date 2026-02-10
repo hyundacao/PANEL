@@ -39,12 +39,6 @@ const navItemsPrzemialy: NavItem[] = [
     icon: ArrowLeftRight,
     tab: 'przesuniecia'
   },
-  {
-    label: 'Przesunięcia magazynowe ERP',
-    href: '/przesuniecia-magazynowe',
-    icon: ArrowLeftRight,
-    tab: 'przesuniecia'
-  },
   { label: 'Raporty', href: '/raporty', icon: FileText, tab: 'raporty' },
   { label: 'Stany magazynowe', href: '/kartoteka', icon: Layers, tab: 'kartoteka' },
   { label: 'Suszarki', href: '/suszarki', icon: Wind, tab: 'suszarki' },
@@ -85,12 +79,6 @@ export const Sidebar = () => {
     if (href === '/spis') return pathname === '/spis' || pathname.startsWith('/spis/');
     if (href === '/spis-oryginalow') {
       return pathname === '/spis-oryginalow' || pathname.startsWith('/spis-oryginalow/');
-    }
-    if (href === '/przesuniecia-magazynowe') {
-      return (
-        pathname === '/przesuniecia-magazynowe' ||
-        pathname.startsWith('/przesuniecia-magazynowe/')
-      );
     }
     if (href === '/przesuniecia') {
       return pathname === '/przesuniecia' || pathname.startsWith('/przesuniecia/');

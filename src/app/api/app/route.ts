@@ -50,6 +50,8 @@ import type {
   WarehouseTransferDocumentItem,
   WarehouseTransferDocumentStatus,
   WarehouseTransferDocumentSummary,
+  WarehouseTransferItemIssue,
+  WarehouseTransferItemPriority,
   WarehouseTransferItemReceipt,
   WarehouseTransferItemStatus,
   Warehouse,
@@ -70,8 +72,25 @@ type TransferCommentsByDate = Record<string, Record<string, string[]>>;
 type TransferDeltasByDate = Record<string, Record<string, Record<string, number>>>;
 type WarehouseTransferDocumentItemBase = Omit<
   WarehouseTransferDocumentItem,
-  'receivedQty' | 'diffQty' | 'status' | 'receipts'
+  'issuedQty' | 'receivedQty' | 'diffQty' | 'status' | 'issues' | 'receipts'
 >;
+
+const warehouseTransferPriorityOrder: WarehouseTransferItemPriority[] = [
+  'CRITICAL',
+  'HIGH',
+  'NORMAL',
+  'LOW'
+];
+
+const normalizeWarehouseTransferItemPriority = (value: unknown): WarehouseTransferItemPriority => {
+  const normalized = String(value ?? '')
+    .trim()
+    .toUpperCase();
+  if (warehouseTransferPriorityOrder.includes(normalized as WarehouseTransferItemPriority)) {
+    return normalized as WarehouseTransferItemPriority;
+  }
+  return 'NORMAL';
+};
 
 const toNumber = (value: unknown) => {
   if (typeof value === 'number') return value;
@@ -195,6 +214,7 @@ const mapWarehouseTransferDocumentItem = (row: any): WarehouseTransferDocumentIt
   id: row.id,
   documentId: row.document_id,
   lineNo: toNumber(row.line_no),
+  priority: normalizeWarehouseTransferItemPriority(row.priority),
   indexCode: row.index_code ?? '',
   indexCode2: row.index_code2 ?? undefined,
   name: row.name ?? '',
@@ -202,6 +222,16 @@ const mapWarehouseTransferDocumentItem = (row: any): WarehouseTransferDocumentIt
   location: row.location ?? undefined,
   unit: row.unit ?? 'kg',
   plannedQty: toNumber(row.planned_qty),
+  note: row.note ?? undefined
+});
+
+const mapWarehouseTransferItemIssue = (row: any): WarehouseTransferItemIssue => ({
+  id: row.id,
+  itemId: row.item_id,
+  createdAt: row.created_at,
+  issuerId: row.issuer_id ?? null,
+  issuerName: row.issuer_name ?? 'nieznany',
+  qty: toNumber(row.qty),
   note: row.note ?? undefined
 });
 
@@ -450,7 +480,10 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       return;
     case 'addTransfer':
     case 'createWarehouseTransferDocument':
+    case 'addWarehouseTransferItemIssue':
+    case 'updateWarehouseTransferItemIssue':
     case 'addWarehouseTransferItemReceipt':
+    case 'updateWarehouseTransferItemReceipt':
     case 'closeWarehouseTransferDocument':
     case 'removeWarehouseTransferDocument':
       requireTabWriteAccess(user, 'PRZEMIALY', ['przesuniecia']);
@@ -593,7 +626,10 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'removeLocation',
   'addTransfer',
   'createWarehouseTransferDocument',
+  'addWarehouseTransferItemIssue',
+  'updateWarehouseTransferItemIssue',
   'addWarehouseTransferItemReceipt',
+  'updateWarehouseTransferItemReceipt',
   'closeWarehouseTransferDocument',
   'removeWarehouseTransferDocument',
   'applyInventoryAdjustment',
@@ -649,7 +685,10 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   confirmNoChangeLocation: 'Spis: potwierdzenie lokalizacji',
   addTransfer: 'Przesuniecia: nowy ruch',
   createWarehouseTransferDocument: 'Przesuniecia magazynowe: nowy dokument',
+  addWarehouseTransferItemIssue: 'Przesuniecia magazynowe: wydanie pozycji',
+  updateWarehouseTransferItemIssue: 'Przesuniecia magazynowe: edycja wydania',
   addWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: przyjecie pozycji',
+  updateWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: edycja przyjecia',
   closeWarehouseTransferDocument: 'Przesuniecia magazynowe: zamkniecie dokumentu',
   removeWarehouseTransferDocument: 'Przesuniecia magazynowe: usuniecie dokumentu',
   applyInventoryAdjustment: 'Inwentaryzacja: korekta stanu',
@@ -768,7 +807,10 @@ const getAuditQty = (action: string, payload: any, data: unknown) => {
   if (
     action === 'upsertEntry' ||
     action === 'addTransfer' ||
+    action === 'addWarehouseTransferItemIssue' ||
+    action === 'updateWarehouseTransferItemIssue' ||
     action === 'addWarehouseTransferItemReceipt' ||
+    action === 'updateWarehouseTransferItemReceipt' ||
     action === 'addMixedMaterial' ||
     action === 'removeMixedMaterial' ||
     action === 'addOriginalInventory'
@@ -1082,15 +1124,19 @@ const resolveWarehouseTransferItemStatus = (
 const buildWarehouseTransferDocumentSummary = (
   document: WarehouseTransferDocument,
   items: WarehouseTransferDocumentItemBase[],
+  issuedByItem: Map<string, number>,
   receivedByItem: Map<string, number>
 ): WarehouseTransferDocumentSummary => {
   let plannedQtyTotal = 0;
+  let issuedQtyTotal = 0;
   let receivedQtyTotal = 0;
   let completedItemsCount = 0;
 
   items.forEach((item) => {
+    const issuedQty = issuedByItem.get(item.id) ?? 0;
     const receivedQty = receivedByItem.get(item.id) ?? 0;
     plannedQtyTotal += item.plannedQty;
+    issuedQtyTotal += issuedQty;
     receivedQtyTotal += receivedQty;
     if (isWarehouseTransferItemCompleted(item.plannedQty, receivedQty)) {
       completedItemsCount += 1;
@@ -1102,6 +1148,7 @@ const buildWarehouseTransferDocumentSummary = (
     itemsCount: items.length,
     completedItemsCount,
     plannedQtyTotal,
+    issuedQtyTotal,
     receivedQtyTotal
   };
 };
@@ -1123,6 +1170,30 @@ const fetchWarehouseTransferItemsByDocumentIds = async (
     items.push(...(data ?? []).map(mapWarehouseTransferDocumentItem));
   }
   return items;
+};
+
+const fetchWarehouseTransferIssuesByItemIds = async (
+  itemIds: string[]
+): Promise<WarehouseTransferItemIssue[]> => {
+  if (itemIds.length === 0) return [];
+  const issues: WarehouseTransferItemIssue[] = [];
+  const chunkSize = 500;
+  for (let i = 0; i < itemIds.length; i += chunkSize) {
+    const chunk = itemIds.slice(i, i + chunkSize);
+    const { data, error } = await supabaseAdmin
+      .from('warehouse_transfer_item_issues')
+      .select('*')
+      .in('item_id', chunk)
+      .order('created_at', { ascending: true });
+    if (error) {
+      if (error.code === '42P01') {
+        return [];
+      }
+      throw error;
+    }
+    issues.push(...(data ?? []).map(mapWarehouseTransferItemIssue));
+  }
+  return issues;
 };
 
 const fetchWarehouseTransferReceiptsByItemIds = async (
@@ -1164,7 +1235,17 @@ const fetchWarehouseTransferDocumentDetails = async (
   if (itemsError) throw itemsError;
   const itemBases = (itemRows ?? []).map(mapWarehouseTransferDocumentItem);
   const itemIds = itemBases.map((item) => item.id);
+  const issues = await fetchWarehouseTransferIssuesByItemIds(itemIds);
   const receipts = await fetchWarehouseTransferReceiptsByItemIds(itemIds);
+
+  const issueByItem = new Map<string, WarehouseTransferItemIssue[]>();
+  const issuedByItem = new Map<string, number>();
+  issues.forEach((issue) => {
+    const existing = issueByItem.get(issue.itemId) ?? [];
+    existing.push(issue);
+    issueByItem.set(issue.itemId, existing);
+    issuedByItem.set(issue.itemId, (issuedByItem.get(issue.itemId) ?? 0) + issue.qty);
+  });
 
   const receiptByItem = new Map<string, WarehouseTransferItemReceipt[]>();
   const receivedByItem = new Map<string, number>();
@@ -1176,19 +1257,28 @@ const fetchWarehouseTransferDocumentDetails = async (
   });
 
   const items: WarehouseTransferDocumentItem[] = itemBases.map((item) => {
+    const itemIssues = issueByItem.get(item.id) ?? [];
     const itemReceipts = receiptByItem.get(item.id) ?? [];
+    const issuedQty = issuedByItem.get(item.id) ?? 0;
     const receivedQty = receivedByItem.get(item.id) ?? 0;
     return {
       ...item,
+      issuedQty,
       receivedQty,
       diffQty: receivedQty - item.plannedQty,
       status: resolveWarehouseTransferItemStatus(item.plannedQty, receivedQty),
+      issues: itemIssues,
       receipts: itemReceipts
     };
   });
 
   return {
-    document: buildWarehouseTransferDocumentSummary(document, itemBases, receivedByItem),
+    document: buildWarehouseTransferDocumentSummary(
+      document,
+      itemBases,
+      issuedByItem,
+      receivedByItem
+    ),
     items
   };
 };
@@ -1207,6 +1297,7 @@ const fetchWarehouseTransferDocumentSummaries = async (): Promise<
   const documentIds = documents.map((document) => document.id);
   const items = await fetchWarehouseTransferItemsByDocumentIds(documentIds);
   const itemIds = items.map((item) => item.id);
+  const issues = await fetchWarehouseTransferIssuesByItemIds(itemIds);
   const receipts = await fetchWarehouseTransferReceiptsByItemIds(itemIds);
 
   const itemsByDocumentId = new Map<string, WarehouseTransferDocumentItemBase[]>();
@@ -1214,6 +1305,11 @@ const fetchWarehouseTransferDocumentSummaries = async (): Promise<
     const existing = itemsByDocumentId.get(item.documentId) ?? [];
     existing.push(item);
     itemsByDocumentId.set(item.documentId, existing);
+  });
+
+  const issuedByItem = new Map<string, number>();
+  issues.forEach((issue) => {
+    issuedByItem.set(issue.itemId, (issuedByItem.get(issue.itemId) ?? 0) + issue.qty);
   });
 
   const receivedByItem = new Map<string, number>();
@@ -1225,6 +1321,7 @@ const fetchWarehouseTransferDocumentSummaries = async (): Promise<
     buildWarehouseTransferDocumentSummary(
       document,
       itemsByDocumentId.get(document.id) ?? [],
+      issuedByItem,
       receivedByItem
     )
   );
@@ -2810,6 +2907,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!documentNumber) throw new Error('DOCUMENT_NUMBER_REQUIRED');
       const rawItems: Array<{
         lineNo?: number;
+        priority?: WarehouseTransferItemPriority;
         indexCode?: string;
         indexCode2?: string;
         name?: string;
@@ -2836,6 +2934,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           id: randomUUID(),
           document_id: '',
           line_no: lineNo,
+          priority: normalizeWarehouseTransferItemPriority(item?.priority),
           index_code: indexCode,
           index_code2: item?.indexCode2 ? String(item.indexCode2).trim() || null : null,
           name,
@@ -2882,10 +2981,143 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .insert(itemsPayload);
       if (insertItemsError) {
         await supabaseAdmin.from('warehouse_transfer_documents').delete().eq('id', documentId);
+        const insertErrorCode = String(insertItemsError.code ?? '');
+        const insertErrorMessage = String(insertItemsError.message ?? '').toLowerCase();
+        if (
+          insertErrorCode === '42703' ||
+          insertErrorCode === 'PGRST204' ||
+          (insertErrorMessage.includes('priority') && insertErrorMessage.includes('column'))
+        ) {
+          throw new Error('MIGRATION_REQUIRED_PRIORITY');
+        }
         throw insertItemsError;
       }
 
       return fetchWarehouseTransferDocumentDetails(documentId);
+    }
+    case 'addWarehouseTransferItemIssue': {
+      const documentId = String(payload?.documentId ?? '').trim();
+      const itemId = String(payload?.itemId ?? '').trim();
+      const qty = toNumber(payload?.qty);
+      if (!documentId || !itemId) throw new Error('NOT_FOUND');
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error('INVALID_QTY');
+
+      const { data: documentRow, error: documentError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .select('id, status')
+        .eq('id', documentId)
+        .maybeSingle();
+      if (documentError) throw documentError;
+      if (!documentRow) throw new Error('NOT_FOUND');
+      if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+
+      const { data: itemRow, error: itemError } = await supabaseAdmin
+        .from('warehouse_transfer_document_items')
+        .select('id, document_id')
+        .eq('id', itemId)
+        .maybeSingle();
+      if (itemError) throw itemError;
+      if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+
+      const { data, error } = await supabaseAdmin
+        .from('warehouse_transfer_item_issues')
+        .insert({
+          id: randomUUID(),
+          item_id: itemId,
+          created_at: new Date().toISOString(),
+          issuer_id: currentUser.id ?? null,
+          issuer_name: getActorName(currentUser),
+          qty,
+          note: payload?.note ? String(payload.note).trim() || null : null
+        })
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (error.code === '42P01') throw new Error('MIGRATION_REQUIRED');
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      return mapWarehouseTransferItemIssue(data);
+    }
+    case 'updateWarehouseTransferItemIssue': {
+      const documentId = String(payload?.documentId ?? '').trim();
+      const itemId = String(payload?.itemId ?? '').trim();
+      const issueId = String(payload?.issueId ?? '').trim();
+      const qty = toNumber(payload?.qty);
+      if (!documentId || !itemId || !issueId) throw new Error('NOT_FOUND');
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error('INVALID_QTY');
+
+      const { data: documentRow, error: documentError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .select('id, status')
+        .eq('id', documentId)
+        .maybeSingle();
+      if (documentError) throw documentError;
+      if (!documentRow) throw new Error('NOT_FOUND');
+      if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+
+      const { data: itemRow, error: itemError } = await supabaseAdmin
+        .from('warehouse_transfer_document_items')
+        .select('id, document_id')
+        .eq('id', itemId)
+        .maybeSingle();
+      if (itemError) throw itemError;
+      if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+
+      const { data: issueRow, error: issueError } = await supabaseAdmin
+        .from('warehouse_transfer_item_issues')
+        .select('*')
+        .eq('id', issueId)
+        .maybeSingle();
+      if (issueError) {
+        if (issueError.code === '42P01') throw new Error('MIGRATION_REQUIRED');
+        throw issueError;
+      }
+      if (!issueRow || issueRow.item_id !== itemId) throw new Error('NOT_FOUND');
+
+      const { data: issueRows, error: issueRowsError } = await supabaseAdmin
+        .from('warehouse_transfer_item_issues')
+        .select('id, qty')
+        .eq('item_id', itemId);
+      if (issueRowsError) {
+        if (issueRowsError.code === '42P01') throw new Error('MIGRATION_REQUIRED');
+        throw issueRowsError;
+      }
+
+      const { data: receiptRows, error: receiptRowsError } = await supabaseAdmin
+        .from('warehouse_transfer_item_receipts')
+        .select('qty')
+        .eq('item_id', itemId);
+      if (receiptRowsError) throw receiptRowsError;
+
+      const issuedExcludingEdited = (issueRows ?? []).reduce((sum, row) => {
+        if (String(row?.id ?? '') === issueId) return sum;
+        return sum + toNumber(row?.qty);
+      }, 0);
+      const receivedQty = (receiptRows ?? []).reduce(
+        (sum, row) => sum + toNumber(row?.qty),
+        0
+      );
+      const nextIssuedQty = issuedExcludingEdited + qty;
+      if (nextIssuedQty + 0.000001 < receivedQty) {
+        throw new Error('ISSUE_BELOW_RECEIVED');
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('warehouse_transfer_item_issues')
+        .update({
+          qty,
+          note: payload?.note !== undefined ? String(payload.note).trim() || null : issueRow.note
+        })
+        .eq('id', issueId)
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (error.code === '42P01') throw new Error('MIGRATION_REQUIRED');
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      return mapWarehouseTransferItemIssue(data);
     }
     case 'addWarehouseTransferItemReceipt': {
       const documentId = String(payload?.documentId ?? '').trim();
@@ -2922,6 +3154,69 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           qty,
           note: payload?.note ? String(payload.note).trim() || null : null
         })
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapWarehouseTransferItemReceipt(data);
+    }
+    case 'updateWarehouseTransferItemReceipt': {
+      const documentId = String(payload?.documentId ?? '').trim();
+      const itemId = String(payload?.itemId ?? '').trim();
+      const receiptId = String(payload?.receiptId ?? '').trim();
+      const qty = toNumber(payload?.qty);
+      if (!documentId || !itemId || !receiptId) throw new Error('NOT_FOUND');
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error('INVALID_QTY');
+
+      const { data: documentRow, error: documentError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .select('id, status')
+        .eq('id', documentId)
+        .maybeSingle();
+      if (documentError) throw documentError;
+      if (!documentRow) throw new Error('NOT_FOUND');
+      if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+
+      const { data: itemRow, error: itemError } = await supabaseAdmin
+        .from('warehouse_transfer_document_items')
+        .select('id, document_id')
+        .eq('id', itemId)
+        .maybeSingle();
+      if (itemError) throw itemError;
+      if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+
+      const { data: receiptRow, error: receiptError } = await supabaseAdmin
+        .from('warehouse_transfer_item_receipts')
+        .select('*')
+        .eq('id', receiptId)
+        .maybeSingle();
+      if (receiptError) throw receiptError;
+      if (!receiptRow || receiptRow.item_id !== itemId) throw new Error('NOT_FOUND');
+
+      const actorName = getActorName(currentUser);
+      const isAdmin = isWarehouseAdmin(currentUser, 'PRZEMIALY');
+      const isOwnerById =
+        Boolean(currentUser.id) &&
+        Boolean(receiptRow.receiver_id) &&
+        String(receiptRow.receiver_id) === String(currentUser.id);
+      const isOwnerByName =
+        !receiptRow.receiver_id &&
+        Boolean(receiptRow.receiver_name) &&
+        String(receiptRow.receiver_name) === actorName;
+      if (!isAdmin && !isOwnerById && !isOwnerByName) {
+        throw new Error('FORBIDDEN');
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('warehouse_transfer_item_receipts')
+        .update({
+          qty,
+          note:
+            payload?.note !== undefined
+              ? String(payload.note).trim() || null
+              : receiptRow.note
+        })
+        .eq('id', receiptId)
         .select('*')
         .maybeSingle();
       if (error) throw error;
@@ -2983,6 +3278,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const chunkSize = 500;
       for (let i = 0; i < itemIds.length; i += chunkSize) {
         const chunk = itemIds.slice(i, i + chunkSize);
+        const { error: issuesError } = await supabaseAdmin
+          .from('warehouse_transfer_item_issues')
+          .delete()
+          .in('item_id', chunk);
+        if (issuesError && issuesError.code !== '42P01') throw issuesError;
         const { error: receiptsError } = await supabaseAdmin
           .from('warehouse_transfer_item_receipts')
           .delete()
