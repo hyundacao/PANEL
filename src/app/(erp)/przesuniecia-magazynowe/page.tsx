@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { PageHeader } from '@/components/layout/PageHeader';
 import { getTodayKey } from '@/lib/api';
@@ -10,11 +10,12 @@ export default function WarehouseTransfersModulePage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Przesuniecia magazynowe ERP"
-        subtitle={`Dzis: ${today}`}
+        title="Przesunięcia magazynowe ERP"
+        subtitle={`Dziś: ${today}`}
       />
 
       <WarehouseTransferDocumentsPanel />
     </div>
   );
 }
+

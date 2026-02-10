@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
@@ -44,9 +44,19 @@ const moduleOptions: ModuleOption[] = [
   {
     id: 'przemialy-core',
     key: 'PRZEMIALY',
-    title: 'Zarzadzanie przemialami i przygotowaniem produkcji',
-    description: 'Spisy, raporty i biezace stany hal produkcyjnych.',
-    action: 'Wejdz',
+    requiredTabs: [
+      'dashboard',
+      'spis',
+      'spis-oryginalow',
+      'przesuniecia',
+      'raporty',
+      'kartoteka',
+      'suszarki',
+      'wymieszane'
+    ],
+    title: 'Zarządzanie przemiałami i przygotowaniem produkcji',
+    description: 'Spisy, raporty i bieżące stany hal produkcyjnych.',
+    action: 'Wejdź',
     href: '/dashboard',
     tags: ['Produkcja', 'Statystyki'],
     keywords: ['hala', 'spis', 'raporty', 'kartoteka', 'suszarki', 'wymieszane'],
@@ -61,23 +71,23 @@ const moduleOptions: ModuleOption[] = [
       'erp-wypisz-dokument',
       'erp-historia-dokumentow'
     ],
-    title: 'Przesuniecia magazynowe ERP',
-    description: 'Osobny modul ERP MM/MMZ: dokumenty, pozycje i przyjecia.',
-    action: 'Wejdz',
+    title: 'Przesunięcia magazynowe ERP',
+    description: 'Osobny moduł ERP MM/MMZ: dokumenty, pozycje i przyjęcia.',
+    action: 'Wejdź',
     href: '/przesuniecia-magazynowe',
     tags: ['ERP', 'MM/MMZ'],
-    keywords: ['erp', 'mm', 'mmz', 'przesuniecia magazynowe', 'dokumenty'],
+    keywords: ['erp', 'mm', 'mmz', 'przesunięcia magazynowe', 'dokumenty'],
     icon: ArrowLeftRight
   },
   {
     id: 'czesci',
     key: 'CZESCI',
-    title: 'Magazyn czesci zamiennych',
-    description: 'Pobrania, uzupelnienia, historia ruchow i kontrola stanow.',
-    action: 'Wejdz',
+    title: 'Magazyn części zamiennych',
+    description: 'Pobrania, uzupełnienia, historia ruchów i kontrola stanów.',
+    action: 'Wejdź',
     href: '/czesci',
     tags: ['Utrzymanie ruchu', 'Magazyn'],
-    keywords: ['czesci', 'historia', 'stany', 'pobierz', 'uzupelnij'],
+    keywords: ['części', 'historia', 'stany', 'pobierz', 'uzupełnij'],
     icon: Wrench
   },
   {
@@ -85,7 +95,7 @@ const moduleOptions: ModuleOption[] = [
     key: 'RAPORT_ZMIANOWY',
     title: 'Raport zmianowy',
     description: 'Wpisy ze zmian, podsumowania i analiza przebiegu produkcji.',
-    action: 'Wejdz',
+    action: 'Wejdź',
     href: '/raport-zmianowy',
     tags: ['Raporty', 'Zmiany'],
     keywords: ['raport', 'zmiana', 'sesja', 'wpisy'],
@@ -149,7 +159,7 @@ export default function WarehousesPage() {
       });
 
   const adminHaystack = normalize(
-    'panel administratora uprawnienia konfiguracja konta zarzadzanie'
+    'panel administratora uprawnienia konfiguracja konta zarządzanie'
   );
   const showAdminCard = adminVisible && (!needle || adminHaystack.includes(needle));
   const visibleCount = filteredModules.length + (showAdminCard ? 1 : 0);
@@ -175,10 +185,10 @@ export default function WarehousesPage() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="space-y-1">
               <h1 className="text-2xl font-semibold text-title md:text-3xl">
-                Wybierz modul do pracy
+                Wybierz moduł do pracy
               </h1>
               <p className="text-sm text-dim">
-                Moduly beda przybywac, wiec mozesz je filtrowac po nazwie lub opisie.
+                Moduły będą przybywać, więc możesz je filtrować po nazwie lub opisie.
               </p>
             </div>
             <Badge tone="info">Widoczne: {visibleCount}</Badge>
@@ -186,20 +196,20 @@ export default function WarehousesPage() {
           <SearchInput
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Szukaj modulu (np. raport, czesci, spis...)"
+            placeholder="Szukaj modułu (np. raport, części, spis...)"
           />
         </Card>
 
         {visibleModules.length === 0 && !adminVisible ? (
           <EmptyState
-            title="Brak dostepu"
-            description="Skontaktuj sie z administratorem, aby otrzymac dostep do modulow."
+            title="Brak dostępu"
+            description="Skontaktuj się z administratorem, aby otrzymać dostęp do modułów."
           />
         ) : visibleCount === 0 ? (
           <EmptyState
-            title="Brak wynikow"
-            description="Zmien fraze wyszukiwania albo wyczysc filtr."
-            actionLabel="Wyczysc filtr"
+            title="Brak wyników"
+            description="Zmień frazę wyszukiwania albo wyczyść filtr."
+            actionLabel="Wyczyść filtr"
             onAction={() => setSearch('')}
           />
         ) : (
@@ -208,7 +218,7 @@ export default function WarehousesPage() {
               <section className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-semibold uppercase tracking-wide text-dim">
-                    Moduly robocze
+                    Moduły robocze
                   </h2>
                   <span className="text-xs text-dim">{filteredModules.length} szt.</span>
                 </div>
@@ -261,12 +271,12 @@ export default function WarehousesPage() {
                     <div>
                       <h3 className="text-lg font-semibold text-title">Panel administratora</h3>
                       <p className="text-sm text-dim">
-                        Konfiguracja kont, uprawnien i ustawien systemowych.
+                        Konfiguracja kont, uprawnień i ustawień systemowych.
                       </p>
                     </div>
                   </div>
                   <Button onClick={openAdmin} className="w-full md:w-auto md:px-8">
-                    Wejdz
+                    Wejdź
                   </Button>
                 </Card>
               </section>
@@ -286,3 +296,5 @@ export default function WarehousesPage() {
     </div>
   );
 }
+
+

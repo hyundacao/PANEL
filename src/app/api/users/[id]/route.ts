@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
-import { getErrorCode, mapDbUser, type DbUserRow } from '@/lib/supabase/users';
+import {
+  getErrorCode,
+  mapDbUser,
+  normalizeAccessForDb,
+  type DbUserRow
+} from '@/lib/supabase/users';
 import type { Role, UserAccess } from '@/lib/api/types';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { isHeadAdmin } from '@/lib/auth/access';
@@ -74,7 +79,7 @@ export async function PATCH(
     p_username: username ?? null,
     p_password: password ? password : null,
     p_role: normalizeRole(payload?.role),
-    p_access: payload?.access ?? null,
+    p_access: normalizeAccessForDb(payload?.access),
     p_is_active: typeof payload?.isActive === 'boolean' ? payload.isActive : null
   });
 

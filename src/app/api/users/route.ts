@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
-import { getErrorCode, mapDbUser, type DbUserRow } from '@/lib/supabase/users';
+import {
+  getErrorCode,
+  mapDbUser,
+  normalizeAccessForDb,
+  type DbUserRow
+} from '@/lib/supabase/users';
 import type { Role, UserAccess } from '@/lib/api/types';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { isHeadAdmin } from '@/lib/auth/access';
@@ -66,7 +71,7 @@ export async function POST(request: NextRequest) {
     p_username: username,
     p_password: password,
     p_role: normalizeRole(payload?.role),
-    p_access: payload?.access ?? null
+    p_access: normalizeAccessForDb(payload?.access)
   });
 
   if (error) {

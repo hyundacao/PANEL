@@ -2226,13 +2226,13 @@ export function WarehouseTransferDocumentsPanel() {
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        INVALID_QTY: 'Podaj ilosc wieksza od zera.',
-        DOCUMENT_CLOSED: 'Dokument jest juz zamkniety.',
+        INVALID_QTY: 'Podaj ilość większą od zera.',
+        DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
-        MIGRATION_REQUIRED: 'Brakuje migracji bazy dla wydan. Uruchom migracje SQL.'
+        MIGRATION_REQUIRED: 'Brakuje migracji bazy dla wydań. Uruchom migrację SQL.'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie udalo sie zapisac wydania.',
+        title: messageMap[err.message] ?? 'Nie udało się zapisać wydania.',
         tone: 'error'
       });
     }
@@ -2255,14 +2255,14 @@ export function WarehouseTransferDocumentsPanel() {
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        INVALID_QTY: 'Podaj ilosc wieksza od zera.',
-        DOCUMENT_CLOSED: 'Dokument jest juz zamkniety.',
+        INVALID_QTY: 'Podaj ilość większą od zera.',
+        DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
-        ISSUE_BELOW_RECEIVED: 'Nie mozna ustawic wydania ponizej ilosci juz przyjetej.',
-        MIGRATION_REQUIRED: 'Brakuje migracji bazy dla wydan. Uruchom migracje SQL.'
+        ISSUE_BELOW_RECEIVED: 'Nie można ustawić wydania poniżej ilości już przyjętej.',
+        MIGRATION_REQUIRED: 'Brakuje migracji bazy dla wydań. Uruchom migrację SQL.'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie udalo sie zaktualizowac wydania.',
+        title: messageMap[err.message] ?? 'Nie udało się zaktualizować wydania.',
         tone: 'error'
       });
     }
@@ -2307,18 +2307,18 @@ export function WarehouseTransferDocumentsPanel() {
         delete next[variables.receiptId];
         return next;
       });
-      toast({ title: 'Zaktualizowano przyjecie', tone: 'success' });
+      toast({ title: 'Zaktualizowano przyjęcie', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        INVALID_QTY: 'Podaj ilosc wieksza od zera.',
-        DOCUMENT_CLOSED: 'Dokument jest juz zamkniety.',
+        INVALID_QTY: 'Podaj ilość większą od zera.',
+        DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
-        FORBIDDEN: 'Mozesz edytowac tylko swoje przyjecia.',
-        MIGRATION_REQUIRED: 'Brakuje migracji bazy dla przyjec. Uruchom migracje SQL.'
+        FORBIDDEN: 'Możesz edytować tylko swoje przyjęcia.',
+        MIGRATION_REQUIRED: 'Brakuje migracji bazy dla przyjęć. Uruchom migrację SQL.'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie udalo sie zaktualizowac przyjecia.',
+        title: messageMap[err.message] ?? 'Nie udało się zaktualizować przyjęcia.',
         tone: 'error'
       });
     }
@@ -2642,7 +2642,7 @@ export function WarehouseTransferDocumentsPanel() {
     const draft = issueDrafts[itemId] ?? { qty: '', note: '' };
     const qty = parseQtyToken(draft.qty);
     if (!qty || qty <= 0) {
-      toast({ title: 'Podaj ilosc wieksza od zera.', tone: 'error' });
+      toast({ title: 'Podaj ilość większą od zera.', tone: 'error' });
       return;
     }
     addIssueForItem(itemId, qty, draft.note);
@@ -2653,7 +2653,7 @@ export function WarehouseTransferDocumentsPanel() {
     const rawQty = issueEditDrafts[issueId];
     const qty = parseQtyToken(rawQty ?? '');
     if (!qty || qty <= 0) {
-      toast({ title: 'Podaj ilosc wieksza od zera.', tone: 'error' });
+      toast({ title: 'Podaj ilość większą od zera.', tone: 'error' });
       return;
     }
     updateIssueMutation.mutate({
@@ -2669,7 +2669,7 @@ export function WarehouseTransferDocumentsPanel() {
     const rawQty = receiptEditDrafts[receiptId];
     const qty = parseQtyToken(rawQty ?? '');
     if (!qty || qty <= 0) {
-      toast({ title: 'Podaj ilosc wieksza od zera.', tone: 'error' });
+      toast({ title: 'Podaj ilość większą od zera.', tone: 'error' });
       return;
     }
     updateReceiptMutation.mutate({
@@ -2775,12 +2775,12 @@ export function WarehouseTransferDocumentsPanel() {
   const currentActorName = currentUser?.name?.trim() || currentUser?.username?.trim() || '';
 
   const detailsEmptyDescription = isHistoryTab
-    ? 'Kliknij dokument z historii, aby zobaczyc szczegoly.'
+    ? 'Kliknij dokument z historii, aby zobaczyć szczegóły.'
     : isWarehousemanTab
-      ? 'Kliknij dokument, aby zobaczyc liste rzeczy do wydania.'
+      ? 'Kliknij dokument, aby zobaczyć listę rzeczy do wydania.'
       : isDispatcherTab
-        ? 'Kliknij dokument, aby zobaczyc liste rzeczy do przyjecia na hale.'
-        : 'Kliknij dokument do realizacji, aby zobaczyc szczegoly.';
+        ? 'Kliknij dokument, aby zobaczyć listę rzeczy do przyjęcia na halę.'
+        : 'Kliknij dokument do realizacji, aby zobaczyć szczegóły.';
 
   const renderDetailsCard = () => {
     if (!activeDocumentId) {
@@ -2794,7 +2794,7 @@ export function WarehouseTransferDocumentsPanel() {
     if (detailsLoading) {
       return (
         <Card className="space-y-4">
-          <p className="text-sm text-dim">Ladowanie szczegolow dokumentu...</p>
+          <p className="text-sm text-dim">Ładowanie szczegółów dokumentu...</p>
         </Card>
       );
     }
@@ -2813,7 +2813,7 @@ export function WarehouseTransferDocumentsPanel() {
     const itemListTitle = isWarehousemanTab
       ? 'Lista rzeczy do wydania'
       : isDispatcherTab
-        ? 'Lista rzeczy do przyjecia na hale'
+        ? 'Lista rzeczy do przyjęcia na halę'
         : 'Pozycje dokumentu';
 
     return (
@@ -2822,7 +2822,7 @@ export function WarehouseTransferDocumentsPanel() {
           <div>
             <p className="text-lg font-semibold text-title">{details.document.documentNumber}</p>
             <p className="text-sm text-dim">
-              Utworzyl: {details.document.createdByName} | {formatDateTime(details.document.createdAt)}
+              Utworzył: {details.document.createdByName} | {formatDateTime(details.document.createdAt)}
             </p>
           </div>
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
@@ -2835,7 +2835,7 @@ export function WarehouseTransferDocumentsPanel() {
               onClick={handleToggleDocumentCollapse}
               disabled={removeDocumentMutation.isPending}
             >
-              {isActiveDocumentCollapsed ? 'Rozwin dokument' : 'Zwin dokument'}
+              {isActiveDocumentCollapsed ? 'Rozwiń dokument' : 'Zwiń dokument'}
             </Button>
             <Button
               variant="outline"
@@ -2843,7 +2843,7 @@ export function WarehouseTransferDocumentsPanel() {
               onClick={handleRemoveDocument}
               disabled={removeDocumentMutation.isPending}
             >
-              Usun dokument
+              Usuń dokument
             </Button>
             {details.document.status === 'OPEN' && (
               <Button
@@ -2862,7 +2862,7 @@ export function WarehouseTransferDocumentsPanel() {
 
         {isActiveDocumentCollapsed ? (
           <div className="rounded-2xl border border-border bg-surface2 px-4 py-3 text-sm text-dim">
-            Dokument jest zwiniety. Kliknij Rozwin dokument, aby zobaczyc pozycje.
+            Dokument jest zwinięty. Kliknij Rozwiń dokument, aby zobaczyć pozycje.
           </div>
         ) : sortedDetailsItems.length === 0 ? (
           <EmptyState
@@ -2966,21 +2966,21 @@ export function WarehouseTransferDocumentsPanel() {
                     {isWarehousemanTab && (
                       <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-2">
                         <div className="flex items-center rounded-lg border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.03)] px-3 py-2">
-                          <div className="flex items-baseline justify-start gap-2">
-                            <p className="text-xl font-black tracking-wide text-title">
+                          <div className="flex flex-col justify-start gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
+                            <p className="text-[11px] font-black leading-tight tracking-[0.08em] text-title sm:text-xl sm:leading-none sm:tracking-wide">
                               WYPISANE:
                             </p>
-                            <p className="text-xl font-black leading-none tabular-nums text-title">
+                            <p className="text-lg font-black leading-none tabular-nums text-title sm:text-xl">
                               {formatQty(item.plannedQty, item.unit)}
                             </p>
                           </div>
                         </div>
                         <div className="flex items-center rounded-lg border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-3 py-2">
-                          <div className="flex items-baseline justify-start gap-2">
-                            <p className="text-xl font-black tracking-wide text-title">
+                          <div className="flex flex-col justify-start gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
+                            <p className="text-[11px] font-black leading-tight tracking-[0.08em] text-title sm:text-xl sm:leading-none sm:tracking-wide">
                               WYDANE:
                             </p>
-                            <p className="text-xl font-black leading-none tabular-nums text-title">
+                            <p className="text-lg font-black leading-none tabular-nums text-title sm:text-xl">
                               {formatQty(item.issuedQty, item.unit)}
                             </p>
                           </div>
@@ -3004,11 +3004,11 @@ export function WarehouseTransferDocumentsPanel() {
                           }
                         >
                           {isDispatcherTab ? (
-                            <div className="flex items-baseline justify-start gap-2">
-                              <p className="text-xl font-black tracking-wide text-title">
+                            <div className="flex flex-col justify-start gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
+                              <p className="text-[11px] font-black leading-tight tracking-[0.08em] text-title sm:text-xl sm:leading-none sm:tracking-wide">
                                 WYPISANE:
                               </p>
-                              <p className="text-xl font-black leading-none tabular-nums text-title">
+                              <p className="text-lg font-black leading-none tabular-nums text-title sm:text-xl">
                                 {formatQty(item.plannedQty, item.unit)}
                               </p>
                             </div>
@@ -3031,11 +3031,11 @@ export function WarehouseTransferDocumentsPanel() {
                           }
                         >
                           {isDispatcherTab ? (
-                            <div className="flex items-baseline justify-start gap-2">
-                              <p className="text-xl font-black tracking-wide text-title">
+                            <div className="flex flex-col justify-start gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
+                              <p className="text-[11px] font-black leading-tight tracking-[0.08em] text-title sm:text-xl sm:leading-none sm:tracking-wide">
                                 WYDANE:
                               </p>
-                              <p className="text-xl font-black leading-none tabular-nums text-title">
+                              <p className="text-lg font-black leading-none tabular-nums text-title sm:text-xl">
                                 {formatQty(item.issuedQty, item.unit)}
                               </p>
                             </div>
@@ -3058,18 +3058,18 @@ export function WarehouseTransferDocumentsPanel() {
                           }
                         >
                           {isDispatcherTab ? (
-                            <div className="flex items-baseline justify-start gap-2">
-                              <p className="text-xl font-black tracking-wide text-title">
-                                PRZYJETE:
+                            <div className="flex flex-col justify-start gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
+                              <p className="text-[11px] font-black leading-tight tracking-[0.08em] text-title sm:text-xl sm:leading-none sm:tracking-wide">
+                                PRZYJĘTE:
                               </p>
-                              <p className="text-xl font-black leading-none tabular-nums text-title">
+                              <p className="text-lg font-black leading-none tabular-nums text-title sm:text-xl">
                                 {formatQty(item.receivedQty, item.unit)}
                               </p>
                             </div>
                           ) : (
                             <>
                               <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-dim">
-                                Przyjeta
+                                Przyjęta
                               </p>
                               <p className="text-sm font-bold tabular-nums text-title">
                                 {formatQty(item.receivedQty, item.unit)}
@@ -3113,7 +3113,7 @@ export function WarehouseTransferDocumentsPanel() {
                         <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
                           <div className="rounded-xl border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.03)] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
-                              Ilosc wypisana
+                              Ilość wypisana
                             </p>
                             <p className="mt-1 text-2xl font-black tabular-nums text-title">
                               {formatQty(item.plannedQty, item.unit)}
@@ -3121,7 +3121,7 @@ export function WarehouseTransferDocumentsPanel() {
                           </div>
                           <div className="rounded-xl border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
-                              Ilosc wydana
+                              Ilość wydana
                             </p>
                             <p className="mt-1 text-2xl font-black tabular-nums text-title">
                               {formatQty(item.issuedQty, item.unit)}
@@ -3129,7 +3129,7 @@ export function WarehouseTransferDocumentsPanel() {
                           </div>
                           <div className="rounded-xl border border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_12%,transparent)] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
-                              Ilosc przyjeta
+                              Ilość przyjęta
                             </p>
                             <p className="mt-1 text-2xl font-black tabular-nums text-title">
                               {formatQty(item.receivedQty, item.unit)}
@@ -3137,7 +3137,7 @@ export function WarehouseTransferDocumentsPanel() {
                           </div>
                           <div className={`rounded-xl border px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] ${diffClasses}`}>
                             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
-                              Roznica
+                              Różnica
                             </p>
                             <p className="mt-1 text-2xl font-black tabular-nums">
                               {formatQty(item.diffQty, item.unit)}
@@ -3156,10 +3156,10 @@ export function WarehouseTransferDocumentsPanel() {
                         >
                           <div className="space-y-1">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
-                              Historia wydan
+                              Historia wydań
                             </p>
                             {item.issues.length === 0 ? (
-                              <p className="text-xs text-dim">Brak zapisanych wydan dla tej pozycji.</p>
+                              <p className="text-xs text-dim">Brak zapisanych wydań dla tej pozycji.</p>
                             ) : (
                               [...item.issues]
                                 .reverse()
@@ -3186,7 +3186,7 @@ export function WarehouseTransferDocumentsPanel() {
                                               onChange={(event) =>
                                                 updateIssueEditDraft(issue.id, event.target.value)
                                               }
-                                              placeholder="Nowa ilosc wydana"
+                                              placeholder="Nowa ilość wydana"
                                               inputMode="decimal"
                                               className="sm:max-w-[190px]"
                                             />
@@ -3196,7 +3196,7 @@ export function WarehouseTransferDocumentsPanel() {
                                               onClick={() => handleSaveIssueEdit(item.id, issue.id)}
                                               disabled={updateIssueMutation.isPending}
                                             >
-                                              Zapisz ilosc
+                                              Zapisz ilość
                                             </Button>
                                             <Button
                                               variant="ghost"
@@ -3214,7 +3214,7 @@ export function WarehouseTransferDocumentsPanel() {
                                             onClick={() => startIssueEdit(issue.id, issue.qty)}
                                             disabled={updateIssueMutation.isPending}
                                           >
-                                            Edytuj ilosc
+                                            Edytuj ilość
                                           </Button>
                                         )}
                                       </div>
@@ -3227,10 +3227,10 @@ export function WarehouseTransferDocumentsPanel() {
                           {!isWarehousemanTab && (
                             <div className="space-y-1">
                               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
-                                Historia przyjec
+                                Historia przyjęć
                               </p>
                               {item.receipts.length === 0 ? (
-                                <p className="text-xs text-dim">Brak zapisanych przyjec dla tej pozycji.</p>
+                                <p className="text-xs text-dim">Brak zapisanych przyjęć dla tej pozycji.</p>
                               ) : (
                                 [...item.receipts]
                                   .reverse()
@@ -3266,7 +3266,7 @@ export function WarehouseTransferDocumentsPanel() {
                                                   onChange={(event) =>
                                                     updateReceiptEditDraft(receipt.id, event.target.value)
                                                   }
-                                                  placeholder="Nowa ilosc przyjeta"
+                                                  placeholder="Nowa ilość przyjęta"
                                                   inputMode="decimal"
                                                   className="sm:max-w-[190px]"
                                                 />
@@ -3278,7 +3278,7 @@ export function WarehouseTransferDocumentsPanel() {
                                                   }
                                                   disabled={updateReceiptMutation.isPending}
                                                 >
-                                                  Zapisz ilosc
+                                                  Zapisz ilość
                                                 </Button>
                                                 <Button
                                                   variant="ghost"
@@ -3296,7 +3296,7 @@ export function WarehouseTransferDocumentsPanel() {
                                                 onClick={() => startReceiptEdit(receipt.id, receipt.qty)}
                                                 disabled={updateReceiptMutation.isPending}
                                               >
-                                                Edytuj ilosc
+                                                Edytuj ilość
                                               </Button>
                                             )}
                                           </div>
@@ -3317,7 +3317,7 @@ export function WarehouseTransferDocumentsPanel() {
                             onChange={(event) =>
                               updateIssueDraft(item.id, { qty: event.target.value })
                             }
-                            placeholder="Ilosc wydana"
+                            placeholder="Ilość wydana"
                             inputMode="decimal"
                           />
                           <Input
@@ -3344,7 +3344,7 @@ export function WarehouseTransferDocumentsPanel() {
                             onChange={(event) =>
                               updateReceiptDraft(item.id, { qty: event.target.value })
                             }
-                            placeholder="Ilosc przyjeta"
+                            placeholder="Ilość przyjęta"
                             inputMode="decimal"
                           />
                           <Input
@@ -3352,14 +3352,14 @@ export function WarehouseTransferDocumentsPanel() {
                             onChange={(event) =>
                               updateReceiptDraft(item.id, { note: event.target.value })
                             }
-                            placeholder="Uwagi do przyjecia (opcjonalnie)"
+                            placeholder="Uwagi do przyjęcia (opcjonalnie)"
                           />
                           <Button
                             className="w-full md:w-auto"
                             onClick={() => handleAddReceipt(item.id)}
                             disabled={addReceiptMutation.isPending}
                           >
-                            Zapisz przyjecie
+                            Zapisz przyjęcie
                           </Button>
                         </div>
                       )}
@@ -3376,17 +3376,17 @@ export function WarehouseTransferDocumentsPanel() {
 
   const activeDocumentsCardTitle = isWarehousemanTab
     ? 'Dokumenty do wydania'
-    : 'Dokumenty do przyjecia na hale';
+    : 'Dokumenty do przyjęcia na halę';
   const activeDocumentsEmptyDescription = isWarehousemanTab
-    ? 'Nowe dokumenty do wydania pojawia sie tutaj po przekazaniu do realizacji.'
-    : 'Nowe dokumenty do przyjecia pojawia sie tutaj po przekazaniu do realizacji.';
+    ? 'Nowe dokumenty do wydania pojawiają się tutaj po przekazaniu do realizacji.'
+    : 'Nowe dokumenty do przyjęcia pojawiają się tutaj po przekazaniu do realizacji.';
 
   if (!hasAnyWorkspaceAccess) {
     return (
       <Card className="space-y-4">
         <EmptyState
-          title="Brak dostepu do zakladek ERP"
-          description="Skontaktuj sie z administratorem, aby wlaczyc wymagane uprawnienia."
+          title="Brak dostępu do zakładek ERP"
+          description="Skontaktuj się z administratorem, aby włączyć wymagane uprawnienia."
         />
       </Card>
     );
@@ -3398,7 +3398,7 @@ export function WarehouseTransferDocumentsPanel() {
         <Card className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              Pole dla wypisujacej osoby
+              Pole dla wypisującej osoby
             </p>
             <p className="text-sm text-dim">
               Pozycje wykryte: <span className="font-semibold text-title">{parsed.items.length}</span>
@@ -3433,7 +3433,7 @@ export function WarehouseTransferDocumentsPanel() {
             </div>
             <div>
               <label className="text-xs uppercase tracking-wide text-dim">
-                Magazyn zrodlowy (opcjonalnie)
+                Magazyn źródłowy (opcjonalnie)
               </label>
               <Input
                 value={form.sourceWarehouse}
@@ -3457,13 +3457,13 @@ export function WarehouseTransferDocumentsPanel() {
               placeholder={`LP;KOD;INDEKS;INDEKS2;NAZWA;ILOSC;JM\n1;7024;M-1-KAR-MAX-7024;7024;KARTON 62[...];606,000;szt`}
             />
             <p className="mt-2 text-xs text-dim">
-              Przetworzone linie: {parsed.total}. Pominiete: {parsed.skipped}.
+              Przetworzone linie: {parsed.total}. Pominięte: {parsed.skipped}.
             </p>
           </div>
 
           {previewRows.length > 0 && (
             <DataTable
-              columns={['LP', 'Kod', 'Indeks', 'Indeks2', 'Nazwa', 'Ilosc', 'JM', 'Priorytet']}
+              columns={['LP', 'Kod', 'Indeks', 'Indeks2', 'Nazwa', 'Ilość', 'JM', 'Priorytet']}
               rows={previewRows}
             />
           )}
@@ -3474,7 +3474,7 @@ export function WarehouseTransferDocumentsPanel() {
               onClick={handleCreateDocument}
               disabled={createDocumentMutation.isPending}
             >
-              Przekaz do realizacji
+              Przekaż do realizacji
             </Button>
           </div>
         </Card>
@@ -3490,10 +3490,10 @@ export function WarehouseTransferDocumentsPanel() {
               <p className="text-sm text-dim">Aktywne: {activeDocuments.length}</p>
             </div>
             {documentsLoading ? (
-              <p className="text-sm text-dim">Ladowanie dokumentow...</p>
+              <p className="text-sm text-dim">Ładowanie dokumentów...</p>
             ) : activeDocuments.length === 0 ? (
               <EmptyState
-                title="Brak aktywnych dokumentow"
+                title="Brak aktywnych dokumentów"
                 description={activeDocumentsEmptyDescription}
               />
             ) : (
@@ -3514,16 +3514,16 @@ export function WarehouseTransferDocumentsPanel() {
           <Card className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-                Historia dokumentow
+                Historia dokumentów
               </p>
-              <p className="text-sm text-dim">Zamkniete: {historyDocuments.length}</p>
+              <p className="text-sm text-dim">Zamknięte: {historyDocuments.length}</p>
             </div>
             {documentsLoading ? (
-              <p className="text-sm text-dim">Ladowanie dokumentow...</p>
+              <p className="text-sm text-dim">Ładowanie dokumentów...</p>
             ) : historyDocuments.length === 0 ? (
               <EmptyState
                 title="Historia jest pusta"
-                description="Zamkniete dokumenty pojawia sie tutaj automatycznie."
+                description="Zamknięte dokumenty pojawiają się tutaj automatycznie."
               />
             ) : (
               <DataTable
@@ -3540,3 +3540,6 @@ export function WarehouseTransferDocumentsPanel() {
     </div>
   );
 }
+
+
+
