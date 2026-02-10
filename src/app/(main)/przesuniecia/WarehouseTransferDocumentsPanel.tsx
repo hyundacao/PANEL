@@ -27,7 +27,8 @@ import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Toggle } from '@/components/ui/Toggle';
 import { useToastStore } from '@/components/ui/Toast';
-import { useUiStore } from '@/lib/store/ui';
+import { canSeeTab } from '@/lib/auth/access';
+import { useUiStore, type ErpWorkspaceTab } from '@/lib/store/ui';
 
 type ParsedItemInput = {
   lineNo: number;
@@ -2036,11 +2037,30 @@ export function WarehouseTransferDocumentsPanel() {
   const currentUser = useUiStore((state) => state.user);
   const workspaceTab = useUiStore((state) => state.erpWorkspaceTab);
   const setWorkspaceTab = useUiStore((state) => state.setErpWorkspaceTab);
+  const canSeeIssuerTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-wypisz-dokument');
+  const canSeeWarehousemanTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-magazynier');
+  const canSeeDispatcherTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-rozdzielca');
+  const canSeeHistoryTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-historia-dokumentow');
+  const allowedWorkspaceTabs = useMemo(() => {
+    const next: ErpWorkspaceTab[] = [];
+    if (canSeeIssuerTab) next.push('issuer');
+    if (canSeeWarehousemanTab) next.push('warehouseman');
+    if (canSeeDispatcherTab) next.push('dispatcher');
+    if (canSeeHistoryTab) next.push('history');
+    return next;
+  }, [canSeeDispatcherTab, canSeeHistoryTab, canSeeIssuerTab, canSeeWarehousemanTab]);
+  const hasAnyWorkspaceAccess = allowedWorkspaceTabs.length > 0;
   const [collapsedDocumentIds, setCollapsedDocumentIds] = useState<Record<string, boolean>>({});
   const [expandedItemIds, setExpandedItemIds] = useState<Record<string, string | null>>({});
   const [priorityOverrides, setPriorityOverrides] = useState<
     Record<string, WarehouseTransferItemPriority>
   >({});
+
+  useEffect(() => {
+    if (!hasAnyWorkspaceAccess) return;
+    if (allowedWorkspaceTabs.includes(workspaceTab)) return;
+    setWorkspaceTab(allowedWorkspaceTabs[0]);
+  }, [allowedWorkspaceTabs, hasAnyWorkspaceAccess, setWorkspaceTab, workspaceTab]);
 
   const parsed = useMemo(() => parseDocumentItems(form.itemsRaw), [form.itemsRaw]);
   const parsedItemsWithPriority = useMemo(
@@ -2119,10 +2139,18 @@ export function WarehouseTransferDocumentsPanel() {
     [documents]
   );
   const visibleDocuments = useMemo(() => {
-    if (workspaceTab === 'warehouseman' || workspaceTab === 'dispatcher') return activeDocuments;
-    if (workspaceTab === 'history') return historyDocuments;
+    if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return activeDocuments;
+    if (workspaceTab === 'dispatcher' && canSeeDispatcherTab) return activeDocuments;
+    if (workspaceTab === 'history' && canSeeHistoryTab) return historyDocuments;
     return [];
-  }, [activeDocuments, historyDocuments, workspaceTab]);
+  }, [
+    activeDocuments,
+    canSeeDispatcherTab,
+    canSeeHistoryTab,
+    canSeeWarehousemanTab,
+    historyDocuments,
+    workspaceTab
+  ]);
 
   const activeDocumentId = useMemo(() => {
     if (!selectedDocumentId) return null;
@@ -2740,9 +2768,10 @@ export function WarehouseTransferDocumentsPanel() {
     </span>
   ]);
 
-  const isWarehousemanTab = workspaceTab === 'warehouseman';
-  const isDispatcherTab = workspaceTab === 'dispatcher';
-  const isHistoryTab = workspaceTab === 'history';
+  const isIssuerTab = workspaceTab === 'issuer' && canSeeIssuerTab;
+  const isWarehousemanTab = workspaceTab === 'warehouseman' && canSeeWarehousemanTab;
+  const isDispatcherTab = workspaceTab === 'dispatcher' && canSeeDispatcherTab;
+  const isHistoryTab = workspaceTab === 'history' && canSeeHistoryTab;
   const currentActorName = currentUser?.name?.trim() || currentUser?.username?.trim() || '';
 
   const detailsEmptyDescription = isHistoryTab
@@ -3352,9 +3381,20 @@ export function WarehouseTransferDocumentsPanel() {
     ? 'Nowe dokumenty do wydania pojawia sie tutaj po przekazaniu do realizacji.'
     : 'Nowe dokumenty do przyjecia pojawia sie tutaj po przekazaniu do realizacji.';
 
+  if (!hasAnyWorkspaceAccess) {
+    return (
+      <Card className="space-y-4">
+        <EmptyState
+          title="Brak dostepu do zakladek ERP"
+          description="Skontaktuj sie z administratorem, aby wlaczyc wymagane uprawnienia."
+        />
+      </Card>
+    );
+  }
+
   return (
     <div className="space-y-4">
-      {workspaceTab === 'issuer' && (
+      {isIssuerTab && (
         <Card className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
@@ -3469,7 +3509,7 @@ export function WarehouseTransferDocumentsPanel() {
         </>
       )}
 
-      {workspaceTab === 'history' && (
+      {isHistoryTab && (
         <>
           <Card className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">

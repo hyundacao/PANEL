@@ -1,6 +1,10 @@
 export type Role = 'VIEWER' | 'USER' | 'ADMIN' | 'HEAD_ADMIN';
 
-export type WarehouseKey = 'PRZEMIALY' | 'CZESCI' | 'RAPORT_ZMIANOWY';
+export type WarehouseKey =
+  | 'PRZEMIALY'
+  | 'CZESCI'
+  | 'RAPORT_ZMIANOWY'
+  | 'PRZESUNIECIA_ERP';
 
 export type WarehouseRole = 'ROZDZIELCA' | 'MECHANIK' | 'PODGLAD';
 
@@ -9,6 +13,7 @@ export type PrzemialyTab =
   | 'spis'
   | 'spis-oryginalow'
   | 'przesuniecia'
+  | 'przesuniecia-erp'
   | 'raporty'
   | 'kartoteka'
   | 'wymieszane'
@@ -18,7 +23,17 @@ export type CzesciTab = 'pobierz' | 'uzupelnij' | 'stany' | 'historia';
 
 export type RaportZmianowyTab = 'raport-zmianowy';
 
-export type WarehouseTab = PrzemialyTab | CzesciTab | RaportZmianowyTab;
+export type ErpTransfersTab =
+  | 'erp-magazynier'
+  | 'erp-rozdzielca'
+  | 'erp-wypisz-dokument'
+  | 'erp-historia-dokumentow';
+
+export type WarehouseTab =
+  | PrzemialyTab
+  | CzesciTab
+  | RaportZmianowyTab
+  | ErpTransfersTab;
 
 export type WarehouseAccess = {
   role: WarehouseRole;

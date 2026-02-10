@@ -131,10 +131,17 @@ const czesciTabOptions: Array<{ key: WarehouseTab; label: string }> = [
 const raportZmianowyTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'raport-zmianowy', label: 'Raport zmianowy' }
 ];
+const erpModuleTabOptions: Array<{ key: WarehouseTab; label: string }> = [
+  { key: 'erp-magazynier', label: 'Magazynier' },
+  { key: 'erp-rozdzielca', label: 'Rozdzielca' },
+  { key: 'erp-wypisz-dokument', label: 'Wypisz dokument' },
+  { key: 'erp-historia-dokumentow', label: 'Historia dokumentow' }
+];
 const warehouseLabels: Record<WarehouseKey, string> = {
   PRZEMIALY: 'Zarządzanie przemiałami i przygotowaniem produkcji',
   CZESCI: 'Magazyn czesci zamiennych',
-  RAPORT_ZMIANOWY: 'Raport zmianowy'
+  RAPORT_ZMIANOWY: 'Raport zmianowy',
+  PRZESUNIECIA_ERP: 'Przesuniecia magazynowe ERP'
 };
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const compareByName = (a: { name: string }, b: { name: string }) =>
@@ -509,7 +516,7 @@ export default function AdminPage() {
     const entries = Object.entries(access.warehouses)
       .map(([key, value]) => {
         if (!value) return null;
-        const label = warehouseLabels[key as WarehouseKey];
+        const label = warehouseLabels[key as WarehouseKey] ?? key;
         const roleLabel = role === 'ADMIN' && value.admin ? 'Administrator modulu' : 'Uzytkownik';
         return `${label}: ${roleLabel}`;
       })
@@ -546,6 +553,8 @@ export default function AdminPage() {
         ? tabOptions.filter((tab) => tab.key !== 'historia')
         : tabOptions;
     const blockEditing = isHeadAdminUser;
+    const readOnlyValue = enabled && warehouseAccess ? warehouseAccess.readOnly : false;
+    const adminValue = enabled && warehouseAccess ? Boolean(warehouseAccess.admin) : false;
 
     return (
       <Card key={warehouseKey} className={`space-y-3 ${blockEditing ? 'opacity-70' : ''}`}>
@@ -572,70 +581,163 @@ export default function AdminPage() {
           />
         </div>
 
-        {enabled && warehouseAccess && (
-          <div className={`space-y-3 ${blockEditing ? 'pointer-events-none' : ''}`}>
-            {canAssignAdmin && (
-              <AdminToggle
-                checked={Boolean(warehouseAccess.admin)}
-                onCheckedChange={(value) =>
-                  onChange((current) => {
-                    const next = cloneAccess(current);
-                    const currentAccess = next.warehouses[warehouseKey];
-                    if (!currentAccess) return next;
-                    currentAccess.admin = value;
-                    return next;
-                  })
-                }
-                label="Administrator modulu"
-                disabled={blockEditing}
-              />
-            )}
+        <div
+          className={`space-y-3 ${blockEditing ? 'pointer-events-none' : ''} ${
+            !enabled ? 'opacity-70' : ''
+          }`}
+        >
+          {canAssignAdmin && (
             <AdminToggle
-              checked={warehouseAccess.readOnly}
+              checked={adminValue}
               onCheckedChange={(value) =>
                 onChange((current) => {
                   const next = cloneAccess(current);
                   const currentAccess = next.warehouses[warehouseKey];
                   if (!currentAccess) return next;
-                  currentAccess.readOnly = value;
+                  currentAccess.admin = value;
                   return next;
                 })
               }
-              label="Tylko do odczytu"
-              disabled={blockEditing}
+              label="Administrator modulu"
+              disabled={blockEditing || !enabled}
             />
+          )}
+          <AdminToggle
+            checked={readOnlyValue}
+            onCheckedChange={(value) =>
+              onChange((current) => {
+                const next = cloneAccess(current);
+                const currentAccess = next.warehouses[warehouseKey];
+                if (!currentAccess) return next;
+                currentAccess.readOnly = value;
+                return next;
+              })
+            }
+            label="Tylko do odczytu"
+            disabled={blockEditing || !enabled}
+          />
 
-            <div className="grid gap-2 sm:grid-cols-2">
-              {visibleTabs.map((tab) => (
-                <AdminToggle
-                  key={`${warehouseKey}-${tab.key}`}
-                  checked={warehouseAccess.tabs.includes(tab.key)}
-                  onCheckedChange={(value) =>
-                    onChange((current) => {
-                      const next = cloneAccess(current);
-                      const currentAccess = next.warehouses[warehouseKey];
-                      if (!currentAccess) return next;
-                      const set = new Set(currentAccess.tabs);
-                      if (value) {
-                        set.add(tab.key);
-                      } else {
-                        set.delete(tab.key);
-                      }
-                      currentAccess.tabs = Array.from(set);
-                      return next;
-                    })
-                  }
-                  label={tab.label}
-                  disabled={blockEditing}
-                />
-              ))}
-            </div>
-            {warehouseKey === 'CZESCI' && !canSeeHistory && (
-              <p className="text-xs text-dim">
-                Historia ruchow jest dostepna tylko dla head admina lub administratora modulu.
-              </p>
-            )}
+          <div className="grid gap-2 sm:grid-cols-2">
+            {visibleTabs.map((tab) => (
+              <AdminToggle
+                key={`${warehouseKey}-${tab.key}`}
+                checked={enabled && warehouseAccess ? warehouseAccess.tabs.includes(tab.key) : false}
+                onCheckedChange={(value) =>
+                  onChange((current) => {
+                    const next = cloneAccess(current);
+                    const currentAccess = next.warehouses[warehouseKey];
+                    if (!currentAccess) return next;
+                    const set = new Set(currentAccess.tabs);
+                    if (value) {
+                      set.add(tab.key);
+                    } else {
+                      set.delete(tab.key);
+                    }
+                    currentAccess.tabs = Array.from(set);
+                    return next;
+                  })
+                }
+                label={tab.label}
+                disabled={blockEditing || !enabled}
+              />
+            ))}
           </div>
+          {!enabled && (
+            <p className="text-xs text-dim">
+              Wlacz dostep, aby aktywowac uprawnienia i zakladki tego modulu.
+            </p>
+          )}
+          {warehouseKey === 'CZESCI' && !canSeeHistory && (
+            <p className="text-xs text-dim">
+              Historia ruchow jest dostepna tylko dla head admina lub administratora modulu.
+            </p>
+          )}
+        </div>
+        {blockEditing && (
+          <p className="text-xs text-dim">Head admin ma pelny dostep do wszystkich magazynow.</p>
+        )}
+      </Card>
+    );
+  };
+
+  const renderErpModuleAccess = (
+    access: UserAccess,
+    onChange: (updater: (current: UserAccess) => UserAccess) => void,
+    userRole: Role
+  ) => {
+    const warehouseAccess = access.warehouses.PRZESUNIECIA_ERP;
+    const enabled = Boolean(warehouseAccess);
+    const blockEditing = userRole === 'HEAD_ADMIN';
+
+    return (
+      <Card className={`space-y-3 ${blockEditing ? 'opacity-70' : ''}`}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dostep</p>
+            <p className="text-sm font-semibold text-title">Przesuniecia magazynowe ERP</p>
+          </div>
+          <AdminToggle
+            checked={enabled}
+            onCheckedChange={(value) => {
+              if (blockEditing) return;
+              onChange((current) => {
+                const next = cloneAccess(current);
+                const currentAccess = next.warehouses.PRZESUNIECIA_ERP;
+
+                if (value) {
+                  if (!currentAccess) {
+                    next.warehouses.PRZESUNIECIA_ERP = {
+                      role: 'ROZDZIELCA',
+                      readOnly: false,
+                      tabs: erpModuleTabOptions.map((tab) => tab.key),
+                      admin: false
+                    };
+                    return next;
+                  }
+                  currentAccess.readOnly = false;
+                  currentAccess.tabs = Array.from(
+                    new Set([...currentAccess.tabs, ...erpModuleTabOptions.map((tab) => tab.key)])
+                  );
+                  return next;
+                }
+
+                delete next.warehouses.PRZESUNIECIA_ERP;
+                return next;
+              });
+            }}
+            disabled={blockEditing}
+          />
+        </div>
+        <div className={cn('grid gap-2 sm:grid-cols-2', !enabled && 'opacity-70')}>
+          {erpModuleTabOptions.map((tab) => (
+            <AdminToggle
+              key={`erp-module-${tab.key}`}
+              checked={enabled && Boolean(warehouseAccess?.tabs.includes(tab.key))}
+              onCheckedChange={(value) => {
+                if (blockEditing || !enabled) return;
+                onChange((current) => {
+                  const next = cloneAccess(current);
+                  const currentAccess = next.warehouses.PRZESUNIECIA_ERP;
+                  if (!currentAccess) return next;
+                  const set = new Set(currentAccess.tabs);
+                  if (value) {
+                    set.add(tab.key);
+                  } else {
+                    set.delete(tab.key);
+                  }
+                  currentAccess.tabs = Array.from(set);
+                  return next;
+                });
+              }}
+              label={tab.label}
+              disabled={blockEditing || !enabled}
+            />
+          ))}
+        </div>
+        {!enabled && (
+          <p className="text-xs text-dim">
+            Wlacz dostep, aby aktywowac uprawnienia modulu ERP.
+          </p>
         )}
         {blockEditing && (
           <p className="text-xs text-dim">Head admin ma pelny dostep do wszystkich magazynow.</p>
@@ -1852,6 +1954,10 @@ export default function AdminPage() {
                             'RAPORT_ZMIANOWY',
                             'ROZDZIELCA'
                           );
+                          nextAccess.warehouses.PRZESUNIECIA_ERP = getRolePreset(
+                            'PRZESUNIECIA_ERP',
+                            'ROZDZIELCA'
+                          );
                         }
                         return { ...prev, role: nextRole, access: nextAccess };
                       });
@@ -1872,6 +1978,11 @@ export default function AdminPage() {
                 <div className="grid gap-4 lg:grid-cols-2">
                   {renderWarehouseAccess(
                     'PRZEMIALY',
+                    userForm.access,
+                    updateUserFormAccess,
+                    userForm.role
+                  )}
+                  {renderErpModuleAccess(
                     userForm.access,
                     updateUserFormAccess,
                     userForm.role
@@ -1966,6 +2077,10 @@ export default function AdminPage() {
                                 'RAPORT_ZMIANOWY',
                                 'ROZDZIELCA'
                               );
+                              nextAccess.warehouses.PRZESUNIECIA_ERP = getRolePreset(
+                                'PRZESUNIECIA_ERP',
+                                'ROZDZIELCA'
+                              );
                             }
                             return {
                               ...prev,
@@ -2045,6 +2160,11 @@ export default function AdminPage() {
                     <div className="grid gap-4 lg:grid-cols-2">
                     {renderWarehouseAccess(
                       'PRZEMIALY',
+                      selectedDraft.access,
+                      (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
+                      selectedDraft.role
+                    )}
+                    {renderErpModuleAccess(
                       selectedDraft.access,
                       (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
                       selectedDraft.role

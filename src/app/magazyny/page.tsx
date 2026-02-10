@@ -19,16 +19,18 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SearchInput } from '@/components/ui/SearchInput';
 import {
+  canSeeTab,
   getAccessibleWarehouses,
   getAdminWarehouses,
   hasAnyAdminAccess,
   isHeadAdmin
 } from '@/lib/auth/access';
-import type { WarehouseKey } from '@/lib/api/types';
+import type { WarehouseKey, WarehouseTab } from '@/lib/api/types';
 
 type ModuleOption = {
   id: string;
   key: WarehouseKey;
+  requiredTabs?: WarehouseTab[];
   title: string;
   description: string;
   action: string;
@@ -43,7 +45,7 @@ const moduleOptions: ModuleOption[] = [
     id: 'przemialy-core',
     key: 'PRZEMIALY',
     title: 'Zarzadzanie przemialami i przygotowaniem produkcji',
-    description: 'Spisy, przesuniecia, raporty i biezace stany hal produkcyjnych.',
+    description: 'Spisy, raporty i biezace stany hal produkcyjnych.',
     action: 'Wejdz',
     href: '/dashboard',
     tags: ['Produkcja', 'Statystyki'],
@@ -52,7 +54,13 @@ const moduleOptions: ModuleOption[] = [
   },
   {
     id: 'przemialy-erp',
-    key: 'PRZEMIALY',
+    key: 'PRZESUNIECIA_ERP',
+    requiredTabs: [
+      'erp-magazynier',
+      'erp-rozdzielca',
+      'erp-wypisz-dokument',
+      'erp-historia-dokumentow'
+    ],
     title: 'Przesuniecia magazynowe ERP',
     description: 'Osobny modul ERP MM/MMZ: dokumenty, pozycje i przyjecia.',
     action: 'Wejdz',
@@ -122,7 +130,11 @@ export default function WarehousesPage() {
   }
 
   const available = getAccessibleWarehouses(user);
-  const visibleModules = moduleOptions.filter((item) => available.includes(item.key));
+  const visibleModules = moduleOptions.filter((item) => {
+    if (!available.includes(item.key)) return false;
+    if (!item.requiredTabs || item.requiredTabs.length === 0) return true;
+    return item.requiredTabs.some((tab) => canSeeTab(user, item.key, tab));
+  });
   const adminWarehouses = getAdminWarehouses(user);
   const adminVisible = hasAnyAdminAccess(user);
   const needle = normalize(search);

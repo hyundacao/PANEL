@@ -1,10 +1,12 @@
 'use client';
 
+import { useEffect } from 'react';
 import { ArrowLeftRight, ClipboardList, History, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useUiStore, type ErpWorkspaceTab } from '@/lib/store/ui';
-import { getRoleLabel } from '@/lib/auth/access';
+import { canSeeTab, getRoleLabel } from '@/lib/auth/access';
 import { logoutUser } from '@/lib/api';
+import type { WarehouseTab } from '@/lib/api/types';
 
 export const ERP_WORKSPACE_ITEMS: Array<{
   key: ErpWorkspaceTab;
@@ -17,6 +19,13 @@ export const ERP_WORKSPACE_ITEMS: Array<{
   { key: 'history', label: 'Historia dokumentów', icon: History }
 ];
 
+export const ERP_WORKSPACE_TAB_ACCESS: Record<ErpWorkspaceTab, WarehouseTab> = {
+  issuer: 'erp-wypisz-dokument',
+  warehouseman: 'erp-magazynier',
+  dispatcher: 'erp-rozdzielca',
+  history: 'erp-historia-dokumentow'
+};
+
 export const ErpSidebar = () => {
   const {
     sidebarCollapsed,
@@ -26,8 +35,18 @@ export const ErpSidebar = () => {
     erpWorkspaceTab,
     setErpWorkspaceTab
   } = useUiStore();
-  const roleLabel = getRoleLabel(user, 'PRZEMIALY');
+  const roleLabel = getRoleLabel(user, 'PRZESUNIECIA_ERP');
   const displayName = user?.name ?? 'Gosc';
+  const visibleItems = ERP_WORKSPACE_ITEMS.filter((item) =>
+    canSeeTab(user, 'PRZESUNIECIA_ERP', ERP_WORKSPACE_TAB_ACCESS[item.key])
+  );
+
+  useEffect(() => {
+    if (visibleItems.length === 0) return;
+    if (visibleItems.some((item) => item.key === erpWorkspaceTab)) return;
+    setErpWorkspaceTab(visibleItems[0].key);
+  }, [erpWorkspaceTab, setErpWorkspaceTab, visibleItems]);
+
   const closeOnMobile = () => {
     if (typeof window === 'undefined') return;
     if (window.matchMedia('(max-width: 767px)').matches) {
@@ -64,7 +83,7 @@ export const ErpSidebar = () => {
         </div>
 
         <nav className="mt-3 flex flex-1 flex-col gap-2">
-          {ERP_WORKSPACE_ITEMS.map((item) => {
+          {visibleItems.map((item) => {
             const active = erpWorkspaceTab === item.key;
             const Icon = item.icon;
             return (

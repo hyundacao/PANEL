@@ -2,7 +2,11 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ErpSidebar, ERP_WORKSPACE_ITEMS } from '@/components/layout/ErpSidebar';
+import {
+  ErpSidebar,
+  ERP_WORKSPACE_ITEMS,
+  ERP_WORKSPACE_TAB_ACCESS
+} from '@/components/layout/ErpSidebar';
 import { Topbar } from '@/components/layout/Topbar';
 import { ContentScrim } from '@/components/ui/ContentScrim';
 import { canAccessWarehouse, canSeeTab } from '@/lib/auth/access';
@@ -13,8 +17,11 @@ import { cn } from '@/lib/utils/cn';
 
 const hasErpAccess = (user: AppUser | null) =>
   Boolean(user) &&
-  canAccessWarehouse(user, 'PRZEMIALY') &&
-  canSeeTab(user, 'PRZEMIALY', 'przesuniecia');
+  canAccessWarehouse(user, 'PRZESUNIECIA_ERP') &&
+  (canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-wypisz-dokument') ||
+    canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-magazynier') ||
+    canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-rozdzielca') ||
+    canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-historia-dokumentow'));
 
 export default function ErpLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -30,6 +37,10 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
     setErpWorkspaceTab
   } = useUiStore();
   const allowed = hasErpAccess(user);
+  const visibleWorkspaceItems = ERP_WORKSPACE_ITEMS.filter((item) =>
+    canSeeTab(user, 'PRZESUNIECIA_ERP', ERP_WORKSPACE_TAB_ACCESS[item.key])
+  );
+  const hasVisibleWorkspace = visibleWorkspaceItems.length > 0;
 
   useEffect(() => {
     if (!hydrated) return;
@@ -37,14 +48,29 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
       router.replace('/login');
       return;
     }
-    if (!allowed) {
+    if (!allowed || !hasVisibleWorkspace) {
       router.replace('/magazyny');
       return;
     }
-    if (activeWarehouse !== 'PRZEMIALY') {
-      setActiveWarehouse('PRZEMIALY');
+    if (activeWarehouse !== 'PRZESUNIECIA_ERP') {
+      setActiveWarehouse('PRZESUNIECIA_ERP');
     }
-  }, [activeWarehouse, allowed, hydrated, router, setActiveWarehouse, user]);
+  }, [activeWarehouse, allowed, hasVisibleWorkspace, hydrated, router, setActiveWarehouse, user]);
+
+  useEffect(() => {
+    if (!hydrated || !allowed || !hasVisibleWorkspace) return;
+    const selectedAllowed = visibleWorkspaceItems.some((item) => item.key === erpWorkspaceTab);
+    if (!selectedAllowed) {
+      setErpWorkspaceTab(visibleWorkspaceItems[0].key);
+    }
+  }, [
+    allowed,
+    erpWorkspaceTab,
+    hasVisibleWorkspace,
+    hydrated,
+    setErpWorkspaceTab,
+    visibleWorkspaceItems
+  ]);
 
   useEffect(() => {
     if (!hydrated || !user) return;
@@ -71,7 +97,7 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
     };
   }, [logout, router]);
 
-  if (!hydrated || !user || !allowed) {
+  if (!hydrated || !user || !allowed || !hasVisibleWorkspace) {
     return <div className="min-h-screen bg-bg" />;
   }
 
@@ -101,7 +127,7 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
             <div className="mb-4 md:hidden">
               <div className="rounded-2xl border border-border bg-surface2 p-2 shadow-[inset_0_1px_0_var(--inner-highlight)]">
                 <div className="grid grid-cols-2 gap-2">
-                {ERP_WORKSPACE_ITEMS.map((item) => {
+                {visibleWorkspaceItems.map((item) => {
                   const active = erpWorkspaceTab === item.key;
                   return (
                     <button

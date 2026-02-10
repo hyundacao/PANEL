@@ -394,6 +394,13 @@ const ALL_PRZEMIALY_TABS: WarehouseTab[] = [
   'suszarki'
 ];
 
+const ERP_MODULE_TABS: WarehouseTab[] = [
+  'erp-wypisz-dokument',
+  'erp-magazynier',
+  'erp-rozdzielca',
+  'erp-historia-dokumentow'
+];
+
 const requireWarehouseAccess = (user: AppUser, warehouse: WarehouseKey) => {
   if (!canAccessWarehouse(user, warehouse)) {
     throw new Error('FORBIDDEN');
@@ -474,19 +481,33 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requireTabWriteAccess(user, 'PRZEMIALY', ['spis']);
       return;
     case 'getTransfers':
-    case 'getWarehouseTransferDocuments':
-    case 'getWarehouseTransferDocument':
       requireAnyTabAccess(user, 'PRZEMIALY', ['przesuniecia']);
       return;
+    case 'getWarehouseTransferDocuments':
+    case 'getWarehouseTransferDocument':
+      requireAnyTabAccess(user, 'PRZESUNIECIA_ERP', ERP_MODULE_TABS);
+      return;
     case 'addTransfer':
+      requireTabWriteAccess(user, 'PRZEMIALY', ['przesuniecia']);
+      return;
     case 'createWarehouseTransferDocument':
+      requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', ['erp-wypisz-dokument']);
+      return;
     case 'addWarehouseTransferItemIssue':
     case 'updateWarehouseTransferItemIssue':
+      requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', ['erp-magazynier']);
+      return;
     case 'addWarehouseTransferItemReceipt':
     case 'updateWarehouseTransferItemReceipt':
+      requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', ['erp-rozdzielca']);
+      return;
     case 'closeWarehouseTransferDocument':
     case 'removeWarehouseTransferDocument':
-      requireTabWriteAccess(user, 'PRZEMIALY', ['przesuniecia']);
+      requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', [
+        'erp-magazynier',
+        'erp-rozdzielca',
+        'erp-historia-dokumentow'
+      ]);
       return;
     case 'getMixedMaterials':
       requireAnyTabAccess(user, 'PRZEMIALY', ['wymieszane']);
@@ -679,6 +700,16 @@ const RAPORT_ZMIANOWY_AUDIT_ACTIONS = new Set<string>([
   'removeRaportZmianowyEntry'
 ]);
 
+const ERP_AUDIT_ACTIONS = new Set<string>([
+  'createWarehouseTransferDocument',
+  'addWarehouseTransferItemIssue',
+  'updateWarehouseTransferItemIssue',
+  'addWarehouseTransferItemReceipt',
+  'updateWarehouseTransferItemReceipt',
+  'closeWarehouseTransferDocument',
+  'removeWarehouseTransferDocument'
+]);
+
 const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   upsertEntry: 'Spis: zapis pozycji',
   confirmNoChangeEntry: 'Spis: potwierdzenie bez zmian',
@@ -725,6 +756,7 @@ const toAuditNumber = (value: unknown) => {
 const getAuditWarehouse = (action: string): WarehouseKey => {
   if (CZESCI_AUDIT_ACTIONS.has(action)) return 'CZESCI';
   if (RAPORT_ZMIANOWY_AUDIT_ACTIONS.has(action)) return 'RAPORT_ZMIANOWY';
+  if (ERP_AUDIT_ACTIONS.has(action)) return 'PRZESUNIECIA_ERP';
   return 'PRZEMIALY';
 };
 
@@ -3194,7 +3226,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!receiptRow || receiptRow.item_id !== itemId) throw new Error('NOT_FOUND');
 
       const actorName = getActorName(currentUser);
-      const isAdmin = isWarehouseAdmin(currentUser, 'PRZEMIALY');
+      const isAdmin = isWarehouseAdmin(currentUser, 'PRZESUNIECIA_ERP');
       const isOwnerById =
         Boolean(currentUser.id) &&
         Boolean(receiptRow.receiver_id) &&
