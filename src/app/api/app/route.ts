@@ -195,7 +195,7 @@ const mapTransfer = (row: any): Transfer => ({
 
 const mapWarehouseTransferDocument = (row: any): WarehouseTransferDocument => {
   const status: WarehouseTransferDocumentStatus =
-    row.status === 'CLOSED' ? 'CLOSED' : 'OPEN';
+    row.status === 'CLOSED' ? 'CLOSED' : row.status === 'ISSUED' ? 'ISSUED' : 'OPEN';
   return {
     id: row.id,
     createdAt: row.created_at,
@@ -378,6 +378,7 @@ const errorCodeFromError = (error: unknown) => {
   if (error && typeof error === 'object') {
     const maybeCode = (error as { code?: string }).code;
     if (maybeCode === '23505') return 'DUPLICATE';
+    if (maybeCode === '23514') return 'CHECK_VIOLATION';
     if (typeof maybeCode === 'string') return maybeCode;
   }
   if (error instanceof Error) return error.message || 'UNKNOWN';
@@ -498,11 +499,19 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'updateWarehouseTransferItemIssue':
       requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', ['erp-magazynier']);
       return;
+    case 'markWarehouseTransferDocumentIssued':
+      requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', ['erp-magazynier']);
+      return;
     case 'addWarehouseTransferItemReceipt':
     case 'updateWarehouseTransferItemReceipt':
       requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', ['erp-rozdzielca']);
       return;
     case 'closeWarehouseTransferDocument':
+      requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', [
+        'erp-rozdzielca',
+        'erp-historia-dokumentow'
+      ]);
+      return;
     case 'removeWarehouseTransferDocument':
       requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', [
         'erp-magazynier',
@@ -650,6 +659,7 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'createWarehouseTransferDocument',
   'addWarehouseTransferItemIssue',
   'updateWarehouseTransferItemIssue',
+  'markWarehouseTransferDocumentIssued',
   'addWarehouseTransferItemReceipt',
   'updateWarehouseTransferItemReceipt',
   'closeWarehouseTransferDocument',
@@ -705,6 +715,7 @@ const ERP_AUDIT_ACTIONS = new Set<string>([
   'createWarehouseTransferDocument',
   'addWarehouseTransferItemIssue',
   'updateWarehouseTransferItemIssue',
+  'markWarehouseTransferDocumentIssued',
   'addWarehouseTransferItemReceipt',
   'updateWarehouseTransferItemReceipt',
   'closeWarehouseTransferDocument',
@@ -719,6 +730,7 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   createWarehouseTransferDocument: 'Przesuniecia magazynowe: nowy dokument',
   addWarehouseTransferItemIssue: 'Przesuniecia magazynowe: wydanie pozycji',
   updateWarehouseTransferItemIssue: 'Przesuniecia magazynowe: edycja wydania',
+  markWarehouseTransferDocumentIssued: 'Przesuniecia magazynowe: wydano wszystkie pozycje',
   addWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: przyjecie pozycji',
   updateWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: edycja przyjecia',
   closeWarehouseTransferDocument: 'Przesuniecia magazynowe: zamkniecie dokumentu',
@@ -2933,15 +2945,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'getWarehouseTransferDocument': {
       const documentId = String(payload?.documentId ?? '').trim();
       if (!documentId) throw new Error('NOT_FOUND');
-      const createdDocument = await fetchWarehouseTransferDocumentDetails(documentId);
-      void sendWarehouseTransferDocumentCreatedPush({
-        documentId: createdDocument.document.id,
-        documentNumber: createdDocument.document.documentNumber,
-        sourceWarehouse: createdDocument.document.sourceWarehouse,
-        targetWarehouse: createdDocument.document.targetWarehouse,
-        createdById: createdDocument.document.createdById ?? null
-      });
-      return createdDocument;
+      return fetchWarehouseTransferDocumentDetails(documentId);
     }
     case 'createWarehouseTransferDocument': {
       const documentNumber = String(payload?.documentNumber ?? '').trim();
@@ -3034,7 +3038,69 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         throw insertItemsError;
       }
 
-      return fetchWarehouseTransferDocumentDetails(documentId);
+      const createdDocument = await fetchWarehouseTransferDocumentDetails(documentId);
+      void sendWarehouseTransferDocumentCreatedPush({
+        documentId: createdDocument.document.id,
+        documentNumber: createdDocument.document.documentNumber,
+        sourceWarehouse: createdDocument.document.sourceWarehouse,
+        targetWarehouse: createdDocument.document.targetWarehouse,
+        createdById: createdDocument.document.createdById ?? null
+      });
+      return createdDocument;
+    }
+    case 'markWarehouseTransferDocumentIssued': {
+      const documentId = String(payload?.documentId ?? '').trim();
+      if (!documentId) throw new Error('NOT_FOUND');
+
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .select('*')
+        .eq('id', documentId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) throw new Error('NOT_FOUND');
+      if (existing.status === 'ISSUED') {
+        return mapWarehouseTransferDocument(existing);
+      }
+      if (existing.status === 'CLOSED') {
+        throw new Error('DOCUMENT_CLOSED');
+      }
+
+      const { data: itemRows, error: itemsError } = await supabaseAdmin
+        .from('warehouse_transfer_document_items')
+        .select('id')
+        .eq('document_id', documentId);
+      if (itemsError) throw itemsError;
+      const items = (itemRows ?? []) as Array<{ id: string }>;
+      if (items.length === 0) throw new Error('ITEMS_REQUIRED');
+
+      const issues = await fetchWarehouseTransferIssuesByItemIds(items.map((item) => item.id));
+      const issuedByItem = new Map<string, number>();
+      issues.forEach((issue) => {
+        issuedByItem.set(issue.itemId, (issuedByItem.get(issue.itemId) ?? 0) + issue.qty);
+      });
+
+      const hasZeroIssuedItem = items.some((item) => {
+        const issuedQty = issuedByItem.get(item.id) ?? 0;
+        return issuedQty <= 0.000001;
+      });
+      if (hasZeroIssuedItem) {
+        throw new Error('DOCUMENT_HAS_ZERO_ISSUE');
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .update({
+          status: 'ISSUED',
+          closed_at: null,
+          closed_by_name: null
+        })
+        .eq('id', documentId)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapWarehouseTransferDocument(data);
     }
     case 'addWarehouseTransferItemIssue': {
       const documentId = String(payload?.documentId ?? '').trim();
@@ -3051,6 +3117,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+      if (documentRow.status !== 'OPEN') throw new Error('DOCUMENT_ALREADY_ISSUED');
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
@@ -3096,6 +3163,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+      if (documentRow.status !== 'OPEN') throw new Error('DOCUMENT_ALREADY_ISSUED');
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
@@ -3175,6 +3243,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+      if (documentRow.status !== 'ISSUED') throw new Error('DOCUMENT_NOT_ISSUED');
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
@@ -3217,6 +3286,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+      if (documentRow.status !== 'ISSUED') throw new Error('DOCUMENT_NOT_ISSUED');
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
@@ -3276,6 +3346,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!existing) throw new Error('NOT_FOUND');
       if (existing.status === 'CLOSED') {
         return mapWarehouseTransferDocument(existing);
+      }
+      if (existing.status !== 'ISSUED') {
+        throw new Error('DOCUMENT_NOT_ISSUED');
       }
 
       const updates: Record<string, unknown> = {

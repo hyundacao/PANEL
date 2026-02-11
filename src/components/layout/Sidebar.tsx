@@ -31,8 +31,8 @@ type NavItem = {
 
 const navItemsPrzemialy: NavItem[] = [
   { label: 'Pulpit', href: '/dashboard', icon: LayoutGrid, tab: 'dashboard' },
-  { label: 'Spis przemialow', href: '/spis', icon: ClipboardList, tab: 'spis' },
-  { label: 'Spis oryginalow', href: '/spis-oryginalow', icon: ClipboardCheck, tab: 'spis-oryginalow' },
+  { label: 'Spis przemiałów', href: '/spis', icon: ClipboardList, tab: 'spis' },
+  { label: 'Spis oryginałów', href: '/spis-oryginalow', icon: ClipboardCheck, tab: 'spis-oryginalow' },
   {
     label: 'Przesunięcia przemiałowe',
     href: '/przesuniecia',
@@ -60,7 +60,7 @@ export const Sidebar = () => {
   const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse } = useUiStore();
   const warehouse = activeWarehouse as WarehouseKey | null;
   const roleLabel = getRoleLabel(user, warehouse);
-  const displayName = user?.name ?? 'Gosc';
+  const displayName = user?.name ?? 'Gość';
   const items =
     warehouse === 'CZESCI'
       ? navItemsCzesci
@@ -87,9 +87,9 @@ export const Sidebar = () => {
   };
   const panelLabel =
     warehouse === 'CZESCI'
-      ? 'PANEL MAGAZYNU CZ\u0118\u015aCI ZAMIENNYCH'
+      ? 'PANEL MAGAZYNU CZĘŚCI ZAMIENNYCH'
       : warehouse === 'PRZEMIALY'
-        ? 'PANEL MAGAZYNU PRZEMIA\u0141\u00d3W'
+        ? 'PANEL MAGAZYNU PRZEMIAŁÓW'
         : warehouse === 'RAPORT_ZMIANOWY'
           ? 'PANEL RAPORTU ZMIANOWEGO'
           : 'Panel produkcji';

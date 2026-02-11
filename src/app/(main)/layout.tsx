@@ -21,8 +21,8 @@ import { getCurrentSessionUser } from '@/lib/api';
 
 const getTitle = (pathname: string) => {
   if (pathname.startsWith('/dashboard')) return 'Pulpit';
-  if (pathname.startsWith('/spis-oryginalow')) return 'Spis oryginalow';
-  if (pathname.startsWith('/spis')) return 'Spis przemialow';
+  if (pathname.startsWith('/spis-oryginalow')) return 'Spis oryginałów';
+  if (pathname.startsWith('/spis')) return 'Spis przemiałów';
   if (pathname.startsWith('/przesuniecia')) return 'Przesunięcia przemiałowe';
   if (pathname.startsWith('/wymieszane')) return 'Wymieszane tworzywa';
   if (pathname.startsWith('/raporty')) return 'Raporty';
@@ -30,9 +30,9 @@ const getTitle = (pathname: string) => {
   if (pathname.startsWith('/suszarki')) return 'Suszarki';
   if (pathname.startsWith('/czesci/historia')) return 'Historia';
   if (pathname.startsWith('/czesci/stany')) return 'Stany magazynowe';
-  if (pathname.startsWith('/czesci/uzupelnij')) return 'Uzupe\u0142nij';
+  if (pathname.startsWith('/czesci/uzupelnij')) return 'Uzupełnij';
   if (pathname.startsWith('/czesci/pobierz')) return 'Pobierz';
-  if (pathname.startsWith('/czesci')) return 'Czesci zamienne';
+  if (pathname.startsWith('/czesci')) return 'Części zamienne';
   if (pathname.startsWith('/raport-zmianowy')) return 'Raport zmianowy';
   if (pathname.startsWith('/admin')) return 'Admin';
   return 'Pulpit';
@@ -70,8 +70,8 @@ type MobileNavItem = {
 
 const navItemsPrzemialy: MobileNavItem[] = [
   { label: 'Pulpit', href: '/dashboard', tab: 'dashboard' },
-  { label: 'Spis przemialow', href: '/spis', tab: 'spis' },
-  { label: 'Spis oryginalow', href: '/spis-oryginalow', tab: 'spis-oryginalow' },
+  { label: 'Spis przemiałów', href: '/spis', tab: 'spis' },
+  { label: 'Spis oryginałów', href: '/spis-oryginalow', tab: 'spis-oryginalow' },
   { label: 'Przesunięcia przemiałowe', href: '/przesuniecia', tab: 'przesuniecia' },
   { label: 'Raporty', href: '/raporty', tab: 'raporty' },
   { label: 'Stany magazynowe', href: '/kartoteka', tab: 'kartoteka' },

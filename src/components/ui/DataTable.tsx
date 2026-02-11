@@ -6,12 +6,14 @@ export const DataTable = ({
   columns,
   rows,
   onRowClick,
-  renderRowDetails
+  renderRowDetails,
+  getRowClassName
 }: {
   columns: Array<React.ReactNode>;
   rows: Array<Array<React.ReactNode>>;
   onRowClick?: (rowIndex: number) => void;
   renderRowDetails?: (rowIndex: number) => React.ReactNode | null;
+  getRowClassName?: (rowIndex: number) => string;
 }) => (
   <div className="overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(0,0,0,0.55))] shadow-[0_18px_40px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]">
     <div className="space-y-3 p-3 md:hidden">
@@ -72,14 +74,17 @@ export const DataTable = ({
       <tbody>
         {rows.map((row, rowIndex) => {
           const details = renderRowDetails?.(rowIndex) ?? null;
+          const rowClassName = getRowClassName?.(rowIndex);
           return (
             <React.Fragment key={`row-${rowIndex}`}>
               <tr
                 className={cn(
                   'border-t border-[rgba(255,255,255,0.08)] text-body transition hover:bg-[rgba(255,255,255,0.06)]',
                   onRowClick && 'cursor-pointer',
-                  rowIndex % 2 === 1 &&
-                    'bg-[linear-gradient(90deg,rgba(255,255,255,0.04),rgba(0,0,0,0.35))]'
+                  !rowClassName &&
+                    rowIndex % 2 === 1 &&
+                    'bg-[linear-gradient(90deg,rgba(255,255,255,0.04),rgba(0,0,0,0.35))]',
+                  rowClassName
                 )}
                 onClick={onRowClick ? () => onRowClick(rowIndex) : undefined}
                 onKeyDown={

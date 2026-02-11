@@ -350,7 +350,7 @@ export type Transfer = {
   note?: string;
 };
 
-export type WarehouseTransferDocumentStatus = 'OPEN' | 'CLOSED';
+export type WarehouseTransferDocumentStatus = 'OPEN' | 'ISSUED' | 'CLOSED';
 
 export type WarehouseTransferItemStatus = 'PENDING' | 'PARTIAL' | 'DONE' | 'OVER';
 

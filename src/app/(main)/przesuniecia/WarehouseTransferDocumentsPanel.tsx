@@ -10,6 +10,7 @@ import {
   createWarehouseTransferDocument,
   getWarehouseTransferDocument,
   getWarehouseTransferDocuments,
+  markWarehouseTransferDocumentIssued,
   removeWarehouseTransferDocument,
   updateWarehouseTransferItemIssue,
   updateWarehouseTransferItemReceipt
@@ -96,9 +97,9 @@ const itemStatusConfig: Record<
   { label: string; tone: 'default' | 'warning' | 'success' | 'danger' }
 > = {
   PENDING: { label: 'Oczekuje', tone: 'default' },
-  PARTIAL: { label: 'Cz臋艣ciowo', tone: 'warning' },
+  PARTIAL: { label: 'Częściowo', tone: 'warning' },
   DONE: { label: 'Zrealizowane', tone: 'success' },
-  OVER: { label: 'Nadwy偶ka', tone: 'danger' }
+  OVER: { label: 'Nadwyżka', tone: 'danger' }
 };
 
 const warehouseTransferPriorityConfig: Record<
@@ -258,7 +259,7 @@ const cleanStreamToken = (value: string) =>
 
 const cleanWordToken = (value: string) =>
   String(value ?? '')
-    .replace(/[|娄]/g, ' ')
+    .replace(/[|ł]/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/^[,;:._]+/, '')
     .replace(/[,;:._]+$/, '')
@@ -378,7 +379,7 @@ const findQtyBeforeUnitToken = (tokens: string[], unitIndex: number, minIndex = 
 
 const normalizeOcrLine = (value: string) =>
   value
-    .replace(/[|娄]/g, ' ')
+    .replace(/[|ł]/g, ' ')
     .replace(/\u00a0/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -2073,6 +2074,7 @@ export function WarehouseTransferDocumentsPanel() {
   const hasAnyWorkspaceAccess = allowedWorkspaceTabs.length > 0;
   const [collapsedDocumentIds, setCollapsedDocumentIds] = useState<Record<string, boolean>>({});
   const [expandedItemIds, setExpandedItemIds] = useState<Record<string, string | null>>({});
+  const [lastMarkedIssuedDocumentId, setLastMarkedIssuedDocumentId] = useState<string | null>(null);
   const [priorityOverrides, setPriorityOverrides] = useState<
     Record<string, WarehouseTransferItemPriority>
   >({});
@@ -2153,10 +2155,49 @@ export function WarehouseTransferDocumentsPanel() {
     refetchInterval: 8000,
     refetchIntervalInBackground: false
   });
-  const activeDocuments = useMemo(
+  const openDocuments = useMemo(
     () => documents.filter((document) => document.status === 'OPEN'),
     [documents]
   );
+  const issuedDocuments = useMemo(
+    () => documents.filter((document) => document.status === 'ISSUED'),
+    [documents]
+  );
+  const warehousemanDocuments = useMemo(() => {
+    const sorted = [...openDocuments, ...issuedDocuments].sort((a, b) => {
+      if (a.status !== b.status) {
+        return a.status === 'OPEN' ? -1 : 1;
+      }
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+    if (!lastMarkedIssuedDocumentId) return sorted;
+    return [...sorted].sort((a, b) => {
+      if (a.id === lastMarkedIssuedDocumentId && b.id !== lastMarkedIssuedDocumentId) return 1;
+      if (b.id === lastMarkedIssuedDocumentId && a.id !== lastMarkedIssuedDocumentId) return -1;
+      return 0;
+    });
+  }, [issuedDocuments, lastMarkedIssuedDocumentId, openDocuments]);
+  const dispatcherDocuments = useMemo(
+    () =>
+      [...issuedDocuments, ...openDocuments].sort((a, b) => {
+        if (a.status !== b.status) {
+          return a.status === 'ISSUED' ? -1 : 1;
+        }
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      }),
+    [issuedDocuments, openDocuments]
+  );
+  const activeDocuments = useMemo(() => {
+    if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return warehousemanDocuments;
+    if (workspaceTab === 'dispatcher' && canSeeDispatcherTab) return dispatcherDocuments;
+    return [];
+  }, [
+    canSeeDispatcherTab,
+    canSeeWarehousemanTab,
+    dispatcherDocuments,
+    warehousemanDocuments,
+    workspaceTab
+  ]);
   const historyDocuments = useMemo(
     () => documents.filter((document) => document.status === 'CLOSED'),
     [documents]
@@ -2206,16 +2247,17 @@ export function WarehouseTransferDocumentsPanel() {
     toast
   ]);
   const visibleDocuments = useMemo(() => {
-    if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return activeDocuments;
-    if (workspaceTab === 'dispatcher' && canSeeDispatcherTab) return activeDocuments;
+    if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return warehousemanDocuments;
+    if (workspaceTab === 'dispatcher' && canSeeDispatcherTab) return dispatcherDocuments;
     if (workspaceTab === 'history' && canSeeHistoryTab) return historyDocuments;
     return [];
   }, [
-    activeDocuments,
     canSeeDispatcherTab,
     canSeeHistoryTab,
     canSeeWarehousemanTab,
+    dispatcherDocuments,
     historyDocuments,
+    warehousemanDocuments,
     workspaceTab
   ]);
 
@@ -2276,21 +2318,21 @@ export function WarehouseTransferDocumentsPanel() {
         itemsRaw: ''
       });
       setPriorityOverrides({});
-      toast({ title: 'Utworzono dokument przesuni臋cia', tone: 'success' });
+      toast({ title: 'Utworzono dokument przesunięcia', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
         DOCUMENT_NUMBER_REQUIRED: 'Podaj numer dokumentu.',
-        ITEMS_REQUIRED: 'Dodaj co najmniej jedn膮 pozycj臋.',
+        ITEMS_REQUIRED: 'Dodaj co najmniej jedną pozycję.',
         INVALID_ITEM: 'Przynajmniej jedna pozycja jest niepoprawna.',
         MIGRATION_REQUIRED_PRIORITY: 'Brakuje migracji bazy dla priorytetow. Uruchom migracje SQL.',
         '42703': 'Brakuje migracji bazy dla priorytetow. Uruchom migracje SQL.',
         PGRST204: 'Brakuje migracji bazy dla priorytetow. Uruchom migracje SQL.',
-        INVALID_QTY: 'Ka偶da pozycja musi mie膰 ilo艣膰 wi臋ksz膮 od zera.',
+        INVALID_QTY: 'Każda pozycja musi mieć ilość większą od zera.',
         FORBIDDEN: 'Brak uprawnien do tworzenia dokumentow (wymagane: Wypisz dokument i zapis).'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie uda艂o si臋 utworzy膰 dokumentu.',
+        title: messageMap[err.message] ?? 'Nie udało się utworzyć dokumentu.',
         tone: 'error'
       });
     }
@@ -2313,6 +2355,7 @@ export function WarehouseTransferDocumentsPanel() {
       const messageMap: Record<string, string> = {
         INVALID_QTY: 'Podaj ilość większą od zera.',
         DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
+        DOCUMENT_ALREADY_ISSUED: 'Dokument ma już status: wydano wszystkie pozycje.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
         MIGRATION_REQUIRED: 'Brakuje migracji bazy dla wydań. Uruchom migrację SQL.'
       };
@@ -2342,6 +2385,7 @@ export function WarehouseTransferDocumentsPanel() {
       const messageMap: Record<string, string> = {
         INVALID_QTY: 'Podaj ilość większą od zera.',
         DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
+        DOCUMENT_ALREADY_ISSUED: 'Dokument ma już status: wydano wszystkie pozycje.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
         ISSUE_BELOW_RECEIVED: 'Nie można ustawić wydania poniżej ilości już przyjętej.',
         MIGRATION_REQUIRED: 'Brakuje migracji bazy dla wydań. Uruchom migrację SQL.'
@@ -2364,16 +2408,17 @@ export function WarehouseTransferDocumentsPanel() {
         ...prev,
         [variables.itemId]: { qty: '', note: '' }
       }));
-      toast({ title: 'Dodano przyj臋cie', tone: 'success' });
+      toast({ title: 'Dodano przyjęcie', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        INVALID_QTY: 'Podaj ilo艣膰 wi臋ksz膮 od zera.',
-        DOCUMENT_CLOSED: 'Dokument jest ju偶 zamkni臋ty.',
+        INVALID_QTY: 'Podaj ilość większą od zera.',
+        DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
+        DOCUMENT_NOT_ISSUED: 'Najpierw magazynier musi oznaczyć: wydano wszystkie pozycje.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie uda艂o si臋 zapisa膰 przyj臋cia.',
+        title: messageMap[err.message] ?? 'Nie udało się zapisać przyjęcia.',
         tone: 'error'
       });
     }
@@ -2398,6 +2443,7 @@ export function WarehouseTransferDocumentsPanel() {
       const messageMap: Record<string, string> = {
         INVALID_QTY: 'Podaj ilość większą od zera.',
         DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
+        DOCUMENT_NOT_ISSUED: 'Najpierw magazynier musi oznaczyć: wydano wszystkie pozycje.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
         FORBIDDEN: 'Możesz edytować tylko swoje przyjęcia.',
         MIGRATION_REQUIRED: 'Brakuje migracji bazy dla przyjęć. Uruchom migrację SQL.'
@@ -2416,10 +2462,46 @@ export function WarehouseTransferDocumentsPanel() {
       queryClient.invalidateQueries({
         queryKey: ['warehouse-transfer-document', data.id]
       });
-      toast({ title: 'Dokument zosta艂 zamkni臋ty', tone: 'success' });
+      toast({ title: 'Dokument zatwierdzony i przeniesiony do historii', tone: 'success' });
     },
-    onError: () => {
-      toast({ title: 'Nie uda艂o si臋 zamkn膮膰 dokumentu.', tone: 'error' });
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        DOCUMENT_NOT_ISSUED: 'Najpierw magazynier musi oznaczyć: wydano wszystkie pozycje.',
+        FORBIDDEN: 'Tylko rozdzielca może zatwierdzić dokument.',
+        NOT_FOUND: 'Nie znaleziono dokumentu.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie udało się zatwierdzić dokumentu.', tone: 'error' });
+    }
+  });
+
+  const markDocumentIssuedMutation = useMutation({
+    mutationFn: markWarehouseTransferDocumentIssued,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['warehouse-transfer-documents'] });
+      queryClient.invalidateQueries({
+        queryKey: ['warehouse-transfer-document', data.id]
+      });
+      setLastMarkedIssuedDocumentId(data.id);
+      toast({ title: 'Dokument oznaczono jako wydany', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        DOCUMENT_HAS_ZERO_ISSUE:
+          'Nie można oznaczyć dokumentu: co najmniej jedna pozycja ma wydanie 0.',
+        DOCUMENT_NOT_FULLY_ISSUED:
+          'Nie można oznaczyć dokumentu: co najmniej jedna pozycja ma wydanie 0.',
+        DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
+        CHECK_VIOLATION:
+          'Baza danych nie ma jeszcze statusu ISSUED. Uruchom migrację SQL dla statusów dokumentu.',
+        '23514':
+          'Baza danych nie ma jeszcze statusu ISSUED. Uruchom migrację SQL dla statusów dokumentu.',
+        FORBIDDEN: 'Tylko magazynier może oznaczyć dokument jako wydany.',
+        NOT_FOUND: 'Nie znaleziono dokumentu.'
+      };
+      toast({
+        title: messageMap[err.message] ?? 'Nie udało się oznaczyć dokumentu jako wydanego.',
+        tone: 'error'
+      });
     }
   });
 
@@ -2449,15 +2531,15 @@ export function WarehouseTransferDocumentsPanel() {
       setSelectedDocumentId((current) =>
         current === variables.documentId ? null : current
       );
-      toast({ title: 'Dokument zosta艂 usuni臋ty', tone: 'success' });
+      toast({ title: 'Dokument został usunięty', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
         NOT_FOUND: 'Nie znaleziono dokumentu.',
-        FORBIDDEN: 'Nie masz uprawnie艅 do usuni臋cia dokumentu.'
+        FORBIDDEN: 'Nie masz uprawnień do usunięcia dokumentu.'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie uda艂o si臋 usun膮膰 dokumentu.',
+        title: messageMap[err.message] ?? 'Nie udało się usunąć dokumentu.',
         tone: 'error'
       });
     }
@@ -2472,7 +2554,7 @@ export function WarehouseTransferDocumentsPanel() {
       toast({
         title: 'Brak poprawnych pozycji.',
         description:
-          'Sprawd藕, czy OCR poprawnie odczyta艂 kolumny: Kod, Indeks, Indeks2, Nazwa, Ilo艣膰 i JM.',
+          'Sprawdź, czy OCR poprawnie odczytał kolumny: Kod, Indeks, Indeks2, Nazwa, Ilość i JM.',
         tone: 'error'
       });
       return;
@@ -2501,7 +2583,7 @@ export function WarehouseTransferDocumentsPanel() {
       if (!ocrText.trim()) {
         toast({
           title: 'Nie wykryto tekstu na screenie.',
-          description: 'Upewnij si臋, 偶e tabela jest czytelna i zajmuje wi臋kszo艣膰 obrazu.',
+          description: 'Upewnij się, że tabela jest czytelna i zajmuje większość obrazu.',
           tone: 'error'
         });
         return;
@@ -2534,15 +2616,15 @@ export function WarehouseTransferDocumentsPanel() {
         title: 'Wczytano screen dokumentu.',
         description:
           engine === 'native'
-            ? 'Pozycje zosta艂y wype艂nione automatycznie. Sprawd藕 i zapisz dokument.'
-            : 'Pozycje zosta艂y wype艂nione automatycznie (OCR fallback). Sprawd藕 i zapisz dokument.',
+            ? 'Pozycje zostały wypełnione automatycznie. Sprawdź i zapisz dokument.'
+            : 'Pozycje zostały wypełnione automatycznie (OCR fallback). Sprawdź i zapisz dokument.',
         tone: 'success'
       });
     } catch {
       toast({
-        title: 'Nie uda艂o si臋 odczyta膰 obrazu.',
+        title: 'Nie udało się odczytać obrazu.',
         description:
-          'Spr贸buj ponownie na wyra藕niejszym screenie. Je艣li obraz jest ciemny lub rozmyty, OCR mo偶e pomin膮膰 pozycje.',
+          'Spróbuj ponownie na wyraźniejszym screenie. Jeśli obraz jest ciemny lub rozmyty, OCR może pominąć pozycje.',
         tone: 'error'
       });
     } finally {
@@ -2575,7 +2657,7 @@ export function WarehouseTransferDocumentsPanel() {
       if (parsedFromSheet.items.length === 0) {
         toast({
           title: 'Nie znaleziono poprawnych pozycji w pliku.',
-          description: 'Plik musi mie膰 kolumny: Kod, Indeks, Indeks2, Nazwa, Ilo艣膰, JM.',
+          description: 'Plik musi mieć kolumny: Kod, Indeks, Indeks2, Nazwa, Ilość, JM.',
           tone: 'error'
         });
         return;
@@ -2587,13 +2669,13 @@ export function WarehouseTransferDocumentsPanel() {
       }));
       toast({
         title: 'Wczytano pozycje z pliku ERP.',
-        description: 'Import CSV/XLSX jest dok艂adniejszy ni偶 OCR ze screena.',
+        description: 'Import CSV/XLSX jest dokładniejszy niż OCR ze screena.',
         tone: 'success'
       });
     } catch {
       toast({
-        title: 'Nie uda艂o si臋 odczyta膰 pliku.',
-        description: 'Spr贸buj wyeksportowa膰 jeszcze raz do CSV albo XLSX.',
+        title: 'Nie udało się odczytać pliku.',
+        description: 'Spróbuj wyeksportować jeszcze raz do CSV albo XLSX.',
         tone: 'error'
       });
     } finally {
@@ -2769,7 +2851,7 @@ export function WarehouseTransferDocumentsPanel() {
     const draft = receiptDrafts[itemId] ?? { qty: '', note: '' };
     const qty = parseQtyToken(draft.qty);
     if (!qty || qty <= 0) {
-      toast({ title: 'Podaj ilo艣膰 wi臋ksz膮 od zera.', tone: 'error' });
+      toast({ title: 'Podaj ilość większą od zera.', tone: 'error' });
       return;
     }
     addReceiptForItem(itemId, qty, draft.note);
@@ -2779,7 +2861,7 @@ export function WarehouseTransferDocumentsPanel() {
     if (!details?.document.id) return;
     const label = details.document.documentNumber || details.document.id;
     const confirmed = window.confirm(
-      `Usun膮膰 dokument ${label}? Tej operacji nie da si臋 cofn膮膰.`
+      `Usunąć dokument ${label}? Tej operacji nie da się cofnąć.`
     );
     if (!confirmed) return;
     removeDocumentMutation.mutate({ documentId: details.document.id });
@@ -2834,20 +2916,37 @@ export function WarehouseTransferDocumentsPanel() {
   const activeDocumentRows = activeDocuments.map((document) => [
     <span
       key={`${document.id}-sourceWarehouse`}
-      className="inline-flex rounded-full border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-2.5 py-1 text-sm font-black tabular-nums text-brand"
+      className={`inline-flex rounded-full border px-2.5 py-1 text-sm font-black tabular-nums ${
+        document.status === 'ISSUED'
+          ? 'border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success'
+          : 'border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] text-brand'
+      }`}
     >
       {displayWarehouseNumber(document.sourceWarehouse)}
     </span>,
     <span key={`${document.id}-date`} className="text-sm text-dim">
       {formatDateTime(document.createdAt)}
     </span>,
-    <span key={`${document.id}-number`} className="text-base font-black text-title">
+    <span
+      key={`${document.id}-number`}
+      className={`text-base font-black ${document.status === 'ISSUED' ? 'text-success' : 'text-title'}`}
+    >
       {document.documentNumber}
     </span>,
-    <span key={`${document.id}-items`} className="text-sm font-semibold tabular-nums text-title">
+    <span
+      key={`${document.id}-items`}
+      className={`text-sm font-semibold tabular-nums ${
+        document.status === 'ISSUED' ? 'text-success' : 'text-title'
+      }`}
+    >
       {document.itemsCount}
     </span>
   ]);
+  const getActiveDocumentRowClassName = (rowIndex: number) => {
+    const document = activeDocuments[rowIndex];
+    if (document?.status !== 'ISSUED') return '';
+    return 'border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[linear-gradient(90deg,color-mix(in_srgb,var(--success)_18%,transparent),color-mix(in_srgb,var(--success)_10%,transparent))] hover:bg-[linear-gradient(90deg,color-mix(in_srgb,var(--success)_24%,transparent),color-mix(in_srgb,var(--success)_14%,transparent))]';
+  };
   const historyDocumentRows = historyDocuments.map((document) => [
     <span
       key={`${document.id}-sourceWarehouse`}
@@ -2870,6 +2969,7 @@ export function WarehouseTransferDocumentsPanel() {
     <div className="space-y-2 md:hidden">
       {docs.map((document) => {
         const selected = activeDocumentId === document.id;
+        const isIssued = document.status === 'ISSUED';
         return (
           <button
             key={`mobile-doc-${document.id}`}
@@ -2877,14 +2977,30 @@ export function WarehouseTransferDocumentsPanel() {
             onClick={() => handleDocumentClick(document.id)}
             className={`w-full rounded-xl border px-3 py-3 text-left shadow-[inset_0_1px_0_var(--inner-highlight)] transition ${
               selected
-                ? 'border-[rgba(255,122,26,0.96)] bg-[color:color-mix(in_srgb,var(--brand)_12%,transparent)] ring-2 ring-[color:color-mix(in_srgb,var(--brand)_40%,transparent)] shadow-[0_0_0_1px_rgba(255,122,26,0.55),inset_0_1px_0_var(--inner-highlight)]'
-                : 'border-border bg-surface2 hover:border-[rgba(255,122,26,0.65)]'
+                ? isIssued
+                  ? 'border-[color:color-mix(in_srgb,var(--success)_70%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] ring-2 ring-[color:color-mix(in_srgb,var(--success)_38%,transparent)] shadow-[0_0_0_1px_color-mix(in_srgb,var(--success)_50%,transparent),inset_0_1px_0_var(--inner-highlight)]'
+                  : 'border-[rgba(255,122,26,0.96)] bg-[color:color-mix(in_srgb,var(--brand)_12%,transparent)] ring-2 ring-[color:color-mix(in_srgb,var(--brand)_40%,transparent)] shadow-[0_0_0_1px_rgba(255,122,26,0.55),inset_0_1px_0_var(--inner-highlight)]'
+                : isIssued
+                  ? 'border-[color:color-mix(in_srgb,var(--success)_44%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_10%,transparent)] hover:border-[color:color-mix(in_srgb,var(--success)_60%,transparent)]'
+                  : 'border-border bg-surface2 hover:border-[rgba(255,122,26,0.65)]'
             }`}
           >
             <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-dim">
-              <span className="inline-flex items-center rounded-full border border-[color:color-mix(in_srgb,var(--brand)_42%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_17%,transparent)] px-2.5 py-1 text-[10px] font-black tracking-[0.1em] text-brand">
+              <span
+                className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black tracking-[0.1em] ${
+                  isIssued
+                    ? 'border-[color:color-mix(in_srgb,var(--success)_42%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_17%,transparent)] text-success'
+                    : 'border-[color:color-mix(in_srgb,var(--brand)_42%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_17%,transparent)] text-brand'
+                }`}
+              >
                 MAGAZYN: NR{' '}
-                <span className="ml-1 text-[12px] tabular-nums text-[color:color-mix(in_srgb,var(--brand)_65%,white_35%)]">
+                <span
+                  className={`ml-1 text-[12px] tabular-nums ${
+                    isIssued
+                      ? 'text-[color:color-mix(in_srgb,var(--success)_65%,white_35%)]'
+                      : 'text-[color:color-mix(in_srgb,var(--brand)_65%,white_35%)]'
+                  }`}
+                >
                   {displayWarehouseNumber(document.sourceWarehouse)}
                 </span>
               </span>
@@ -2905,7 +3021,11 @@ export function WarehouseTransferDocumentsPanel() {
               <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-dim">
                 Dokument
               </p>
-              <p className="mt-1 break-words text-base font-black leading-tight text-title">
+              <p
+                className={`mt-1 break-words text-base font-black leading-tight ${
+                  isIssued ? 'text-success' : 'text-title'
+                }`}
+              >
                 {document.documentNumber}
               </p>
             </div>
@@ -2956,7 +3076,7 @@ export function WarehouseTransferDocumentsPanel() {
 
     const expandedItemId = expandedItemIds[details.document.id] ?? null;
     const canEditIssue = isWarehousemanTab && details.document.status === 'OPEN';
-    const canEditReceipt = isDispatcherTab && details.document.status === 'OPEN';
+    const canEditReceipt = isDispatcherTab && details.document.status === 'ISSUED';
     const itemListTitle = isWarehousemanTab
       ? 'Lista rzeczy do wydania'
       : isDispatcherTab
@@ -2992,7 +3112,21 @@ export function WarehouseTransferDocumentsPanel() {
             >
               Usuń dokument
             </Button>
-            {details.document.status === 'OPEN' && (
+            {isWarehousemanTab && details.document.status === 'OPEN' && (
+              <Button
+                variant="outline"
+                className="w-full border-[color:color-mix(in_srgb,var(--success)_40%,transparent)] text-success hover:bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] sm:w-auto"
+                onClick={() =>
+                  markDocumentIssuedMutation.mutate({ documentId: details.document.id })
+                }
+                disabled={
+                  markDocumentIssuedMutation.isPending || removeDocumentMutation.isPending
+                }
+              >
+                Wydano wszystkie pozycje
+              </Button>
+            )}
+            {isDispatcherTab && details.document.status === 'ISSUED' && (
               <Button
                 variant="outline"
                 className="w-full sm:w-auto"
@@ -3001,8 +3135,14 @@ export function WarehouseTransferDocumentsPanel() {
                 }
                 disabled={closeDocumentMutation.isPending || removeDocumentMutation.isPending}
               >
-                Zamknij dokument
+                Dokument zatwierdzony
               </Button>
+            )}
+            {isDispatcherTab && details.document.status === 'OPEN' && (
+              <p className="w-full text-xs text-dim sm:text-right">
+                Dokument w przygotowaniu. Przyjęcia odblokują się po oznaczeniu Wydano wszystkie
+                pozycje.
+              </p>
             )}
           </div>
         </div>
@@ -3227,7 +3367,7 @@ export function WarehouseTransferDocumentsPanel() {
                             </>
                           )}
                         </div>
-                        {!isDispatcherTab && (
+                        {!isDispatcherTab && !isHistoryTab && (
                           <div className="rounded-lg border border-[color:color-mix(in_srgb,var(--warning)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--warning)_12%,transparent)] px-2 py-2">
                             <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-dim">
                               Do wydania
@@ -3237,7 +3377,7 @@ export function WarehouseTransferDocumentsPanel() {
                             </p>
                           </div>
                         )}
-                        {!isDispatcherTab && (
+                        {!isDispatcherTab && !isHistoryTab && (
                           <div className="rounded-lg border border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_12%,transparent)] px-2 py-2">
                             <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-dim">
                               Na hale
@@ -3526,10 +3666,10 @@ export function WarehouseTransferDocumentsPanel() {
 
   const activeDocumentsCardTitle = isWarehousemanTab
     ? 'Dokumenty do wydania'
-    : 'Dokumenty do przyjęcia na halę';
+    : 'Dokumenty przychodzące';
   const activeDocumentsEmptyDescription = isWarehousemanTab
-    ? 'Nowe dokumenty do wydania pojawiają się tutaj po przekazaniu do realizacji.'
-    : 'Nowe dokumenty do przyjęcia pojawiają się tutaj po przekazaniu do realizacji.';
+    ? 'Nowe dokumenty do wydania pojawiają się tutaj po przekazaniu do realizacji. Zielone dokumenty są już wydane i czekają na zatwierdzenie.'
+    : 'Widzisz wszystkie dokumenty (OPEN i ISSUED). Zielone dokumenty są już wydane i gotowe do przyjęcia.';
 
   if (!hasAnyWorkspaceAccess) {
     return (
@@ -3673,6 +3813,7 @@ export function WarehouseTransferDocumentsPanel() {
               <DataTable
                 columns={['Magazyn', 'Data', 'Dokument', 'Pozycje']}
                 rows={activeDocumentRows}
+                getRowClassName={getActiveDocumentRowClassName}
                 onRowClick={(rowIndex) => handleDocumentClick(activeDocuments[rowIndex]?.id)}
               />
             )}

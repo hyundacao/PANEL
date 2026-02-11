@@ -23,6 +23,13 @@ create table if not exists public.app_users (
 alter table if exists public.app_users
   add column if not exists active_session_id uuid;
 
+alter table if exists public.app_users
+  drop constraint if exists app_users_role_check;
+
+alter table if exists public.app_users
+  add constraint app_users_role_check
+  check (role in ('VIEWER', 'USER', 'ADMIN', 'HEAD_ADMIN'));
+
 create unique index if not exists app_users_username_lower_idx
   on public.app_users (lower(username));
 
@@ -317,6 +324,12 @@ create table if not exists public.materials (
   is_active boolean not null default true
 );
 
+alter table if exists public.materials
+  add column if not exists code text not null default '';
+
+alter table if exists public.materials
+  add column if not exists catalog_id text references public.material_catalogs(id) on delete set null;
+
 create unique index if not exists materials_code_name_idx
   on public.materials (lower(code), lower(name));
 
@@ -370,10 +383,17 @@ create table if not exists public.warehouse_transfer_documents (
   source_warehouse text,
   target_warehouse text,
   note text,
-  status text not null default 'OPEN' check (status in ('OPEN', 'CLOSED')),
+  status text not null default 'OPEN' check (status in ('OPEN', 'ISSUED', 'CLOSED')),
   closed_at timestamptz,
   closed_by_name text
 );
+
+alter table if exists public.warehouse_transfer_documents
+  drop constraint if exists warehouse_transfer_documents_status_check;
+
+alter table if exists public.warehouse_transfer_documents
+  add constraint warehouse_transfer_documents_status_check
+  check (status in ('OPEN', 'ISSUED', 'CLOSED'));
 
 create index if not exists warehouse_transfer_documents_created_idx
   on public.warehouse_transfer_documents (created_at);
@@ -395,6 +415,26 @@ create table if not exists public.warehouse_transfer_document_items (
   note text,
   created_at timestamptz not null default now()
 );
+
+alter table if exists public.warehouse_transfer_document_items
+  add column if not exists priority text;
+
+update public.warehouse_transfer_document_items
+set priority = 'NORMAL'
+where priority is null or btrim(priority) = '';
+
+alter table if exists public.warehouse_transfer_document_items
+  alter column priority set default 'NORMAL';
+
+alter table if exists public.warehouse_transfer_document_items
+  alter column priority set not null;
+
+alter table if exists public.warehouse_transfer_document_items
+  drop constraint if exists warehouse_transfer_document_items_priority_check;
+
+alter table if exists public.warehouse_transfer_document_items
+  add constraint warehouse_transfer_document_items_priority_check
+  check (priority in ('LOW', 'NORMAL', 'HIGH', 'CRITICAL'));
 
 create index if not exists warehouse_transfer_document_items_document_idx
   on public.warehouse_transfer_document_items (document_id);
@@ -575,6 +615,27 @@ create table if not exists public.audit_logs (
 
 create index if not exists audit_logs_date_idx on public.audit_logs (at);
 
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.app_users(id) on delete cascade,
+  endpoint text not null,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now()
+);
+
+create unique index if not exists push_subscriptions_endpoint_uq
+  on public.push_subscriptions (endpoint);
+
+create index if not exists push_subscriptions_user_idx
+  on public.push_subscriptions (user_id);
+
+create index if not exists push_subscriptions_last_seen_idx
+  on public.push_subscriptions (last_seen_at desc);
+
 -- =========================
 -- SECURE RLS (server only)
 -- =========================
@@ -601,6 +662,7 @@ alter table if exists public.raport_zmianowy_sessions enable row level security;
 alter table if exists public.raport_zmianowy_items enable row level security;
 alter table if exists public.raport_zmianowy_entries enable row level security;
 alter table if exists public.audit_logs enable row level security;
+alter table if exists public.push_subscriptions enable row level security;
 
 drop policy if exists "locations_read" on public.locations;
 drop policy if exists "materials_read" on public.materials;
@@ -693,3 +755,103 @@ insert into public.spare_parts (id, code, name, unit, qty, location) values
   ('part-filtr-pp', 'FIL-PP', 'Filtr PP', 'szt', 16, 'Szafka A3'),
   ('part-czujnik-temp', 'TEMP-01', 'Czujnik temperatury', 'szt', 7, 'Regal B2')
 on conflict (id) do nothing;
+
+-- =========================
+-- ERP ACCESS DECOUPLE (safe re-run)
+-- =========================
+do $$
+declare
+  user_row record;
+  current_access jsonb;
+  warehouses jsonb;
+  przemialy jsonb;
+  erp jsonb;
+  moved_tabs text[];
+  remaining_tabs text[];
+  merged_erp_tabs text[];
+  przemialy_admin boolean;
+  erp_admin boolean;
+  erp_read_only boolean;
+  erp_role text;
+begin
+  for user_row in
+    select id, coalesce(access, '{"admin":false,"warehouses":{}}'::jsonb) as access
+    from public.app_users
+  loop
+    current_access := user_row.access;
+    warehouses := coalesce(current_access -> 'warehouses', '{}'::jsonb);
+    przemialy := warehouses -> 'PRZEMIALY';
+
+    if jsonb_typeof(przemialy) <> 'object' then
+      continue;
+    end if;
+
+    select coalesce(array_agg(distinct tab), '{}'::text[])
+    into moved_tabs
+    from jsonb_array_elements_text(coalesce(przemialy -> 'tabs', '[]'::jsonb)) as t(tab)
+    where tab in (
+      'erp-magazynier',
+      'erp-rozdzielca',
+      'erp-wypisz-dokument',
+      'erp-historia-dokumentow'
+    );
+
+    if coalesce(array_length(moved_tabs, 1), 0) = 0 then
+      continue;
+    end if;
+
+    select coalesce(array_agg(distinct tab), '{}'::text[])
+    into remaining_tabs
+    from jsonb_array_elements_text(coalesce(przemialy -> 'tabs', '[]'::jsonb)) as t(tab)
+    where tab not in (
+      'erp-magazynier',
+      'erp-rozdzielca',
+      'erp-wypisz-dokument',
+      'erp-historia-dokumentow'
+    );
+
+    erp := warehouses -> 'PRZESUNIECIA_ERP';
+    erp_role := coalesce(erp ->> 'role', przemialy ->> 'role', 'ROZDZIELCA');
+    erp_read_only := coalesce((erp ->> 'readOnly')::boolean, (przemialy ->> 'readOnly')::boolean, false);
+    erp_admin := coalesce((erp ->> 'admin')::boolean, (przemialy ->> 'admin')::boolean, false);
+
+    select coalesce(array_agg(distinct tab), '{}'::text[])
+    into merged_erp_tabs
+    from (
+      select tab
+      from jsonb_array_elements_text(coalesce(erp -> 'tabs', '[]'::jsonb)) as t(tab)
+      where tab in (
+        'erp-magazynier',
+        'erp-rozdzielca',
+        'erp-wypisz-dokument',
+        'erp-historia-dokumentow'
+      )
+      union all
+      select unnest(moved_tabs) as tab
+    ) as merged;
+
+    warehouses := jsonb_set(
+      warehouses,
+      '{PRZESUNIECIA_ERP}',
+      jsonb_build_object(
+        'role', erp_role,
+        'readOnly', erp_read_only,
+        'admin', erp_admin,
+        'tabs', to_jsonb(merged_erp_tabs)
+      ),
+      true
+    );
+
+    przemialy_admin := coalesce((przemialy ->> 'admin')::boolean, false);
+    if coalesce(array_length(remaining_tabs, 1), 0) = 0 and not przemialy_admin then
+      warehouses := warehouses - 'PRZEMIALY';
+    else
+      warehouses := jsonb_set(warehouses, '{PRZEMIALY,tabs}', to_jsonb(remaining_tabs), true);
+    end if;
+
+    update public.app_users
+    set access = jsonb_set(current_access, '{warehouses}', warehouses, true)
+    where id = user_row.id;
+  end loop;
+end
+$$;

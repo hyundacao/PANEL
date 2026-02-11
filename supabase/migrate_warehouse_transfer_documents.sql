@@ -9,7 +9,7 @@ create table if not exists public.warehouse_transfer_documents (
   source_warehouse text,
   target_warehouse text,
   note text,
-  status text not null default 'OPEN' check (status in ('OPEN', 'CLOSED')),
+  status text not null default 'OPEN' check (status in ('OPEN', 'ISSUED', 'CLOSED')),
   closed_at timestamptz,
   closed_by_name text
 );

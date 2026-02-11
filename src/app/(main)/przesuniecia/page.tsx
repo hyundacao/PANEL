@@ -42,9 +42,9 @@ const initialForm: TransferForm = {
 };
 
 const kindConfig: Record<TransferKind, { label: string; tone: 'info' | 'success' | 'warning' }> = {
-  INTERNAL: { label: 'Wewn\u0119trzne', tone: 'info' },
-  EXTERNAL_IN: { label: 'Przyj\u0119cie zewn\u0119trzne', tone: 'success' },
-  EXTERNAL_OUT: { label: 'Wydanie zewn\u0119trzne', tone: 'warning' }
+  INTERNAL: { label: 'Wewnętrzne', tone: 'info' },
+  EXTERNAL_IN: { label: 'Przyjęcie zewnętrzne', tone: 'success' },
+  EXTERNAL_OUT: { label: 'Wydanie zewnętrzne', tone: 'warning' }
 };
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const materialLabel = (name: string, code: string) => `${name} (${code.trim()})`;
@@ -110,20 +110,20 @@ export default function TransfersPage() {
       queryClient.invalidateQueries({ queryKey: ['material-locations'] });
       queryClient.invalidateQueries({ queryKey: ['material-totals'] });
       setForm(initialForm);
-      toast({ title: 'Zapisano przesuniecie.', tone: 'success' });
+      toast({ title: 'Zapisano przesunięcie.', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        MATERIAL_MISSING: 'Wybierz poprawny przemial z listy.',
-        INVALID_QTY: 'Podaj ilosc wieksza od zera.',
-        MISSING_LOCATIONS: 'Wybierz lokacje zrodlowa i docelowa.',
-        SAME_LOCATION: 'Lokacje zrodlowa i docelowa nie moga byc takie same.',
-        MISSING_LOCATION: 'Wybierz lokacje dla przesuniecia.',
-        INSUFFICIENT_STOCK: 'Brak wystarczajacego stanu w lokacji zrodlowej.'
+        MATERIAL_MISSING: 'Wybierz poprawny przemiał z listy.',
+        INVALID_QTY: 'Podaj ilość większą od zera.',
+        MISSING_LOCATIONS: 'Wybierz lokację źródłową i docelową.',
+        SAME_LOCATION: 'Lokacje źródłowa i docelowa nie mogą być takie same.',
+        MISSING_LOCATION: 'Wybierz lokację dla przesunięcia.',
+        INSUFFICIENT_STOCK: 'Brak wystarczającego stanu w lokacji źródłowej.'
       };
       toast({
-        title: 'Nie zapisano przesuniecia.',
-        description: messageMap[err.message] ?? 'Sprawdz dane i sprobuj ponownie.',
+        title: 'Nie zapisano przesunięcia.',
+        description: messageMap[err.message] ?? 'Sprawdź dane i spróbuj ponownie.',
         tone: 'error'
       });
     }
@@ -147,7 +147,7 @@ export default function TransfersPage() {
     if (!normalized) return;
     const resolved = resolveLocation(normalized, list);
     if (!resolved) {
-      toast({ title: 'Wybierz lokacje z listy', tone: 'error' });
+      toast({ title: 'Wybierz lokację z listy', tone: 'error' });
       setForm((prev) => ({ ...prev, [field]: '' }));
       return;
     }
@@ -271,12 +271,12 @@ export default function TransfersPage() {
   const handleAdd = () => {
     const qtyValue = parseQtyInput(form.qty);
     if (!qtyValue || qtyValue <= 0) {
-      toast({ title: 'Podaj ilosc', description: 'Wpisz ilosc wieksza od zera.', tone: 'error' });
+      toast({ title: 'Podaj ilość', description: 'Wpisz ilość większą od zera.', tone: 'error' });
       return;
     }
     const material = resolveMaterial(form.material);
     if (!material) {
-      toast({ title: 'Brak przemialu', description: 'Wybierz przemial z listy.', tone: 'error' });
+      toast({ title: 'Brak przemiału', description: 'Wybierz przemiał z listy.', tone: 'error' });
       return;
     }
 
@@ -288,8 +288,8 @@ export default function TransfersPage() {
     if (form.kind === 'INTERNAL') {
       if (!fromLocation || !toLocation) {
         toast({
-          title: 'Uzupelnij lokacje',
-          description: 'Wybierz lokacje zrodlowa i docelowa.',
+          title: 'Uzupełnij lokacje',
+          description: 'Wybierz lokację źródłową i docelową.',
           tone: 'error'
         });
         return;
@@ -297,7 +297,7 @@ export default function TransfersPage() {
       if (fromLocation.id === toLocation.id) {
         toast({
           title: 'Niepoprawne lokacje',
-          description: 'Lokacje zrodlowa i docelowa musza sie roznic.',
+          description: 'Lokacje źródłowa i docelowa muszą się różnić.',
           tone: 'error'
         });
         return;
@@ -305,12 +305,12 @@ export default function TransfersPage() {
     }
 
     if (form.kind === 'EXTERNAL_IN' && !toLocation) {
-      toast({ title: 'Wybierz lokacje docelowa', tone: 'error' });
+      toast({ title: 'Wybierz lokację docelową', tone: 'error' });
       return;
     }
 
     if (form.kind === 'EXTERNAL_OUT' && !fromLocation) {
-      toast({ title: 'Wybierz lokacje zrodlowa', tone: 'error' });
+      toast({ title: 'Wybierz lokację źródłową', tone: 'error' });
       return;
     }
 
@@ -367,7 +367,7 @@ export default function TransfersPage() {
         material ? (
           <span style={{ color: 'var(--value-purple)' }}>{material.name}</span>
         ) : (
-          'Nieznany przemial'
+          'Nieznany przemiał'
         ),
         <span key={`${transfer.id}-qty`} className="font-semibold tabular-nums">
           {formatKg(transfer.qty)}
@@ -381,17 +381,17 @@ export default function TransfersPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Przesuni\u0119cia przemia\u0142owe" subtitle={`Dzis: ${today}`} />
+      <PageHeader title="Przesunięcia przemiałowe" subtitle={`Dziś: ${today}`} />
 
       <Card className="border-[rgba(255,106,0,0.35)] bg-brandSoft">
         <p className="text-sm text-body">
-          Przesuniecia sluza do rejestrowania transferow miedzy lokacjami oraz wydan i przyjec
-          zewnetrznych. Nie wplywaja na podsumowanie &quot;Przybylo/Wyrobiono&quot;.
+          Przesunięcia służą do rejestrowania transferów między lokacjami oraz wydań i przyjęć
+          zewnętrznych. Nie wpływają na podsumowanie &quot;Przybyło/Wyrobiono&quot;.
         </p>
       </Card>
 
       <Card className="space-y-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-dim">Nowe przesuniecie</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-dim">Nowe przesunięcie</p>
 
         <div className="flex flex-wrap gap-2">
           {(['INTERNAL', 'EXTERNAL_IN', 'EXTERNAL_OUT'] as TransferKind[]).map((kind) => (
@@ -412,7 +412,7 @@ export default function TransfersPage() {
 
         <div className="grid gap-4">
           <div>
-            <label className="text-xs uppercase tracking-wide text-dim">Przemial</label>
+            <label className="text-xs uppercase tracking-wide text-dim">Przemiał</label>
             <div className="relative">
               <Input
                 value={form.material}
@@ -431,7 +431,7 @@ export default function TransfersPage() {
               {form.material && (
                 <button
                   type="button"
-                  aria-label="Wyczysc pole przemial"
+                  aria-label="Wyczyść pole przemiału"
                   className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => {
@@ -491,7 +491,7 @@ export default function TransfersPage() {
                 {form.fromLocation && (
                   <button
                     type="button"
-                    aria-label="Wyczysc pole lokacji"
+                    aria-label="Wyczyść pole lokacji"
                     className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => {
@@ -543,7 +543,7 @@ export default function TransfersPage() {
 
         <div className="grid gap-4">
           <div>
-            <label className="text-xs uppercase tracking-wide text-dim">Ilo\u015b\u0107 (kg)</label>
+            <label className="text-xs uppercase tracking-wide text-dim">Ilość (kg)</label>
             <Input
               value={form.qty}
               onChange={(event) => setForm((prev) => ({ ...prev, qty: event.target.value }))}
@@ -674,10 +674,10 @@ export default function TransfersPage() {
             className={glowClass}
             disabled={mutation.isPending}
           >
-            Wyczy\u015b\u0107
+            Wyczyść
           </Button>
           <Button onClick={handleAdd} disabled={mutation.isPending}>
-            Zapisz przesuni\u0119cie
+            Zapisz przesunięcie
           </Button>
         </div>
       </Card>
@@ -685,18 +685,18 @@ export default function TransfersPage() {
       <Card className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-dim">Historia przesuniec</p>
-          <p className="text-sm text-dim">Liczba wpisow: {transfers.length}</p>
+          <p className="text-sm text-dim">Liczba wpisów: {transfers.length}</p>
         </div>
         {transfersLoading ? (
-          <p className="text-sm text-dim">Ladowanie...</p>
+          <p className="text-sm text-dim">Ładowanie...</p>
         ) : transfers.length === 0 ? (
           <EmptyState
-            title="Brak przesuniec"
-            description="Dodaj pierwsze przesuniecie, aby sledzic transfery."
+            title="Brak przesunięć"
+            description="Dodaj pierwsze przesunięcie, aby śledzić transfery."
           />
         ) : (
           <DataTable
-            columns={['Data', 'Typ', 'Przemial', 'Ilosc', 'Skad', 'Dokad', 'Uwagi']}
+            columns={['Data', 'Typ', 'Przemiał', 'Ilość', 'Skąd', 'Dokąd', 'Uwagi']}
             rows={transferRows}
           />
         )}

@@ -336,6 +336,11 @@ export const closeWarehouseTransferDocument = async (payload: {
 }): Promise<WarehouseTransferDocument> =>
   appRequest('closeWarehouseTransferDocument', payload);
 
+export const markWarehouseTransferDocumentIssued = async (payload: {
+  documentId: string;
+}): Promise<WarehouseTransferDocument> =>
+  appRequest('markWarehouseTransferDocumentIssued', payload);
+
 export const removeWarehouseTransferDocument = async (payload: {
   documentId: string;
 }): Promise<void> => appRequest('removeWarehouseTransferDocument', payload);

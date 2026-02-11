@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect } from 'react';
 import { ArrowLeftRight, ClipboardList, History, LogOut } from 'lucide-react';
@@ -36,7 +36,7 @@ export const ErpSidebar = () => {
     setErpWorkspaceTab
   } = useUiStore();
   const roleLabel = getRoleLabel(user, 'PRZESUNIECIA_ERP');
-  const displayName = user?.name ?? 'Gosc';
+  const displayName = user?.name ?? 'Gość';
   const visibleItems = ERP_WORKSPACE_ITEMS.filter((item) =>
     canSeeTab(user, 'PRZESUNIECIA_ERP', ERP_WORKSPACE_TAB_ACCESS[item.key])
   );
@@ -141,3 +141,4 @@ export const ErpSidebar = () => {
     </aside>
   );
 };
+

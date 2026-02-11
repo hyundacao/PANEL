@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
@@ -121,7 +121,7 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
           sidebarCollapsed ? 'pl-0 md:pl-20' : 'pl-0 md:pl-64'
         )}
       >
-        <Topbar title="Przesuniecia magazynowe ERP" breadcrumb="Modul ERP" />
+        <Topbar title="Przesunięcia magazynowe ERP" breadcrumb="Moduł ERP" />
         <main className="content-area flex-1 px-4 py-4 md:px-6 md:py-6">
           <ContentScrim className="min-h-full">
             <div className="mb-4 md:hidden">
@@ -154,3 +154,4 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+
