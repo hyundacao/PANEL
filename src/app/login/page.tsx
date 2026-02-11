@@ -11,11 +11,25 @@ import { Button } from '@/components/ui/Button';
 import { Toggle } from '@/components/ui/Toggle';
 import { useToastStore } from '@/components/ui/Toast';
 import { useUiStore } from '@/lib/store/ui';
+import { canAccessWarehouse } from '@/lib/auth/access';
+import {
+  disableErpPushNotifications,
+  enableErpPushNotifications,
+  syncErpPushStatus
+} from '@/lib/push/client';
 
 export default function LoginPage() {
   const router = useRouter();
   const toast = useToastStore((state) => state.push);
-  const { user, setUser, hydrated, rememberMe, setRememberMe, clearActiveWarehouse } = useUiStore();
+  const {
+    user,
+    setUser,
+    hydrated,
+    rememberMe,
+    setRememberMe,
+    clearActiveWarehouse,
+    setErpDocumentNotificationsEnabled
+  } = useUiStore();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
@@ -28,21 +42,80 @@ export default function LoginPage() {
 
   const loginMutation = useMutation({
     mutationFn: authenticateUser,
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       setUser(data);
       clearActiveWarehouse();
+
+      if (canAccessWarehouse(data, 'PRZESUNIECIA_ERP')) {
+        try {
+          if (typeof window !== 'undefined' && 'Notification' in window) {
+            if (Notification.permission === 'default') {
+              const shouldEnable = window.confirm(
+                'Czy włączyć powiadomienia o nowych dokumentach ERP?'
+              );
+              if (shouldEnable) {
+                const status = await enableErpPushNotifications();
+                setErpDocumentNotificationsEnabled(status.enabled);
+                if (status.enabled) {
+                  toast({
+                    title: 'Powiadomienia ERP włączone',
+                    description: 'Nowe dokumenty będą wysyłane jako powiadomienia systemowe.',
+                    tone: 'info'
+                  });
+                }
+              } else {
+                await disableErpPushNotifications().catch(() => undefined);
+                setErpDocumentNotificationsEnabled(false);
+              }
+            } else if (Notification.permission === 'granted') {
+              const status = await syncErpPushStatus();
+              setErpDocumentNotificationsEnabled(status.enabled);
+            } else {
+              setErpDocumentNotificationsEnabled(false);
+              toast({
+                title: 'Powiadomienia ERP są zablokowane',
+                description: 'Odblokuj je w ustawieniach przeglądarki telefonu.',
+                tone: 'info'
+              });
+            }
+          } else {
+            setErpDocumentNotificationsEnabled(false);
+          }
+        } catch (error) {
+          setErpDocumentNotificationsEnabled(false);
+          const code = error instanceof Error ? error.message : 'UNKNOWN';
+          const description =
+            code === 'NOT_CONFIGURED'
+              ? 'Brak konfiguracji push na serwerze.'
+              : code === 'INSECURE_CONTEXT'
+                ? 'Powiadomienia wymagają HTTPS.'
+                : code === 'NOT_SUPPORTED'
+                  ? 'Ta przeglądarka nie obsługuje push.'
+                  : code === 'MIGRATION_REQUIRED'
+                    ? 'Brakuje migracji tabeli subskrypcji push.'
+                    : 'Nie udało się włączyć powiadomień ERP.';
+          toast({
+            title: 'Problem z konfiguracją powiadomień ERP',
+            description,
+            tone: 'error'
+          });
+        }
+      } else {
+        setErpDocumentNotificationsEnabled(false);
+      }
+
       toast({ title: 'Zalogowano', tone: 'success' });
       router.replace('/magazyny');
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        INVALID_CREDENTIALS: 'Nieprawidlowy login lub haslo.',
+        INVALID_CREDENTIALS: 'Nieprawidłowy login lub hasło.',
         INACTIVE: 'Twoje konto jest nieaktywne.',
-        RATE_LIMITED: 'Za duzo prob logowania. Odczekaj chwile i sprobuj ponownie.'
+        RATE_LIMITED: 'Za dużo prób logowania. Odczekaj chwilę i spróbuj ponownie.'
       };
       toast({
-        title: 'Nie udalo sie zalogowac',
-        description: messageMap[err.message] ?? 'Sprawdz dane i sprobuj ponownie.',
+        title: 'Nie udało się zalogować',
+        description: messageMap[err.message] ?? 'Sprawdź dane i spróbuj ponownie.',
         tone: 'error'
       });
     }
@@ -51,7 +124,7 @@ export default function LoginPage() {
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!username.trim() || !password.trim()) {
-      toast({ title: 'Wpisz login i haslo', tone: 'error' });
+      toast({ title: 'Wpisz login i hasło', tone: 'error' });
       return;
     }
     loginMutation.mutate({ username, password, rememberMe });
@@ -71,7 +144,7 @@ export default function LoginPage() {
         <Card className="w-full space-y-6">
           <div className="space-y-2 text-center">
             <p className="text-4xl font-semibold uppercase tracking-wide text-title">Panel logowania</p>
-            <p className="text-base text-dim">Zaloguj sie, aby przejsc do pulpitu.</p>
+            <p className="text-base text-dim">Zaloguj się, aby przejść do pulpitu.</p>
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
@@ -84,7 +157,7 @@ export default function LoginPage() {
               />
             </div>
             <div className="space-y-2">
-              <label className="text-xs uppercase tracking-wide text-dim">Haslo</label>
+              <label className="text-xs uppercase tracking-wide text-dim">Hasło</label>
               <Input
                 type="password"
                 value={password}
@@ -94,7 +167,7 @@ export default function LoginPage() {
               />
             </div>
             <div className="flex items-center justify-between">
-              <Toggle checked={rememberMe} onCheckedChange={setRememberMe} label="Zapamietaj mnie" />
+              <Toggle checked={rememberMe} onCheckedChange={setRememberMe} label="Zapamiętaj mnie" />
             </div>
             <Button type="submit" disabled={loginMutation.isPending} className="w-full">
               Zaloguj

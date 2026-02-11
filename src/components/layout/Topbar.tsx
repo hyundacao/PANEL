@@ -83,16 +83,16 @@ export const Topbar = ({
         await enableErpPushNotifications();
         setErpDocumentNotificationsEnabled(true);
         toast({
-          title: 'Powiadomienia ERP w??czone',
-          description: 'Nowe dokumenty b?d? wysy?ane jako powiadomienia systemowe.',
+          title: 'Powiadomienia ERP włączone',
+          description: 'Nowe dokumenty będą wysyłane jako powiadomienia systemowe.',
           tone: 'info'
         });
       } else {
         await disableErpPushNotifications();
         setErpDocumentNotificationsEnabled(false);
         toast({
-          title: 'Powiadomienia ERP wy??czone',
-          description: 'Powiadomienia systemowe o nowych dokumentach s? wy??czone.',
+          title: 'Powiadomienia ERP wyłączone',
+          description: 'Powiadomienia systemowe o nowych dokumentach są wyłączone.',
           tone: 'info'
         });
       }
@@ -100,21 +100,21 @@ export const Topbar = ({
       const code = error instanceof Error ? error.message : 'UNKNOWN';
       const description =
         code === 'NOT_SUPPORTED'
-          ? 'Ta przegl?darka nie obs?uguje powiadomień push.'
+          ? 'Ta przeglądarka nie obsługuje powiadomień push.'
           : code === 'INSECURE_CONTEXT'
-            ? 'Powiadomienia push wymagaj? po??czenia HTTPS.'
+            ? 'Powiadomienia push wymagają połączenia HTTPS.'
             : code === 'NOT_CONFIGURED' || code === 'PUSH_NOT_CONFIGURED'
               ? 'Brak konfiguracji kluczy push na serwerze.'
               : code === 'PERMISSION_DENIED' || code === 'PERMISSION_NOT_GRANTED'
-                ? 'W przegl?darce odrzucono zgod? na powiadomienia.'
+                ? 'W przeglądarce odrzucono zgodę na powiadomienia.'
                 : code === 'MIGRATION_REQUIRED'
-                  ? 'Brak tabeli subskrypcji. Wykonaj migracj? bazy danych.'
-                  : 'Nie uda?o si? zapisa? ustawienia powiadomień.';
+                  ? 'Brak tabeli subskrypcji. Wykonaj migrację bazy danych.'
+                  : 'Nie udało się zapisać ustawienia powiadomień.';
 
       toast({
         title: shouldEnable
-          ? 'Nie uda?o si? w??czy? powiadomień ERP'
-          : 'Nie uda?o si? wy??czy? powiadomień ERP',
+          ? 'Nie udało się włączyć powiadomień ERP'
+          : 'Nie udało się wyłączyć powiadomień ERP',
         description,
         tone: 'error'
       });
@@ -129,7 +129,7 @@ export const Topbar = ({
         <Button
           variant="ghost"
           onClick={toggleSidebar}
-          aria-label="Przelacz menu"
+          aria-label="Przełącz menu"
           aria-expanded={!sidebarCollapsed}
           className={showSidebarToggle ? 'hidden md:inline-flex' : 'hidden'}
         >
@@ -170,7 +170,7 @@ export const Topbar = ({
                 router.push('/magazyny');
               }}
               className="h-10 min-h-10 w-10 px-0 py-0 md:hidden"
-              aria-label="Zmien modul"
+              aria-label="Zmień moduł"
             >
               <ArrowLeftRight className="h-4 w-4" />
             </Button>
@@ -183,7 +183,7 @@ export const Topbar = ({
               className="hidden md:inline-flex"
             >
               <ArrowLeftRight className="mr-2 h-4 w-4" />
-              Zmień modu?
+              Zmień moduł
             </Button>
           </>
         )}
@@ -199,15 +199,15 @@ export const Topbar = ({
           aria-label={
             isErpModule
               ? erpDocumentNotificationsEnabled
-                ? 'Wy??cz powiadomienia ERP'
-                : 'W??cz powiadomienia ERP'
+                ? 'Wyłącz powiadomienia ERP'
+                : 'Włącz powiadomienia ERP'
               : 'Powiadomienia'
           }
           title={
             isErpModule
               ? erpDocumentNotificationsEnabled
-                ? 'Powiadomienia ERP: w??czone'
-                : 'Powiadomienia ERP: wy??czone'
+                ? 'Powiadomienia ERP: włączone'
+                : 'Powiadomienia ERP: wyłączone'
               : undefined
           }
         >

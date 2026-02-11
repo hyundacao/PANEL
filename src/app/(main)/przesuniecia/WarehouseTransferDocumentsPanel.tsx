@@ -3052,8 +3052,9 @@ export function WarehouseTransferDocumentsPanel() {
                         className="min-w-0 flex-1 text-left"
                       >
                         <p className="break-words text-base font-black tracking-wide text-title">
-                          <span className="text-[color:var(--brand)]">LP {item.lineNo}</span> |{' '}
-                          <span className="text-title">
+                          <span className="text-[color:var(--brand)]">LP {item.lineNo}</span>{' '}
+                          <span className="text-[color:var(--brand)]">|</span>{' '}
+                          <span className="text-[color:var(--brand)]">
                             {displayItemName(item.name)}
                           </span>
                         </p>

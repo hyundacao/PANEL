@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   AppUser,
   WarehouseAccess,
   WarehouseKey,
@@ -147,6 +147,7 @@ export const getWarehouseLabel = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'PRZEMIALY')
     return 'Zarządzanie przemiałami i przygotowaniem produkcji';
   if (warehouse === 'RAPORT_ZMIANOWY') return 'Raport zmianowy';
-  if (warehouse === 'PRZESUNIECIA_ERP') return 'Przesuniecia magazynowe ERP';
+  if (warehouse === 'PRZESUNIECIA_ERP') return 'Przesunięcia magazynowe ERP';
   return 'Magazyn';
 };
+
