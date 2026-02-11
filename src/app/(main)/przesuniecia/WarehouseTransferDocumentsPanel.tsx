@@ -50,6 +50,15 @@ type ParsedDocumentItems = {
   total: number;
 };
 
+type NonInventoryItemDraft = {
+  id: string;
+  name: string;
+  qty: string;
+  unit: string;
+  note: string;
+  priority: WarehouseTransferItemPriority;
+};
+
 type SplitMode = 'delimited' | 'whitespace';
 type SplitLineResult = {
   tokens: string[];
@@ -2028,6 +2037,20 @@ const toCanonicalItemsRaw = (items: ParsedItemInput[]) =>
     })
     .join('\n');
 
+const createNonInventoryDraftId = () =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `nieew-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+const createEmptyNonInventoryDraft = (): NonInventoryItemDraft => ({
+  id: createNonInventoryDraftId(),
+  name: '',
+  qty: '',
+  unit: 'szt',
+  note: '',
+  priority: 'NORMAL'
+});
+
 export function WarehouseTransferDocumentsPanel() {
   const toast = useToastStore((state) => state.push);
   const queryClient = useQueryClient();
@@ -2042,6 +2065,7 @@ export function WarehouseTransferDocumentsPanel() {
     sourceWarehouse: '',
     itemsRaw: ''
   });
+  const [nonInventoryDrafts, setNonInventoryDrafts] = useState<NonInventoryItemDraft[]>([]);
   const [ocrInProgress, setOcrInProgress] = useState(false);
   const [issueDrafts, setIssueDrafts] = useState<Record<string, { qty: string; note: string }>>(
     {}
@@ -2100,6 +2124,17 @@ export function WarehouseTransferDocumentsPanel() {
       }),
     [parsed.items, priorityOverrides]
   );
+  const nonInventoryReadyCount = useMemo(
+    () =>
+      nonInventoryDrafts.filter((item) => {
+        const hasInput =
+          item.name.trim().length > 0 || item.qty.trim().length > 0 || item.note.trim().length > 0;
+        if (!hasInput) return false;
+        const qty = parseQtyToken(item.qty);
+        return item.name.trim().length > 0 && Boolean(qty && qty > 0);
+      }).length,
+    [nonInventoryDrafts]
+  );
 
   useEffect(() => {
     const activeKeys = new Set(
@@ -2125,6 +2160,20 @@ export function WarehouseTransferDocumentsPanel() {
       prev[priorityKey] === normalized ? prev : { ...prev, [priorityKey]: normalized }
     );
   }, []);
+  const addNonInventoryDraft = () => {
+    setNonInventoryDrafts((prev) => [...prev, createEmptyNonInventoryDraft()]);
+  };
+  const updateNonInventoryDraft = (
+    draftId: string,
+    patch: Partial<Omit<NonInventoryItemDraft, 'id'>>
+  ) => {
+    setNonInventoryDrafts((prev) =>
+      prev.map((item) => (item.id === draftId ? { ...item, ...patch } : item))
+    );
+  };
+  const removeNonInventoryDraft = (draftId: string) => {
+    setNonInventoryDrafts((prev) => prev.filter((item) => item.id !== draftId));
+  };
 
   const previewRows = useMemo(
     () =>
@@ -2318,6 +2367,7 @@ export function WarehouseTransferDocumentsPanel() {
         itemsRaw: ''
       });
       setPriorityOverrides({});
+      setNonInventoryDrafts([]);
       toast({ title: 'Utworzono dokument przesunięcia', tone: 'success' });
     },
     onError: (err: Error) => {
@@ -2550,29 +2600,77 @@ export function WarehouseTransferDocumentsPanel() {
       toast({ title: 'Podaj numer dokumentu.', tone: 'error' });
       return;
     }
-    if (parsedItemsWithPriority.length === 0) {
+    const preparedNonInventoryItems = nonInventoryDrafts
+      .map((item) => {
+        const name = item.name.trim();
+        const qtyRaw = item.qty.trim();
+        const note = item.note.trim();
+        const qty = parseQtyToken(qtyRaw);
+        const unitRaw = item.unit.trim();
+        const unit = normalizeUnitToken(unitRaw) || unitRaw || 'szt';
+        const hasInput = Boolean(name || qtyRaw || note);
+        return {
+          ...item,
+          name,
+          qty,
+          note,
+          unit,
+          hasInput
+        };
+      })
+      .filter((item) => item.hasInput);
+
+    const invalidNonInventoryItem = preparedNonInventoryItems.find(
+      (item) => !item.name || !item.qty || item.qty <= 0
+    );
+    if (invalidNonInventoryItem) {
       toast({
-        title: 'Brak poprawnych pozycji.',
-        description:
-          'Sprawdź, czy OCR poprawnie odczytał kolumny: Kod, Indeks, Indeks2, Nazwa, Ilość i JM.',
+        title: 'Uzupełnij pozycję nieewidencjonowaną.',
+        description: 'Podaj nazwę i ilość większą od zera.',
         tone: 'error'
       });
       return;
     }
 
+    if (parsedItemsWithPriority.length === 0 && preparedNonInventoryItems.length === 0) {
+      toast({
+        title: 'Brak poprawnych pozycji.',
+        description:
+          'Dodaj pozycje z importu albo ręcznie jako nieewidencjonowane.',
+        tone: 'error'
+      });
+      return;
+    }
+
+    const maxLineNo = parsedItemsWithPriority.reduce(
+      (currentMax, item) => Math.max(currentMax, item.lineNo),
+      0
+    );
+
     createDocumentMutation.mutate({
       documentNumber: form.documentNumber.trim(),
       sourceWarehouse: form.sourceWarehouse.trim() || undefined,
-      items: parsedItemsWithPriority.map((item) => ({
-        lineNo: item.lineNo,
-        priority: item.priority,
-        indexCode: item.indexCode,
-        name: item.name,
-        batch: item.indexCode2 || item.batch,
-        location: item.erpCode || item.location,
-        unit: item.unit,
-        plannedQty: item.plannedQty
-      }))
+      items: [
+        ...parsedItemsWithPriority.map((item) => ({
+          lineNo: item.lineNo,
+          priority: item.priority,
+          indexCode: item.indexCode,
+          name: item.name,
+          batch: item.indexCode2 || item.batch,
+          location: item.erpCode || item.location,
+          unit: item.unit,
+          plannedQty: item.plannedQty
+        })),
+        ...preparedNonInventoryItems.map((item, index) => ({
+          lineNo: maxLineNo + index + 1,
+          priority: item.priority,
+          indexCode: `NIEEW-${index + 1}`,
+          name: item.name,
+          unit: item.unit,
+          plannedQty: item.qty as number,
+          note: item.note || 'Pozycja nieewidencjonowana'
+        }))
+      ]
     });
   };
 
@@ -3691,7 +3789,10 @@ export function WarehouseTransferDocumentsPanel() {
               Pole dla wypisującej osoby
             </p>
             <p className="text-sm text-dim">
-              Pozycje wykryte: <span className="font-semibold text-title">{parsed.items.length}</span>
+              Pozycje do przekazania:{' '}
+              <span className="font-semibold text-title">
+                {parsedItemsWithPriority.length + nonInventoryReadyCount}
+              </span>
             </p>
           </div>
 
@@ -3749,6 +3850,91 @@ export function WarehouseTransferDocumentsPanel() {
             <p className="mt-2 text-xs text-dim">
               Przetworzone linie: {parsed.total}. Pominięte: {parsed.skipped}.
             </p>
+          </div>
+
+          <div className="space-y-3 rounded-2xl border border-border bg-surface2 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                  Pozycje nieewidencjonowane (opcjonalnie)
+                </p>
+                <p className="text-xs text-dim">
+                  Ręczny wpis dla pozycji bez kodu i indeksu ERP.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={addNonInventoryDraft}
+              >
+                Dodaj pozycję nieewidencjonowaną
+              </Button>
+            </div>
+
+            {nonInventoryDrafts.length === 0 ? (
+              <p className="text-xs text-dim">Brak pozycji nieewidencjonowanych.</p>
+            ) : (
+              <div className="space-y-3">
+                {nonInventoryDrafts.map((item, index) => (
+                  <div
+                    key={item.id}
+                    className="space-y-2 rounded-xl border border-border bg-surface px-3 py-3"
+                  >
+                    <div className="grid gap-2 md:grid-cols-[1fr_140px_96px_auto_auto]">
+                      <Input
+                        value={item.name}
+                        onChange={(event) =>
+                          updateNonInventoryDraft(item.id, { name: event.target.value })
+                        }
+                        placeholder={`Nazwa pozycji #${index + 1}`}
+                      />
+                      <Input
+                        value={item.qty}
+                        onChange={(event) =>
+                          updateNonInventoryDraft(item.id, { qty: event.target.value })
+                        }
+                        placeholder="Ilość"
+                        inputMode="decimal"
+                      />
+                      <Input
+                        value={item.unit}
+                        onChange={(event) =>
+                          updateNonInventoryDraft(item.id, { unit: event.target.value })
+                        }
+                        placeholder="JM"
+                      />
+                      <div className="flex items-center gap-2 rounded-xl border border-border bg-surface2 px-3 py-2">
+                        <Toggle
+                          checked={item.priority === 'CRITICAL'}
+                          onCheckedChange={(checked) =>
+                            updateNonInventoryDraft(item.id, {
+                              priority: checked ? 'CRITICAL' : 'NORMAL'
+                            })
+                          }
+                        />
+                        <span className="text-xs font-semibold text-title">
+                          {item.priority === 'CRITICAL' ? 'Pilny' : 'Normalny'}
+                        </span>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        className="w-full md:w-auto"
+                        onClick={() => removeNonInventoryDraft(item.id)}
+                      >
+                        Usuń
+                      </Button>
+                    </div>
+                    <Input
+                      value={item.note}
+                      onChange={(event) =>
+                        updateNonInventoryDraft(item.id, { note: event.target.value })
+                      }
+                      placeholder="Uwagi (opcjonalnie)"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {previewRows.length > 0 && (
