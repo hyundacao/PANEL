@@ -85,6 +85,31 @@ const appRequest = async <T,>(action: string, payload?: unknown): Promise<T> =>
     body: JSON.stringify({ action, payload })
   });
 
+export type ErpPushStatus = {
+  enabled: boolean;
+  configured: boolean;
+  publicKey: string | null;
+};
+
+export const getErpPushStatus = async (): Promise<ErpPushStatus> =>
+  apiRequest('/api/push/status', { cache: 'no-store' });
+
+export const subscribeErpPush = async (
+  subscription: PushSubscriptionJSON
+): Promise<{ enabled: boolean }> =>
+  apiRequest('/api/push/subscribe', {
+    method: 'POST',
+    body: JSON.stringify({ subscription })
+  });
+
+export const unsubscribeErpPush = async (
+  endpoint?: string
+): Promise<{ enabled: boolean }> =>
+  apiRequest('/api/push/unsubscribe', {
+    method: 'POST',
+    body: JSON.stringify(endpoint ? { endpoint } : {})
+  });
+
 export const getDashboard = async (date: string): Promise<DashboardSummary[]> =>
   appRequest('getDashboard', { date });
 

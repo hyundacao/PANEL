@@ -11,6 +11,7 @@ import {
   isWarehouseAdmin
 } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
+import { sendWarehouseTransferDocumentCreatedPush } from '@/lib/push/server';
 import type {
   AuditEvent,
   AppUser,
@@ -2932,7 +2933,15 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'getWarehouseTransferDocument': {
       const documentId = String(payload?.documentId ?? '').trim();
       if (!documentId) throw new Error('NOT_FOUND');
-      return fetchWarehouseTransferDocumentDetails(documentId);
+      const createdDocument = await fetchWarehouseTransferDocumentDetails(documentId);
+      void sendWarehouseTransferDocumentCreatedPush({
+        documentId: createdDocument.document.id,
+        documentNumber: createdDocument.document.documentNumber,
+        sourceWarehouse: createdDocument.document.sourceWarehouse,
+        targetWarehouse: createdDocument.document.targetWarehouse,
+        createdById: createdDocument.document.createdById ?? null
+      });
+      return createdDocument;
     }
     case 'createWarehouseTransferDocument': {
       const documentNumber = String(payload?.documentNumber ?? '').trim();

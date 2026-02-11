@@ -1,11 +1,18 @@
 ﻿'use client';
 
+import { useEffect, useState } from 'react';
 import { ArrowLeftRight, Bell, LogOut, Menu } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useUiStore } from '@/lib/store/ui';
 import { Button } from '@/components/ui/Button';
 import { getAccessibleWarehouses } from '@/lib/auth/access';
 import { logoutUser } from '@/lib/api';
+import { useToastStore } from '@/components/ui/Toast';
+import {
+  disableErpPushNotifications,
+  enableErpPushNotifications,
+  syncErpPushStatus
+} from '@/lib/push/client';
 
 export const Topbar = ({
   title,
@@ -17,9 +24,22 @@ export const Topbar = ({
   showSidebarToggle?: boolean;
 }) => {
   const router = useRouter();
-  const { toggleSidebar, sidebarCollapsed, user, clearActiveWarehouse, logout } = useUiStore();
+  const toast = useToastStore((state) => state.push);
+  const {
+    toggleSidebar,
+    sidebarCollapsed,
+    user,
+    clearActiveWarehouse,
+    logout,
+    activeWarehouse,
+    erpDocumentNotificationsEnabled,
+    setErpDocumentNotificationsEnabled
+  } = useUiStore();
   const warehouses = getAccessibleWarehouses(user);
   const canSwitch = warehouses.length > 1;
+  const isErpModule = activeWarehouse === 'PRZESUNIECIA_ERP';
+  const [erpNotificationsBusy, setErpNotificationsBusy] = useState(false);
+
   const handleLogout = async () => {
     try {
       await logoutUser();
@@ -31,9 +51,81 @@ export const Topbar = ({
     }
   };
 
+  useEffect(() => {
+    if (!isErpModule) return;
+    let cancelled = false;
+
+    const syncStatus = async () => {
+      try {
+        const status = await syncErpPushStatus();
+        if (cancelled) return;
+        setErpDocumentNotificationsEnabled(status.enabled);
+      } catch {
+        if (cancelled) return;
+        setErpDocumentNotificationsEnabled(false);
+      }
+    };
+
+    void syncStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isErpModule, setErpDocumentNotificationsEnabled]);
+
+  const handleToggleErpNotifications = async () => {
+    if (!isErpModule || erpNotificationsBusy) return;
+
+    const shouldEnable = !erpDocumentNotificationsEnabled;
+    setErpNotificationsBusy(true);
+    try {
+      if (shouldEnable) {
+        await enableErpPushNotifications();
+        setErpDocumentNotificationsEnabled(true);
+        toast({
+          title: 'Powiadomienia ERP w??czone',
+          description: 'Nowe dokumenty b?d? wysy?ane jako powiadomienia systemowe.',
+          tone: 'info'
+        });
+      } else {
+        await disableErpPushNotifications();
+        setErpDocumentNotificationsEnabled(false);
+        toast({
+          title: 'Powiadomienia ERP wy??czone',
+          description: 'Powiadomienia systemowe o nowych dokumentach s? wy??czone.',
+          tone: 'info'
+        });
+      }
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'UNKNOWN';
+      const description =
+        code === 'NOT_SUPPORTED'
+          ? 'Ta przegl?darka nie obs?uguje powiadomień push.'
+          : code === 'INSECURE_CONTEXT'
+            ? 'Powiadomienia push wymagaj? po??czenia HTTPS.'
+            : code === 'NOT_CONFIGURED' || code === 'PUSH_NOT_CONFIGURED'
+              ? 'Brak konfiguracji kluczy push na serwerze.'
+              : code === 'PERMISSION_DENIED' || code === 'PERMISSION_NOT_GRANTED'
+                ? 'W przegl?darce odrzucono zgod? na powiadomienia.'
+                : code === 'MIGRATION_REQUIRED'
+                  ? 'Brak tabeli subskrypcji. Wykonaj migracj? bazy danych.'
+                  : 'Nie uda?o si? zapisa? ustawienia powiadomień.';
+
+      toast({
+        title: shouldEnable
+          ? 'Nie uda?o si? w??czy? powiadomień ERP'
+          : 'Nie uda?o si? wy??czy? powiadomień ERP',
+        description,
+        tone: 'error'
+      });
+    } finally {
+      setErpNotificationsBusy(false);
+    }
+  };
+
   return (
-    <header className="sticky top-0 z-30 flex flex-wrap items-center gap-3 border-b border-border bg-surface px-4 py-3 backdrop-blur md:gap-6 md:px-6 md:py-4">
-      <div className="flex w-full min-w-0 items-center gap-3 md:w-auto">
+    <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-surface px-3 py-2 backdrop-blur md:gap-6 md:px-6 md:py-4">
+      <div className="flex min-w-0 flex-1 items-center gap-2 md:gap-3">
         <Button
           variant="ghost"
           onClick={toggleSidebar}
@@ -45,12 +137,12 @@ export const Topbar = ({
         </Button>
         <div className="min-w-0">
           {breadcrumb && (
-            <p className="truncate text-xs" style={{ color: 'var(--brand)' }}>
+            <p className="hidden truncate text-[11px] leading-tight sm:block" style={{ color: 'var(--brand)' }}>
               {breadcrumb}
             </p>
           )}
           <h1
-            className="truncate text-base font-semibold md:text-lg"
+            className="truncate text-sm font-semibold leading-tight md:text-lg"
             style={{ color: 'var(--brand)' }}
           >
             {title}
@@ -68,25 +160,62 @@ export const Topbar = ({
         )}
       </div>
 
-      <div className="flex w-full items-center justify-end gap-2 md:ml-auto md:w-auto md:gap-3">
+      <div className="ml-auto flex items-center justify-end gap-2 md:gap-3">
         {canSwitch && (
-          <Button
-            variant="ghost"
-            onClick={() => {
-              clearActiveWarehouse();
-              router.push('/magazyny');
-            }}
-            className="w-full md:w-auto"
-          >
-            <ArrowLeftRight className="mr-2 h-4 w-4" />
-            Zmień moduł
-          </Button>
+          <>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                clearActiveWarehouse();
+                router.push('/magazyny');
+              }}
+              className="h-10 min-h-10 w-10 px-0 py-0 md:hidden"
+              aria-label="Zmien modul"
+            >
+              <ArrowLeftRight className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                clearActiveWarehouse();
+                router.push('/magazyny');
+              }}
+              className="hidden md:inline-flex"
+            >
+              <ArrowLeftRight className="mr-2 h-4 w-4" />
+              Zmień modu?
+            </Button>
+          </>
         )}
-        <Button variant="ghost">
+        <Button
+          variant="ghost"
+          onClick={isErpModule ? () => void handleToggleErpNotifications() : undefined}
+          disabled={isErpModule ? erpNotificationsBusy : false}
+          className={`h-10 min-h-10 w-10 px-0 py-0 ${
+            isErpModule && erpDocumentNotificationsEnabled
+              ? 'border-[color:color-mix(in_srgb,var(--brand)_55%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] text-brand'
+              : ''
+          }`}
+          aria-label={
+            isErpModule
+              ? erpDocumentNotificationsEnabled
+                ? 'Wy??cz powiadomienia ERP'
+                : 'W??cz powiadomienia ERP'
+              : 'Powiadomienia'
+          }
+          title={
+            isErpModule
+              ? erpDocumentNotificationsEnabled
+                ? 'Powiadomienia ERP: w??czone'
+                : 'Powiadomienia ERP: wy??czone'
+              : undefined
+          }
+        >
           <Bell className="h-4 w-4" />
         </Button>
-        <div className="hidden h-10 w-10 rounded-full bg-surface2 sm:block" />
+        <div className="hidden h-10 w-10 rounded-full bg-surface2 md:block" />
       </div>
     </header>
   );
 };
+

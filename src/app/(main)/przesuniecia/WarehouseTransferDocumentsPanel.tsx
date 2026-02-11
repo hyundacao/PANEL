@@ -2033,6 +2033,8 @@ export function WarehouseTransferDocumentsPanel() {
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const tableFileInputRef = useRef<HTMLInputElement | null>(null);
   const detailsCardRef = useRef<HTMLDivElement | null>(null);
+  const firstItemRef = useRef<HTMLDivElement | null>(null);
+  const shouldScrollToFirstItemRef = useRef(false);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [form, setForm] = useState({
     documentNumber: '',
@@ -2051,6 +2053,11 @@ export function WarehouseTransferDocumentsPanel() {
   const currentUser = useUiStore((state) => state.user);
   const workspaceTab = useUiStore((state) => state.erpWorkspaceTab);
   const setWorkspaceTab = useUiStore((state) => state.setErpWorkspaceTab);
+  const erpDocumentNotificationsEnabled = useUiStore(
+    (state) => state.erpDocumentNotificationsEnabled
+  );
+  const notificationsInitializedRef = useRef(false);
+  const lastSeenDocumentIdRef = useRef<string | null>(null);
   const canSeeIssuerTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-wypisz-dokument');
   const canSeeWarehousemanTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-magazynier');
   const canSeeDispatcherTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-rozdzielca');
@@ -2140,9 +2147,11 @@ export function WarehouseTransferDocumentsPanel() {
     [handlePriorityToggle, parsedItemsWithPriority]
   );
 
-  const { data: documents = [], isLoading: documentsLoading } = useQuery({
+  const { data: documents = [], isLoading: documentsLoading, isFetched: documentsFetched } = useQuery({
     queryKey: ['warehouse-transfer-documents'],
-    queryFn: getWarehouseTransferDocuments
+    queryFn: getWarehouseTransferDocuments,
+    refetchInterval: 8000,
+    refetchIntervalInBackground: false
   });
   const activeDocuments = useMemo(
     () => documents.filter((document) => document.status === 'OPEN'),
@@ -2152,6 +2161,50 @@ export function WarehouseTransferDocumentsPanel() {
     () => documents.filter((document) => document.status === 'CLOSED'),
     [documents]
   );
+  const latestDocument = useMemo(() => {
+    if (documents.length === 0) return null;
+    return documents.reduce<(typeof documents)[number] | null>((latest, document) => {
+      if (!latest) return document;
+      const latestTime = new Date(latest.createdAt).getTime();
+      const currentTime = new Date(document.createdAt).getTime();
+      return currentTime > latestTime ? document : latest;
+    }, null);
+  }, [documents]);
+
+  useEffect(() => {
+    if (!documentsFetched) return;
+
+    if (!notificationsInitializedRef.current) {
+      notificationsInitializedRef.current = true;
+      lastSeenDocumentIdRef.current = latestDocument?.id ?? null;
+      return;
+    }
+
+    const nextId = latestDocument?.id ?? null;
+    const prevId = lastSeenDocumentIdRef.current;
+    if (prevId === nextId) return;
+    lastSeenDocumentIdRef.current = nextId;
+
+    if (!erpDocumentNotificationsEnabled || !latestDocument) return;
+
+    const isOwnDocument =
+      Boolean(currentUser?.id) &&
+      Boolean(latestDocument.createdById) &&
+      String(currentUser?.id) === String(latestDocument.createdById);
+    if (isOwnDocument) return;
+
+    toast({
+      title: 'Został utworzony nowy dokument',
+      description: latestDocument.documentNumber || latestDocument.id,
+      tone: 'info'
+    });
+  }, [
+    currentUser?.id,
+    documentsFetched,
+    erpDocumentNotificationsEnabled,
+    latestDocument,
+    toast
+  ]);
   const visibleDocuments = useMemo(() => {
     if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return activeDocuments;
     if (workspaceTab === 'dispatcher' && canSeeDispatcherTab) return activeDocuments;
@@ -2190,6 +2243,23 @@ export function WarehouseTransferDocumentsPanel() {
       return a.lineNo - b.lineNo;
     });
   }, [details]);
+
+  useEffect(() => {
+    if (!shouldScrollToFirstItemRef.current) return;
+    if (!activeDocumentId || !details || detailsLoading || isActiveDocumentCollapsed) return;
+
+    const target = sortedDetailsItems.length > 0 ? firstItemRef.current : detailsCardRef.current;
+    if (!target) return;
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    shouldScrollToFirstItemRef.current = false;
+  }, [
+    activeDocumentId,
+    details,
+    detailsLoading,
+    isActiveDocumentCollapsed,
+    sortedDetailsItems.length
+  ]);
 
   const createDocumentMutation = useMutation({
     mutationFn: createWarehouseTransferDocument,
@@ -2736,12 +2806,14 @@ export function WarehouseTransferDocumentsPanel() {
         };
       });
       if (willExpand) {
+        shouldScrollToFirstItemRef.current = true;
         requestAnimationFrame(() => {
           detailsCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
       }
       return;
     }
+    shouldScrollToFirstItemRef.current = true;
     setSelectedDocumentId(clickedDocumentId);
     setCollapsedDocumentIds((prev) => ({
       ...prev,
@@ -2793,6 +2865,52 @@ export function WarehouseTransferDocumentsPanel() {
       {document.itemsCount}
     </span>
   ]);
+
+  const renderMobileDocumentCards = (docs: Array<(typeof documents)[number]>) => (
+    <div className="space-y-2 md:hidden">
+      {docs.map((document) => {
+        const selected = activeDocumentId === document.id;
+        return (
+          <button
+            key={`mobile-doc-${document.id}`}
+            type="button"
+            onClick={() => handleDocumentClick(document.id)}
+            className={`w-full rounded-xl border px-3 py-3 text-left shadow-[inset_0_1px_0_var(--inner-highlight)] transition ${
+              selected
+                ? 'border-[rgba(255,122,26,0.85)] bg-[color:color-mix(in_srgb,var(--brand)_11%,transparent)]'
+                : 'border-border bg-surface2 hover:border-[rgba(255,122,26,0.65)]'
+            }`}
+          >
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-dim">
+              <span>
+                Magazyn:{' '}
+                <span className="font-black tabular-nums text-brand">
+                  {displayWarehouseNumber(document.sourceWarehouse)}
+                </span>
+              </span>
+              <span>
+                Data: <span className="font-semibold normal-case text-title">{formatDateTime(document.createdAt)}</span>
+              </span>
+              <span>
+                Pozycje:{' '}
+                <span className="font-black tabular-nums normal-case text-title">
+                  {document.itemsCount}
+                </span>
+              </span>
+            </div>
+            <div className="mt-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-dim">
+                Dokument
+              </p>
+              <p className="mt-1 break-words text-base font-black leading-tight text-title">
+                {document.documentNumber}
+              </p>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
 
   const isIssuerTab = workspaceTab === 'issuer' && canSeeIssuerTab;
   const isWarehousemanTab = workspaceTab === 'warehouseman' && canSeeWarehousemanTab;
@@ -2898,7 +3016,7 @@ export function WarehouseTransferDocumentsPanel() {
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">{itemListTitle}</p>
             </div>
 
-            {sortedDetailsItems.map((item) => {
+            {sortedDetailsItems.map((item, itemIndex) => {
               const issueDraft = issueDrafts[item.id] ?? { qty: '', note: '' };
               const receiptDraft = receiptDrafts[item.id] ?? { qty: '', note: '' };
               const isExpanded = expandedItemId === item.id;
@@ -2917,7 +3035,8 @@ export function WarehouseTransferDocumentsPanel() {
               return (
                 <div
                   key={item.id}
-                  className="rounded-2xl border border-border bg-surface2 p-3 shadow-[inset_0_1px_0_var(--inner-highlight)]"
+                  ref={itemIndex === 0 ? firstItemRef : undefined}
+                  className="scroll-mt-24 rounded-2xl border border-border bg-surface2 p-3 shadow-[inset_0_1px_0_var(--inner-highlight)]"
                 >
                   <div
                     className={
@@ -3506,7 +3625,30 @@ export function WarehouseTransferDocumentsPanel() {
 
       {(isWarehousemanTab || isDispatcherTab) && (
         <>
-          <Card className="space-y-4">
+          <div className="space-y-3 md:hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                {activeDocumentsCardTitle}
+              </p>
+              <p className="text-sm text-dim">Aktywne: {activeDocuments.length}</p>
+            </div>
+            {documentsLoading ? (
+              <Card>
+                <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+              </Card>
+            ) : activeDocuments.length === 0 ? (
+              <Card>
+                <EmptyState
+                  title="Brak aktywnych dokumentów"
+                  description={activeDocumentsEmptyDescription}
+                />
+              </Card>
+            ) : (
+              renderMobileDocumentCards(activeDocuments)
+            )}
+          </div>
+
+          <Card className="hidden space-y-4 md:block">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                 {activeDocumentsCardTitle}
@@ -3537,7 +3679,30 @@ export function WarehouseTransferDocumentsPanel() {
 
       {isHistoryTab && (
         <>
-          <Card className="space-y-4">
+          <div className="space-y-3 md:hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                Historia dokumentów
+              </p>
+              <p className="text-sm text-dim">Zamknięte: {historyDocuments.length}</p>
+            </div>
+            {documentsLoading ? (
+              <Card>
+                <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+              </Card>
+            ) : historyDocuments.length === 0 ? (
+              <Card>
+                <EmptyState
+                  title="Historia jest pusta"
+                  description="Zamknięte dokumenty pojawiają się tutaj automatycznie."
+                />
+              </Card>
+            ) : (
+              renderMobileDocumentCards(historyDocuments)
+            )}
+          </div>
+
+          <Card className="hidden space-y-4 md:block">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                 Historia dokumentów

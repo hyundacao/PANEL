@@ -40,6 +40,8 @@ type UiState = {
   setFilters: (filters: Partial<UiFilters>) => void;
   erpWorkspaceTab: ErpWorkspaceTab;
   setErpWorkspaceTab: (value: ErpWorkspaceTab) => void;
+  erpDocumentNotificationsEnabled: boolean;
+  setErpDocumentNotificationsEnabled: (value: boolean) => void;
 };
 
 type PersistedUiState = Pick<
@@ -51,6 +53,7 @@ type PersistedUiState = Pick<
   | 'rememberMe'
   | 'filters'
   | 'erpWorkspaceTab'
+  | 'erpDocumentNotificationsEnabled'
 >;
 
 const roleFromUser = (user: AppUser | null): Role => {
@@ -112,7 +115,10 @@ export const useUiStore = create<UiState>()(
       filters: { onlyPending: false, search: '' },
       setFilters: (filters) => set((state) => ({ filters: { ...state.filters, ...filters } })),
       erpWorkspaceTab: 'issuer',
-      setErpWorkspaceTab: (value) => set({ erpWorkspaceTab: normalizeErpWorkspaceTab(value) })
+      setErpWorkspaceTab: (value) => set({ erpWorkspaceTab: normalizeErpWorkspaceTab(value) }),
+      erpDocumentNotificationsEnabled: false,
+      setErpDocumentNotificationsEnabled: (value) =>
+        set({ erpDocumentNotificationsEnabled: value })
     }),
     {
       name: storageKey,
@@ -124,7 +130,8 @@ export const useUiStore = create<UiState>()(
         activeWarehouse: state.activeWarehouse,
         rememberMe: state.rememberMe,
         filters: state.filters,
-        erpWorkspaceTab: state.erpWorkspaceTab
+        erpWorkspaceTab: state.erpWorkspaceTab,
+        erpDocumentNotificationsEnabled: state.erpDocumentNotificationsEnabled
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated(true);
