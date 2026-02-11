@@ -668,6 +668,7 @@ export default function AdminPage() {
     const warehouseAccess = access.warehouses.PRZESUNIECIA_ERP;
     const enabled = Boolean(warehouseAccess);
     const blockEditing = userRole === 'HEAD_ADMIN';
+    const readOnlyValue = enabled && warehouseAccess ? warehouseAccess.readOnly : false;
 
     return (
       <Card className={`space-y-3 ${blockEditing ? 'opacity-70' : ''}`}>
@@ -709,6 +710,21 @@ export default function AdminPage() {
           />
         </div>
         <div className={cn('grid gap-2 sm:grid-cols-2', !enabled && 'opacity-70')}>
+          <AdminToggle
+            checked={readOnlyValue}
+            onCheckedChange={(value) => {
+              if (blockEditing || !enabled) return;
+              onChange((current) => {
+                const next = cloneAccess(current);
+                const currentAccess = next.warehouses.PRZESUNIECIA_ERP;
+                if (!currentAccess) return next;
+                currentAccess.readOnly = value;
+                return next;
+              });
+            }}
+            label="Tylko do odczytu"
+            disabled={blockEditing || !enabled}
+          />
           {erpModuleTabOptions.map((tab) => (
             <AdminToggle
               key={`erp-module-${tab.key}`}

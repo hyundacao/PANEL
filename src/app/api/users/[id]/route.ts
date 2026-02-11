@@ -62,6 +62,9 @@ export async function PATCH(
   const name = payload?.name?.trim();
   const username = payload?.username?.trim();
   const password = payload?.password?.trim();
+  const normalizedRole = normalizeRole(payload?.role);
+  const normalizedAccess =
+    payload?.access === undefined ? undefined : normalizeAccessForDb(payload.access);
 
   if (payload?.name !== undefined && !name) {
     return NextResponse.json({ code: 'NAME_REQUIRED' }, { status: 400 });
@@ -73,46 +76,83 @@ export async function PATCH(
     return NextResponse.json({ code: 'SELF_DISABLE_FORBIDDEN' }, { status: 400 });
   }
 
-  const { data, error } = await supabaseAdmin.rpc('update_app_user', {
-    p_id: userId,
-    p_name: name ?? null,
-    p_username: username ?? null,
-    p_password: password ? password : null,
-    p_role: normalizeRole(payload?.role),
-    p_access: normalizeAccessForDb(payload?.access),
-    p_is_active: typeof payload?.isActive === 'boolean' ? payload.isActive : null
-  });
+  if (password) {
+    const { data, error } = await supabaseAdmin.rpc('update_app_user', {
+      p_id: userId,
+      p_name: name ?? null,
+      p_username: username ?? null,
+      p_password: password,
+      p_role: normalizedRole,
+      p_access: normalizedAccess ?? null,
+      p_is_active: typeof payload?.isActive === 'boolean' ? payload.isActive : null
+    });
 
-  if (error) {
-    if (
-      typeof payload?.isActive === 'boolean' &&
-      payload?.name === undefined &&
-      payload?.username === undefined &&
-      payload?.password === undefined &&
-      payload?.role === undefined &&
-      payload?.access === undefined
-    ) {
-      const { data: directRow, error: directError } = await supabaseAdmin
-        .from('app_users')
-        .update({ is_active: payload.isActive })
-        .eq('id', userId)
-        .select('*')
-        .maybeSingle();
-      if (!directError && directRow) {
-        return NextResponse.json(mapDbUser(directRow as DbUserRow));
-      }
+    if (error) {
+      const code = getErrorCode(error.message, error.code);
+      const status = code === 'DUPLICATE' ? 409 : code === 'NOT_FOUND' ? 404 : 400;
+      return NextResponse.json({ code }, { status });
     }
-    const code = getErrorCode(error.message, error.code);
+
+    const row = (Array.isArray(data) ? data[0] : data) as DbUserRow | null;
+    if (!row) {
+      return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+    }
+
+    return NextResponse.json(mapDbUser(row));
+  }
+
+  const updatePayload: Record<string, unknown> = {};
+  if (payload?.name !== undefined) {
+    updatePayload.name = name;
+  }
+  if (payload?.username !== undefined) {
+    updatePayload.username = username;
+  }
+  if (payload?.role !== undefined && normalizedRole) {
+    updatePayload.role = normalizedRole;
+  }
+  if (payload?.access !== undefined) {
+    updatePayload.access = normalizedAccess ?? { admin: false, warehouses: {} };
+  }
+  if (typeof payload?.isActive === 'boolean') {
+    updatePayload.is_active = payload.isActive;
+  }
+
+  if (Object.keys(updatePayload).length === 0) {
+    const { data: unchangedRow, error: unchangedError } = await supabaseAdmin
+      .from('app_users')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+    if (unchangedError) {
+      const code = getErrorCode(unchangedError.message, unchangedError.code);
+      const status = code === 'NOT_FOUND' ? 404 : 400;
+      return NextResponse.json({ code }, { status });
+    }
+    if (!unchangedRow) {
+      return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+    }
+    return NextResponse.json(mapDbUser(unchangedRow as DbUserRow));
+  }
+
+  const { data: directRow, error: directError } = await supabaseAdmin
+    .from('app_users')
+    .update(updatePayload)
+    .eq('id', userId)
+    .select('*')
+    .maybeSingle();
+
+  if (directError) {
+    const code = getErrorCode(directError.message, directError.code);
     const status = code === 'DUPLICATE' ? 409 : code === 'NOT_FOUND' ? 404 : 400;
     return NextResponse.json({ code }, { status });
   }
 
-  const row = (Array.isArray(data) ? data[0] : data) as DbUserRow | null;
-  if (!row) {
+  if (!directRow) {
     return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
   }
 
-  return NextResponse.json(mapDbUser(row));
+  return NextResponse.json(mapDbUser(directRow as DbUserRow));
 }
 
 export async function DELETE(

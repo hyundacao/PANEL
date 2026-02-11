@@ -13,7 +13,6 @@ export type PrzemialyTab =
   | 'spis'
   | 'spis-oryginalow'
   | 'przesuniecia'
-  | 'przesuniecia-erp'
   | 'raporty'
   | 'kartoteka'
   | 'wymieszane'

@@ -101,20 +101,12 @@ const itemStatusConfig: Record<
   OVER: { label: 'Nadwy偶ka', tone: 'danger' }
 };
 
-const documentStatusConfig: Record<
-  'OPEN' | 'CLOSED',
-  { label: string; tone: 'info' | 'default' }
-> = {
-  OPEN: { label: 'Otwarte', tone: 'info' },
-  CLOSED: { label: 'Zamkni臋te', tone: 'default' }
-};
-
 const warehouseTransferPriorityConfig: Record<
   WarehouseTransferItemPriority,
   { label: string; tone: 'default' | 'info' | 'danger'; order: number }
 > = {
-  CRITICAL: { label: 'Pilny', tone: 'danger', order: 0 },
-  HIGH: { label: 'Pilny', tone: 'danger', order: 0 },
+  CRITICAL: { label: 'Pilne', tone: 'danger', order: 0 },
+  HIGH: { label: 'Pilne', tone: 'danger', order: 0 },
   NORMAL: { label: 'Normalny', tone: 'info', order: 1 },
   LOW: { label: 'Normalny', tone: 'default', order: 1 }
 };
@@ -150,6 +142,27 @@ const formatDateTime = (value: string) =>
     dateStyle: 'short',
     timeStyle: 'short'
   }).format(new Date(value));
+
+const displayItemName = (value: string) => {
+  const normalized = String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return '';
+
+  const withoutPrice = normalized.replace(/(?:\s*[|,;:-]\s*|\s+)0[.,]0+\s*$/i, '').trim();
+  const withoutQty = withoutPrice.replace(
+    /(?:\s*[|,;:-]\s*|\s+)\d[\d\s.,]*\s*(?:szt\.?|kg|g|l|ltr|m2|m3|mb|kpl|op)\.?\s*$/i,
+    ''
+  );
+
+  const cleaned = withoutQty.replace(/[|,;:-]\s*$/g, '').trim();
+  return cleaned || normalized;
+};
+
+const displayWarehouseNumber = (value: string | null | undefined) => {
+  const normalized = String(value ?? '').trim();
+  return normalized || '-';
+};
 
 const normalizeUnitToken = (value: string) => {
   const normalized = value
@@ -2019,6 +2032,7 @@ export function WarehouseTransferDocumentsPanel() {
   const queryClient = useQueryClient();
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const tableFileInputRef = useRef<HTMLInputElement | null>(null);
+  const detailsCardRef = useRef<HTMLDivElement | null>(null);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [form, setForm] = useState({
     documentNumber: '',
@@ -2202,7 +2216,8 @@ export function WarehouseTransferDocumentsPanel() {
         MIGRATION_REQUIRED_PRIORITY: 'Brakuje migracji bazy dla priorytetow. Uruchom migracje SQL.',
         '42703': 'Brakuje migracji bazy dla priorytetow. Uruchom migracje SQL.',
         PGRST204: 'Brakuje migracji bazy dla priorytetow. Uruchom migracje SQL.',
-        INVALID_QTY: 'Ka偶da pozycja musi mie膰 ilo艣膰 wi臋ksz膮 od zera.'
+        INVALID_QTY: 'Ka偶da pozycja musi mie膰 ilo艣膰 wi臋ksz膮 od zera.',
+        FORBIDDEN: 'Brak uprawnien do tworzenia dokumentow (wymagane: Wypisz dokument i zapis).'
       };
       toast({
         title: messageMap[err.message] ?? 'Nie uda艂o si臋 utworzy膰 dokumentu.',
@@ -2711,10 +2726,20 @@ export function WarehouseTransferDocumentsPanel() {
   const handleDocumentClick = (clickedDocumentId?: string) => {
     if (!clickedDocumentId) return;
     if (clickedDocumentId === activeDocumentId) {
-      setCollapsedDocumentIds((prev) => ({
-        ...prev,
-        [clickedDocumentId]: !prev[clickedDocumentId]
-      }));
+      let willExpand = false;
+      setCollapsedDocumentIds((prev) => {
+        const nextCollapsed = !prev[clickedDocumentId];
+        willExpand = !nextCollapsed;
+        return {
+          ...prev,
+          [clickedDocumentId]: nextCollapsed
+        };
+      });
+      if (willExpand) {
+        requestAnimationFrame(() => {
+          detailsCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      }
       return;
     }
     setSelectedDocumentId(clickedDocumentId);
@@ -2722,6 +2747,9 @@ export function WarehouseTransferDocumentsPanel() {
       ...prev,
       [clickedDocumentId]: false
     }));
+    requestAnimationFrame(() => {
+      detailsCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   };
 
   const handleToggleItemExpand = useCallback((documentId: string, itemId: string) => {
@@ -2732,38 +2760,36 @@ export function WarehouseTransferDocumentsPanel() {
   }, []);
 
   const activeDocumentRows = activeDocuments.map((document) => [
-    <span key={`${document.id}-sourceWarehouse`} className="font-medium text-title">
-      {document.sourceWarehouse?.trim() || '-'}
+    <span
+      key={`${document.id}-sourceWarehouse`}
+      className="inline-flex rounded-full border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-2.5 py-1 text-sm font-black tabular-nums text-brand"
+    >
+      {displayWarehouseNumber(document.sourceWarehouse)}
     </span>,
-    formatDateTime(document.createdAt),
-    <span key={`${document.id}-number`} className="font-semibold text-title">
+    <span key={`${document.id}-date`} className="text-sm text-dim">
+      {formatDateTime(document.createdAt)}
+    </span>,
+    <span key={`${document.id}-number`} className="text-base font-black text-title">
       {document.documentNumber}
     </span>,
-    <Badge
-      key={`${document.id}-status`}
-      tone={documentStatusConfig[document.status].tone}
-    >
-      {documentStatusConfig[document.status].label}
-    </Badge>,
-    <span key={`${document.id}-items`} className="tabular-nums">
+    <span key={`${document.id}-items`} className="text-sm font-semibold tabular-nums text-title">
       {document.itemsCount}
     </span>
   ]);
   const historyDocumentRows = historyDocuments.map((document) => [
-    <span key={`${document.id}-sourceWarehouse`} className="font-medium text-title">
-      {document.sourceWarehouse?.trim() || '-'}
+    <span
+      key={`${document.id}-sourceWarehouse`}
+      className="inline-flex rounded-full border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-2.5 py-1 text-sm font-black tabular-nums text-brand"
+    >
+      {displayWarehouseNumber(document.sourceWarehouse)}
     </span>,
-    formatDateTime(document.createdAt),
-    <span key={`${document.id}-number`} className="font-semibold text-title">
+    <span key={`${document.id}-date`} className="text-sm text-dim">
+      {formatDateTime(document.createdAt)}
+    </span>,
+    <span key={`${document.id}-number`} className="text-base font-black text-title">
       {document.documentNumber}
     </span>,
-    <Badge
-      key={`${document.id}-status`}
-      tone={documentStatusConfig[document.status].tone}
-    >
-      {documentStatusConfig[document.status].label}
-    </Badge>,
-    <span key={`${document.id}-items`} className="tabular-nums">
+    <span key={`${document.id}-items`} className="text-sm font-semibold tabular-nums text-title">
       {document.itemsCount}
     </span>
   ]);
@@ -2826,9 +2852,6 @@ export function WarehouseTransferDocumentsPanel() {
             </p>
           </div>
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
-            <Badge tone={documentStatusConfig[details.document.status].tone}>
-              {documentStatusConfig[details.document.status].label}
-            </Badge>
             <Button
               variant="outline"
               className="w-full sm:w-auto"
@@ -2879,6 +2902,9 @@ export function WarehouseTransferDocumentsPanel() {
               const issueDraft = issueDrafts[item.id] ?? { qty: '', note: '' };
               const receiptDraft = receiptDrafts[item.id] ?? { qty: '', note: '' };
               const isExpanded = expandedItemId === item.id;
+              const normalizedPriority = normalizeWarehouseTransferPriority(item.priority);
+              const isUrgentPriority =
+                warehouseTransferPriorityConfig[normalizedPriority].order === 0;
               const diffClasses =
                 item.diffQty > 0
                   ? 'border-[color:color-mix(in_srgb,var(--danger)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--danger)_12%,transparent)] text-danger'
@@ -2907,7 +2933,10 @@ export function WarehouseTransferDocumentsPanel() {
                         className="min-w-0 flex-1 text-left"
                       >
                         <p className="break-words text-base font-black tracking-wide text-title">
-                          LP {item.lineNo} | <span className="text-[color:var(--brand)]">{item.name}</span>
+                          <span className="text-[color:var(--brand)]">LP {item.lineNo}</span> |{' '}
+                          <span className="text-title">
+                            {displayItemName(item.name)}
+                          </span>
                         </p>
                         <p className="mt-2 break-words text-xs leading-relaxed text-dim">
                           Indeks: {item.indexCode}
@@ -2916,20 +2945,15 @@ export function WarehouseTransferDocumentsPanel() {
                         </p>
                       </button>
                       <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
-                        <Badge
-                          tone={
-                            warehouseTransferPriorityConfig[
-                              normalizeWarehouseTransferPriority(item.priority)
-                            ].tone
+                        <span
+                          className={
+                            isUrgentPriority
+                              ? 'inline-flex min-h-[36px] items-center whitespace-nowrap rounded-full border border-[color:color-mix(in_srgb,var(--danger)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)] px-3 py-1 text-sm font-black text-danger'
+                              : 'inline-flex min-h-[36px] items-center whitespace-nowrap rounded-full border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-3 py-1 text-sm font-black text-brand'
                           }
                         >
-                          Priorytet:{' '}
-                          {
-                            warehouseTransferPriorityConfig[
-                              normalizeWarehouseTransferPriority(item.priority)
-                            ].label
-                          }
-                        </Badge>
+                          Priorytet: {warehouseTransferPriorityConfig[normalizedPriority].label}
+                        </span>
                         {!isDispatcherTab && !isWarehousemanTab && (
                           <Badge tone={itemStatusConfig[item.status].tone}>
                             {itemStatusConfig[item.status].label}
@@ -3498,14 +3522,16 @@ export function WarehouseTransferDocumentsPanel() {
               />
             ) : (
               <DataTable
-                columns={['Magazyn', 'Data', 'Dokument', 'Status', 'Pozycje']}
+                columns={['Magazyn', 'Data', 'Dokument', 'Pozycje']}
                 rows={activeDocumentRows}
                 onRowClick={(rowIndex) => handleDocumentClick(activeDocuments[rowIndex]?.id)}
               />
             )}
           </Card>
 
-          {renderDetailsCard()}
+          <div ref={detailsCardRef} className="scroll-mt-20">
+            {renderDetailsCard()}
+          </div>
         </>
       )}
 
@@ -3527,14 +3553,16 @@ export function WarehouseTransferDocumentsPanel() {
               />
             ) : (
               <DataTable
-                columns={['Magazyn', 'Data', 'Dokument', 'Status', 'Pozycje']}
+                columns={['Magazyn', 'Data', 'Dokument', 'Pozycje']}
                 rows={historyDocumentRows}
                 onRowClick={(rowIndex) => handleDocumentClick(historyDocuments[rowIndex]?.id)}
               />
             )}
           </Card>
 
-          {renderDetailsCard()}
+          <div ref={detailsCardRef} className="scroll-mt-20">
+            {renderDetailsCard()}
+          </div>
         </>
       )}
     </div>

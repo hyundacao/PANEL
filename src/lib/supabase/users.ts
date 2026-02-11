@@ -13,13 +13,6 @@ export type DbUserRow = {
 
 const defaultAccess: UserAccess = { admin: false, warehouses: {} };
 
-const ERP_ACCESS_TABS = new Set([
-  'erp-magazynier',
-  'erp-rozdzielca',
-  'erp-wypisz-dokument',
-  'erp-historia-dokumentow'
-]);
-
 const cloneAccess = (access: UserAccess): UserAccess => ({
   admin: Boolean(access.admin),
   warehouses: Object.fromEntries(
@@ -31,63 +24,14 @@ const cloneAccess = (access: UserAccess): UserAccess => ({
 });
 
 const normalizeAccessFromDb = (access: UserAccess | null | undefined): UserAccess => {
-  const next = cloneAccess(access ?? defaultAccess);
-  const przemialyAccess = next.warehouses.PRZEMIALY;
-  if (!przemialyAccess) return next;
-
-  const erpTabs = przemialyAccess.tabs.filter((tab) => ERP_ACCESS_TABS.has(tab));
-  if (erpTabs.length > 0) {
-    const existingErp = next.warehouses.PRZESUNIECIA_ERP;
-    if (existingErp) {
-      existingErp.tabs = Array.from(new Set([...existingErp.tabs, ...erpTabs]));
-    } else {
-      next.warehouses.PRZESUNIECIA_ERP = {
-        role: przemialyAccess.role,
-        readOnly: przemialyAccess.readOnly,
-        admin: przemialyAccess.admin,
-        tabs: erpTabs
-      };
-    }
-  }
-
-  przemialyAccess.tabs = przemialyAccess.tabs.filter((tab) => !ERP_ACCESS_TABS.has(tab));
-  if (przemialyAccess.tabs.length === 0 && !przemialyAccess.admin) {
-    delete next.warehouses.PRZEMIALY;
-  }
-  return next;
+  return cloneAccess(access ?? defaultAccess);
 };
 
 export const normalizeAccessForDb = (
   access: UserAccess | null | undefined
 ): UserAccess | null => {
   if (!access) return null;
-  const next = cloneAccess(access);
-  const erpAccess = next.warehouses.PRZESUNIECIA_ERP;
-  const przemialyAccess = next.warehouses.PRZEMIALY;
-
-  if (erpAccess) {
-    const baseTabs = przemialyAccess
-      ? przemialyAccess.tabs.filter((tab) => !ERP_ACCESS_TABS.has(tab))
-      : [];
-    const erpTabs = erpAccess.tabs.filter((tab) => ERP_ACCESS_TABS.has(tab));
-    const mergedTabs = Array.from(new Set([...baseTabs, ...erpTabs]));
-    next.warehouses.PRZEMIALY = {
-      role: przemialyAccess?.role ?? erpAccess.role,
-      readOnly: przemialyAccess?.readOnly ?? erpAccess.readOnly,
-      admin: przemialyAccess?.admin ?? erpAccess.admin,
-      tabs: mergedTabs
-    };
-    delete next.warehouses.PRZESUNIECIA_ERP;
-    return next;
-  }
-
-  if (przemialyAccess) {
-    przemialyAccess.tabs = przemialyAccess.tabs.filter((tab) => !ERP_ACCESS_TABS.has(tab));
-    if (przemialyAccess.tabs.length === 0 && !przemialyAccess.admin) {
-      delete next.warehouses.PRZEMIALY;
-    }
-  }
-  return next;
+  return cloneAccess(access);
 };
 
 export const mapDbUser = (row: DbUserRow): AppUser => ({
