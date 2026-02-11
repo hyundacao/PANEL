@@ -2877,22 +2877,25 @@ export function WarehouseTransferDocumentsPanel() {
             onClick={() => handleDocumentClick(document.id)}
             className={`w-full rounded-xl border px-3 py-3 text-left shadow-[inset_0_1px_0_var(--inner-highlight)] transition ${
               selected
-                ? 'border-[rgba(255,122,26,0.85)] bg-[color:color-mix(in_srgb,var(--brand)_11%,transparent)]'
+                ? 'border-[rgba(255,122,26,0.96)] bg-[color:color-mix(in_srgb,var(--brand)_12%,transparent)] ring-2 ring-[color:color-mix(in_srgb,var(--brand)_40%,transparent)] shadow-[0_0_0_1px_rgba(255,122,26,0.55),inset_0_1px_0_var(--inner-highlight)]'
                 : 'border-border bg-surface2 hover:border-[rgba(255,122,26,0.65)]'
             }`}
           >
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-dim">
-              <span>
-                Magazyn:{' '}
-                <span className="font-black tabular-nums text-brand">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-dim">
+              <span className="inline-flex items-center rounded-full border border-[color:color-mix(in_srgb,var(--brand)_42%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_17%,transparent)] px-2.5 py-1 text-[10px] font-black tracking-[0.1em] text-brand">
+                MAGAZYN: NR{' '}
+                <span className="ml-1 text-[12px] tabular-nums text-[color:color-mix(in_srgb,var(--brand)_65%,white_35%)]">
                   {displayWarehouseNumber(document.sourceWarehouse)}
                 </span>
               </span>
               <span>
-                Data: <span className="font-semibold normal-case text-title">{formatDateTime(document.createdAt)}</span>
+                DATA:{' '}
+                <span className="font-semibold normal-case text-title">
+                  {formatDateTime(document.createdAt)}
+                </span>
               </span>
               <span>
-                Pozycje:{' '}
+                POZYCJE:{' '}
                 <span className="font-black tabular-nums normal-case text-title">
                   {document.itemsCount}
                 </span>
@@ -2965,6 +2968,9 @@ export function WarehouseTransferDocumentsPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-lg font-semibold text-title">{details.document.documentNumber}</p>
+            <p className="mt-1 text-xs font-semibold uppercase tracking-[0.08em] text-brand">
+              MAGAZYN: NR {displayWarehouseNumber(details.document.sourceWarehouse)}
+            </p>
             <p className="text-sm text-dim">
               Utworzył: {details.document.createdByName} | {formatDateTime(details.document.createdAt)}
             </p>
