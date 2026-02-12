@@ -174,6 +174,15 @@ const displayWarehouseNumber = (value: string | null | undefined) => {
   return normalized || '-';
 };
 
+const WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS = ['1', '4', '10', '13', '51', '56'] as const;
+
+const extractWarehousemanSourceWarehouseKey = (value: string | null | undefined) => {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) return null;
+  const match = normalized.match(/\d+/);
+  return match ? match[0] : null;
+};
+
 const normalizeUnitToken = (value: string) => {
   const normalized = value
     .trim()
@@ -183,7 +192,17 @@ const normalizeUnitToken = (value: string) => {
     .replace(/[^a-z0-9]/g, '');
   if (!normalized) return null;
 
-  if (normalized === 'kg' || normalized === 'kgs' || normalized === 'kq') return 'kg';
+  if (
+    normalized === 'kg' ||
+    normalized === 'kgs' ||
+    normalized === 'kq' ||
+    normalized === 'k9' ||
+    normalized === 'k6' ||
+    normalized === 'ko'
+  ) {
+    return 'kg';
+  }
+  if (normalized.startsWith('kg')) return 'kg';
   if (normalized === 'g') return 'g';
   if (normalized === 'l' || normalized === 'ltr' || normalized === 'litr') return 'l';
   if (
@@ -290,10 +309,28 @@ const splitLine = (line: string): SplitLineResult => {
   return { tokens: line.split(/\s+/), mode: 'whitespace' };
 };
 
-const parseQtyToken = (value: string) => {
+const normalizeOcrQtyToken = (value: string) => {
   const raw = String(value ?? '').trim();
+  if (!raw) return '';
+
+  const hasDigitOrSeparator = /[\d,.\-]/.test(raw);
+  let normalized = raw
+    .replace(/[Oo]/g, '0')
+    .replace(/[’`´]/g, ',');
+  if (hasDigitOrSeparator) {
+    normalized = normalized
+      .replace(/[Il]/g, '1')
+      .replace(/[Ss]/g, '5')
+      .replace(/[Bb]/g, '8');
+  }
+  return normalized;
+};
+
+const parseQtyToken = (value: string) => {
+  const raw = normalizeOcrQtyToken(value);
   if (!raw) return null;
   const compact = raw.replace(/\s+/g, '').replace(/[^\d,.\-]/g, '');
+  if (!/\d/.test(compact)) return null;
   const hasComma = compact.includes(',');
   const hasDot = compact.includes('.');
   let normalized = compact;
@@ -312,6 +349,11 @@ const parseQtyToken = (value: string) => {
   if (!Number.isFinite(parsed)) return null;
   return parsed;
 };
+
+const normalizeParsedItemName = (value: string) =>
+  displayItemName(value)
+    .replace(/\s+/g, ' ')
+    .trim();
 
 const tryParseQtyFromParts = (parts: string[]) => {
   const compactParts = parts.map((part) => String(part ?? '').replace(/\s+/g, '').trim()).filter(Boolean);
@@ -781,7 +823,7 @@ const parseDocumentItemsFromTesseractTsv = (tsv: string): ParsedDocumentItems =>
 
   const items = rowBlocks
     .map((row, index): ParsedItemInput | null => {
-      const name = row.nameParts.join(' ').replace(/\s+/g, ' ').trim();
+      const name = normalizeParsedItemName(row.nameParts.join(' '));
       const qty = row.qty ?? null;
       if (!row.indexCode || !name || qty === null || qty <= 0) {
         return null;
@@ -1074,7 +1116,7 @@ const parseDocumentItemsFromTesseractGrid = (tsv: string): ParsedDocumentItems =
 
   const items = rowBlocks
     .map((row, index): ParsedItemInput | null => {
-      const name = row.nameParts.join(' ').replace(/\s+/g, ' ').trim();
+      const name = normalizeParsedItemName(row.nameParts.join(' '));
       const qty = row.qty ?? null;
       if (!row.indexCode || !name || qty === null || qty <= 0) {
         return null;
@@ -1365,11 +1407,11 @@ const parseDocumentItemsFromCanonicalColumns = (raw: string): ParsedDocumentItem
     cursor += 1;
     const indexCode2Raw = front[cursor] ?? '';
     cursor += 1;
-    const name = front
+    const name = normalizeParsedItemName(
+      front
       .slice(cursor)
       .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    );
 
     const erpCode = erpCodeRaw && erpCodeRaw !== '-' ? erpCodeRaw : undefined;
     const indexCode = indexCodeRaw && indexCodeRaw !== '-' ? indexCodeRaw : erpCodeRaw;
@@ -1509,11 +1551,11 @@ const parseDocumentItemsFromSheetRows = (rows: Array<Array<unknown>>): ParsedDoc
     const nameStart = Math.max(0, cols.name);
     const nameStopCandidates = [cols.qty, cols.unit].filter((idx) => idx >= 0 && idx > nameStart);
     const nameStop = nameStopCandidates.length > 0 ? Math.min(...nameStopCandidates) : cells.length;
-    const name = cells
+    const name = normalizeParsedItemName(
+      cells
       .slice(nameStart, nameStop)
       .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    );
 
     const erpCode = erpCodeRaw && erpCodeRaw !== '-' ? erpCodeRaw : undefined;
     const indexCode = indexRaw && indexRaw !== '-' ? indexRaw : erpCodeRaw;
@@ -1664,11 +1706,11 @@ const parseDocumentItemsFromFixedColumns = (raw: string): ParsedDocumentItems =>
       return;
     }
 
-    const name = payload
+    const name = normalizeParsedItemName(
+      payload
       .slice(0, qtyStartIndex)
       .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    );
     if (!name) {
       skipped += 1;
       return;
@@ -1724,7 +1766,20 @@ const parseDocumentItemsByLines = (raw: string): ParsedDocumentItems => {
       return;
     }
 
-    const qtyToken = findQtyTokenFromEnd(tokens, 1);
+    let qtyToken: { qty: number; qtyStartIndex: number; qtyEndIndex: number } | null = null;
+    let unit: string | null = null;
+    for (let unitIndex = tokens.length - 1; unitIndex >= 1; unitIndex -= 1) {
+      const normalizedUnit = normalizeUnitToken(tokens[unitIndex] ?? '');
+      if (!normalizedUnit) continue;
+      const beforeUnitQty = findQtyBeforeUnitToken(tokens, unitIndex, 1);
+      if (!beforeUnitQty) continue;
+      qtyToken = beforeUnitQty;
+      unit = normalizedUnit;
+      break;
+    }
+    if (!qtyToken) {
+      qtyToken = findQtyTokenFromEnd(tokens, 1);
+    }
     if (!qtyToken) {
       skipped += 1;
       return;
@@ -1745,16 +1800,18 @@ const parseDocumentItemsByLines = (raw: string): ParsedDocumentItems => {
     }
 
     let end = qtyToken.qtyStartIndex;
-    let unit = 'kg';
-    const unitBeforeQty = end - cursor >= 1 ? normalizeUnitToken(tokens[end - 1]) : null;
-    if (unitBeforeQty) {
-      unit = unitBeforeQty;
-      end -= 1;
-    }
-    const unitAfterQty = tokens[qtyToken.qtyEndIndex + 1];
-    const normalizedUnitAfterQty = unitAfterQty ? normalizeUnitToken(unitAfterQty) : null;
-    if (normalizedUnitAfterQty) {
-      unit = normalizedUnitAfterQty;
+    if (!unit) {
+      unit = 'kg';
+      const unitBeforeQty = end - cursor >= 1 ? normalizeUnitToken(tokens[end - 1]) : null;
+      if (unitBeforeQty) {
+        unit = unitBeforeQty;
+        end -= 1;
+      }
+      const unitAfterQty = tokens[qtyToken.qtyEndIndex + 1];
+      const normalizedUnitAfterQty = unitAfterQty ? normalizeUnitToken(unitAfterQty) : null;
+      if (normalizedUnitAfterQty) {
+        unit = normalizedUnitAfterQty;
+      }
     }
 
     let indexCode = tokens[cursor] ?? '';
@@ -1786,29 +1843,18 @@ const parseDocumentItemsByLines = (raw: string): ParsedDocumentItems => {
       return;
     }
 
-    const name =
-      split.mode === 'whitespace' ? details.join(' ') : details[0];
-    const batch =
-      split.mode === 'whitespace'
-        ? undefined
-        : details.length >= 2
-        ? details[1]
-        : undefined;
-    const location =
-      split.mode === 'whitespace'
-        ? undefined
-        : details.length >= 3
-        ? details.slice(2).join(' ')
-        : undefined;
+    const name = normalizeParsedItemName(details.join(' '));
+    if (!name) {
+      skipped += 1;
+      return;
+    }
     items.push({
       lineNo,
       erpCode,
       indexCode,
       indexCode2,
       name,
-      batch,
-      location,
-      unit,
+      unit: unit || 'kg',
       plannedQty: qty
     });
   });
@@ -1883,30 +1929,46 @@ const parseDocumentItemsFromTokenStream = (raw: string): ParsedDocumentItems => 
       cursor += 1;
     }
 
-    const qtyToken = findQtyTokenFromEnd(chunk, cursor);
+    let qtyToken: { qty: number; qtyStartIndex: number; qtyEndIndex: number } | null = null;
+    let unit: string | null = null;
+    for (let unitIndex = chunk.length - 1; unitIndex >= cursor + 1; unitIndex -= 1) {
+      const normalizedUnit = normalizeUnitToken(chunk[unitIndex] ?? '');
+      if (!normalizedUnit) continue;
+      const beforeUnitQty = findQtyBeforeUnitToken(chunk, unitIndex, cursor);
+      if (!beforeUnitQty) continue;
+      qtyToken = beforeUnitQty;
+      unit = normalizedUnit;
+      break;
+    }
+    if (!qtyToken) {
+      qtyToken = findQtyTokenFromEnd(chunk, cursor);
+    }
     if (!qtyToken) {
       skipped += 1;
       continue;
     }
 
     let detailsEnd = qtyToken.qtyStartIndex;
-    let unit = 'kg';
-    const unitBeforeQty = detailsEnd - cursor >= 1 ? normalizeUnitToken(chunk[detailsEnd - 1]) : null;
-    if (unitBeforeQty) {
-      unit = unitBeforeQty;
-      detailsEnd -= 1;
-    }
-    const unitAfterQty = chunk[qtyToken.qtyEndIndex + 1];
-    const normalizedUnitAfterQty = unitAfterQty ? normalizeUnitToken(unitAfterQty) : null;
-    if (normalizedUnitAfterQty) {
-      unit = normalizedUnitAfterQty;
+    if (!unit) {
+      unit = 'kg';
+      const unitBeforeQty =
+        detailsEnd - cursor >= 1 ? normalizeUnitToken(chunk[detailsEnd - 1]) : null;
+      if (unitBeforeQty) {
+        unit = unitBeforeQty;
+        detailsEnd -= 1;
+      }
+      const unitAfterQty = chunk[qtyToken.qtyEndIndex + 1];
+      const normalizedUnitAfterQty = unitAfterQty ? normalizeUnitToken(unitAfterQty) : null;
+      if (normalizedUnitAfterQty) {
+        unit = normalizedUnitAfterQty;
+      }
     }
 
     const details = chunk
       .slice(cursor, detailsEnd)
       .map((token) => token.trim())
       .filter((token) => token && token !== '-');
-    const name = details.join(' ').trim();
+    const name = normalizeParsedItemName(details.join(' '));
     if (!name) {
       skipped += 1;
       continue;
@@ -1918,7 +1980,7 @@ const parseDocumentItemsFromTokenStream = (raw: string): ParsedDocumentItems => 
       indexCode,
       indexCode2,
       name,
-      unit,
+      unit: unit || 'kg',
       plannedQty: qtyToken.qty
     });
   }
@@ -2102,6 +2164,9 @@ export function WarehouseTransferDocumentsPanel() {
   const [priorityOverrides, setPriorityOverrides] = useState<
     Record<string, WarehouseTransferItemPriority>
   >({});
+  const [warehousemanSourceWarehouseFilter, setWarehousemanSourceWarehouseFilter] = useState<
+    string[]
+  >([...WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS]);
 
   useEffect(() => {
     if (!hasAnyWorkspaceAccess) return;
@@ -2174,6 +2239,23 @@ export function WarehouseTransferDocumentsPanel() {
   const removeNonInventoryDraft = (draftId: string) => {
     setNonInventoryDrafts((prev) => prev.filter((item) => item.id !== draftId));
   };
+  const toggleWarehousemanSourceWarehouse = useCallback((warehouseNo: string) => {
+    setWarehousemanSourceWarehouseFilter((prev) => {
+      const nextSet = new Set(prev);
+      if (nextSet.has(warehouseNo)) {
+        nextSet.delete(warehouseNo);
+      } else {
+        nextSet.add(warehouseNo);
+      }
+      return WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS.filter((option) => nextSet.has(option));
+    });
+  }, []);
+  const selectAllWarehousemanSourceWarehouses = useCallback(() => {
+    setWarehousemanSourceWarehouseFilter([...WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS]);
+  }, []);
+  const clearWarehousemanSourceWarehouseFilter = useCallback(() => {
+    setWarehousemanSourceWarehouseFilter([]);
+  }, []);
 
   const previewRows = useMemo(
     () =>
@@ -2226,6 +2308,19 @@ export function WarehouseTransferDocumentsPanel() {
       return 0;
     });
   }, [issuedDocuments, lastMarkedIssuedDocumentId, openDocuments]);
+  const warehousemanSourceWarehouseFilterSet = useMemo(
+    () => new Set(warehousemanSourceWarehouseFilter),
+    [warehousemanSourceWarehouseFilter]
+  );
+  const filteredWarehousemanDocuments = useMemo(
+    () =>
+      warehousemanDocuments.filter((document) => {
+        const sourceWarehouseKey = extractWarehousemanSourceWarehouseKey(document.sourceWarehouse);
+        if (!sourceWarehouseKey) return false;
+        return warehousemanSourceWarehouseFilterSet.has(sourceWarehouseKey);
+      }),
+    [warehousemanDocuments, warehousemanSourceWarehouseFilterSet]
+  );
   const dispatcherDocuments = useMemo(
     () =>
       [...issuedDocuments, ...openDocuments].sort((a, b) => {
@@ -2237,14 +2332,14 @@ export function WarehouseTransferDocumentsPanel() {
     [issuedDocuments, openDocuments]
   );
   const activeDocuments = useMemo(() => {
-    if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return warehousemanDocuments;
+    if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return filteredWarehousemanDocuments;
     if (workspaceTab === 'dispatcher' && canSeeDispatcherTab) return dispatcherDocuments;
     return [];
   }, [
     canSeeDispatcherTab,
     canSeeWarehousemanTab,
     dispatcherDocuments,
-    warehousemanDocuments,
+    filteredWarehousemanDocuments,
     workspaceTab
   ]);
   const historyDocuments = useMemo(
@@ -2296,7 +2391,7 @@ export function WarehouseTransferDocumentsPanel() {
     toast
   ]);
   const visibleDocuments = useMemo(() => {
-    if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return warehousemanDocuments;
+    if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return filteredWarehousemanDocuments;
     if (workspaceTab === 'dispatcher' && canSeeDispatcherTab) return dispatcherDocuments;
     if (workspaceTab === 'history' && canSeeHistoryTab) return historyDocuments;
     return [];
@@ -2305,8 +2400,8 @@ export function WarehouseTransferDocumentsPanel() {
     canSeeHistoryTab,
     canSeeWarehousemanTab,
     dispatcherDocuments,
+    filteredWarehousemanDocuments,
     historyDocuments,
-    warehousemanDocuments,
     workspaceTab
   ]);
 
@@ -3283,7 +3378,7 @@ export function WarehouseTransferDocumentsPanel() {
                 <div
                   key={item.id}
                   ref={itemIndex === 0 ? firstItemRef : undefined}
-                  className="scroll-mt-24 rounded-2xl border border-border bg-surface2 p-3 shadow-[inset_0_1px_0_var(--inner-highlight)]"
+                  className="scroll-mt-24 rounded-2xl border border-[color:color-mix(in_srgb,var(--border)_98%,var(--brand)_2%)] bg-[color:color-mix(in_srgb,var(--surface-2)_99%,var(--brand)_1%)] p-3 shadow-[inset_0_1px_0_var(--inner-highlight)]"
                 >
                   <div
                     className={
@@ -3778,7 +3873,9 @@ export function WarehouseTransferDocumentsPanel() {
     ? 'Dokumenty do wydania'
     : 'Dokumenty przychodzące';
   const activeDocumentsEmptyDescription = isWarehousemanTab
-    ? 'Nowe dokumenty do wydania pojawiają się tutaj po przekazaniu do realizacji. Zielone dokumenty są już wydane i czekają na zatwierdzenie.'
+    ? warehousemanSourceWarehouseFilter.length === 0
+      ? 'Wybierz co najmniej jeden magazyn w filtrze, aby zobaczyc dokumenty.'
+      : 'Nowe dokumenty do wydania pojawiają się tutaj po przekazaniu do realizacji. Zielone dokumenty są już wydane i czekają na zatwierdzenie.'
     : 'Widzisz wszystkie dokumenty (OPEN i ISSUED). Zielone dokumenty są już wydane i gotowe do przyjęcia.';
 
   if (!hasAnyWorkspaceAccess) {
@@ -3970,6 +4067,54 @@ export function WarehouseTransferDocumentsPanel() {
 
       {(isWarehousemanTab || isDispatcherTab) && (
         <>
+          {isWarehousemanTab && (
+            <Card className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                  Filtr magazynow zrodlowych
+                </p>
+                <p className="text-sm text-dim">
+                  Wybrane: {warehousemanSourceWarehouseFilter.length}/
+                  {WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS.length}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS.map((warehouseNo) => {
+                  const active = warehousemanSourceWarehouseFilterSet.has(warehouseNo);
+                  return (
+                    <button
+                      key={warehouseNo}
+                      type="button"
+                      onClick={() => toggleWarehousemanSourceWarehouse(warehouseNo)}
+                      className={`min-h-[34px] rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                        active
+                          ? 'border-[color:color-mix(in_srgb,var(--brand)_42%,var(--border))] bg-[color:color-mix(in_srgb,var(--brand)_16%,transparent)] text-title'
+                          : 'border-border bg-surface2 text-dim hover:border-borderStrong hover:text-title'
+                      }`}
+                    >
+                      Magazyn {warehouseNo}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  className="min-h-[36px] px-3 py-1.5 text-xs"
+                  onClick={selectAllWarehousemanSourceWarehouses}
+                >
+                  Zaznacz wszystkie
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="min-h-[36px] px-3 py-1.5 text-xs"
+                  onClick={clearWarehousemanSourceWarehouseFilter}
+                >
+                  Wyczysc
+                </Button>
+              </div>
+            </Card>
+          )}
           <div className="space-y-3 md:hidden">
             <div className="flex flex-wrap items-center justify-between gap-2 px-1">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
