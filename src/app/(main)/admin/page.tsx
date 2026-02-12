@@ -493,7 +493,7 @@ export default function AdminPage() {
     const url = new URL(window.location.href);
     if (url.searchParams.get('tab') !== przemialyTab) {
       url.searchParams.set('tab', przemialyTab);
-      window.history.replaceState(null, '', url.toString());
+      window.history.pushState(null, '', url.toString());
     }
   }, [przemialyTab, tabReady]);
 

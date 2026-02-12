@@ -166,7 +166,10 @@ export default function WarehousesPage() {
 
   const openModule = (module: ModuleOption) => {
     setActiveWarehouse(module.key);
-    router.replace(module.href);
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem('apka-nav-from-magazyny', module.href);
+    }
+    router.push(module.href);
   };
 
   const openAdmin = () => {
@@ -175,7 +178,10 @@ export default function WarehousesPage() {
     } else if (adminWarehouses.length > 0) {
       setActiveWarehouse(adminWarehouses[0]);
     }
-    router.replace('/admin');
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem('apka-nav-from-magazyny', '/admin');
+    }
+    router.push('/admin');
   };
 
   return (

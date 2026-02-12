@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -12,6 +13,25 @@ export default function SparePartsHomePage() {
   const canPick = canSeeTab(user, 'CZESCI', 'pobierz');
   const canRefill = canSeeTab(user, 'CZESCI', 'uzupelnij');
   const readOnly = isReadOnly(user, 'CZESCI');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const fromMagazyny = window.sessionStorage.getItem('apka-nav-from-magazyny');
+    if (fromMagazyny === '/czesci') {
+      window.sessionStorage.removeItem('apka-nav-from-magazyny');
+      return;
+    }
+    const currentState =
+      (window.history.state as Record<string, unknown> | null) ?? {};
+    if (currentState.__apka_hierarchy_for === '/czesci') return;
+    const hierarchyState = {
+      ...currentState,
+      __apka_hierarchy_for: '/czesci',
+      __apka_hierarchy_parent: '/magazyny'
+    };
+    window.history.replaceState(hierarchyState, '', '/magazyny');
+    window.history.pushState(hierarchyState, '', '/czesci');
+  }, []);
 
   return (
     <div className="space-y-6">
