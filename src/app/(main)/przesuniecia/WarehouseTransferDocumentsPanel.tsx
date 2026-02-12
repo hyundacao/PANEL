@@ -2464,7 +2464,9 @@ export function WarehouseTransferDocumentsPanel() {
       const messageMap: Record<string, string> = {
         INVALID_QTY: 'Podaj ilość większą od zera.',
         DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
-        DOCUMENT_NOT_ISSUED: 'Najpierw magazynier musi oznaczyć: wydano wszystkie pozycje.',
+        DOCUMENT_NOT_ISSUED: 'Dokument nie jest gotowy do zatwierdzenia.',
+        ITEM_NOT_ISSUED: 'Ta pozycja nie ma jeszcze wydania.',
+        RECEIPT_ABOVE_ISSUED: 'Nie można przyjąć więcej niż wydano.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.'
       };
       toast({
@@ -2493,7 +2495,9 @@ export function WarehouseTransferDocumentsPanel() {
       const messageMap: Record<string, string> = {
         INVALID_QTY: 'Podaj ilość większą od zera.',
         DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
-        DOCUMENT_NOT_ISSUED: 'Najpierw magazynier musi oznaczyć: wydano wszystkie pozycje.',
+        DOCUMENT_NOT_ISSUED: 'Dokument nie jest gotowy do zatwierdzenia.',
+        ITEM_NOT_ISSUED: 'Ta pozycja nie ma jeszcze wydania.',
+        RECEIPT_ABOVE_ISSUED: 'Nie można przyjąć więcej niż wydano.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
         FORBIDDEN: 'Możesz edytować tylko swoje przyjęcia.',
         MIGRATION_REQUIRED: 'Brakuje migracji bazy dla przyjęć. Uruchom migrację SQL.'
@@ -3174,7 +3178,7 @@ export function WarehouseTransferDocumentsPanel() {
 
     const expandedItemId = expandedItemIds[details.document.id] ?? null;
     const canEditIssue = isWarehousemanTab && details.document.status === 'OPEN';
-    const canEditReceipt = isDispatcherTab && details.document.status === 'ISSUED';
+    const canEditReceipt = isDispatcherTab && details.document.status !== 'CLOSED';
     const itemListTitle = isWarehousemanTab
       ? 'Lista rzeczy do wydania'
       : isDispatcherTab
@@ -3238,8 +3242,7 @@ export function WarehouseTransferDocumentsPanel() {
             )}
             {isDispatcherTab && details.document.status === 'OPEN' && (
               <p className="w-full text-xs text-dim sm:text-right">
-                Dokument w przygotowaniu. Przyjęcia odblokują się po oznaczeniu Wydano wszystkie
-                pozycje.
+                Dokument w przygotowaniu. Przyjmuj tylko pozycje, które mają już ilość wydaną.
               </p>
             )}
           </div>
@@ -3332,11 +3335,20 @@ export function WarehouseTransferDocumentsPanel() {
                             Wydano
                           </Button>
                         )}
-                        {isDispatcherTab && canEditReceipt && (
+                        {isDispatcherTab && (
                           <Button
                             className="min-h-[46px] flex-1 px-4 py-2 text-sm sm:min-h-[52px] sm:flex-none sm:px-5 sm:py-3"
                             onClick={() => addReceiptForItem(item.id, qtyToReceive)}
-                            disabled={qtyToReceive <= 0 || addReceiptMutation.isPending}
+                            disabled={
+                              !canEditReceipt || qtyToReceive <= 0 || addReceiptMutation.isPending
+                            }
+                            title={
+                              canEditReceipt
+                                ? qtyToReceive <= 0
+                                  ? 'Brak ilości do przyjęcia.'
+                                  : undefined
+                                : 'Przyjęcia odblokują się po oznaczeniu dokumentu jako wydanego.'
+                            }
                           >
                             Przyjmij
                           </Button>

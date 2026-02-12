@@ -3243,7 +3243,6 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
-      if (documentRow.status !== 'ISSUED') throw new Error('DOCUMENT_NOT_ISSUED');
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
@@ -3252,6 +3251,29 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .maybeSingle();
       if (itemError) throw itemError;
       if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+
+      const { data: issueRows, error: issueRowsError } = await supabaseAdmin
+        .from('warehouse_transfer_item_issues')
+        .select('qty')
+        .eq('item_id', itemId);
+      if (issueRowsError) {
+        if (issueRowsError.code === '42P01') throw new Error('MIGRATION_REQUIRED');
+        throw issueRowsError;
+      }
+
+      const { data: receiptRows, error: receiptRowsError } = await supabaseAdmin
+        .from('warehouse_transfer_item_receipts')
+        .select('qty')
+        .eq('item_id', itemId);
+      if (receiptRowsError) throw receiptRowsError;
+
+      const issuedQty = (issueRows ?? []).reduce((sum, row) => sum + toNumber(row?.qty), 0);
+      if (issuedQty <= 0.000001) throw new Error('ITEM_NOT_ISSUED');
+
+      const receivedQty = (receiptRows ?? []).reduce((sum, row) => sum + toNumber(row?.qty), 0);
+      if (receivedQty + qty > issuedQty + 0.000001) {
+        throw new Error('RECEIPT_ABOVE_ISSUED');
+      }
 
       const { data, error } = await supabaseAdmin
         .from('warehouse_transfer_item_receipts')
@@ -3286,7 +3308,6 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
-      if (documentRow.status !== 'ISSUED') throw new Error('DOCUMENT_NOT_ISSUED');
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
@@ -3316,6 +3337,32 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         String(receiptRow.receiver_name) === actorName;
       if (!isAdmin && !isOwnerById && !isOwnerByName) {
         throw new Error('FORBIDDEN');
+      }
+
+      const { data: issueRows, error: issueRowsError } = await supabaseAdmin
+        .from('warehouse_transfer_item_issues')
+        .select('qty')
+        .eq('item_id', itemId);
+      if (issueRowsError) {
+        if (issueRowsError.code === '42P01') throw new Error('MIGRATION_REQUIRED');
+        throw issueRowsError;
+      }
+
+      const { data: receiptRows, error: receiptRowsError } = await supabaseAdmin
+        .from('warehouse_transfer_item_receipts')
+        .select('id, qty')
+        .eq('item_id', itemId);
+      if (receiptRowsError) throw receiptRowsError;
+
+      const issuedQty = (issueRows ?? []).reduce((sum, row) => sum + toNumber(row?.qty), 0);
+      if (issuedQty <= 0.000001) throw new Error('ITEM_NOT_ISSUED');
+
+      const receivedExcludingEdited = (receiptRows ?? []).reduce((sum, row) => {
+        if (String(row?.id ?? '') === receiptId) return sum;
+        return sum + toNumber(row?.qty);
+      }, 0);
+      if (receivedExcludingEdited + qty > issuedQty + 0.000001) {
+        throw new Error('RECEIPT_ABOVE_ISSUED');
       }
 
       const { data, error } = await supabaseAdmin
