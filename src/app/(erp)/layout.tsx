@@ -28,6 +28,7 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
   const {
     hydrated,
     user,
+    setUser,
     logout,
     activeWarehouse,
     setActiveWarehouse,
@@ -73,17 +74,34 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
   ]);
 
   useEffect(() => {
-    if (!hydrated || !user) return;
+    if (!hydrated || !user?.id) return;
+    const currentUser = user;
     let cancelled = false;
-    getCurrentSessionUser().catch(() => {
-      if (cancelled) return;
-      logout();
-      router.replace('/login');
-    });
+    getCurrentSessionUser()
+      .then((freshUser) => {
+        if (cancelled) return;
+        const accessChanged =
+          JSON.stringify(freshUser.access) !== JSON.stringify(currentUser.access);
+        const changed =
+          freshUser.id !== currentUser.id ||
+          freshUser.name !== currentUser.name ||
+          freshUser.username !== currentUser.username ||
+          freshUser.role !== currentUser.role ||
+          freshUser.isActive !== currentUser.isActive ||
+          accessChanged;
+        if (changed) {
+          setUser(freshUser);
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        logout();
+        router.replace('/login');
+      });
     return () => {
       cancelled = true;
     };
-  }, [hydrated, logout, router, user]);
+  }, [hydrated, logout, router, setUser, user, user?.id]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;

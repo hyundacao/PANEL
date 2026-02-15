@@ -97,6 +97,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     sidebarCollapsed,
     setSidebarCollapsed,
     user,
+    setUser,
     logout,
     hydrated,
     activeWarehouse,
@@ -196,11 +197,24 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   ]);
 
   useEffect(() => {
-    if (!hydrated || !user) return;
+    if (!hydrated || !user?.id) return;
+    const currentUser = user;
     let cancelled = false;
     getCurrentSessionUser()
-      .then(() => {
-        // session is valid
+      .then((freshUser) => {
+        if (cancelled) return;
+        const accessChanged =
+          JSON.stringify(freshUser.access) !== JSON.stringify(currentUser.access);
+        const changed =
+          freshUser.id !== currentUser.id ||
+          freshUser.name !== currentUser.name ||
+          freshUser.username !== currentUser.username ||
+          freshUser.role !== currentUser.role ||
+          freshUser.isActive !== currentUser.isActive ||
+          accessChanged;
+        if (changed) {
+          setUser(freshUser);
+        }
       })
       .catch(() => {
         if (cancelled) return;
@@ -210,7 +224,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     return () => {
       cancelled = true;
     };
-  }, [hydrated, logout, router, user]);
+  }, [hydrated, logout, router, setUser, user, user?.id]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;

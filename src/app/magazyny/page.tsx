@@ -112,7 +112,14 @@ const normalize = (value: string) =>
 
 export default function WarehousesPage() {
   const router = useRouter();
-  const { user, hydrated, setActiveWarehouse, clearActiveWarehouse, logout } = useUiStore();
+  const {
+    user,
+    setUser,
+    hydrated,
+    setActiveWarehouse,
+    clearActiveWarehouse,
+    logout
+  } = useUiStore();
   const [search, setSearch] = useState('');
 
   useEffect(() => {
@@ -123,17 +130,34 @@ export default function WarehousesPage() {
   }, [hydrated, router, user]);
 
   useEffect(() => {
-    if (!hydrated || !user) return;
+    if (!hydrated || !user?.id) return;
+    const currentUser = user;
     let cancelled = false;
-    getCurrentSessionUser().catch(() => {
-      if (cancelled) return;
-      logout();
-      router.replace('/login');
-    });
+    getCurrentSessionUser()
+      .then((freshUser) => {
+        if (cancelled) return;
+        const accessChanged =
+          JSON.stringify(freshUser.access) !== JSON.stringify(currentUser.access);
+        const changed =
+          freshUser.id !== currentUser.id ||
+          freshUser.name !== currentUser.name ||
+          freshUser.username !== currentUser.username ||
+          freshUser.role !== currentUser.role ||
+          freshUser.isActive !== currentUser.isActive ||
+          accessChanged;
+        if (changed) {
+          setUser(freshUser);
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        logout();
+        router.replace('/login');
+      });
     return () => {
       cancelled = true;
     };
-  }, [hydrated, logout, router, user]);
+  }, [hydrated, logout, router, setUser, user, user?.id]);
 
   if (!hydrated || !user) {
     return <div className="min-h-screen bg-bg" />;
