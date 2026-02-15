@@ -126,7 +126,10 @@ const sendWarehouseTransferPush = async ({
   tag,
   requiredTabs
 }: SendWarehouseTransferPushInput) => {
-  if (!initVapid()) return;
+  if (!initVapid()) {
+    console.warn('[push] VAPID not configured');
+    return;
+  }
 
   const query = supabaseAdmin
     .from('push_subscriptions')
@@ -140,19 +143,19 @@ const sendWarehouseTransferPush = async ({
 
   const allSubscriptions = (data ?? []) as PushSubscriptionRow[];
   if (allSubscriptions.length === 0) {
-    console.info('[push] No subscriptions found');
+    console.warn('[push] No subscriptions found');
     return;
   }
 
   const subscriptions = await filterSubscriptionsByErpTabs(allSubscriptions, requiredTabs);
   if (subscriptions.length === 0) {
-    console.info('[push] No subscriptions after ERP tab filtering', {
+    console.warn('[push] No subscriptions after ERP tab filtering', {
       requiredTabs,
       totalSubscriptions: allSubscriptions.length
     });
     return;
   }
-  console.info('[push] Sending ERP push', {
+  console.warn('[push] Sending ERP push', {
     requiredTabs,
     totalSubscriptions: allSubscriptions.length,
     filteredSubscriptions: subscriptions.length,
@@ -277,7 +280,7 @@ export const sendWarehouseTransferDocumentCreatedPush = async (
     body,
     url: '/przesuniecia-magazynowe',
     tag: `erp-document-created-${payload.documentId}`,
-    requiredTabs: ['erp-magazynier']
+    requiredTabs: ['erp-magazynier', 'erp-rozdzielca']
   });
 };
 
@@ -300,6 +303,6 @@ export const sendWarehouseTransferDocumentIssuedPush = async (
     body,
     url: '/przesuniecia-magazynowe',
     tag: `erp-document-issued-${payload.documentId}`,
-    requiredTabs: ['erp-rozdzielca']
+    requiredTabs: ['erp-magazynier', 'erp-rozdzielca']
   });
 };
