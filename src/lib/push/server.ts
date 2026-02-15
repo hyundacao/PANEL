@@ -79,6 +79,14 @@ const toPushText = (value?: string) => {
   return normalized || '-';
 };
 
+const getEndpointHost = (endpoint: string) => {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return 'invalid-endpoint';
+  }
+};
+
 const toDistinctUserIds = (rows: PushSubscriptionRow[]) => [
   ...new Set(rows.map((row) => toCleanString(row.user_id)).filter(Boolean))
 ];
@@ -159,9 +167,11 @@ const sendWarehouseTransferPush = async ({
   const androidSubscriptions = subscriptions.filter((row) =>
     /android/i.test(String(row.user_agent ?? ''))
   ).length;
-  const desktopSubscriptions = subscriptions.filter((row) =>
-    /windows|macintosh|linux/i.test(String(row.user_agent ?? ''))
-  ).length;
+  const desktopSubscriptions = subscriptions.filter((row) => {
+    const userAgent = String(row.user_agent ?? '');
+    const isAndroid = /android/i.test(userAgent);
+    return !isAndroid && /windows nt|macintosh|x11|linux/i.test(userAgent);
+  }).length;
   console.warn('[push] Sending ERP push', {
     requiredTabs,
     totalSubscriptions: allSubscriptions.length,
@@ -184,6 +194,10 @@ const sendWarehouseTransferPush = async ({
         await webpush.sendNotification(toWebPushSubscription(row), message, {
           TTL: 60 * 60,
           urgency: 'high'
+        });
+        console.warn('[push] Send accepted', {
+          endpointHost: getEndpointHost(row.endpoint),
+          tag
         });
       } catch (error) {
         const pushError = error as WebPushError;
