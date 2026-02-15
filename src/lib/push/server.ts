@@ -87,6 +87,9 @@ const getEndpointHost = (endpoint: string) => {
   }
 };
 
+const isAndroidUserAgent = (userAgent?: string | null) =>
+  /android/i.test(String(userAgent ?? ''));
+
 const toDistinctUserIds = (rows: PushSubscriptionRow[]) => [
   ...new Set(rows.map((row) => toCleanString(row.user_id)).filter(Boolean))
 ];
@@ -165,11 +168,11 @@ const sendWarehouseTransferPush = async ({
     return;
   }
   const androidSubscriptions = subscriptions.filter((row) =>
-    /android/i.test(String(row.user_agent ?? ''))
+    isAndroidUserAgent(row.user_agent)
   ).length;
   const desktopSubscriptions = subscriptions.filter((row) => {
     const userAgent = String(row.user_agent ?? '');
-    const isAndroid = /android/i.test(userAgent);
+    const isAndroid = isAndroidUserAgent(userAgent);
     return !isAndroid && /windows nt|macintosh|x11|linux/i.test(userAgent);
   }).length;
   console.warn('[push] Sending ERP push', {
@@ -188,32 +191,63 @@ const sendWarehouseTransferPush = async ({
     tag
   });
 
-  await Promise.allSettled(
+  const sendResults = await Promise.allSettled(
     subscriptions.map(async (row) => {
+      const endpointHost = getEndpointHost(row.endpoint);
+      const platform = isAndroidUserAgent(row.user_agent) ? 'android' : 'desktop';
       try {
         await webpush.sendNotification(toWebPushSubscription(row), message, {
           TTL: 60 * 60,
           urgency: 'high'
         });
         console.warn('[push] Send accepted', {
-          endpointHost: getEndpointHost(row.endpoint),
+          endpointHost,
+          platform,
           tag
         });
+        return { accepted: 1, removed: 0, failed: 0 };
       } catch (error) {
         const pushError = error as WebPushError;
         const statusCode = Number(pushError?.statusCode ?? 0);
         if (statusCode === 404 || statusCode === 410) {
           await removePushSubscriptionById(row.id);
-          return;
+          console.warn('[push] Removed stale subscription', {
+            endpointHost,
+            platform,
+            statusCode,
+            tag
+          });
+          return { accepted: 0, removed: 1, failed: 0 };
         }
         console.error('[push] Send failed', {
           endpoint: row.endpoint,
           statusCode,
           message: pushError?.message ?? 'UNKNOWN'
         });
+        return { accepted: 0, removed: 0, failed: 1 };
       }
     })
   );
+
+  let acceptedCount = 0;
+  let removedCount = 0;
+  let failedCount = 0;
+  sendResults.forEach((result) => {
+    if (result.status !== 'fulfilled') {
+      failedCount += 1;
+      return;
+    }
+    acceptedCount += result.value.accepted;
+    removedCount += result.value.removed;
+    failedCount += result.value.failed;
+  });
+  console.warn('[push] Send summary', {
+    tag,
+    attempted: subscriptions.length,
+    acceptedCount,
+    removedCount,
+    failedCount
+  });
 };
 
 export const isWebPushConfigured = () => {
@@ -270,6 +304,11 @@ export const upsertPushSubscriptionForUser = async (
     { onConflict: 'endpoint' }
   );
   if (error) throw error;
+  console.warn('[push] Subscription upserted', {
+    userId,
+    endpointHost: getEndpointHost(subscription.endpoint),
+    platform: isAndroidUserAgent(userAgent) ? 'android' : 'desktop'
+  });
 };
 
 export const removePushSubscriptionForUser = async (userId: string, endpoint?: string) => {
@@ -279,10 +318,14 @@ export const removePushSubscriptionForUser = async (userId: string, endpoint?: s
 
   const { error } = await supabaseAdmin
     .from('push_subscriptions')
-    .delete()
+    .delete({ count: 'exact' })
     .eq('user_id', userId)
     .eq('endpoint', normalizedEndpoint);
   if (error) throw error;
+  console.warn('[push] Subscription removed', {
+    userId,
+    endpointHost: getEndpointHost(normalizedEndpoint)
+  });
 };
 
 export const sendWarehouseTransferDocumentCreatedPush = async (
