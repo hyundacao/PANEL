@@ -11,12 +11,15 @@ import {
   getWarehouseTransferDocument,
   getWarehouseTransferDocuments,
   markWarehouseTransferDocumentIssued,
+  removeWarehouseTransferItemIssue,
+  removeWarehouseTransferItemReceipt,
   removeWarehouseTransferDocument,
   updateWarehouseTransferItemIssue,
   updateWarehouseTransferItemReceipt
 } from '@/lib/api';
 import type {
   WarehouseTransferDocumentDetails,
+  WarehouseTransferDocumentSummary,
   WarehouseTransferItemPriority,
   WarehouseTransferItemStatus
 } from '@/lib/api/types';
@@ -136,6 +139,17 @@ const toBinaryWarehouseTransferPriority = (value: unknown): WarehouseTransferIte
     ? 'CRITICAL'
     : 'NORMAL';
 
+const comparePriorityThenLineNo = (
+  a: { priority?: WarehouseTransferItemPriority; lineNo: number },
+  b: { priority?: WarehouseTransferItemPriority; lineNo: number }
+) => {
+  const priorityDiff =
+    warehouseTransferPriorityConfig[normalizeWarehouseTransferPriority(a.priority)].order -
+    warehouseTransferPriorityConfig[normalizeWarehouseTransferPriority(b.priority)].order;
+  if (priorityDiff !== 0) return priorityDiff;
+  return a.lineNo - b.lineNo;
+};
+
 const getParsedItemPriorityKey = (item: ParsedItemInput, index: number) =>
   `${item.lineNo}|${item.indexCode}|${item.name}|${index}`;
 
@@ -161,7 +175,7 @@ const displayItemName = (value: string) => {
 
   const withoutPrice = normalized.replace(/(?:\s*[|,;:-]\s*|\s+)0[.,]0+\s*$/i, '').trim();
   const withoutQty = withoutPrice.replace(
-    /(?:\s*[|,;:-]\s*|\s+)\d[\d\s.,]*\s*(?:szt\.?|kg|g|l|ltr|m2|m3|mb|kpl|op)\.?\s*$/i,
+    /(?:\s*[|,;:-]\s*|\s+)\d[\d\s.,]*\s*(?:szt\.?|kg|g|l|ltr|m2|m3|mb|kpl|op|opakowaniech?|opakowania?|opak)\.?\s*$/i,
     ''
   );
 
@@ -174,7 +188,42 @@ const displayWarehouseNumber = (value: string | null | undefined) => {
   return normalized || '-';
 };
 
-const WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS = ['1', '4', '10', '13', '51', '56'] as const;
+const WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS = [
+  '1',
+  '4',
+  '10',
+  '11',
+  '13',
+  '40',
+  '41',
+  '51',
+  '55',
+  '56'
+] as const;
+
+const ISSUE_TARGET_LOCATION_PRESETS = [
+  'HALA 1',
+  'HALA 2',
+  'HALA 3',
+  'BAKOMA',
+  'PACZKA',
+  'LAKIERNIA',
+  'INNA LOKALIZACJA'
+] as const;
+const CUSTOM_TARGET_LOCATION_PRESET = 'INNA LOKALIZACJA';
+const DISPATCHER_TARGET_LOCATION_FILTER_OPTIONS = ISSUE_TARGET_LOCATION_PRESETS.filter(
+  (preset) => preset !== CUSTOM_TARGET_LOCATION_PRESET
+);
+const RETURN_TARGET_LOCATION_PRESETS = WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS.filter(
+  (warehouseNo) => warehouseNo !== '40' && warehouseNo !== '41'
+).map((warehouseNo) => `MAGAZYN ${warehouseNo}`);
+const WAREHOUSE_TRANSFER_FLOW_KIND_OPTIONS = ['WYDANIE', 'ZWROT'] as const;
+type WarehouseTransferFlowKind = (typeof WAREHOUSE_TRANSFER_FLOW_KIND_OPTIONS)[number];
+const WAREHOUSE_TRANSFER_FLOW_KIND_LABELS: Record<WarehouseTransferFlowKind, string> = {
+  WYDANIE: 'Wydanie na Hale',
+  ZWROT: 'Zwrot z Hali'
+};
+const WAREHOUSE_TRANSFER_FLOW_KIND_NOTE_PREFIX = 'FLOW_KIND:';
 
 const extractWarehousemanSourceWarehouseKey = (value: string | null | undefined) => {
   const normalized = String(value ?? '').trim();
@@ -182,6 +231,67 @@ const extractWarehousemanSourceWarehouseKey = (value: string | null | undefined)
   const match = normalized.match(/\d+/);
   return match ? match[0] : null;
 };
+
+const normalizeWarehouseTransferFlowKind = (value: unknown): WarehouseTransferFlowKind => {
+  const normalized = String(value ?? '')
+    .trim()
+    .toUpperCase();
+  if (normalized.startsWith('ZWROT')) return 'ZWROT';
+  if (normalized.startsWith('WYDANIE')) return 'WYDANIE';
+  return 'WYDANIE';
+};
+
+const buildWarehouseTransferFlowKindNote = (
+  flowKind: WarehouseTransferFlowKind,
+  extraNote?: string
+) => {
+  const normalizedFlowKind = normalizeWarehouseTransferFlowKind(flowKind);
+  const trimmedExtraNote = String(extraNote ?? '').trim();
+  if (!trimmedExtraNote) {
+    return `${WAREHOUSE_TRANSFER_FLOW_KIND_NOTE_PREFIX}${normalizedFlowKind}`;
+  }
+  return `${WAREHOUSE_TRANSFER_FLOW_KIND_NOTE_PREFIX}${normalizedFlowKind} | ${trimmedExtraNote}`;
+};
+
+const parseWarehouseTransferFlowKindFromNote = (
+  note: string | null | undefined
+): WarehouseTransferFlowKind => {
+  const normalizedNote = String(note ?? '').trim();
+  if (!normalizedNote) return 'WYDANIE';
+  const markerMatch = normalizedNote.match(/\bFLOW_KIND\s*:\s*(WYDANIE|ZWROT)\b/i);
+  if (markerMatch?.[1]) {
+    return normalizeWarehouseTransferFlowKind(markerMatch[1]);
+  }
+  return normalizeWarehouseTransferFlowKind(normalizedNote);
+};
+
+const stripWarehouseTransferFlowKindFromNote = (note: string | null | undefined) =>
+  String(note ?? '')
+    .replace(/\bFLOW_KIND\s*:\s*(?:WYDANIE|ZWROT)\b\s*(?:[|,;:-]\s*)?/i, '')
+    .trim();
+
+const getDefaultWarehousemanSourceWarehouseFilter = () => [
+  ...WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS
+];
+
+const normalizeWarehousemanSourceWarehouseFilter = (value: unknown) => {
+  if (!Array.isArray(value)) return getDefaultWarehousemanSourceWarehouseFilter();
+  const selected = new Set(
+    value.map((item) => String(item ?? '').trim()).filter((item) => item.length > 0)
+  );
+  return WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS.filter((option) => selected.has(option));
+};
+
+const normalizeDocumentSearchToken = (value: string | null | undefined) =>
+  String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+
+const normalizeTargetLocationFilterToken = (value: string | null | undefined) =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 
 const normalizeUnitToken = (value: string) => {
   const normalized = value
@@ -217,6 +327,16 @@ const normalizeUnitToken = (value: string) => {
     normalized === 'pcs'
   ) {
     return 'szt';
+  }
+  if (
+    normalized === 'opak' ||
+    normalized === 'opakowanie' ||
+    normalized === 'opakowania' ||
+    normalized === 'opakowaniech' ||
+    normalized === 'opakow' ||
+    normalized === 'opakowaniach'
+  ) {
+    return 'opak';
   }
   if (normalized === 'm' || normalized === 'mb' || normalized === 'm2' || normalized === 'm3') {
     return normalized;
@@ -259,6 +379,61 @@ const normalizeIndexToken = (value: string) =>
 const isCompositeIndexCode = (value: string) =>
   isStrongIndexCode(value) && /[-/:]/.test(value);
 
+const splitIndexCodeSegments = (value: string) => {
+  return value
+    .toUpperCase()
+    .replace(/[^A-Z0-9-/]/g, '')
+    .split(/[-/]+/)
+    .map((segment) => segment.replace(/[^A-Z0-9]/g, '').trim())
+    .filter(Boolean);
+};
+
+const isLongCodeLikeToken = (token: string) => {
+  const normalized = token.trim();
+  if (!normalized || isLikelyUnit(normalized)) return false;
+  if (!/^[A-Za-z0-9]+$/.test(normalized)) return false;
+
+  const digits = normalized.match(/\d/g)?.length ?? 0;
+  const hasLetter = /[A-Za-z]/.test(normalized);
+
+  // Kod indeksu2 często pojawia się jako długi, alfanumeryczny ciąg bez spacji
+  // (np. S0K009000941604000). Nie traktujemy jednak krótkich wpisów takich jak 21.
+  if (normalized.length >= 12 && digits >= 1) return true;
+  if (normalized.length >= 10 && hasLetter && digits >= 4) return true;
+  if (normalized.length >= 8 && hasLetter && digits >= 4 && digits * 2 >= normalized.length) {
+    return true;
+  }
+  return false;
+};
+
+const isLikelyNameStartToken = (token: string) => {
+  const normalized = token.trim();
+  if (!normalized || normalized === '-') return false;
+  if (isLikelyUnit(normalized)) return false;
+  if (/^\d[\d.,]*$/.test(normalized)) return false;
+  return /[A-Za-z]/.test(normalized);
+};
+
+const shouldTreatAsIndex2ByPosition = (
+  token: string | undefined,
+  nextToken: string | undefined,
+  primaryIndex?: string
+) => {
+  const normalized = String(token ?? '').trim();
+  if (!normalized) return false;
+  if (normalized === '-') return true;
+  if (isLikelyDetachedIndex2Token(normalized, primaryIndex)) return true;
+
+  const nextNormalized = String(nextToken ?? '').trim();
+  if (!nextNormalized) return false;
+  if (!isLikelyNameStartToken(nextNormalized)) return false;
+  if (!/^[A-Za-z0-9]+$/.test(normalized)) return false;
+  if (!/[A-Za-z]/.test(normalized) || !/\d/.test(normalized)) return false;
+  const digits = normalized.match(/\d/g)?.length ?? 0;
+  if (normalized.length < 7 || digits < 4) return false;
+  return true;
+};
+
 const isLikelyIndex2Token = (token: string, primaryIndex?: string) => {
   const normalized = token.trim();
   if (!normalized || normalized === '-') return true;
@@ -277,6 +452,40 @@ const isLikelyIndex2Token = (token: string, primaryIndex?: string) => {
   }
 
   return isCompositeIndexCode(normalized);
+};
+
+const isLikelyDetachedIndex2Token = (token: string, primaryIndex?: string) => {
+  const normalized = token.trim();
+  if (!normalized || normalized === '-') return true;
+  if (isLikelyUnit(normalized)) return false;
+  if (isLikelyIndex2Token(token, primaryIndex)) return true;
+  if (isLongCodeLikeToken(normalized)) return true;
+  if (/^\d{3,}$/.test(normalized)) return true;
+
+  if (/^\d{2}$/.test(normalized) && primaryIndex) {
+    const tokenNormalized = normalized.replace(/^0+/, '');
+    const primarySegments = splitIndexCodeSegments(primaryIndex)
+      .map((segment) => segment.replace(/^0+/, ''))
+      .filter(Boolean);
+    return (
+      primarySegments.includes(normalized) ||
+      primarySegments.includes(tokenNormalized)
+    );
+  }
+
+  return false;
+};
+
+const stripLeadingDetachedIndex2 = (
+  tokens: string[],
+  primaryIndex?: string
+): { tokens: string[]; index2?: string } => {
+  if (tokens.length < 2) return { tokens };
+  const firstToken = tokens[0];
+  if (!firstToken) return { tokens };
+  if (!isLikelyDetachedIndex2Token(firstToken, primaryIndex)) return { tokens };
+  const index2 = firstToken === '-' ? undefined : firstToken;
+  return { tokens: tokens.slice(1), index2 };
 };
 
 const cleanStreamToken = (value: string) =>
@@ -355,19 +564,72 @@ const normalizeParsedItemName = (value: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+const tryParseQtyFromTwoNumericTokens = (left: string, right: string) => {
+  const leftDigits = left.replace(/\D/g, '');
+  const rightClean = right.replace(/\s+/g, '').trim();
+  if (!leftDigits || !rightClean) return null;
+
+  const rightMatch = rightClean.match(/^(\d+)(?:[.,](\d+))?$/);
+  if (!rightMatch) return null;
+  const rightIntPart = rightMatch[1] ?? '';
+  const rightFracPart = rightMatch[2] ?? '';
+
+  if (rightFracPart.length === 0) {
+    if (rightClean.length !== 3) return null;
+    if (leftDigits.length !== 1) return null;
+    return parseQtyToken(`${leftDigits}${rightIntPart}`);
+  }
+
+  if (rightFracPart.length <= 2) {
+    if (leftDigits.length !== 1) return null;
+    return parseQtyToken(`${leftDigits}${rightIntPart}.${rightFracPart}`);
+  }
+
+  if (rightFracPart.length === 3) {
+    if (leftDigits.length !== 1) return null;
+    return parseQtyToken(`${leftDigits}${rightIntPart}`);
+  }
+
+  return null;
+};
+
+const tryParseQtyBeforeUnitFromTwoTokens = (
+  left: string,
+  right: string,
+  previousToken?: string
+) => {
+  const leftClean = String(left ?? '').trim();
+  const rightClean = String(right ?? '').replace(/\s+/g, '').trim();
+  if (!/^\d{1,3}$/.test(leftClean)) return null;
+
+  const rightMatch = rightClean.match(/^(\d{3})[.,](\d{3})$/);
+  if (!rightMatch) return null;
+
+  // Dla prefiksu wielocyfrowego (np. "10 944,000") wymagamy,
+  // aby poprzedni token wyglądał "kodowo" (zawierał cyfrę),
+  // co ogranicza branie końcówki nazwy typu "... DF 21 200,000 kg".
+  if (leftClean.length > 1 && !/\d/.test(String(previousToken ?? ''))) {
+    return null;
+  }
+
+  return parseQtyToken(`${leftClean}${rightMatch[1]}`);
+};
+
 const tryParseQtyFromParts = (parts: string[]) => {
   const compactParts = parts.map((part) => String(part ?? '').replace(/\s+/g, '').trim()).filter(Boolean);
   if (compactParts.length === 0) return null;
+
+  if (compactParts.length === 2) {
+    const parsedPair = tryParseQtyFromTwoNumericTokens(compactParts[0], compactParts[1]);
+    if (parsedPair !== null) return parsedPair;
+    return null;
+  }
+
   const candidates: string[] = [];
   candidates.push(compactParts.join(''));
   candidates.push(compactParts.join(','));
   candidates.push(compactParts.join('.'));
-  if (
-    compactParts.length === 2 &&
-    /^\d+$/.test(compactParts[0]) &&
-    /^\d+$/.test(compactParts[1]) &&
-    compactParts[1].length >= 2
-  ) {
+  if (/^\d+$/.test(compactParts[0]) && /^\d+$/.test(compactParts[1]) && compactParts[1].length >= 2) {
     candidates.push(`${compactParts[0]},${compactParts[1]}`);
     candidates.push(`${compactParts[0]}.${compactParts[1]}`);
   }
@@ -376,7 +638,7 @@ const tryParseQtyFromParts = (parts: string[]) => {
     .map((value) => parseQtyToken(value))
     .filter((value): value is number => value !== null && value > 0);
   if (parsedCandidates.length === 0) return null;
-  return Math.min(...parsedCandidates);
+  return Math.max(...parsedCandidates);
 };
 
 const areReasonableQtyParts = (parts: string[]) => {
@@ -389,36 +651,81 @@ const areReasonableQtyParts = (parts: string[]) => {
   if (!prefixes.every((part) => /^\d{1,3}$/.test(part))) return false;
 
   const tail = cleaned[cleaned.length - 1];
+  if (cleaned.length === 2 && prefixes.length === 1 && /^\d{1,3}$/.test(prefixes[0])) {
+    // Dwa odrębne fragmenty bez separatora bierzemy głównie jako zapis "50 000",
+    // a nie jako część nazwy typu "... DF 21" + "50".
+    if (tail.length === 2) return false;
+    return /^\d{3}$/.test(tail) || /^\d{1,3}[.,]\d{1,3}$/.test(tail);
+  }
   return /^\d{1,3}(?:[.,]\d+)?$/.test(tail) || /^\d{3}$/.test(tail);
 };
 
-const findQtyTokenFromEnd = (tokens: string[], minIndex = 0) => {
+type QtyTokenSearchOptions = {
+  requireFormattedQty?: boolean;
+};
+
+type QtyBeforeUnitSearchOptions = {
+  allowQtyStartIndex?: (startIndex: number, width: number) => boolean;
+};
+
+const looksLikeFormattedQty = (value: string) => {
+  const normalized = value
+    .replace(/\s+/g, '')
+    .trim();
+  if (!normalized || !/\d/.test(normalized)) return false;
+  if (normalized.length >= 3 || /[.,]/.test(normalized)) return true;
+  return false;
+};
+
+const findQtyTokenFromEnd = (
+  tokens: string[],
+  minIndex = 0,
+  options: QtyTokenSearchOptions = {}
+) => {
   for (let end = tokens.length - 1; end >= minIndex; end -= 1) {
     for (let start = end - 1; start >= Math.max(minIndex, end - 2); start -= 1) {
       const slice = tokens.slice(start, end + 1);
       if (!areReasonableQtyParts(slice)) continue;
       const qtyCombined = tryParseQtyFromParts(slice);
-      if (qtyCombined !== null) {
-        return { qty: qtyCombined, qtyStartIndex: start, qtyEndIndex: end };
-      }
+      if (qtyCombined === null) continue;
+      if (options.requireFormattedQty && !looksLikeFormattedQty(slice.join(''))) continue;
+      return { qty: qtyCombined, qtyStartIndex: start, qtyEndIndex: end };
     }
 
     const qtySingle = parseQtyToken(tokens[end]);
-    if (qtySingle !== null && qtySingle > 0) {
-      return { qty: qtySingle, qtyStartIndex: end, qtyEndIndex: end };
-    }
+    if (qtySingle === null || qtySingle <= 0) continue;
+    if (options.requireFormattedQty && !looksLikeFormattedQty(tokens[end])) continue;
+    return { qty: qtySingle, qtyStartIndex: end, qtyEndIndex: end };
   }
   return null;
 };
 
-const findQtyBeforeUnitToken = (tokens: string[], unitIndex: number, minIndex = 0) => {
+const findQtyBeforeUnitToken = (
+  tokens: string[],
+  unitIndex: number,
+  minIndex = 0,
+  options: QtyBeforeUnitSearchOptions = {}
+) => {
   const maxWidth = Math.min(3, unitIndex - minIndex);
   for (let width = maxWidth; width >= 1; width -= 1) {
     const start = unitIndex - width;
     if (start < minIndex) continue;
+    if (options.allowQtyStartIndex && !options.allowQtyStartIndex(start, width)) continue;
     const slice = tokens.slice(start, unitIndex);
     if (slice.length === 0) continue;
     if (!slice.every((token) => /\d/.test(token) && !/[A-Za-z]/.test(token))) continue;
+
+    if (slice.length === 2) {
+      const qtyFromSplit = tryParseQtyBeforeUnitFromTwoTokens(
+        slice[0] ?? '',
+        slice[1] ?? '',
+        tokens[start - 1]
+      );
+      if (qtyFromSplit !== null && qtyFromSplit > 0) {
+        return { qty: qtyFromSplit, qtyStartIndex: start, qtyEndIndex: unitIndex - 1 };
+      }
+    }
+
     if (!areReasonableQtyParts(slice)) continue;
     const qty = tryParseQtyFromParts(slice);
     if (qty !== null && qty > 0) {
@@ -426,6 +733,25 @@ const findQtyBeforeUnitToken = (tokens: string[], unitIndex: number, minIndex = 
     }
   }
   return null;
+};
+
+const tokenizeLineWithGaps = (line: string) => {
+  const tokens: Array<{ token: string; gapBefore: number }> = [];
+  const pattern = /\S+/g;
+  let match: RegExpExecArray | null;
+  let previousEnd = 0;
+
+  while ((match = pattern.exec(line)) !== null) {
+    const token = match[0] ?? '';
+    const start = match.index;
+    tokens.push({
+      token,
+      gapBefore: Math.max(0, start - previousEnd)
+    });
+    previousEnd = start + token.length;
+  }
+
+  return tokens;
 };
 
 const normalizeOcrLine = (value: string) =>
@@ -445,7 +771,7 @@ const mergeWrappedLines = (lines: string[]) => {
       .map((token) => token.trim())
       .filter(Boolean);
     const currentHasIndex = currentTokens.some((token) => isLikelyIndexCode(token));
-    const currentHasQty = Boolean(findQtyTokenFromEnd(currentTokens));
+    const currentHasQty = Boolean(findQtyTokenFromEnd(currentTokens, 0, { requireFormattedQty: true }));
 
     if (currentHasIndex && !currentHasQty && index + 1 < lines.length) {
       let lookAhead = index + 1;
@@ -459,7 +785,7 @@ const mergeWrappedLines = (lines: string[]) => {
         const nextTokens = splitLine(next).tokens
           .map((token) => token.trim())
           .filter(Boolean);
-        const nextHasQty = Boolean(findQtyTokenFromEnd(nextTokens));
+        const nextHasQty = Boolean(findQtyTokenFromEnd(nextTokens, 0, { requireFormattedQty: true }));
         const nextHasIndex = nextTokens.some((token) => isLikelyIndexCode(token));
 
         if (nextHasIndex && tail.length === 0) {
@@ -731,7 +1057,7 @@ const parseDocumentItemsFromTesseractTsv = (tsv: string): ParsedDocumentItems =>
 
     if (indexPositions.length === 0) {
       if (!currentRow) return;
-      const qtyToken = findQtyTokenFromEnd(tokens);
+      const qtyToken = findQtyTokenFromEnd(tokens, 0, { requireFormattedQty: true });
       let tail = tokens;
       if (qtyToken && !currentRow.qty) {
         currentRow.qty = qtyToken.qty;
@@ -775,7 +1101,10 @@ const parseDocumentItemsFromTesseractTsv = (tsv: string): ParsedDocumentItems =>
       let cursor = 1;
       const possibleIndex2 = segment[cursor] ?? '';
       let indexCode2: string | undefined;
-      if (possibleIndex2 && isLikelyIndex2Token(possibleIndex2, segment[0])) {
+      if (
+        possibleIndex2 &&
+        shouldTreatAsIndex2ByPosition(possibleIndex2, segment[cursor + 1], segment[0])
+      ) {
         // indeks2 pomijamy
         if (possibleIndex2 !== '-') {
           indexCode2 = possibleIndex2;
@@ -783,7 +1112,7 @@ const parseDocumentItemsFromTesseractTsv = (tsv: string): ParsedDocumentItems =>
         cursor += 1;
       }
 
-      const qtyToken = findQtyTokenFromEnd(segment, cursor);
+      const qtyToken = findQtyTokenFromEnd(segment, cursor, { requireFormattedQty: true });
       let nameEnd = segment.length;
       let unit: string | undefined;
       if (qtyToken) {
@@ -800,11 +1129,19 @@ const parseDocumentItemsFromTesseractTsv = (tsv: string): ParsedDocumentItems =>
         }
       }
 
-      const name = segment
-        .slice(cursor, nameEnd)
-        .filter((token) => token !== '-')
-        .join(' ')
-        .trim();
+      let nameTokens = segment.slice(cursor, nameEnd).filter((token) => token !== '-');
+      if (!indexCode2 && nameTokens.length > 1) {
+        const leadingIndex2 = stripLeadingDetachedIndex2(nameTokens, segment[0]);
+        if (leadingIndex2.index2) {
+          indexCode2 = leadingIndex2.index2;
+          nameTokens = leadingIndex2.tokens;
+        }
+      }
+      const name = nameTokens.join(' ').trim();
+      if (!name) {
+        // fallback if nameTokens not set (np. bledne rozpoznanie)
+        return;
+      }
 
       currentRow = {
         lineNo: parsedLineNo ?? autoLineNo,
@@ -1043,14 +1380,15 @@ const parseDocumentItemsFromTesseractGrid = (tsv: string): ParsedDocumentItems =
       '';
     const index2Token =
       cols.index2.find((token) => token !== '-' && !isLikelyUnit(token)) ??
-      indexTokens.find((token) => isLikelyIndex2Token(token, indexToken)) ??
+      indexTokens.find((token) => isLikelyDetachedIndex2Token(token, indexToken)) ??
       '';
 
     const qtyFromQtyColumn =
-      findQtyTokenFromEnd(cols.qty)?.qty ??
-      findQtyTokenFromEnd(cols.qty.filter((token) => !isLikelyUnit(token)))?.qty ??
+      findQtyTokenFromEnd(cols.qty, 0, { requireFormattedQty: true })?.qty ??
+      findQtyTokenFromEnd(cols.qty.filter((token) => !isLikelyUnit(token)), 0, { requireFormattedQty: true })
+        ?.qty ??
       null;
-    const qtyFromUnitColumn = findQtyTokenFromEnd(cols.unit)?.qty ?? null;
+    const qtyFromUnitColumn = findQtyTokenFromEnd(cols.unit, 0, { requireFormattedQty: true })?.qty ?? null;
     const qty = qtyFromQtyColumn ?? qtyFromUnitColumn ?? undefined;
     let unit = cols.unit
       .map((token) => normalizeUnitToken(token))
@@ -1080,7 +1418,7 @@ const parseDocumentItemsFromTesseractGrid = (tsv: string): ParsedDocumentItems =
     if (codeToken) {
       removeFirstOccurrence(rowNameTokens, codeToken);
     }
-    while (rowNameTokens.length > 0 && isLikelyIndex2Token(rowNameTokens[0], indexToken)) {
+    while (rowNameTokens.length > 0 && isLikelyDetachedIndex2Token(rowNameTokens[0], indexToken)) {
       // usuwamy potencjalny indeks2 (czesto wpada do kolumny nazwy)
       rowNameTokens.shift();
     }
@@ -1157,7 +1495,7 @@ const scoreOcrText = (text: string) => {
     if (/[0-9]/.test(line)) score += 1;
     if (/[A-Za-z].*\d|\d.*[A-Za-z]/.test(line)) score += 1.5;
     if (/\d+[.,]\d+/.test(line)) score += 2;
-    if (/(kg|kgs|szt|l|litr|litr\.)/i.test(line)) score += 1;
+    if (/(kg|kgs|szt|l|litr|litr\.|opak)/i.test(line)) score += 1;
     if (/(indeks|nazwa|ilosc|partia)/i.test(line)) score += 0.5;
   });
   return score;
@@ -1625,12 +1963,11 @@ const parseDocumentItemsFromFixedColumns = (raw: string): ParsedDocumentItems =>
   let autoLineNo = 1;
 
   const isIndexToken = (token: string) => isLikelyIndexCode(token) || /^\d{2,}$/.test(token);
-  const looksLikeIndex2Token = (token: string, primaryIndex: string) => {
+  const looksLikeIndex2Token = (token: string, nextToken: string, primaryIndex: string) => {
     if (!token) return false;
-    if (token === '-') return true;
     if (token === primaryIndex) return true;
-    if (normalizeUnitToken(token)) return false;
-    return isLikelyIndex2Token(token, primaryIndex) || /^\d{2,}$/.test(token);
+    if (isLikelyUnit(token)) return false;
+    return shouldTreatAsIndex2ByPosition(token, nextToken, primaryIndex);
   };
 
   dataLines.forEach((line) => {
@@ -1642,6 +1979,8 @@ const parseDocumentItemsFromFixedColumns = (raw: string): ParsedDocumentItems =>
       .split(/\s+/)
       .map((part) => part.trim())
       .filter(Boolean);
+    const tokensWithGaps = tokenizeLineWithGaps(line);
+    const hasTokenGapMapping = tokensWithGaps.length === tokens.length;
     if (tokens.length < 6) {
       skipped += 1;
       return;
@@ -1672,8 +2011,8 @@ const parseDocumentItemsFromFixedColumns = (raw: string): ParsedDocumentItems =>
     let indexCode2: string | undefined;
     const maybeIndex2 = tokens[cursor] ?? '';
     if (
-      looksLikeIndex2Token(maybeIndex2, indexCode) &&
-      tokens.length - (cursor + 1) >= 4
+      looksLikeIndex2Token(maybeIndex2, tokens[cursor + 1] ?? '', indexCode) &&
+      tokens.length - (cursor + 1) >= 3
     ) {
       indexCode2 = maybeIndex2 === '-' ? undefined : maybeIndex2;
       cursor += 1;
@@ -1692,7 +2031,18 @@ const parseDocumentItemsFromFixedColumns = (raw: string): ParsedDocumentItems =>
     for (let index = 0; index < payload.length; index += 1) {
       const normalizedUnit = normalizeUnitToken(payload[index] ?? '');
       if (!normalizedUnit) continue;
-      const qtyToken = findQtyBeforeUnitToken(payload, index, 0);
+      const qtyToken = findQtyBeforeUnitToken(payload, index, 0, {
+        allowQtyStartIndex: (startIndex, width) => {
+          if (!hasTokenGapMapping) return true;
+          const absoluteStart = cursor + startIndex;
+          const gapBefore = tokensWithGaps[absoluteStart]?.gapBefore ?? 0;
+          if (gapBefore >= 10) return true;
+          const startToken = payload[startIndex] ?? '';
+          // Fallback dla klasycznej pojedynczej liczby typu "50,000".
+          if (width === 1 && /^\d{1,3}[.,]\d{3}$/.test(startToken)) return true;
+          return false;
+        }
+      });
       if (!qtyToken) continue;
       if (qtyToken.qtyStartIndex <= 0) continue;
       qty = qtyToken.qty;
@@ -1706,11 +2056,15 @@ const parseDocumentItemsFromFixedColumns = (raw: string): ParsedDocumentItems =>
       return;
     }
 
-    const name = normalizeParsedItemName(
-      payload
-      .slice(0, qtyStartIndex)
-      .join(' ')
-    );
+    let nameParts = payload.slice(0, qtyStartIndex);
+    if (!indexCode2) {
+      const leadingIndex2 = stripLeadingDetachedIndex2(nameParts, indexCode);
+      if (leadingIndex2.index2) {
+        indexCode2 = leadingIndex2.index2;
+      }
+      nameParts = leadingIndex2.tokens;
+    }
+    const name = normalizeParsedItemName(nameParts.join(' '));
     if (!name) {
       skipped += 1;
       return;
@@ -1778,7 +2132,7 @@ const parseDocumentItemsByLines = (raw: string): ParsedDocumentItems => {
       break;
     }
     if (!qtyToken) {
-      qtyToken = findQtyTokenFromEnd(tokens, 1);
+      qtyToken = findQtyTokenFromEnd(tokens, 1, { requireFormattedQty: true });
     }
     if (!qtyToken) {
       skipped += 1;
@@ -1830,14 +2184,21 @@ const parseDocumentItemsByLines = (raw: string): ParsedDocumentItems => {
     if (
       maybeIndex2 &&
       end - cursor >= 2 &&
-      isLikelyIndex2Token(maybeIndex2, indexCode)
+      shouldTreatAsIndex2ByPosition(maybeIndex2, tokens[cursor + 1], indexCode)
     ) {
       // Ignorujemy indeks 2 - przesuwamy kursor dalej, ale nie zapisujemy tej wartosci.
       indexCode2 = maybeIndex2 === '-' ? undefined : maybeIndex2;
       cursor += 1;
     }
 
-    const details = tokens.slice(cursor, end);
+    let details = tokens.slice(cursor, end);
+    if (!indexCode2) {
+      const leadingIndex2 = stripLeadingDetachedIndex2(details, indexCode);
+      if (leadingIndex2.index2) {
+        indexCode2 = leadingIndex2.index2;
+        details = leadingIndex2.tokens;
+      }
+    }
     if (details.length === 0) {
       skipped += 1;
       return;
@@ -1923,7 +2284,10 @@ const parseDocumentItemsFromTokenStream = (raw: string): ParsedDocumentItems => 
 
     const possibleIndex2 = chunk[cursor];
     let indexCode2: string | undefined;
-    if (possibleIndex2 && isLikelyIndex2Token(possibleIndex2, indexCode)) {
+    if (
+      possibleIndex2 &&
+      shouldTreatAsIndex2ByPosition(possibleIndex2, chunk[cursor + 1], indexCode)
+    ) {
       // Ignorujemy indeks 2 - nie bierzemy go pod uwage przy zapisie dokumentu.
       indexCode2 = possibleIndex2 === '-' ? undefined : possibleIndex2;
       cursor += 1;
@@ -1941,7 +2305,7 @@ const parseDocumentItemsFromTokenStream = (raw: string): ParsedDocumentItems => 
       break;
     }
     if (!qtyToken) {
-      qtyToken = findQtyTokenFromEnd(chunk, cursor);
+      qtyToken = findQtyTokenFromEnd(chunk, cursor, { requireFormattedQty: true });
     }
     if (!qtyToken) {
       skipped += 1;
@@ -1964,10 +2328,17 @@ const parseDocumentItemsFromTokenStream = (raw: string): ParsedDocumentItems => 
       }
     }
 
-    const details = chunk
+    let details = chunk
       .slice(cursor, detailsEnd)
       .map((token) => token.trim())
       .filter((token) => token && token !== '-');
+    if (!indexCode2) {
+      const leadingIndex2 = stripLeadingDetachedIndex2(details, indexCode);
+      if (leadingIndex2.index2) {
+        indexCode2 = leadingIndex2.index2;
+        details = leadingIndex2.tokens;
+      }
+    }
     const name = normalizeParsedItemName(details.join(' '));
     if (!name) {
       skipped += 1;
@@ -2118,6 +2489,7 @@ export function WarehouseTransferDocumentsPanel() {
   const queryClient = useQueryClient();
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const tableFileInputRef = useRef<HTMLInputElement | null>(null);
+  const commentPresetDropdownRef = useRef<HTMLDivElement | null>(null);
   const detailsCardRef = useRef<HTMLDivElement | null>(null);
   const firstItemRef = useRef<HTMLDivElement | null>(null);
   const shouldScrollToFirstItemRef = useRef(false);
@@ -2125,6 +2497,9 @@ export function WarehouseTransferDocumentsPanel() {
   const [form, setForm] = useState({
     documentNumber: '',
     sourceWarehouse: '',
+    documentFlowKind: 'WYDANIE' as WarehouseTransferFlowKind,
+    documentCommentPreset: '',
+    documentCommentCustom: '',
     itemsRaw: ''
   });
   const [nonInventoryDrafts, setNonInventoryDrafts] = useState<NonInventoryItemDraft[]>([]);
@@ -2158,21 +2533,127 @@ export function WarehouseTransferDocumentsPanel() {
     return next;
   }, [canSeeDispatcherTab, canSeeHistoryTab, canSeeIssuerTab, canSeeWarehousemanTab]);
   const hasAnyWorkspaceAccess = allowedWorkspaceTabs.length > 0;
+  const warehousemanSourceWarehouseFilterStorageKey = useMemo(() => {
+    const userId = String(currentUser?.id ?? '').trim();
+    return userId ? `apka:erp:warehouseman-source-warehouse-filter:${userId}` : null;
+  }, [currentUser?.id]);
   const [collapsedDocumentIds, setCollapsedDocumentIds] = useState<Record<string, boolean>>({});
   const [expandedItemIds, setExpandedItemIds] = useState<Record<string, string | null>>({});
   const [lastMarkedIssuedDocumentId, setLastMarkedIssuedDocumentId] = useState<string | null>(null);
+  const [autoMarkIssuedPromptCandidate, setAutoMarkIssuedPromptCandidate] = useState<{
+    documentId: string;
+    itemId: string;
+  } | null>(null);
   const [priorityOverrides, setPriorityOverrides] = useState<
     Record<string, WarehouseTransferItemPriority>
   >({});
+  const [qtyOverrides, setQtyOverrides] = useState<Record<string, string>>({});
+  const [showCommentPresetSuggestions, setShowCommentPresetSuggestions] = useState(false);
+  const [historySearch, setHistorySearch] = useState('');
   const [warehousemanSourceWarehouseFilter, setWarehousemanSourceWarehouseFilter] = useState<
     string[]
-  >([...WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS]);
+  >(getDefaultWarehousemanSourceWarehouseFilter);
+  const [warehousemanSourceWarehouseFilterHydrated, setWarehousemanSourceWarehouseFilterHydrated] =
+    useState(false);
+  const [dispatcherTargetLocationFilter, setDispatcherTargetLocationFilter] = useState<
+    string[] | null
+  >(null);
+  const normalizedFormFlowKind = normalizeWarehouseTransferFlowKind(form.documentFlowKind);
+  const targetLocationPresetOptions = useMemo<readonly string[]>(
+    () =>
+      normalizedFormFlowKind === 'ZWROT'
+        ? RETURN_TARGET_LOCATION_PRESETS
+        : ISSUE_TARGET_LOCATION_PRESETS,
+    [normalizedFormFlowKind]
+  );
+  const showCustomTargetLocationInput =
+    normalizedFormFlowKind === 'WYDANIE' &&
+    form.documentCommentPreset === CUSTOM_TARGET_LOCATION_PRESET;
+  const targetLocationFieldLabel =
+    normalizedFormFlowKind === 'ZWROT' ? 'Magazyn docelowy' : 'Lokalizacja docelowa';
+  const targetLocationSelectPlaceholder =
+    normalizedFormFlowKind === 'ZWROT'
+      ? 'Wybierz magazyn docelowy'
+      : 'Wybierz lokalizację docelową';
 
   useEffect(() => {
     if (!hasAnyWorkspaceAccess) return;
     if (allowedWorkspaceTabs.includes(workspaceTab)) return;
     setWorkspaceTab(allowedWorkspaceTabs[0]);
   }, [allowedWorkspaceTabs, hasAnyWorkspaceAccess, setWorkspaceTab, workspaceTab]);
+
+  useEffect(() => {
+    setForm((prev) => {
+      const flowKind = normalizeWarehouseTransferFlowKind(prev.documentFlowKind);
+      const presets: readonly string[] =
+        flowKind === 'ZWROT' ? RETURN_TARGET_LOCATION_PRESETS : ISSUE_TARGET_LOCATION_PRESETS;
+      const presetIsValid = presets.includes(prev.documentCommentPreset);
+      const nextPreset = presetIsValid ? prev.documentCommentPreset : '';
+      const nextCustom = flowKind === 'ZWROT' ? '' : prev.documentCommentCustom;
+      if (nextPreset === prev.documentCommentPreset && nextCustom === prev.documentCommentCustom) {
+        return prev;
+      }
+      return {
+        ...prev,
+        documentCommentPreset: nextPreset,
+        documentCommentCustom: nextCustom
+      };
+    });
+  }, [normalizedFormFlowKind]);
+
+  useEffect(() => {
+    if (!showCommentPresetSuggestions) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (commentPresetDropdownRef.current?.contains(target)) return;
+      setShowCommentPresetSuggestions(false);
+    };
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => window.removeEventListener('mousedown', handlePointerDown);
+  }, [showCommentPresetSuggestions]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setWarehousemanSourceWarehouseFilterHydrated(false);
+
+    if (!warehousemanSourceWarehouseFilterStorageKey) {
+      setWarehousemanSourceWarehouseFilter(getDefaultWarehousemanSourceWarehouseFilter());
+      setWarehousemanSourceWarehouseFilterHydrated(true);
+      return;
+    }
+
+    try {
+      const rawSaved = window.localStorage.getItem(warehousemanSourceWarehouseFilterStorageKey);
+      if (!rawSaved) {
+        setWarehousemanSourceWarehouseFilter(getDefaultWarehousemanSourceWarehouseFilter());
+        setWarehousemanSourceWarehouseFilterHydrated(true);
+        return;
+      }
+      const parsedSaved = JSON.parse(rawSaved);
+      setWarehousemanSourceWarehouseFilter(
+        normalizeWarehousemanSourceWarehouseFilter(parsedSaved)
+      );
+      setWarehousemanSourceWarehouseFilterHydrated(true);
+    } catch {
+      setWarehousemanSourceWarehouseFilter(getDefaultWarehousemanSourceWarehouseFilter());
+      setWarehousemanSourceWarehouseFilterHydrated(true);
+    }
+  }, [warehousemanSourceWarehouseFilterStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!warehousemanSourceWarehouseFilterStorageKey) return;
+    if (!warehousemanSourceWarehouseFilterHydrated) return;
+    window.localStorage.setItem(
+      warehousemanSourceWarehouseFilterStorageKey,
+      JSON.stringify(warehousemanSourceWarehouseFilter)
+    );
+  }, [
+    warehousemanSourceWarehouseFilter,
+    warehousemanSourceWarehouseFilterHydrated,
+    warehousemanSourceWarehouseFilterStorageKey
+  ]);
 
   const parsed = useMemo(() => parseDocumentItems(form.itemsRaw), [form.itemsRaw]);
   const parsedItemsWithPriority = useMemo(
@@ -2188,6 +2669,32 @@ export function WarehouseTransferDocumentsPanel() {
         };
       }),
     [parsed.items, priorityOverrides]
+  );
+  const parsedItemsWithOverrides = useMemo(
+    () =>
+      parsedItemsWithPriority.map((item) => {
+        const qtyOverrideRaw = qtyOverrides[item.priorityKey] ?? '';
+        const trimmedQty = qtyOverrideRaw.trim();
+        const parsedQty = trimmedQty ? parseQtyToken(trimmedQty) : null;
+        const hasInvalidQtyOverride =
+          trimmedQty.length > 0 && (parsedQty === null || parsedQty <= 0);
+        const effectivePlannedQty =
+          trimmedQty.length > 0 && parsedQty !== null && parsedQty > 0
+            ? parsedQty
+            : item.plannedQty;
+
+        return {
+          ...item,
+          qtyOverrideRaw,
+          hasInvalidQtyOverride,
+          effectivePlannedQty
+        };
+      }),
+    [parsedItemsWithPriority, qtyOverrides]
+  );
+  const sortedParsedItemsWithPriority = useMemo(
+    () => [...parsedItemsWithOverrides].sort(comparePriorityThenLineNo),
+    [parsedItemsWithOverrides]
   );
   const nonInventoryReadyCount = useMemo(
     () =>
@@ -2218,12 +2725,42 @@ export function WarehouseTransferDocumentsPanel() {
       return changed ? next : prev;
     });
   }, [parsed.items]);
+  useEffect(() => {
+    const activeKeys = new Set(
+      parsed.items.map((item, index) => getParsedItemPriorityKey(item, index))
+    );
+    setQtyOverrides((prev) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      Object.entries(prev).forEach(([key, value]) => {
+        if (!activeKeys.has(key)) {
+          changed = true;
+          return;
+        }
+        next[key] = value;
+      });
+      return changed ? next : prev;
+    });
+  }, [parsed.items]);
 
   const handlePriorityToggle = useCallback((priorityKey: string, checked: boolean) => {
     const normalized: WarehouseTransferItemPriority = checked ? 'CRITICAL' : 'NORMAL';
     setPriorityOverrides((prev) =>
       prev[priorityKey] === normalized ? prev : { ...prev, [priorityKey]: normalized }
     );
+  }, []);
+  const handleQtyOverrideChange = useCallback((priorityKey: string, rawValue: string) => {
+    setQtyOverrides((prev) => {
+      const nextValue = rawValue;
+      if (!nextValue.trim()) {
+        if (!(priorityKey in prev)) return prev;
+        const next = { ...prev };
+        delete next[priorityKey];
+        return next;
+      }
+      if (prev[priorityKey] === nextValue) return prev;
+      return { ...prev, [priorityKey]: nextValue };
+    });
   }, []);
   const addNonInventoryDraft = () => {
     setNonInventoryDrafts((prev) => [...prev, createEmptyNonInventoryDraft()]);
@@ -2251,21 +2788,37 @@ export function WarehouseTransferDocumentsPanel() {
     });
   }, []);
   const selectAllWarehousemanSourceWarehouses = useCallback(() => {
-    setWarehousemanSourceWarehouseFilter([...WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS]);
+    setWarehousemanSourceWarehouseFilter(getDefaultWarehousemanSourceWarehouseFilter());
   }, []);
   const clearWarehousemanSourceWarehouseFilter = useCallback(() => {
     setWarehousemanSourceWarehouseFilter([]);
   }, []);
-
   const previewRows = useMemo(
     () =>
-      parsedItemsWithPriority.map((item) => [
+      sortedParsedItemsWithPriority.map((item) => [
         item.lineNo,
         item.erpCode || '-',
         item.indexCode,
         item.indexCode2 || '-',
         item.name,
-        formatValue(item.plannedQty),
+        <div key={`${item.priorityKey}-qty`} className="min-w-[136px]">
+          <Input
+            value={item.qtyOverrideRaw}
+            onChange={(event) => handleQtyOverrideChange(item.priorityKey, event.target.value)}
+            placeholder={formatValue(item.plannedQty)}
+            inputMode="decimal"
+            className={
+              item.hasInvalidQtyOverride ? 'border-[rgba(170,24,24,0.65)] text-danger' : undefined
+            }
+          />
+          <p className={`mt-1 text-[10px] ${item.hasInvalidQtyOverride ? 'text-danger' : 'text-dim'}`}>
+            {item.hasInvalidQtyOverride
+              ? 'Niepoprawna ilość'
+              : item.qtyOverrideRaw.trim()
+              ? `Ustawiono: ${formatValue(item.effectivePlannedQty)}`
+              : `Domyślnie: ${formatValue(item.plannedQty)}`}
+          </p>
+        </div>,
         item.unit,
         <div key={`${item.priorityKey}-priority`} className="flex items-center gap-2">
           <Toggle
@@ -2277,7 +2830,7 @@ export function WarehouseTransferDocumentsPanel() {
           </span>
         </div>
       ]),
-    [handlePriorityToggle, parsedItemsWithPriority]
+    [handlePriorityToggle, handleQtyOverrideChange, sortedParsedItemsWithPriority]
   );
 
   const { data: documents = [], isLoading: documentsLoading, isFetched: documentsFetched } = useQuery({
@@ -2315,11 +2868,31 @@ export function WarehouseTransferDocumentsPanel() {
   const filteredWarehousemanDocuments = useMemo(
     () =>
       warehousemanDocuments.filter((document) => {
-        const sourceWarehouseKey = extractWarehousemanSourceWarehouseKey(document.sourceWarehouse);
-        if (!sourceWarehouseKey) return false;
-        return warehousemanSourceWarehouseFilterSet.has(sourceWarehouseKey);
+        const flowKind = parseWarehouseTransferFlowKindFromNote(document.note);
+        const warehouseKey =
+          flowKind === 'ZWROT'
+            ? extractWarehousemanSourceWarehouseKey(
+                document.targetWarehouse ?? document.sourceWarehouse
+              )
+            : extractWarehousemanSourceWarehouseKey(document.sourceWarehouse);
+        if (!warehouseKey) return false;
+        return warehousemanSourceWarehouseFilterSet.has(warehouseKey);
       }),
     [warehousemanDocuments, warehousemanSourceWarehouseFilterSet]
+  );
+  const warehousemanIssueDocuments = useMemo(
+    () =>
+      filteredWarehousemanDocuments.filter(
+        (document) => parseWarehouseTransferFlowKindFromNote(document.note) === 'WYDANIE'
+      ),
+    [filteredWarehousemanDocuments]
+  );
+  const warehousemanReturnDocuments = useMemo(
+    () =>
+      filteredWarehousemanDocuments.filter(
+        (document) => parseWarehouseTransferFlowKindFromNote(document.note) === 'ZWROT'
+      ),
+    [filteredWarehousemanDocuments]
   );
   const dispatcherDocuments = useMemo(
     () =>
@@ -2331,21 +2904,76 @@ export function WarehouseTransferDocumentsPanel() {
       }),
     [issuedDocuments, openDocuments]
   );
-  const activeDocuments = useMemo(() => {
-    if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return filteredWarehousemanDocuments;
-    if (workspaceTab === 'dispatcher' && canSeeDispatcherTab) return dispatcherDocuments;
-    return [];
-  }, [
-    canSeeDispatcherTab,
-    canSeeWarehousemanTab,
-    dispatcherDocuments,
-    filteredWarehousemanDocuments,
-    workspaceTab
-  ]);
+  const dispatcherTargetLocationOptions = DISPATCHER_TARGET_LOCATION_FILTER_OPTIONS;
+  const dispatcherTargetLocationFilterSet = useMemo(() => {
+    if (dispatcherTargetLocationFilter === null) return null;
+    const allowedOptions = new Set(
+      dispatcherTargetLocationOptions.map((option) => normalizeTargetLocationFilterToken(option))
+    );
+    return new Set(
+      dispatcherTargetLocationFilter
+        .map((option) => normalizeTargetLocationFilterToken(option))
+        .filter((option) => allowedOptions.has(option))
+    );
+  }, [dispatcherTargetLocationFilter, dispatcherTargetLocationOptions]);
+  const filteredDispatcherDocuments = useMemo(() => {
+    return dispatcherDocuments.filter((document) =>
+      parseWarehouseTransferFlowKindFromNote(document.note) === 'ZWROT'
+        ? true
+        : dispatcherTargetLocationFilterSet === null
+          ? true
+          : dispatcherTargetLocationFilterSet.has(
+              normalizeTargetLocationFilterToken(document.targetWarehouse)
+            )
+    );
+  }, [dispatcherDocuments, dispatcherTargetLocationFilterSet]);
+  const dispatcherIssueDocuments = useMemo(
+    () =>
+      filteredDispatcherDocuments.filter(
+        (document) => parseWarehouseTransferFlowKindFromNote(document.note) === 'WYDANIE'
+      ),
+    [filteredDispatcherDocuments]
+  );
+  const dispatcherReturnDocuments = useMemo(
+    () =>
+      filteredDispatcherDocuments.filter(
+        (document) => parseWarehouseTransferFlowKindFromNote(document.note) === 'ZWROT'
+      ),
+    [filteredDispatcherDocuments]
+  );
   const historyDocuments = useMemo(
     () => documents.filter((document) => document.status === 'CLOSED'),
     [documents]
   );
+  const filteredHistoryDocuments = useMemo(() => {
+    const normalizedSearch = normalizeDocumentSearchToken(historySearch);
+    if (!normalizedSearch) return historyDocuments;
+    return historyDocuments.filter((document) =>
+      normalizeDocumentSearchToken(document.documentNumber).includes(normalizedSearch)
+    );
+  }, [historyDocuments, historySearch]);
+  const toggleDispatcherTargetLocation = useCallback(
+    (targetLocation: string) => {
+      setDispatcherTargetLocationFilter((prev) => {
+        const currentlySelected = prev === null ? [...dispatcherTargetLocationOptions] : prev;
+        const nextSet = new Set(currentlySelected);
+        if (nextSet.has(targetLocation)) {
+          nextSet.delete(targetLocation);
+        } else {
+          nextSet.add(targetLocation);
+        }
+        if (nextSet.size === dispatcherTargetLocationOptions.length) return null;
+        return dispatcherTargetLocationOptions.filter((option) => nextSet.has(option));
+      });
+    },
+    [dispatcherTargetLocationOptions]
+  );
+  const selectAllDispatcherTargetLocations = useCallback(() => {
+    setDispatcherTargetLocationFilter(null);
+  }, []);
+  const clearDispatcherTargetLocationFilter = useCallback(() => {
+    setDispatcherTargetLocationFilter([]);
+  }, []);
   const latestDocument = useMemo(() => {
     if (documents.length === 0) return null;
     return documents.reduce<(typeof documents)[number] | null>((latest, document) => {
@@ -2392,16 +3020,16 @@ export function WarehouseTransferDocumentsPanel() {
   ]);
   const visibleDocuments = useMemo(() => {
     if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return filteredWarehousemanDocuments;
-    if (workspaceTab === 'dispatcher' && canSeeDispatcherTab) return dispatcherDocuments;
-    if (workspaceTab === 'history' && canSeeHistoryTab) return historyDocuments;
+    if (workspaceTab === 'dispatcher' && canSeeDispatcherTab) return filteredDispatcherDocuments;
+    if (workspaceTab === 'history' && canSeeHistoryTab) return filteredHistoryDocuments;
     return [];
   }, [
     canSeeDispatcherTab,
     canSeeHistoryTab,
     canSeeWarehousemanTab,
-    dispatcherDocuments,
+    filteredDispatcherDocuments,
     filteredWarehousemanDocuments,
-    historyDocuments,
+    filteredHistoryDocuments,
     workspaceTab
   ]);
 
@@ -2416,6 +3044,11 @@ export function WarehouseTransferDocumentsPanel() {
     queryFn: () => getWarehouseTransferDocument(activeDocumentId ?? ''),
     enabled: Boolean(activeDocumentId)
   });
+  useEffect(() => {
+    if (!autoMarkIssuedPromptCandidate) return;
+    if (activeDocumentId === autoMarkIssuedPromptCandidate.documentId) return;
+    setAutoMarkIssuedPromptCandidate(null);
+  }, [activeDocumentId, autoMarkIssuedPromptCandidate]);
   const isActiveDocumentCollapsed = activeDocumentId
     ? Boolean(collapsedDocumentIds[activeDocumentId])
     : false;
@@ -2459,15 +3092,21 @@ export function WarehouseTransferDocumentsPanel() {
       setForm({
         documentNumber: '',
         sourceWarehouse: '',
+        documentFlowKind: 'WYDANIE',
+        documentCommentPreset: '',
+        documentCommentCustom: '',
         itemsRaw: ''
       });
+      setShowCommentPresetSuggestions(false);
       setPriorityOverrides({});
+      setQtyOverrides({});
       setNonInventoryDrafts([]);
       toast({ title: 'Utworzono dokument przesunięcia', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
         DOCUMENT_NUMBER_REQUIRED: 'Podaj numer dokumentu.',
+        NOTE_REQUIRED: 'Wybierz lokalizację docelową.',
         ITEMS_REQUIRED: 'Dodaj co najmniej jedną pozycję.',
         INVALID_ITEM: 'Przynajmniej jedna pozycja jest niepoprawna.',
         MIGRATION_REQUIRED_PRIORITY: 'Brakuje migracji bazy dla priorytetow. Uruchom migracje SQL.',
@@ -2490,6 +3129,10 @@ export function WarehouseTransferDocumentsPanel() {
       queryClient.invalidateQueries({
         queryKey: ['warehouse-transfer-document', variables.documentId]
       });
+      setAutoMarkIssuedPromptCandidate({
+        documentId: variables.documentId,
+        itemId: variables.itemId
+      });
       setIssueDrafts((prev) => ({
         ...prev,
         [variables.itemId]: { qty: '', note: '' }
@@ -2500,7 +3143,6 @@ export function WarehouseTransferDocumentsPanel() {
       const messageMap: Record<string, string> = {
         INVALID_QTY: 'Podaj ilość większą od zera.',
         DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
-        DOCUMENT_ALREADY_ISSUED: 'Dokument ma już status: wydano wszystkie pozycje.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
         MIGRATION_REQUIRED: 'Brakuje migracji bazy dla wydań. Uruchom migrację SQL.'
       };
@@ -2530,13 +3172,42 @@ export function WarehouseTransferDocumentsPanel() {
       const messageMap: Record<string, string> = {
         INVALID_QTY: 'Podaj ilość większą od zera.',
         DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
-        DOCUMENT_ALREADY_ISSUED: 'Dokument ma już status: wydano wszystkie pozycje.',
         NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
         ISSUE_BELOW_RECEIVED: 'Nie można ustawić wydania poniżej ilości już przyjętej.',
         MIGRATION_REQUIRED: 'Brakuje migracji bazy dla wydań. Uruchom migrację SQL.'
       };
       toast({
         title: messageMap[err.message] ?? 'Nie udało się zaktualizować wydania.',
+        tone: 'error'
+      });
+    }
+  });
+
+  const removeIssueMutation = useMutation({
+    mutationFn: removeWarehouseTransferItemIssue,
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['warehouse-transfer-documents'] });
+      queryClient.invalidateQueries({
+        queryKey: ['warehouse-transfer-document', variables.documentId]
+      });
+      setIssueEditDrafts((prev) => {
+        if (prev[variables.issueId] === undefined) return prev;
+        const next = { ...prev };
+        delete next[variables.issueId];
+        return next;
+      });
+      toast({ title: 'Usunięto wpis wydania', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
+        NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
+        ISSUE_BELOW_RECEIVED: 'Nie można usunąć wydania poniżej ilości już przyjętej.',
+        MIGRATION_REQUIRED: 'Brakuje migracji bazy dla wydań. Uruchom migrację SQL.',
+        FORBIDDEN: 'Brak uprawnień do usunięcia wpisu wydania.'
+      };
+      toast({
+        title: messageMap[err.message] ?? 'Nie udało się usunąć wpisu wydania.',
         tone: 'error'
       });
     }
@@ -2604,6 +3275,35 @@ export function WarehouseTransferDocumentsPanel() {
     }
   });
 
+  const removeReceiptMutation = useMutation({
+    mutationFn: removeWarehouseTransferItemReceipt,
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['warehouse-transfer-documents'] });
+      queryClient.invalidateQueries({
+        queryKey: ['warehouse-transfer-document', variables.documentId]
+      });
+      setReceiptEditDrafts((prev) => {
+        if (prev[variables.receiptId] === undefined) return prev;
+        const next = { ...prev };
+        delete next[variables.receiptId];
+        return next;
+      });
+      toast({ title: 'Usunięto wpis przyjęcia', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        DOCUMENT_CLOSED: 'Dokument jest już zamknięty.',
+        NOT_FOUND: 'Nie znaleziono dokumentu lub pozycji.',
+        FORBIDDEN: 'Możesz usuwać tylko swoje przyjęcia.',
+        MIGRATION_REQUIRED: 'Brakuje migracji bazy dla przyjęć. Uruchom migrację SQL.'
+      };
+      toast({
+        title: messageMap[err.message] ?? 'Nie udało się usunąć wpisu przyjęcia.',
+        tone: 'error'
+      });
+    }
+  });
+
   const closeDocumentMutation = useMutation({
     mutationFn: closeWarehouseTransferDocument,
     onSuccess: (data) => {
@@ -2654,6 +3354,31 @@ export function WarehouseTransferDocumentsPanel() {
     }
   });
 
+  useEffect(() => {
+    if (!autoMarkIssuedPromptCandidate) return;
+    if (!details) return;
+    if (details.document.id !== autoMarkIssuedPromptCandidate.documentId) return;
+
+    if (details.document.status !== 'OPEN') {
+      setAutoMarkIssuedPromptCandidate(null);
+      return;
+    }
+
+    const allItemsIssued = details.items.length > 0 && details.items.every((item) => item.issuedQty > 0);
+    if (!allItemsIssued) return;
+
+    const flowKind = parseWarehouseTransferFlowKindFromNote(details.document.note);
+    const documentLabel = details.document.documentNumber || details.document.id;
+    const message =
+      flowKind === 'ZWROT'
+        ? `Odebrano ostatnią pozycję zwrotu w dokumencie ${documentLabel}. Oznaczyć dokument jako zakończony przez magazyniera?`
+        : `Wydano ostatnią pozycję w dokumencie ${documentLabel}. Oznaczyć dokument jako wydany?`;
+    const confirmed = window.confirm(message);
+    setAutoMarkIssuedPromptCandidate(null);
+    if (!confirmed) return;
+    markDocumentIssuedMutation.mutate({ documentId: details.document.id });
+  }, [autoMarkIssuedPromptCandidate, details, markDocumentIssuedMutation]);
+
   const removeDocumentMutation = useMutation({
     mutationFn: removeWarehouseTransferDocument,
     onSuccess: (_, variables) => {
@@ -2699,6 +3424,28 @@ export function WarehouseTransferDocumentsPanel() {
       toast({ title: 'Podaj numer dokumentu.', tone: 'error' });
       return;
     }
+    const documentFlowKind = normalizeWarehouseTransferFlowKind(form.documentFlowKind);
+    const commentPreset = form.documentCommentPreset.trim();
+    if (!commentPreset) {
+      toast({
+        title:
+          documentFlowKind === 'ZWROT'
+            ? 'Wybierz magazyn docelowy.'
+            : 'Wybierz lokalizację docelową.',
+        tone: 'error'
+      });
+      return;
+    }
+    const commentCustom = form.documentCommentCustom.trim();
+    const isCustomTargetLocation =
+      documentFlowKind === 'WYDANIE' && commentPreset === CUSTOM_TARGET_LOCATION_PRESET;
+    if (isCustomTargetLocation && !commentCustom) {
+      toast({ title: 'Podaj lokalizację docelową.', tone: 'error' });
+      return;
+    }
+    const documentTargetLocation = isCustomTargetLocation ? commentCustom : commentPreset;
+    const documentNote = buildWarehouseTransferFlowKindNote(documentFlowKind);
+
     const preparedNonInventoryItems = nonInventoryDrafts
       .map((item) => {
         const name = item.name.trim();
@@ -2740,6 +3487,17 @@ export function WarehouseTransferDocumentsPanel() {
       });
       return;
     }
+    const invalidQtyOverrideItem = sortedParsedItemsWithPriority.find(
+      (item) => item.hasInvalidQtyOverride
+    );
+    if (invalidQtyOverrideItem) {
+      toast({
+        title: 'Popraw ilość przed zapisaniem.',
+        description: `LP ${invalidQtyOverrideItem.lineNo} ma niepoprawną ilość.`,
+        tone: 'error'
+      });
+      return;
+    }
 
     const maxLineNo = parsedItemsWithPriority.reduce(
       (currentMax, item) => Math.max(currentMax, item.lineNo),
@@ -2749,8 +3507,10 @@ export function WarehouseTransferDocumentsPanel() {
     createDocumentMutation.mutate({
       documentNumber: form.documentNumber.trim(),
       sourceWarehouse: form.sourceWarehouse.trim() || undefined,
+      targetWarehouse: documentTargetLocation,
+      note: documentNote,
       items: [
-        ...parsedItemsWithPriority.map((item) => ({
+        ...sortedParsedItemsWithPriority.map((item) => ({
           lineNo: item.lineNo,
           priority: item.priority,
           indexCode: item.indexCode,
@@ -2758,7 +3518,7 @@ export function WarehouseTransferDocumentsPanel() {
           batch: item.indexCode2 || item.batch,
           location: item.erpCode || item.location,
           unit: item.unit,
-          plannedQty: item.plannedQty
+          plannedQty: item.effectivePlannedQty
         })),
         ...preparedNonInventoryItems.map((item, index) => ({
           lineNo: maxLineNo + index + 1,
@@ -2769,7 +3529,7 @@ export function WarehouseTransferDocumentsPanel() {
           plannedQty: item.qty as number,
           note: item.note || 'Pozycja nieewidencjonowana'
         }))
-      ]
+      ].sort(comparePriorityThenLineNo)
     });
   };
 
@@ -2789,18 +3549,15 @@ export function WarehouseTransferDocumentsPanel() {
       const parsedFromGrid = tsv ? parseDocumentItemsFromTesseractGrid(tsv) : null;
       const parsedFromColumns = tsv ? parseDocumentItemsFromTesseractTsv(tsv) : null;
       const parsedFromText = parseDocumentItems(ocrText);
-      const chosenParsed =
-        parsedFromGrid && parsedFromGrid.items.length > 0
-          ? parsedFromGrid
-          : [parsedFromColumns, parsedFromText].reduce((best, candidate) => {
-              if (!candidate) return best;
-              if (!best) return candidate;
-              return scoreParsedDocumentItems(candidate) > scoreParsedDocumentItems(best)
-                ? candidate
-                : best;
-            }, null as ParsedDocumentItems | null) ?? parsedFromText;
+      const chosenParsed = [parsedFromGrid, parsedFromColumns, parsedFromText]
+        .filter((candidate): candidate is ParsedDocumentItems => candidate !== null)
+        .filter((candidate) => candidate.items.length > 0)
+        .reduce((best, candidate) => {
+          if (!best) return candidate;
+          return scoreParsedDocumentItems(candidate) > scoreParsedDocumentItems(best) ? candidate : best;
+        }, null as ParsedDocumentItems | null);
       const preparedItemsRaw =
-        chosenParsed.items.length > 0 ? toCanonicalItemsRaw(chosenParsed.items) : ocrText;
+        chosenParsed?.items.length ? toCanonicalItemsRaw(chosenParsed.items) : ocrText;
 
       const detectedMeta = extractMetaFromOcrText(ocrText);
       setForm((prev) => ({
@@ -3028,6 +3785,23 @@ export function WarehouseTransferDocumentsPanel() {
     });
   };
 
+  const handleRemoveIssue = (itemId: string, issueId: string) => {
+    if (!details?.document.id) return;
+    const issueEntryLabel =
+      parseWarehouseTransferFlowKindFromNote(details.document.note) === 'ZWROT'
+        ? 'odbioru zwrotu'
+        : 'wydania';
+    const confirmed = window.confirm(
+      `Usunąć ten wpis ${issueEntryLabel}? Tej operacji nie da się cofnąć.`
+    );
+    if (!confirmed) return;
+    removeIssueMutation.mutate({
+      documentId: details.document.id,
+      itemId,
+      issueId
+    });
+  };
+
   const handleSaveReceiptEdit = (itemId: string, receiptId: string) => {
     if (!details?.document.id) return;
     const rawQty = receiptEditDrafts[receiptId];
@@ -3041,6 +3815,19 @@ export function WarehouseTransferDocumentsPanel() {
       itemId,
       receiptId,
       qty
+    });
+  };
+
+  const handleRemoveReceipt = (itemId: string, receiptId: string) => {
+    if (!details?.document.id) return;
+    const confirmed = window.confirm(
+      'Usunąć ten wpis przyjęcia? Tej operacji nie da się cofnąć.'
+    );
+    if (!confirmed) return;
+    removeReceiptMutation.mutate({
+      documentId: details.document.id,
+      itemId,
+      receiptId
     });
   };
 
@@ -3110,57 +3897,72 @@ export function WarehouseTransferDocumentsPanel() {
     }));
   }, []);
 
-  const activeDocumentRows = activeDocuments.map((document) => [
-    <span
-      key={`${document.id}-sourceWarehouse`}
-      className={`inline-flex rounded-full border px-2.5 py-1 text-sm font-black tabular-nums ${
-        document.status === 'ISSUED'
-          ? 'border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success'
-          : 'border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] text-brand'
-      }`}
-    >
-      {displayWarehouseNumber(document.sourceWarehouse)}
-    </span>,
-    <span key={`${document.id}-date`} className="text-sm text-dim">
-      {formatDateTime(document.createdAt)}
-    </span>,
-    <span
-      key={`${document.id}-number`}
-      className={`text-base font-black ${document.status === 'ISSUED' ? 'text-success' : 'text-title'}`}
-    >
-      {document.documentNumber}
-    </span>,
-    <span
-      key={`${document.id}-items`}
-      className={`text-sm font-semibold tabular-nums ${
-        document.status === 'ISSUED' ? 'text-success' : 'text-title'
-      }`}
-    >
-      {document.itemsCount}
-    </span>
-  ]);
-  const getActiveDocumentRowClassName = (rowIndex: number) => {
-    const document = activeDocuments[rowIndex];
+  const mapDocumentRows = (documentsToMap: WarehouseTransferDocumentSummary[]) =>
+    documentsToMap.map((document) => [
+      <span
+        key={`${document.id}-sourceWarehouse`}
+        className={`inline-flex rounded-full border px-2.5 py-1 text-sm font-black tabular-nums ${
+          document.status === 'ISSUED'
+            ? 'border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success'
+            : 'border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] text-brand'
+        }`}
+      >
+        {displayWarehouseNumber(document.sourceWarehouse)}
+      </span>,
+      <span key={`${document.id}-date`} className="text-sm text-dim">
+        {formatDateTime(document.createdAt)}
+      </span>,
+      <span
+        key={`${document.id}-number`}
+        className={`text-base font-black ${document.status === 'ISSUED' ? 'text-success' : 'text-title'}`}
+      >
+        {document.documentNumber}
+      </span>,
+      <span
+        key={`${document.id}-items`}
+        className={`text-sm font-semibold tabular-nums ${
+          document.status === 'ISSUED' ? 'text-success' : 'text-title'
+        }`}
+      >
+        {document.itemsCount}
+      </span>,
+      <span
+        key={`${document.id}-targetWarehouse`}
+        className={`text-sm font-semibold ${
+          document.status === 'ISSUED' ? 'text-success' : 'text-title'
+        }`}
+      >
+        {displayWarehouseNumber(document.targetWarehouse)}
+      </span>
+    ]);
+  const getDocumentRowClassName = (
+    documentsToCheck: WarehouseTransferDocumentSummary[],
+    rowIndex: number
+  ) => {
+    const document = documentsToCheck[rowIndex];
     if (document?.status !== 'ISSUED') return '';
     return 'border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[linear-gradient(90deg,color-mix(in_srgb,var(--success)_18%,transparent),color-mix(in_srgb,var(--success)_10%,transparent))] hover:bg-[linear-gradient(90deg,color-mix(in_srgb,var(--success)_24%,transparent),color-mix(in_srgb,var(--success)_14%,transparent))]';
   };
-  const historyDocumentRows = historyDocuments.map((document) => [
-    <span
-      key={`${document.id}-sourceWarehouse`}
-      className="inline-flex rounded-full border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-2.5 py-1 text-sm font-black tabular-nums text-brand"
-    >
-      {displayWarehouseNumber(document.sourceWarehouse)}
-    </span>,
-    <span key={`${document.id}-date`} className="text-sm text-dim">
-      {formatDateTime(document.createdAt)}
-    </span>,
-    <span key={`${document.id}-number`} className="text-base font-black text-title">
-      {document.documentNumber}
-    </span>,
-    <span key={`${document.id}-items`} className="text-sm font-semibold tabular-nums text-title">
-      {document.itemsCount}
-    </span>
-  ]);
+  const warehousemanIssueDocumentRows = mapDocumentRows(warehousemanIssueDocuments);
+  const warehousemanReturnDocumentRows = mapDocumentRows(warehousemanReturnDocuments);
+  const dispatcherIssueDocumentRows = mapDocumentRows(dispatcherIssueDocuments);
+  const dispatcherReturnDocumentRows = mapDocumentRows(dispatcherReturnDocuments);
+  const historyDocumentRows = mapDocumentRows(filteredHistoryDocuments);
+  const getWarehousemanIssueDocumentRowClassName = (rowIndex: number) =>
+    getDocumentRowClassName(warehousemanIssueDocuments, rowIndex);
+  const getWarehousemanReturnDocumentRowClassName = (rowIndex: number) =>
+    getDocumentRowClassName(warehousemanReturnDocuments, rowIndex);
+  const getDispatcherIssueDocumentRowClassName = (rowIndex: number) =>
+    getDocumentRowClassName(dispatcherIssueDocuments, rowIndex);
+  const getDispatcherReturnDocumentRowClassName = (rowIndex: number) =>
+    getDocumentRowClassName(dispatcherReturnDocuments, rowIndex);
+  const dispatcherSelectedTargetLocationCount =
+    dispatcherTargetLocationFilterSet === null
+      ? dispatcherTargetLocationOptions.length
+      : dispatcherTargetLocationFilterSet.size;
+  const historyCountLabel = historySearch.trim()
+    ? `${filteredHistoryDocuments.length}/${historyDocuments.length}`
+    : String(historyDocuments.length);
 
   const renderMobileDocumentCards = (docs: Array<(typeof documents)[number]>) => (
     <div className="space-y-2 md:hidden">
@@ -3213,6 +4015,12 @@ export function WarehouseTransferDocumentsPanel() {
                   {document.itemsCount}
                 </span>
               </span>
+              <span>
+                CEL:{' '}
+                <span className="font-semibold normal-case text-title">
+                  {displayWarehouseNumber(document.targetWarehouse)}
+                </span>
+              </span>
             </div>
             <div className="mt-2">
               <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-dim">
@@ -3241,7 +4049,7 @@ export function WarehouseTransferDocumentsPanel() {
   const detailsEmptyDescription = isHistoryTab
     ? 'Kliknij dokument z historii, aby zobaczyć szczegóły.'
     : isWarehousemanTab
-      ? 'Kliknij dokument, aby zobaczyć listę rzeczy do wydania.'
+      ? 'Kliknij dokument, aby zobaczyć listę rzeczy do wydania albo zwrotu.'
       : isDispatcherTab
         ? 'Kliknij dokument, aby zobaczyć listę rzeczy do przyjęcia na halę.'
         : 'Kliknij dokument do realizacji, aby zobaczyć szczegóły.';
@@ -3272,13 +4080,22 @@ export function WarehouseTransferDocumentsPanel() {
     }
 
     const expandedItemId = expandedItemIds[details.document.id] ?? null;
-    const canEditIssue = isWarehousemanTab && details.document.status === 'OPEN';
+    const canEditIssue = isWarehousemanTab && details.document.status !== 'CLOSED';
     const canEditReceipt = isDispatcherTab && details.document.status !== 'CLOSED';
+    const documentFlowKind = parseWarehouseTransferFlowKindFromNote(details.document.note);
+    const isReturnDocument = documentFlowKind === 'ZWROT';
     const itemListTitle = isWarehousemanTab
-      ? 'Lista rzeczy do wydania'
+      ? isReturnDocument
+        ? 'Lista zwrotów do odebrania'
+        : 'Lista rzeczy do wydania'
       : isDispatcherTab
         ? 'Lista rzeczy do przyjęcia na halę'
         : 'Pozycje dokumentu';
+    const targetLocation = String(details.document.targetWarehouse ?? '').trim();
+    const documentNote = stripWarehouseTransferFlowKindFromNote(details.document.note);
+    const warehousemanPrimaryActionLabel = isReturnDocument
+      ? 'Odebrano wszystkie zwroty'
+      : 'Wydano wszystkie pozycje';
 
     return (
       <Card className="space-y-4">
@@ -3291,6 +4108,17 @@ export function WarehouseTransferDocumentsPanel() {
             <p className="text-sm text-dim">
               Utworzył: {details.document.createdByName} | {formatDateTime(details.document.createdAt)}
             </p>
+            <p className="text-sm text-dim">
+              Rodzaj: {WAREHOUSE_TRANSFER_FLOW_KIND_LABELS[documentFlowKind]}
+            </p>
+            {targetLocation && (
+              <p className="text-sm text-dim">Lokalizacja docelowa: {targetLocation}</p>
+            )}
+            {documentNote &&
+              documentNote !== targetLocation &&
+              documentNote !== CUSTOM_TARGET_LOCATION_PRESET && (
+                <p className="text-sm text-dim">Komentarz: {documentNote}</p>
+            )}
           </div>
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
             <Button
@@ -3320,7 +4148,7 @@ export function WarehouseTransferDocumentsPanel() {
                   markDocumentIssuedMutation.isPending || removeDocumentMutation.isPending
                 }
               >
-                Wydano wszystkie pozycje
+                {warehousemanPrimaryActionLabel}
               </Button>
             )}
             {isDispatcherTab && details.document.status === 'ISSUED' && (
@@ -3373,6 +4201,23 @@ export function WarehouseTransferDocumentsPanel() {
                     : 'border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_12%,transparent)] text-success';
               const qtyToIssue = Math.max(item.plannedQty - item.issuedQty, 0);
               const qtyToReceive = Math.max(item.issuedQty - item.receivedQty, 0);
+              const issueQuickActionLabel = isReturnDocument ? 'Odebrano zwrot' : 'Wydano';
+              const plannedQtyLabel = isReturnDocument ? 'ZWROT:' : 'WYPISANE:';
+              const issuedQtyLabel = isReturnDocument ? 'ODEBRANE:' : 'WYDANE:';
+              const issueHistoryTitle = isReturnDocument
+                ? 'Historia odbiorów zwrotu'
+                : 'Historia wydań';
+              const issueHistoryEmptyText = isReturnDocument
+                ? 'Brak zapisanych odbiorów zwrotu dla tej pozycji.'
+                : 'Brak zapisanych wydań dla tej pozycji.';
+              const issueEditQtyPlaceholder = isReturnDocument
+                ? 'Nowa ilość odebrana'
+                : 'Nowa ilość wydana';
+              const issueQtyPlaceholder = isReturnDocument ? 'Ilość odebrana' : 'Ilość wydana';
+              const issueNotePlaceholder = isReturnDocument
+                ? 'Uwagi do odbioru zwrotu (opcjonalnie)'
+                : 'Uwagi do wydania (opcjonalnie)';
+              const issueSaveButtonLabel = isReturnDocument ? 'Zapisz odbiór' : 'Zapisz wydanie';
 
               return (
                 <div
@@ -3416,7 +4261,7 @@ export function WarehouseTransferDocumentsPanel() {
                         >
                           Priorytet: {warehouseTransferPriorityConfig[normalizedPriority].label}
                         </span>
-                        {!isDispatcherTab && !isWarehousemanTab && (
+                        {!isDispatcherTab && !isWarehousemanTab && item.status !== 'PENDING' && (
                           <Badge tone={itemStatusConfig[item.status].tone}>
                             {itemStatusConfig[item.status].label}
                           </Badge>
@@ -3427,7 +4272,7 @@ export function WarehouseTransferDocumentsPanel() {
                             onClick={() => addIssueForItem(item.id, qtyToIssue)}
                             disabled={qtyToIssue <= 0 || addIssueMutation.isPending}
                           >
-                            Wydano
+                            {issueQuickActionLabel}
                           </Button>
                         )}
                         {isDispatcherTab && (
@@ -3453,7 +4298,7 @@ export function WarehouseTransferDocumentsPanel() {
                           className="min-h-[46px] flex-1 px-4 py-2 text-sm sm:min-h-[52px] sm:flex-none sm:px-5 sm:py-3"
                           onClick={() => handleToggleItemExpand(details.document.id, item.id)}
                         >
-                          {isExpanded ? 'Zamknij' : 'Edytuj'}
+                          {isExpanded ? 'Zamknij' : isHistoryTab ? 'Więcej informacji' : 'Edytuj'}
                         </Button>
                       </div>
                     </div>
@@ -3463,7 +4308,7 @@ export function WarehouseTransferDocumentsPanel() {
                         <div className="flex items-center rounded-lg border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.03)] px-3 py-2">
                           <div className="flex flex-col justify-start gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
                             <p className="text-[11px] font-black leading-tight tracking-[0.08em] text-title sm:text-xl sm:leading-none sm:tracking-wide">
-                              WYPISANE:
+                              {plannedQtyLabel}
                             </p>
                             <p className="text-lg font-black leading-none tabular-nums text-title sm:text-xl">
                               {formatQty(item.plannedQty, item.unit)}
@@ -3473,7 +4318,7 @@ export function WarehouseTransferDocumentsPanel() {
                         <div className="flex items-center rounded-lg border border-[color:color-mix(in_srgb,var(--brand)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] px-3 py-2">
                           <div className="flex flex-col justify-start gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
                             <p className="text-[11px] font-black leading-tight tracking-[0.08em] text-title sm:text-xl sm:leading-none sm:tracking-wide">
-                              WYDANE:
+                              {issuedQtyLabel}
                             </p>
                             <p className="text-lg font-black leading-none tabular-nums text-title sm:text-xl">
                               {formatQty(item.issuedQty, item.unit)}
@@ -3651,10 +4496,10 @@ export function WarehouseTransferDocumentsPanel() {
                         >
                           <div className="space-y-1">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-dim">
-                              Historia wydań
+                              {issueHistoryTitle}
                             </p>
                             {item.issues.length === 0 ? (
-                              <p className="text-xs text-dim">Brak zapisanych wydań dla tej pozycji.</p>
+                              <p className="text-xs text-dim">{issueHistoryEmptyText}</p>
                             ) : (
                               [...item.issues]
                                 .reverse()
@@ -3681,7 +4526,7 @@ export function WarehouseTransferDocumentsPanel() {
                                               onChange={(event) =>
                                                 updateIssueEditDraft(issue.id, event.target.value)
                                               }
-                                              placeholder="Nowa ilość wydana"
+                                              placeholder={issueEditQtyPlaceholder}
                                               inputMode="decimal"
                                               className="sm:max-w-[190px]"
                                             />
@@ -3701,16 +4546,43 @@ export function WarehouseTransferDocumentsPanel() {
                                             >
                                               Anuluj
                                             </Button>
+                                            <Button
+                                              variant="outline"
+                                              className="w-full border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_12%,transparent)] sm:w-auto"
+                                              onClick={() => handleRemoveIssue(item.id, issue.id)}
+                                              disabled={
+                                                updateIssueMutation.isPending ||
+                                                removeIssueMutation.isPending
+                                              }
+                                            >
+                                              Usuń wpis
+                                            </Button>
                                           </>
                                         ) : (
-                                          <Button
-                                            variant="outline"
-                                            className="w-full sm:w-auto"
-                                            onClick={() => startIssueEdit(issue.id, issue.qty)}
-                                            disabled={updateIssueMutation.isPending}
-                                          >
-                                            Edytuj ilość
-                                          </Button>
+                                          <>
+                                            <Button
+                                              variant="outline"
+                                              className="w-full sm:w-auto"
+                                              onClick={() => startIssueEdit(issue.id, issue.qty)}
+                                              disabled={
+                                                updateIssueMutation.isPending ||
+                                                removeIssueMutation.isPending
+                                              }
+                                            >
+                                              Edytuj ilość
+                                            </Button>
+                                            <Button
+                                              variant="outline"
+                                              className="w-full border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_12%,transparent)] sm:w-auto"
+                                              onClick={() => handleRemoveIssue(item.id, issue.id)}
+                                              disabled={
+                                                updateIssueMutation.isPending ||
+                                                removeIssueMutation.isPending
+                                              }
+                                            >
+                                              Usuń wpis
+                                            </Button>
+                                          </>
                                         )}
                                       </div>
                                     )}
@@ -3783,16 +4655,49 @@ export function WarehouseTransferDocumentsPanel() {
                                                 >
                                                   Anuluj
                                                 </Button>
+                                                <Button
+                                                  variant="outline"
+                                                  className="w-full border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_12%,transparent)] sm:w-auto"
+                                                  onClick={() =>
+                                                    handleRemoveReceipt(item.id, receipt.id)
+                                                  }
+                                                  disabled={
+                                                    updateReceiptMutation.isPending ||
+                                                    removeReceiptMutation.isPending
+                                                  }
+                                                >
+                                                  Usuń wpis
+                                                </Button>
                                               </>
                                             ) : (
-                                              <Button
-                                                variant="outline"
-                                                className="w-full sm:w-auto"
-                                                onClick={() => startReceiptEdit(receipt.id, receipt.qty)}
-                                                disabled={updateReceiptMutation.isPending}
-                                              >
-                                                Edytuj ilość
-                                              </Button>
+                                              <>
+                                                <Button
+                                                  variant="outline"
+                                                  className="w-full sm:w-auto"
+                                                  onClick={() =>
+                                                    startReceiptEdit(receipt.id, receipt.qty)
+                                                  }
+                                                  disabled={
+                                                    updateReceiptMutation.isPending ||
+                                                    removeReceiptMutation.isPending
+                                                  }
+                                                >
+                                                  Edytuj ilość
+                                                </Button>
+                                                <Button
+                                                  variant="outline"
+                                                  className="w-full border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_12%,transparent)] sm:w-auto"
+                                                  onClick={() =>
+                                                    handleRemoveReceipt(item.id, receipt.id)
+                                                  }
+                                                  disabled={
+                                                    updateReceiptMutation.isPending ||
+                                                    removeReceiptMutation.isPending
+                                                  }
+                                                >
+                                                  Usuń wpis
+                                                </Button>
+                                              </>
                                             )}
                                           </div>
                                         )}
@@ -3812,7 +4717,7 @@ export function WarehouseTransferDocumentsPanel() {
                             onChange={(event) =>
                               updateIssueDraft(item.id, { qty: event.target.value })
                             }
-                            placeholder="Ilość wydana"
+                            placeholder={issueQtyPlaceholder}
                             inputMode="decimal"
                           />
                           <Input
@@ -3820,14 +4725,14 @@ export function WarehouseTransferDocumentsPanel() {
                             onChange={(event) =>
                               updateIssueDraft(item.id, { note: event.target.value })
                             }
-                            placeholder="Uwagi do wydania (opcjonalnie)"
+                            placeholder={issueNotePlaceholder}
                           />
                           <Button
                             className="w-full md:w-auto"
                             onClick={() => handleAddIssue(item.id)}
                             disabled={addIssueMutation.isPending}
                           >
-                            Zapisz wydanie
+                            {issueSaveButtonLabel}
                           </Button>
                         </div>
                       )}
@@ -3869,14 +4774,32 @@ export function WarehouseTransferDocumentsPanel() {
     );
   };
 
-  const activeDocumentsCardTitle = isWarehousemanTab
-    ? 'Dokumenty do wydania'
-    : 'Dokumenty przychodzące';
-  const activeDocumentsEmptyDescription = isWarehousemanTab
-    ? warehousemanSourceWarehouseFilter.length === 0
-      ? 'Wybierz co najmniej jeden magazyn w filtrze, aby zobaczyc dokumenty.'
-      : 'Nowe dokumenty do wydania pojawiają się tutaj po przekazaniu do realizacji. Zielone dokumenty są już wydane i czekają na zatwierdzenie.'
-    : 'Widzisz wszystkie dokumenty (OPEN i ISSUED). Zielone dokumenty są już wydane i gotowe do przyjęcia.';
+  const dispatcherIssueCardTitle = 'Dokumenty przychodzące';
+  const dispatcherNoTargetFilterDescription =
+    dispatcherTargetLocationOptions.length === 0
+      ? 'Brak lokalizacji docelowych na aktywnych dokumentach.'
+      : 'Wybierz co najmniej jedną lokalizację docelową w filtrze, aby zobaczyć dokumenty.';
+  const dispatcherIssueEmptyDescription =
+    dispatcherSelectedTargetLocationCount === 0
+      ? dispatcherNoTargetFilterDescription
+      : 'Brak dokumentów przychodzących dla wybranych lokalizacji.';
+  const dispatcherReturnCardTitle = 'Zwroty';
+  const dispatcherReturnEmptyDescription =
+    dispatcherSelectedTargetLocationCount === 0
+      ? dispatcherNoTargetFilterDescription
+      : 'Brak dokumentów zwrotu dla wybranych lokalizacji.';
+  const warehousemanNoFilterDescription =
+    'Wybierz co najmniej jeden magazyn w filtrze, aby zobaczyć dokumenty.';
+  const warehousemanIssueCardTitle = 'Dokumenty do wydania';
+  const warehousemanIssueEmptyDescription =
+    warehousemanSourceWarehouseFilter.length === 0
+      ? warehousemanNoFilterDescription
+      : 'Brak dokumentów do wydania dla wybranych magazynów.';
+  const warehousemanReturnCardTitle = 'Zwroty do odebrania';
+  const warehousemanReturnEmptyDescription =
+    warehousemanSourceWarehouseFilter.length === 0
+      ? warehousemanNoFilterDescription
+      : 'Brak zwrotów do odebrania dla wybranych magazynów.';
 
   if (!hasAnyWorkspaceAccess) {
     return (
@@ -3920,7 +4843,7 @@ export function WarehouseTransferDocumentsPanel() {
             className="hidden"
           />
 
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-4">
             <div>
               <label className="text-xs uppercase tracking-wide text-dim">Numer dokumentu</label>
               <Input
@@ -3929,6 +4852,7 @@ export function WarehouseTransferDocumentsPanel() {
                   setForm((prev) => ({ ...prev, documentNumber: event.target.value }))
                 }
                 placeholder="np. 13168 / MMZ / 0/2025"
+                className="h-[42px]"
               />
             </div>
             <div>
@@ -3941,13 +4865,114 @@ export function WarehouseTransferDocumentsPanel() {
                   setForm((prev) => ({ ...prev, sourceWarehouse: event.target.value }))
                 }
                 placeholder="np. 51"
+                className="h-[42px]"
               />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-wide text-dim">Rodzaj dokumentu</label>
+              <div className="flex h-[42px] w-full overflow-hidden rounded-xl border border-border bg-[rgba(0,0,0,0.40)]">
+                {WAREHOUSE_TRANSFER_FLOW_KIND_OPTIONS.map((flowKind) => {
+                  const active = form.documentFlowKind === flowKind;
+                  return (
+                    <button
+                      key={flowKind}
+                      type="button"
+                      onClick={() => {
+                        setForm((prev) => ({ ...prev, documentFlowKind: flowKind }));
+                        setShowCommentPresetSuggestions(false);
+                      }}
+                      className={`h-full flex-1 px-3 py-2 text-xs font-semibold tracking-wide transition ${
+                        active
+                          ? 'bg-[color:color-mix(in_srgb,var(--brand)_18%,transparent)] text-title'
+                          : 'text-dim hover:bg-[rgba(255,255,255,0.04)] hover:text-title'
+                      }`}
+                    >
+                      {WAREHOUSE_TRANSFER_FLOW_KIND_LABELS[flowKind]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-wide text-dim">
+                {targetLocationFieldLabel}
+              </label>
+              <div ref={commentPresetDropdownRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowCommentPresetSuggestions((prev) => !prev)}
+                  className={`${textAreaClass} h-[42px] text-left ${
+                    form.documentCommentPreset ? '' : 'text-dim'
+                  }`}
+                >
+                  <span className="flex items-center justify-between gap-3">
+                    <span className="truncate">
+                      {form.documentCommentPreset || targetLocationSelectPlaceholder}
+                    </span>
+                    <span className="shrink-0 text-xs font-semibold text-dim">
+                      {showCommentPresetSuggestions ? 'Zamknij' : 'Wybierz'}
+                    </span>
+                  </span>
+                </button>
+                {showCommentPresetSuggestions && (
+                  <div className="absolute z-20 mt-2 w-full max-h-72 overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+                    {targetLocationPresetOptions.map((preset) => {
+                      const isActive = form.documentCommentPreset === preset;
+                      return (
+                        <button
+                          key={preset}
+                          type="button"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            setForm((prev) => ({
+                              ...prev,
+                              documentCommentPreset: preset,
+                              documentCommentCustom:
+                                preset === CUSTOM_TARGET_LOCATION_PRESET
+                                  ? prev.documentCommentCustom
+                                  : ''
+                            }));
+                            setShowCommentPresetSuggestions(false);
+                          }}
+                          className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition ${
+                            isActive
+                              ? 'bg-[color:color-mix(in_srgb,var(--brand)_18%,transparent)] text-title'
+                              : 'text-body hover:bg-[rgba(255,255,255,0.06)]'
+                          }`}
+                        >
+                          <span className="font-semibold">{preset}</span>
+                          {isActive ? (
+                            <span className="text-[11px] font-semibold text-brand">Wybrane</span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
+          {showCustomTargetLocationInput && (
+            <div>
+              <label className="text-xs uppercase tracking-wide text-dim">
+                Lokalizacja docelowa (wpis ręczny)
+              </label>
+              <Input
+                value={form.documentCommentCustom}
+                onChange={(event) =>
+                  setForm((prev) => ({ ...prev, documentCommentCustom: event.target.value }))
+                }
+                placeholder="np. Hala testowa / linia 3 / klient zewnętrzny"
+              />
+            </div>
+          )}
+
           <div>
             <label className="text-xs uppercase tracking-wide text-dim">
-              Wklej dokument (pozycje do wydania)
+              {form.documentFlowKind === 'ZWROT'
+                ? 'Wklej dokument (pozycje zwrotu)'
+                : 'Wklej dokument (pozycje do wydania)'}
             </label>
             <textarea
               value={form.itemsRaw}
@@ -4067,6 +5092,212 @@ export function WarehouseTransferDocumentsPanel() {
 
       {(isWarehousemanTab || isDispatcherTab) && (
         <>
+          {isWarehousemanTab ? (
+            <>
+              <div className="space-y-3 md:hidden">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                    {warehousemanIssueCardTitle}
+                  </p>
+                  <p className="text-sm text-dim">Aktywne: {warehousemanIssueDocuments.length}</p>
+                </div>
+                {documentsLoading ? (
+                  <Card>
+                    <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+                  </Card>
+                ) : warehousemanIssueDocuments.length === 0 ? (
+                  <Card>
+                    <EmptyState
+                      title="Brak dokumentów do wydania"
+                      description={warehousemanIssueEmptyDescription}
+                    />
+                  </Card>
+                ) : (
+                  renderMobileDocumentCards(warehousemanIssueDocuments)
+                )}
+              </div>
+
+              <Card className="hidden space-y-4 md:block">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                    {warehousemanIssueCardTitle}
+                  </p>
+                  <p className="text-sm text-dim">Aktywne: {warehousemanIssueDocuments.length}</p>
+                </div>
+                {documentsLoading ? (
+                  <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+                ) : warehousemanIssueDocuments.length === 0 ? (
+                  <EmptyState
+                    title="Brak dokumentów do wydania"
+                    description={warehousemanIssueEmptyDescription}
+                  />
+                ) : (
+                  <DataTable
+                    columns={['Magazyn', 'Data', 'Dokument', 'Pozycje', 'Lokalizacja docelowa']}
+                    rows={warehousemanIssueDocumentRows}
+                    getRowClassName={getWarehousemanIssueDocumentRowClassName}
+                    onRowClick={(rowIndex) =>
+                      handleDocumentClick(warehousemanIssueDocuments[rowIndex]?.id)
+                    }
+                  />
+                )}
+              </Card>
+
+              <div className="space-y-3 md:hidden">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                    {warehousemanReturnCardTitle}
+                  </p>
+                  <p className="text-sm text-dim">Aktywne: {warehousemanReturnDocuments.length}</p>
+                </div>
+                {documentsLoading ? (
+                  <Card>
+                    <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+                  </Card>
+                ) : warehousemanReturnDocuments.length === 0 ? (
+                  <Card>
+                    <EmptyState
+                      title="Brak zwrotów do odebrania"
+                      description={warehousemanReturnEmptyDescription}
+                    />
+                  </Card>
+                ) : (
+                  renderMobileDocumentCards(warehousemanReturnDocuments)
+                )}
+              </div>
+
+              <Card className="hidden space-y-4 md:block">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                    {warehousemanReturnCardTitle}
+                  </p>
+                  <p className="text-sm text-dim">Aktywne: {warehousemanReturnDocuments.length}</p>
+                </div>
+                {documentsLoading ? (
+                  <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+                ) : warehousemanReturnDocuments.length === 0 ? (
+                  <EmptyState
+                    title="Brak zwrotów do odebrania"
+                    description={warehousemanReturnEmptyDescription}
+                  />
+                ) : (
+                  <DataTable
+                    columns={['Magazyn', 'Data', 'Dokument', 'Pozycje', 'Lokalizacja docelowa']}
+                    rows={warehousemanReturnDocumentRows}
+                    getRowClassName={getWarehousemanReturnDocumentRowClassName}
+                    onRowClick={(rowIndex) =>
+                      handleDocumentClick(warehousemanReturnDocuments[rowIndex]?.id)
+                    }
+                  />
+                )}
+              </Card>
+            </>
+          ) : (
+            <>
+              <div className="space-y-3 md:hidden">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                    {dispatcherIssueCardTitle}
+                  </p>
+                  <p className="text-sm text-dim">Aktywne: {dispatcherIssueDocuments.length}</p>
+                </div>
+                {documentsLoading ? (
+                  <Card>
+                    <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+                  </Card>
+                ) : dispatcherIssueDocuments.length === 0 ? (
+                  <Card>
+                    <EmptyState
+                      title="Brak aktywnych dokumentów"
+                      description={dispatcherIssueEmptyDescription}
+                    />
+                  </Card>
+                ) : (
+                  renderMobileDocumentCards(dispatcherIssueDocuments)
+                )}
+              </div>
+
+              <Card className="hidden space-y-4 md:block">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                    {dispatcherIssueCardTitle}
+                  </p>
+                  <p className="text-sm text-dim">Aktywne: {dispatcherIssueDocuments.length}</p>
+                </div>
+                {documentsLoading ? (
+                  <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+                ) : dispatcherIssueDocuments.length === 0 ? (
+                  <EmptyState
+                    title="Brak aktywnych dokumentów"
+                    description={dispatcherIssueEmptyDescription}
+                  />
+                ) : (
+                  <DataTable
+                    columns={['Magazyn', 'Data', 'Dokument', 'Pozycje', 'Lokalizacja docelowa']}
+                    rows={dispatcherIssueDocumentRows}
+                    getRowClassName={getDispatcherIssueDocumentRowClassName}
+                    onRowClick={(rowIndex) =>
+                      handleDocumentClick(dispatcherIssueDocuments[rowIndex]?.id)
+                    }
+                  />
+                )}
+              </Card>
+
+              <div className="space-y-3 md:hidden">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                    {dispatcherReturnCardTitle}
+                  </p>
+                  <p className="text-sm text-dim">Aktywne: {dispatcherReturnDocuments.length}</p>
+                </div>
+                {documentsLoading ? (
+                  <Card>
+                    <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+                  </Card>
+                ) : dispatcherReturnDocuments.length === 0 ? (
+                  <Card>
+                    <EmptyState
+                      title="Brak dokumentów zwrotu"
+                      description={dispatcherReturnEmptyDescription}
+                    />
+                  </Card>
+                ) : (
+                  renderMobileDocumentCards(dispatcherReturnDocuments)
+                )}
+              </div>
+
+              <Card className="hidden space-y-4 md:block">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                    {dispatcherReturnCardTitle}
+                  </p>
+                  <p className="text-sm text-dim">Aktywne: {dispatcherReturnDocuments.length}</p>
+                </div>
+                {documentsLoading ? (
+                  <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+                ) : dispatcherReturnDocuments.length === 0 ? (
+                  <EmptyState
+                    title="Brak dokumentów zwrotu"
+                    description={dispatcherReturnEmptyDescription}
+                  />
+                ) : (
+                  <DataTable
+                    columns={['Magazyn', 'Data', 'Dokument', 'Pozycje', 'Lokalizacja docelowa']}
+                    rows={dispatcherReturnDocumentRows}
+                    getRowClassName={getDispatcherReturnDocumentRowClassName}
+                    onRowClick={(rowIndex) =>
+                      handleDocumentClick(dispatcherReturnDocuments[rowIndex]?.id)
+                    }
+                  />
+                )}
+              </Card>
+            </>
+          )}
+
+          <div ref={detailsCardRef} className="scroll-mt-20">
+            {renderDetailsCard()}
+          </div>
+
           {isWarehousemanTab && (
             <Card className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -4115,67 +5346,89 @@ export function WarehouseTransferDocumentsPanel() {
               </div>
             </Card>
           )}
-          <div className="space-y-3 md:hidden">
-            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-                {activeDocumentsCardTitle}
-              </p>
-              <p className="text-sm text-dim">Aktywne: {activeDocuments.length}</p>
-            </div>
-            {documentsLoading ? (
-              <Card>
-                <p className="text-sm text-dim">Ładowanie dokumentów...</p>
-              </Card>
-            ) : activeDocuments.length === 0 ? (
-              <Card>
-                <EmptyState
-                  title="Brak aktywnych dokumentów"
-                  description={activeDocumentsEmptyDescription}
-                />
-              </Card>
-            ) : (
-              renderMobileDocumentCards(activeDocuments)
-            )}
-          </div>
 
-          <Card className="hidden space-y-4 md:block">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-                {activeDocumentsCardTitle}
-              </p>
-              <p className="text-sm text-dim">Aktywne: {activeDocuments.length}</p>
-            </div>
-            {documentsLoading ? (
-              <p className="text-sm text-dim">Ładowanie dokumentów...</p>
-            ) : activeDocuments.length === 0 ? (
-              <EmptyState
-                title="Brak aktywnych dokumentów"
-                description={activeDocumentsEmptyDescription}
-              />
-            ) : (
-              <DataTable
-                columns={['Magazyn', 'Data', 'Dokument', 'Pozycje']}
-                rows={activeDocumentRows}
-                getRowClassName={getActiveDocumentRowClassName}
-                onRowClick={(rowIndex) => handleDocumentClick(activeDocuments[rowIndex]?.id)}
-              />
-            )}
-          </Card>
-
-          <div ref={detailsCardRef} className="scroll-mt-20">
-            {renderDetailsCard()}
-          </div>
+          {isDispatcherTab && (
+            <Card className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                  Filtr lokalizacji docelowej
+                </p>
+                <p className="text-sm text-dim">
+                  Wybrane: {dispatcherSelectedTargetLocationCount}/
+                  {dispatcherTargetLocationOptions.length}
+                </p>
+              </div>
+              {dispatcherTargetLocationOptions.length === 0 ? (
+                <p className="text-xs text-dim">
+                  Brak lokalizacji docelowych na aktywnych dokumentach.
+                </p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    {dispatcherTargetLocationOptions.map((targetLocation) => {
+                      const targetLocationToken =
+                        normalizeTargetLocationFilterToken(targetLocation);
+                      const active =
+                        dispatcherTargetLocationFilterSet === null ||
+                        dispatcherTargetLocationFilterSet.has(targetLocationToken);
+                      return (
+                        <button
+                          key={targetLocation}
+                          type="button"
+                          onClick={() => toggleDispatcherTargetLocation(targetLocation)}
+                          className={`min-h-[34px] rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                            active
+                              ? 'border-[color:color-mix(in_srgb,var(--brand)_42%,var(--border))] bg-[color:color-mix(in_srgb,var(--brand)_16%,transparent)] text-title'
+                              : 'border-border bg-surface2 text-dim hover:border-borderStrong hover:text-title'
+                          }`}
+                        >
+                          {targetLocation}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      className="min-h-[36px] px-3 py-1.5 text-xs"
+                      onClick={selectAllDispatcherTargetLocations}
+                    >
+                      Zaznacz wszystkie
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="min-h-[36px] px-3 py-1.5 text-xs"
+                      onClick={clearDispatcherTargetLocationFilter}
+                    >
+                      Wyczysc
+                    </Button>
+                  </div>
+                </>
+              )}
+            </Card>
+          )}
         </>
       )}
 
       {isHistoryTab && (
         <>
+          <Card className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              Wyszukaj numer dokumentu
+            </p>
+            <Input
+              value={historySearch}
+              onChange={(event) => setHistorySearch(event.target.value)}
+              placeholder="np. 1123"
+            />
+          </Card>
+
           <div className="space-y-3 md:hidden">
             <div className="flex flex-wrap items-center justify-between gap-2 px-1">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                 Historia dokumentów
               </p>
-              <p className="text-sm text-dim">Zamknięte: {historyDocuments.length}</p>
+              <p className="text-sm text-dim">Zamknięte: {historyCountLabel}</p>
             </div>
             {documentsLoading ? (
               <Card>
@@ -4188,8 +5441,15 @@ export function WarehouseTransferDocumentsPanel() {
                   description="Zamknięte dokumenty pojawiają się tutaj automatycznie."
                 />
               </Card>
+            ) : filteredHistoryDocuments.length === 0 ? (
+              <Card>
+                <EmptyState
+                  title="Brak wyników"
+                  description="Nie znaleziono dokumentu dla podanego numeru."
+                />
+              </Card>
             ) : (
-              renderMobileDocumentCards(historyDocuments)
+              renderMobileDocumentCards(filteredHistoryDocuments)
             )}
           </div>
 
@@ -4198,7 +5458,7 @@ export function WarehouseTransferDocumentsPanel() {
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                 Historia dokumentów
               </p>
-              <p className="text-sm text-dim">Zamknięte: {historyDocuments.length}</p>
+              <p className="text-sm text-dim">Zamknięte: {historyCountLabel}</p>
             </div>
             {documentsLoading ? (
               <p className="text-sm text-dim">Ładowanie dokumentów...</p>
@@ -4207,11 +5467,16 @@ export function WarehouseTransferDocumentsPanel() {
                 title="Historia jest pusta"
                 description="Zamknięte dokumenty pojawiają się tutaj automatycznie."
               />
+            ) : filteredHistoryDocuments.length === 0 ? (
+              <EmptyState
+                title="Brak wyników"
+                description="Nie znaleziono dokumentu dla podanego numeru."
+              />
             ) : (
               <DataTable
-                columns={['Magazyn', 'Data', 'Dokument', 'Pozycje']}
+                columns={['Magazyn', 'Data', 'Dokument', 'Pozycje', 'Lokalizacja docelowa']}
                 rows={historyDocumentRows}
-                onRowClick={(rowIndex) => handleDocumentClick(historyDocuments[rowIndex]?.id)}
+                onRowClick={(rowIndex) => handleDocumentClick(filteredHistoryDocuments[rowIndex]?.id)}
               />
             )}
           </Card>

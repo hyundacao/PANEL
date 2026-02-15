@@ -314,6 +314,12 @@ export const updateWarehouseTransferItemIssue = async (payload: {
 }): Promise<WarehouseTransferItemIssue> =>
   appRequest('updateWarehouseTransferItemIssue', payload);
 
+export const removeWarehouseTransferItemIssue = async (payload: {
+  documentId: string;
+  itemId: string;
+  issueId: string;
+}): Promise<void> => appRequest('removeWarehouseTransferItemIssue', payload);
+
 export const addWarehouseTransferItemReceipt = async (payload: {
   documentId: string;
   itemId: string;
@@ -330,6 +336,12 @@ export const updateWarehouseTransferItemReceipt = async (payload: {
   note?: string;
 }): Promise<WarehouseTransferItemReceipt> =>
   appRequest('updateWarehouseTransferItemReceipt', payload);
+
+export const removeWarehouseTransferItemReceipt = async (payload: {
+  documentId: string;
+  itemId: string;
+  receiptId: string;
+}): Promise<void> => appRequest('removeWarehouseTransferItemReceipt', payload);
 
 export const closeWarehouseTransferDocument = async (payload: {
   documentId: string;

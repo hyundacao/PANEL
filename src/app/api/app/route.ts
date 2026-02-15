@@ -497,6 +497,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       return;
     case 'addWarehouseTransferItemIssue':
     case 'updateWarehouseTransferItemIssue':
+    case 'removeWarehouseTransferItemIssue':
       requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', ['erp-magazynier']);
       return;
     case 'markWarehouseTransferDocumentIssued':
@@ -504,6 +505,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       return;
     case 'addWarehouseTransferItemReceipt':
     case 'updateWarehouseTransferItemReceipt':
+    case 'removeWarehouseTransferItemReceipt':
       requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', ['erp-rozdzielca']);
       return;
     case 'closeWarehouseTransferDocument':
@@ -659,9 +661,11 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'createWarehouseTransferDocument',
   'addWarehouseTransferItemIssue',
   'updateWarehouseTransferItemIssue',
+  'removeWarehouseTransferItemIssue',
   'markWarehouseTransferDocumentIssued',
   'addWarehouseTransferItemReceipt',
   'updateWarehouseTransferItemReceipt',
+  'removeWarehouseTransferItemReceipt',
   'closeWarehouseTransferDocument',
   'removeWarehouseTransferDocument',
   'applyInventoryAdjustment',
@@ -715,9 +719,11 @@ const ERP_AUDIT_ACTIONS = new Set<string>([
   'createWarehouseTransferDocument',
   'addWarehouseTransferItemIssue',
   'updateWarehouseTransferItemIssue',
+  'removeWarehouseTransferItemIssue',
   'markWarehouseTransferDocumentIssued',
   'addWarehouseTransferItemReceipt',
   'updateWarehouseTransferItemReceipt',
+  'removeWarehouseTransferItemReceipt',
   'closeWarehouseTransferDocument',
   'removeWarehouseTransferDocument'
 ]);
@@ -730,9 +736,11 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   createWarehouseTransferDocument: 'Przesuniecia magazynowe: nowy dokument',
   addWarehouseTransferItemIssue: 'Przesuniecia magazynowe: wydanie pozycji',
   updateWarehouseTransferItemIssue: 'Przesuniecia magazynowe: edycja wydania',
+  removeWarehouseTransferItemIssue: 'Przesuniecia magazynowe: usuniecie wydania',
   markWarehouseTransferDocumentIssued: 'Przesuniecia magazynowe: wydano wszystkie pozycje',
   addWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: przyjecie pozycji',
   updateWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: edycja przyjecia',
+  removeWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: usuniecie przyjecia',
   closeWarehouseTransferDocument: 'Przesuniecia magazynowe: zamkniecie dokumentu',
   removeWarehouseTransferDocument: 'Przesuniecia magazynowe: usuniecie dokumentu',
   applyInventoryAdjustment: 'Inwentaryzacja: korekta stanu',
@@ -2950,6 +2958,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'createWarehouseTransferDocument': {
       const documentNumber = String(payload?.documentNumber ?? '').trim();
       if (!documentNumber) throw new Error('DOCUMENT_NUMBER_REQUIRED');
+      const documentNote = String(payload?.note ?? '').trim();
+      if (!documentNote) throw new Error('NOTE_REQUIRED');
       const rawItems: Array<{
         lineNo?: number;
         priority?: WarehouseTransferItemPriority;
@@ -3006,7 +3016,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         target_warehouse: payload?.targetWarehouse
           ? String(payload.targetWarehouse).trim() || null
           : null,
-        note: payload?.note ? String(payload.note).trim() || null : null,
+        note: documentNote,
         status: 'OPEN',
         closed_at: null,
         closed_by_name: null
@@ -3117,7 +3127,6 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
-      if (documentRow.status !== 'OPEN') throw new Error('DOCUMENT_ALREADY_ISSUED');
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
@@ -3163,7 +3172,6 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
-      if (documentRow.status !== 'OPEN') throw new Error('DOCUMENT_ALREADY_ISSUED');
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
@@ -3218,6 +3226,80 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           qty,
           note: payload?.note !== undefined ? String(payload.note).trim() || null : issueRow.note
         })
+        .eq('id', issueId)
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (error.code === '42P01') throw new Error('MIGRATION_REQUIRED');
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      return mapWarehouseTransferItemIssue(data);
+    }
+    case 'removeWarehouseTransferItemIssue': {
+      const documentId = String(payload?.documentId ?? '').trim();
+      const itemId = String(payload?.itemId ?? '').trim();
+      const issueId = String(payload?.issueId ?? '').trim();
+      if (!documentId || !itemId || !issueId) throw new Error('NOT_FOUND');
+
+      const { data: documentRow, error: documentError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .select('id, status')
+        .eq('id', documentId)
+        .maybeSingle();
+      if (documentError) throw documentError;
+      if (!documentRow) throw new Error('NOT_FOUND');
+      if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+
+      const { data: itemRow, error: itemError } = await supabaseAdmin
+        .from('warehouse_transfer_document_items')
+        .select('id, document_id')
+        .eq('id', itemId)
+        .maybeSingle();
+      if (itemError) throw itemError;
+      if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+
+      const { data: issueRow, error: issueError } = await supabaseAdmin
+        .from('warehouse_transfer_item_issues')
+        .select('*')
+        .eq('id', issueId)
+        .maybeSingle();
+      if (issueError) {
+        if (issueError.code === '42P01') throw new Error('MIGRATION_REQUIRED');
+        throw issueError;
+      }
+      if (!issueRow || issueRow.item_id !== itemId) throw new Error('NOT_FOUND');
+
+      const { data: issueRows, error: issueRowsError } = await supabaseAdmin
+        .from('warehouse_transfer_item_issues')
+        .select('id, qty')
+        .eq('item_id', itemId);
+      if (issueRowsError) {
+        if (issueRowsError.code === '42P01') throw new Error('MIGRATION_REQUIRED');
+        throw issueRowsError;
+      }
+
+      const { data: receiptRows, error: receiptRowsError } = await supabaseAdmin
+        .from('warehouse_transfer_item_receipts')
+        .select('qty')
+        .eq('item_id', itemId);
+      if (receiptRowsError) throw receiptRowsError;
+
+      const issuedExcludingRemoved = (issueRows ?? []).reduce((sum, row) => {
+        if (String(row?.id ?? '') === issueId) return sum;
+        return sum + toNumber(row?.qty);
+      }, 0);
+      const receivedQty = (receiptRows ?? []).reduce(
+        (sum, row) => sum + toNumber(row?.qty),
+        0
+      );
+      if (issuedExcludingRemoved + 0.000001 < receivedQty) {
+        throw new Error('ISSUE_BELOW_RECEIVED');
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('warehouse_transfer_item_issues')
+        .delete()
         .eq('id', issueId)
         .select('*')
         .maybeSingle();
@@ -3374,6 +3456,61 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
               ? String(payload.note).trim() || null
               : receiptRow.note
         })
+        .eq('id', receiptId)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapWarehouseTransferItemReceipt(data);
+    }
+    case 'removeWarehouseTransferItemReceipt': {
+      const documentId = String(payload?.documentId ?? '').trim();
+      const itemId = String(payload?.itemId ?? '').trim();
+      const receiptId = String(payload?.receiptId ?? '').trim();
+      if (!documentId || !itemId || !receiptId) throw new Error('NOT_FOUND');
+
+      const { data: documentRow, error: documentError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .select('id, status')
+        .eq('id', documentId)
+        .maybeSingle();
+      if (documentError) throw documentError;
+      if (!documentRow) throw new Error('NOT_FOUND');
+      if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+
+      const { data: itemRow, error: itemError } = await supabaseAdmin
+        .from('warehouse_transfer_document_items')
+        .select('id, document_id')
+        .eq('id', itemId)
+        .maybeSingle();
+      if (itemError) throw itemError;
+      if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+
+      const { data: receiptRow, error: receiptError } = await supabaseAdmin
+        .from('warehouse_transfer_item_receipts')
+        .select('*')
+        .eq('id', receiptId)
+        .maybeSingle();
+      if (receiptError) throw receiptError;
+      if (!receiptRow || receiptRow.item_id !== itemId) throw new Error('NOT_FOUND');
+
+      const actorName = getActorName(currentUser);
+      const isAdmin = isWarehouseAdmin(currentUser, 'PRZESUNIECIA_ERP');
+      const isOwnerById =
+        Boolean(currentUser.id) &&
+        Boolean(receiptRow.receiver_id) &&
+        String(receiptRow.receiver_id) === String(currentUser.id);
+      const isOwnerByName =
+        !receiptRow.receiver_id &&
+        Boolean(receiptRow.receiver_name) &&
+        String(receiptRow.receiver_name) === actorName;
+      if (!isAdmin && !isOwnerById && !isOwnerByName) {
+        throw new Error('FORBIDDEN');
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('warehouse_transfer_item_receipts')
+        .delete()
         .eq('id', receiptId)
         .select('*')
         .maybeSingle();
