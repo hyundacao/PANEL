@@ -3052,7 +3052,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }
 
       const createdDocument = await fetchWarehouseTransferDocumentDetails(documentId);
-      void sendWarehouseTransferDocumentCreatedPush({
+      await sendWarehouseTransferDocumentCreatedPush({
         documentId: createdDocument.document.id,
         documentNumber: createdDocument.document.documentNumber,
         sourceWarehouse: createdDocument.document.sourceWarehouse,
@@ -3114,7 +3114,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (error) throw error;
       if (!data) throw new Error('NOT_FOUND');
       const issuedDocument = mapWarehouseTransferDocument(data);
-      void sendWarehouseTransferDocumentIssuedPush({
+      await sendWarehouseTransferDocumentIssuedPush({
         documentId: issuedDocument.id,
         documentNumber: issuedDocument.documentNumber,
         sourceWarehouse: issuedDocument.sourceWarehouse,
