@@ -13,6 +13,7 @@ type PushSubscriptionRow = {
   endpoint: string;
   p256dh: string;
   auth: string;
+  user_agent?: string | null;
 };
 
 type PushSubscriptionInput = {
@@ -133,7 +134,7 @@ const sendWarehouseTransferPush = async ({
 
   const query = supabaseAdmin
     .from('push_subscriptions')
-    .select('id, user_id, endpoint, p256dh, auth');
+    .select('id, user_id, endpoint, p256dh, auth, user_agent');
 
   const { data, error } = await query;
   if (error) {
@@ -155,10 +156,18 @@ const sendWarehouseTransferPush = async ({
     });
     return;
   }
+  const androidSubscriptions = subscriptions.filter((row) =>
+    /android/i.test(String(row.user_agent ?? ''))
+  ).length;
+  const desktopSubscriptions = subscriptions.filter((row) =>
+    /windows|macintosh|linux/i.test(String(row.user_agent ?? ''))
+  ).length;
   console.warn('[push] Sending ERP push', {
     requiredTabs,
     totalSubscriptions: allSubscriptions.length,
     filteredSubscriptions: subscriptions.length,
+    androidSubscriptions,
+    desktopSubscriptions,
     tag
   });
 
