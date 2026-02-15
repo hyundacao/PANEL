@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+﻿import type { Metadata } from 'next';
 import { Space_Grotesk } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
@@ -6,8 +6,8 @@ import { Providers } from './providers';
 const spaceGrotesk = Space_Grotesk({ subsets: ['latin'], variable: '--font-space' });
 
 export const metadata: Metadata = {
-  title: 'Magazyn Przemiałów',
-  description: 'Panel rozliczeń przemiałów na halach produkcyjnych'
+  title: 'Panel Produkcja',
+  description: 'Panel rozlicze艅 przemia艂贸w na halach produkcyjnych'
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -19,3 +19,4 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     </html>
   );
 }
+

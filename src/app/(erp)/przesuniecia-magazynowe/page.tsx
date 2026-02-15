@@ -1,8 +1,12 @@
-﻿'use client';
+﻿import type { Metadata } from 'next';
 
 import { PageHeader } from '@/components/layout/PageHeader';
 import { getTodayKey } from '@/lib/api';
 import { WarehouseTransferDocumentsPanel } from '@/app/(main)/przesuniecia/WarehouseTransferDocumentsPanel';
+
+export const metadata: Metadata = {
+  title: 'Panel Produkcja'
+};
 
 export default function WarehouseTransfersModulePage() {
   const today = getTodayKey();

@@ -51,7 +51,7 @@ export default function LoginPage() {
           if (typeof window !== 'undefined' && 'Notification' in window) {
             if (Notification.permission === 'default') {
               const shouldEnable = window.confirm(
-                'Czy włączyć powiadomienia o nowych dokumentach ERP?'
+                'Czy włączyć powiadomienia o dokumentach ERP?'
               );
               if (shouldEnable) {
                 const status = await enableErpPushNotifications();
@@ -59,7 +59,7 @@ export default function LoginPage() {
                 if (status.enabled) {
                   toast({
                     title: 'Powiadomienia ERP włączone',
-                    description: 'Nowe dokumenty będą wysyłane jako powiadomienia systemowe.',
+                    description: 'Powiadomienia o dokumentach ERP będą wysyłane systemowo.',
                     tone: 'info'
                   });
                 }

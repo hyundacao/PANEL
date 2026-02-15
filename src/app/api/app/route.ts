@@ -11,7 +11,10 @@ import {
   isWarehouseAdmin
 } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
-import { sendWarehouseTransferDocumentCreatedPush } from '@/lib/push/server';
+import {
+  sendWarehouseTransferDocumentCreatedPush,
+  sendWarehouseTransferDocumentIssuedPush
+} from '@/lib/push/server';
 import type {
   AuditEvent,
   AppUser,
@@ -3054,7 +3057,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         documentNumber: createdDocument.document.documentNumber,
         sourceWarehouse: createdDocument.document.sourceWarehouse,
         targetWarehouse: createdDocument.document.targetWarehouse,
-        createdById: createdDocument.document.createdById ?? null
+        actorUserId: currentUser.id ?? null
       });
       return createdDocument;
     }
@@ -3110,7 +3113,15 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .maybeSingle();
       if (error) throw error;
       if (!data) throw new Error('NOT_FOUND');
-      return mapWarehouseTransferDocument(data);
+      const issuedDocument = mapWarehouseTransferDocument(data);
+      void sendWarehouseTransferDocumentIssuedPush({
+        documentId: issuedDocument.id,
+        documentNumber: issuedDocument.documentNumber,
+        sourceWarehouse: issuedDocument.sourceWarehouse,
+        targetWarehouse: issuedDocument.targetWarehouse,
+        actorUserId: currentUser.id ?? null
+      });
+      return issuedDocument;
     }
     case 'addWarehouseTransferItemIssue': {
       const documentId = String(payload?.documentId ?? '').trim();

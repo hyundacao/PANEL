@@ -84,7 +84,7 @@ export const Topbar = ({
         setErpDocumentNotificationsEnabled(true);
         toast({
           title: 'Powiadomienia ERP włączone',
-          description: 'Nowe dokumenty będą wysyłane jako powiadomienia systemowe.',
+          description: 'Powiadomienia o dokumentach ERP będą wysyłane systemowo.',
           tone: 'info'
         });
       } else {
@@ -92,7 +92,7 @@ export const Topbar = ({
         setErpDocumentNotificationsEnabled(false);
         toast({
           title: 'Powiadomienia ERP wyłączone',
-          description: 'Powiadomienia systemowe o nowych dokumentach są wyłączone.',
+          description: 'Powiadomienia systemowe o dokumentach ERP są wyłączone.',
           tone: 'info'
         });
       }

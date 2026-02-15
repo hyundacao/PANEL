@@ -3,6 +3,9 @@ import webpush, {
   type WebPushSubscription
 } from 'web-push';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { canSeeTab } from '@/lib/auth/access';
+import { mapDbUser, type DbUserRow } from '@/lib/supabase/users';
+import type { WarehouseTab } from '@/lib/api/types';
 
 type PushSubscriptionRow = {
   id: string;
@@ -25,7 +28,7 @@ type WarehouseDocumentPushPayload = {
   documentNumber: string;
   sourceWarehouse?: string;
   targetWarehouse?: string;
-  createdById?: string | null;
+  actorUserId?: string | null;
 };
 
 let vapidConfigured = false;
@@ -73,6 +76,108 @@ const removePushSubscriptionById = async (subscriptionId: string) => {
 const toPushText = (value?: string) => {
   const normalized = toCleanString(value);
   return normalized || '-';
+};
+
+const toDistinctUserIds = (rows: PushSubscriptionRow[]) => [
+  ...new Set(rows.map((row) => toCleanString(row.user_id)).filter(Boolean))
+];
+
+const filterSubscriptionsByErpTabs = async (
+  subscriptions: PushSubscriptionRow[],
+  requiredTabs: WarehouseTab[]
+) => {
+  if (subscriptions.length === 0 || requiredTabs.length === 0) return subscriptions;
+
+  const userIds = toDistinctUserIds(subscriptions);
+  if (userIds.length === 0) return [];
+
+  const { data, error } = await supabaseAdmin
+    .from('app_users')
+    .select('id, name, username, role, access, is_active, created_at, last_login')
+    .in('id', userIds)
+    .eq('is_active', true);
+
+  if (error) {
+    console.error('[push] Failed to load users for tab filtering', error);
+    return [];
+  }
+
+  const allowedUserIds = new Set(
+    ((data ?? []) as DbUserRow[]).map(mapDbUser).flatMap((user) =>
+      requiredTabs.some((tab) => canSeeTab(user, 'PRZESUNIECIA_ERP', tab)) ? [user.id] : []
+    )
+  );
+
+  return subscriptions.filter((row) => allowedUserIds.has(row.user_id));
+};
+
+type SendWarehouseTransferPushInput = {
+  title: string;
+  body: string;
+  url: string;
+  tag: string;
+  actorUserId?: string | null;
+  requiredTabs: WarehouseTab[];
+};
+
+const sendWarehouseTransferPush = async ({
+  title,
+  body,
+  url,
+  tag,
+  actorUserId,
+  requiredTabs
+}: SendWarehouseTransferPushInput) => {
+  if (!initVapid()) return;
+
+  let query = supabaseAdmin
+    .from('push_subscriptions')
+    .select('id, user_id, endpoint, p256dh, auth');
+
+  if (actorUserId) {
+    query = query.neq('user_id', actorUserId);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    console.error('[push] Failed to load subscriptions', error);
+    return;
+  }
+
+  const allSubscriptions = (data ?? []) as PushSubscriptionRow[];
+  if (allSubscriptions.length === 0) return;
+
+  const subscriptions = await filterSubscriptionsByErpTabs(allSubscriptions, requiredTabs);
+  if (subscriptions.length === 0) return;
+
+  const message = JSON.stringify({
+    title,
+    body,
+    url,
+    tag
+  });
+
+  await Promise.allSettled(
+    subscriptions.map(async (row) => {
+      try {
+        await webpush.sendNotification(toWebPushSubscription(row), message, {
+          TTL: 60 * 60,
+          urgency: 'high'
+        });
+      } catch (error) {
+        const pushError = error as WebPushError;
+        const statusCode = Number(pushError?.statusCode ?? 0);
+        if (statusCode === 404 || statusCode === 410) {
+          await removePushSubscriptionById(row.id);
+          return;
+        }
+        console.error('[push] Send failed', {
+          endpoint: row.endpoint,
+          statusCode
+        });
+      }
+    })
+  );
 };
 
 export const isWebPushConfigured = () => {
@@ -154,25 +259,6 @@ export const removePushSubscriptionForUser = async (userId: string, endpoint?: s
 export const sendWarehouseTransferDocumentCreatedPush = async (
   payload: WarehouseDocumentPushPayload
 ) => {
-  if (!initVapid()) return;
-
-  let query = supabaseAdmin
-    .from('push_subscriptions')
-    .select('id, user_id, endpoint, p256dh, auth');
-
-  if (payload.createdById) {
-    query = query.neq('user_id', payload.createdById);
-  }
-
-  const { data, error } = await query;
-  if (error) {
-    console.error('[push] Failed to load subscriptions', error);
-    return;
-  }
-
-  const subscriptions = (data ?? []) as PushSubscriptionRow[];
-  if (subscriptions.length === 0) return;
-
   const title = 'Nowy dokument ERP';
   const warehousePart = payload.sourceWarehouse
     ? `Magazyn: ${toPushText(payload.sourceWarehouse)}`
@@ -183,32 +269,36 @@ export const sendWarehouseTransferDocumentCreatedPush = async (
   const body = warehousePart
     ? `Został utworzony nowy dokument: ${documentLabel} | ${warehousePart}`
     : `Został utworzony nowy dokument: ${documentLabel}`;
-  const message = JSON.stringify({
+  await sendWarehouseTransferPush({
     title,
     body,
     url: '/przesuniecia-magazynowe',
-    tag: `erp-document-${payload.documentId}`
+    tag: `erp-document-created-${payload.documentId}`,
+    actorUserId: payload.actorUserId ?? null,
+    requiredTabs: ['erp-magazynier']
   });
+};
 
-  await Promise.allSettled(
-    subscriptions.map(async (row) => {
-      try {
-        await webpush.sendNotification(toWebPushSubscription(row), message, {
-          TTL: 60 * 60,
-          urgency: 'high'
-        });
-      } catch (error) {
-        const pushError = error as WebPushError;
-        const statusCode = Number(pushError?.statusCode ?? 0);
-        if (statusCode === 404 || statusCode === 410) {
-          await removePushSubscriptionById(row.id);
-          return;
-        }
-        console.error('[push] Send failed', {
-          endpoint: row.endpoint,
-          statusCode
-        });
-      }
-    })
-  );
+export const sendWarehouseTransferDocumentIssuedPush = async (
+  payload: WarehouseDocumentPushPayload
+) => {
+  const documentLabel = toPushText(payload.documentNumber);
+  const targetPart = payload.targetWarehouse
+    ? `Lokalizacja docelowa: ${toPushText(payload.targetWarehouse)}`
+    : payload.sourceWarehouse
+      ? `Magazyn źródłowy: ${toPushText(payload.sourceWarehouse)}`
+      : '';
+  const title = 'Dokument ERP wydany';
+  const body = targetPart
+    ? `Dokument ${documentLabel} jest gotowy do przyjęcia | ${targetPart}`
+    : `Dokument ${documentLabel} jest gotowy do przyjęcia`;
+
+  await sendWarehouseTransferPush({
+    title,
+    body,
+    url: '/przesuniecia-magazynowe',
+    tag: `erp-document-issued-${payload.documentId}`,
+    actorUserId: payload.actorUserId ?? null,
+    requiredTabs: ['erp-rozdzielca']
+  });
 };

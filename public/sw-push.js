@@ -1,4 +1,4 @@
-self.addEventListener('install', (event) => {
+﻿self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
 });
 
@@ -8,10 +8,10 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('push', (event) => {
   const fallback = {
-    title: 'Nowy dokument ERP',
-    body: 'Został utworzony nowy dokument.',
+    title: 'Powiadomienie ERP',
+    body: 'Pojawila sie aktualizacja dokumentu ERP.',
     url: '/przesuniecia-magazynowe',
-    tag: 'erp-document-created'
+    tag: 'erp-document-update'
   };
 
   let payload = fallback;

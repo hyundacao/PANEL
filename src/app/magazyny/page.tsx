@@ -86,7 +86,7 @@ const moduleOptions: ModuleOption[] = [
     description: 'Pobrania, uzupełnienia, historia ruchów i kontrola stanów.',
     action: 'Wejdź',
     href: '/czesci',
-    tags: ['Utrzymanie ruchu', 'Magazyn'],
+    tags: ['Dział Uruchomień', 'Magazyn'],
     keywords: ['części', 'historia', 'stany', 'pobierz', 'uzupełnij'],
     icon: Wrench
   },
@@ -232,7 +232,10 @@ export default function WarehousesPage() {
                   {filteredModules.map((module) => {
                     const Icon = module.icon;
                     return (
-                      <Card key={module.id} className="flex h-full flex-col gap-4">
+                      <Card
+                        key={module.id}
+                        className="flex h-full flex-col gap-4 bg-[var(--surface-1)] hover:bg-[var(--surface-1)]"
+                      >
                         <div className="flex items-start gap-3">
                           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-surface2">
                             <Icon className="h-5 w-5 text-brand" />
@@ -269,7 +272,7 @@ export default function WarehousesPage() {
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-dim">
                   Administracja
                 </h2>
-                <Card className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <Card className="flex flex-col gap-4 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] md:flex-row md:items-center md:justify-between">
                   <div className="flex items-start gap-3">
                     <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-surface2">
                       <Shield className="h-5 w-5 text-brand" />
