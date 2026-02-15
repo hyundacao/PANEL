@@ -104,6 +104,31 @@ const getEndpointHost = (endpoint: string) => {
 const isAndroidUserAgent = (userAgent?: string | null) =>
   /android/i.test(String(userAgent ?? ''));
 
+type SupabaseLikeError = {
+  code?: unknown;
+  message?: unknown;
+  details?: unknown;
+  hint?: unknown;
+};
+
+const isMissingPushPreferenceColumnsError = (error: unknown) => {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as SupabaseLikeError;
+  const code = String(candidate.code ?? '');
+  const text = [
+    String(candidate.message ?? ''),
+    String(candidate.details ?? ''),
+    String(candidate.hint ?? '')
+  ]
+    .join(' ')
+    .toLowerCase();
+  if (code === '42703' || code === 'PGRST204') return true;
+  return (
+    text.includes('erp_warehouseman_source_warehouses') ||
+    text.includes('erp_dispatcher_target_locations')
+  );
+};
+
 const WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS = new Set([
   '1',
   '4',
@@ -296,7 +321,7 @@ const sendWarehouseTransferPush = async ({
   }
 
   let data: unknown[] | null = null;
-  let error: { code?: string; message?: string } | null = null;
+  let error: unknown = null;
 
   const withPreferences = await supabaseAdmin
     .from('push_subscriptions')
@@ -304,24 +329,14 @@ const sendWarehouseTransferPush = async ({
       'id, user_id, endpoint, p256dh, auth, user_agent, erp_warehouseman_source_warehouses, erp_dispatcher_target_locations'
     );
   data = (withPreferences.data ?? null) as unknown[] | null;
-  error = withPreferences.error
-    ? {
-        code: String((withPreferences.error as { code?: string }).code ?? ''),
-        message: String((withPreferences.error as { message?: string }).message ?? '')
-      }
-    : null;
+  error = withPreferences.error;
 
-  if (error?.code === '42703') {
+  if (error && isMissingPushPreferenceColumnsError(error)) {
     const fallback = await supabaseAdmin
       .from('push_subscriptions')
       .select('id, user_id, endpoint, p256dh, auth, user_agent');
     data = (fallback.data ?? null) as unknown[] | null;
-    error = fallback.error
-      ? {
-          code: String((fallback.error as { code?: string }).code ?? ''),
-          message: String((fallback.error as { message?: string }).message ?? '')
-        }
-      : null;
+    error = fallback.error;
   }
 
   if (error) {
@@ -560,7 +575,7 @@ export const upsertPushSubscriptionForUser = async (
     .from('push_subscriptions')
     .upsert(payload, { onConflict: 'endpoint' });
 
-  if (error && String((error as { code?: string }).code ?? '') === '42703') {
+  if (error && isMissingPushPreferenceColumnsError(error)) {
     const fallbackPayload = {
       user_id: userId,
       endpoint: subscription.endpoint,
