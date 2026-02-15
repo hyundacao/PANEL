@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import {
   isWebPushConfigured,
+  normalizePushSubscriptionPreferences,
   normalizePushSubscription,
   upsertPushSubscriptionForUser
 } from '@/lib/push/server';
@@ -10,6 +11,7 @@ export const dynamic = 'force-dynamic';
 
 type SubscribeBody = {
   subscription?: unknown;
+  preferences?: unknown;
 };
 
 export async function POST(request: NextRequest) {
@@ -32,11 +34,13 @@ export async function POST(request: NextRequest) {
     if (!normalized) {
       return NextResponse.json({ code: 'INVALID_SUBSCRIPTION' }, { status: 400 });
     }
+    const preferences = normalizePushSubscriptionPreferences(body.preferences);
 
     await upsertPushSubscriptionForUser(
       auth.user.id,
       normalized,
-      request.headers.get('user-agent')
+      request.headers.get('user-agent'),
+      preferences
     );
     return NextResponse.json({ enabled: true });
   } catch (error) {

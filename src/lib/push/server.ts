@@ -5,7 +5,7 @@ import webpush, {
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { canSeeTab } from '@/lib/auth/access';
 import { mapDbUser, type DbUserRow } from '@/lib/supabase/users';
-import type { WarehouseTab } from '@/lib/api/types';
+import type { AppUser, WarehouseTab } from '@/lib/api/types';
 
 type PushSubscriptionRow = {
   id: string;
@@ -14,6 +14,8 @@ type PushSubscriptionRow = {
   p256dh: string;
   auth: string;
   user_agent?: string | null;
+  erp_warehouseman_source_warehouses?: string[] | null;
+  erp_dispatcher_target_locations?: string[] | null;
 };
 
 type PushSubscriptionInput = {
@@ -24,11 +26,23 @@ type PushSubscriptionInput = {
   };
 };
 
+type PushSubscriptionPreferencesInput = {
+  warehousemanSourceWarehouses?: string[] | null;
+  dispatcherTargetLocations?: string[] | null;
+};
+
+type SendWarehouseTransferPushContext = {
+  sourceWarehouse?: string;
+  targetWarehouse?: string;
+  note?: string | null;
+};
+
 type WarehouseDocumentPushPayload = {
   documentId: string;
   documentNumber: string;
   sourceWarehouse?: string;
   targetWarehouse?: string;
+  note?: string | null;
   actorUserId?: string | null;
 };
 
@@ -90,18 +104,27 @@ const getEndpointHost = (endpoint: string) => {
 const isAndroidUserAgent = (userAgent?: string | null) =>
   /android/i.test(String(userAgent ?? ''));
 
+const WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS = new Set([
+  '1',
+  '4',
+  '10',
+  '11',
+  '13',
+  '40',
+  '41',
+  '51',
+  'LAKIERNIA',
+  'INNA LOKALIZACJA'
+]);
+
+type WarehouseTransferFlowKind = 'WYDANIE' | 'ZWROT';
+
 const toDistinctUserIds = (rows: PushSubscriptionRow[]) => [
   ...new Set(rows.map((row) => toCleanString(row.user_id)).filter(Boolean))
 ];
 
-const filterSubscriptionsByErpTabs = async (
-  subscriptions: PushSubscriptionRow[],
-  requiredTabs: WarehouseTab[]
-) => {
-  if (subscriptions.length === 0 || requiredTabs.length === 0) return subscriptions;
-
-  const userIds = toDistinctUserIds(subscriptions);
-  if (userIds.length === 0) return [];
+const loadActiveUsersById = async (userIds: string[]) => {
+  if (userIds.length === 0) return new Map<string, AppUser>();
 
   const { data, error } = await supabaseAdmin
     .from('app_users')
@@ -111,16 +134,143 @@ const filterSubscriptionsByErpTabs = async (
 
   if (error) {
     console.error('[push] Failed to load users for tab filtering', error);
-    return [];
+    return new Map<string, AppUser>();
   }
 
-  const allowedUserIds = new Set(
-    ((data ?? []) as DbUserRow[]).map(mapDbUser).flatMap((user) =>
-      requiredTabs.some((tab) => canSeeTab(user, 'PRZESUNIECIA_ERP', tab)) ? [user.id] : []
-    )
-  );
+  return new Map(((data ?? []) as DbUserRow[]).map(mapDbUser).map((user) => [user.id, user]));
+};
 
-  return subscriptions.filter((row) => allowedUserIds.has(row.user_id));
+const filterSubscriptionsByErpTabs = (
+  subscriptions: PushSubscriptionRow[],
+  usersById: Map<string, AppUser>,
+  requiredTabs: WarehouseTab[]
+) => {
+  if (subscriptions.length === 0 || requiredTabs.length === 0) return subscriptions;
+  return subscriptions.filter((row) => {
+    const user = usersById.get(row.user_id);
+    if (!user) return false;
+    return requiredTabs.some((tab) => canSeeTab(user, 'PRZESUNIECIA_ERP', tab));
+  });
+};
+
+const normalizeWarehouseTransferFlowKind = (value: unknown): WarehouseTransferFlowKind => {
+  const normalized = toCleanString(value).toUpperCase();
+  if (normalized === 'ZWROT') return 'ZWROT';
+  return 'WYDANIE';
+};
+
+const parseWarehouseTransferFlowKindFromNote = (
+  note: string | null | undefined
+): WarehouseTransferFlowKind => {
+  const normalizedNote = toCleanString(note);
+  if (!normalizedNote) return 'WYDANIE';
+  const markerMatch = normalizedNote.match(/\bFLOW_KIND\s*:\s*(WYDANIE|ZWROT)\b/i);
+  if (markerMatch?.[1]) return normalizeWarehouseTransferFlowKind(markerMatch[1]);
+  return 'WYDANIE';
+};
+
+const extractWarehousemanSourceWarehouseKey = (value: string | null | undefined) => {
+  const normalized = toCleanString(value);
+  if (!normalized) return null;
+  if (/lakiernia/i.test(normalized)) return 'LAKIERNIA';
+  if (/inna\s+lokalizacja/i.test(normalized)) return 'INNA LOKALIZACJA';
+  const match = normalized.match(/\d+/);
+  return match ? match[0] : null;
+};
+
+const normalizeWarehousemanSourceWarehouseFilterToken = (value: unknown) => {
+  const normalized = toCleanString(value).toUpperCase();
+  if (!normalized) return null;
+  if (/^MAGAZYN\s+/.test(normalized)) {
+    const stripped = normalized.replace(/^MAGAZYN\s+/, '').trim();
+    if (stripped) return stripped;
+  }
+  if (normalized === 'INNA') return 'INNA LOKALIZACJA';
+  if (normalized === 'LAK') return 'LAKIERNIA';
+  return normalized;
+};
+
+const normalizeTargetLocationFilterToken = (value: unknown) =>
+  toCleanString(value)
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+
+const getDocumentSourceWarehouseKeyForWarehouseman = (
+  payload?: SendWarehouseTransferPushContext
+) => {
+  if (!payload) return null;
+  const flowKind = parseWarehouseTransferFlowKindFromNote(payload.note);
+  if (flowKind === 'ZWROT') {
+    return extractWarehousemanSourceWarehouseKey(payload.targetWarehouse ?? payload.sourceWarehouse);
+  }
+  return extractWarehousemanSourceWarehouseKey(payload.sourceWarehouse);
+};
+
+const shouldSendToWarehousemanSubscription = (
+  row: PushSubscriptionRow,
+  payload?: SendWarehouseTransferPushContext
+) => {
+  const selectedWarehouses = row.erp_warehouseman_source_warehouses;
+  if (!Array.isArray(selectedWarehouses)) return true;
+  const documentWarehouseKey = getDocumentSourceWarehouseKeyForWarehouseman(payload);
+  if (!documentWarehouseKey) return false;
+  const selectedSet = new Set(
+    selectedWarehouses
+      .map(normalizeWarehousemanSourceWarehouseFilterToken)
+      .filter((item): item is string => Boolean(item))
+      .filter((item) => WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS.has(item))
+  );
+  if (selectedSet.size === 0) return false;
+  return selectedSet.has(documentWarehouseKey);
+};
+
+const shouldSendToDispatcherSubscription = (
+  row: PushSubscriptionRow,
+  payload?: SendWarehouseTransferPushContext
+) => {
+  const selectedLocations = row.erp_dispatcher_target_locations;
+  if (!Array.isArray(selectedLocations)) return true;
+  const flowKind = parseWarehouseTransferFlowKindFromNote(payload?.note);
+  if (flowKind === 'ZWROT') return true;
+  const targetLocationToken = normalizeTargetLocationFilterToken(payload?.targetWarehouse);
+  if (!targetLocationToken) return false;
+  const selectedSet = new Set(
+    selectedLocations
+      .map(normalizeTargetLocationFilterToken)
+      .filter((item) => item.length > 0)
+  );
+  if (selectedSet.size === 0) return false;
+  return selectedSet.has(targetLocationToken);
+};
+
+const filterSubscriptionsByDocumentPreferences = (
+  subscriptions: PushSubscriptionRow[],
+  usersById: Map<string, AppUser>,
+  requiredTabs: WarehouseTab[],
+  payload?: SendWarehouseTransferPushContext
+) => {
+  if (subscriptions.length === 0) return subscriptions;
+  if (!payload) return subscriptions;
+
+  const includesWarehouseman = requiredTabs.includes('erp-magazynier');
+  const includesDispatcher = requiredTabs.includes('erp-rozdzielca');
+
+  return subscriptions.filter((row) => {
+    const user = usersById.get(row.user_id);
+    if (!user) return false;
+
+    const canReceiveAsWarehouseman =
+      includesWarehouseman &&
+      canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-magazynier') &&
+      shouldSendToWarehousemanSubscription(row, payload);
+
+    const canReceiveAsDispatcher =
+      includesDispatcher &&
+      canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-rozdzielca') &&
+      shouldSendToDispatcherSubscription(row, payload);
+
+    return canReceiveAsWarehouseman || canReceiveAsDispatcher;
+  });
 };
 
 type SendWarehouseTransferPushInput = {
@@ -129,6 +279,7 @@ type SendWarehouseTransferPushInput = {
   url: string;
   tag: string;
   requiredTabs: WarehouseTab[];
+  context?: SendWarehouseTransferPushContext;
 };
 
 const sendWarehouseTransferPush = async ({
@@ -136,18 +287,43 @@ const sendWarehouseTransferPush = async ({
   body,
   url,
   tag,
-  requiredTabs
+  requiredTabs,
+  context
 }: SendWarehouseTransferPushInput) => {
   if (!initVapid()) {
     console.warn('[push] VAPID not configured');
     return;
   }
 
-  const query = supabaseAdmin
-    .from('push_subscriptions')
-    .select('id, user_id, endpoint, p256dh, auth, user_agent');
+  let data: unknown[] | null = null;
+  let error: { code?: string; message?: string } | null = null;
 
-  const { data, error } = await query;
+  const withPreferences = await supabaseAdmin
+    .from('push_subscriptions')
+    .select(
+      'id, user_id, endpoint, p256dh, auth, user_agent, erp_warehouseman_source_warehouses, erp_dispatcher_target_locations'
+    );
+  data = (withPreferences.data ?? null) as unknown[] | null;
+  error = withPreferences.error
+    ? {
+        code: String((withPreferences.error as { code?: string }).code ?? ''),
+        message: String((withPreferences.error as { message?: string }).message ?? '')
+      }
+    : null;
+
+  if (error?.code === '42703') {
+    const fallback = await supabaseAdmin
+      .from('push_subscriptions')
+      .select('id, user_id, endpoint, p256dh, auth, user_agent');
+    data = (fallback.data ?? null) as unknown[] | null;
+    error = fallback.error
+      ? {
+          code: String((fallback.error as { code?: string }).code ?? ''),
+          message: String((fallback.error as { message?: string }).message ?? '')
+        }
+      : null;
+  }
+
   if (error) {
     console.error('[push] Failed to load subscriptions', error);
     return;
@@ -159,14 +335,36 @@ const sendWarehouseTransferPush = async ({
     return;
   }
 
-  const subscriptions = await filterSubscriptionsByErpTabs(allSubscriptions, requiredTabs);
-  if (subscriptions.length === 0) {
+  const usersById = await loadActiveUsersById(toDistinctUserIds(allSubscriptions));
+  const tabFilteredSubscriptions = filterSubscriptionsByErpTabs(
+    allSubscriptions,
+    usersById,
+    requiredTabs
+  );
+  if (tabFilteredSubscriptions.length === 0) {
     console.warn('[push] No subscriptions after ERP tab filtering', {
       requiredTabs,
       totalSubscriptions: allSubscriptions.length
     });
     return;
   }
+
+  const subscriptions = filterSubscriptionsByDocumentPreferences(
+    tabFilteredSubscriptions,
+    usersById,
+    requiredTabs,
+    context
+  );
+  if (subscriptions.length === 0) {
+    console.warn('[push] No subscriptions after ERP preference filtering', {
+      requiredTabs,
+      totalSubscriptions: allSubscriptions.length,
+      tabFilteredSubscriptions: tabFilteredSubscriptions.length,
+      tag
+    });
+    return;
+  }
+
   const androidSubscriptions = subscriptions.filter((row) =>
     isAndroidUserAgent(row.user_agent)
   ).length;
@@ -178,6 +376,7 @@ const sendWarehouseTransferPush = async ({
   console.warn('[push] Sending ERP push', {
     requiredTabs,
     totalSubscriptions: allSubscriptions.length,
+    tabFilteredSubscriptions: tabFilteredSubscriptions.length,
     filteredSubscriptions: subscriptions.length,
     androidSubscriptions,
     desktopSubscriptions,
@@ -275,6 +474,50 @@ export const normalizePushSubscription = (value: unknown): PushSubscriptionInput
   };
 };
 
+const normalizeStringArrayPreference = (
+  value: unknown,
+  normalizer: (item: unknown) => string,
+  allowedValues?: Set<string>
+): string[] | null | undefined => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (!Array.isArray(value)) return undefined;
+
+  const normalized = value
+    .map((item) => normalizer(item))
+    .filter((item) => item.length > 0)
+    .filter((item) => (allowedValues ? allowedValues.has(item) : true));
+  return [...new Set(normalized)];
+};
+
+export const normalizePushSubscriptionPreferences = (
+  value: unknown
+): PushSubscriptionPreferencesInput => {
+  if (!value || typeof value !== 'object') return {};
+  const raw = value as {
+    warehousemanSourceWarehouses?: unknown;
+    dispatcherTargetLocations?: unknown;
+  };
+
+  const warehousemanSourceWarehouses = normalizeStringArrayPreference(
+    raw.warehousemanSourceWarehouses,
+    (item) => normalizeWarehousemanSourceWarehouseFilterToken(item) ?? '',
+    WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS
+  );
+
+  const dispatcherTargetLocations = normalizeStringArrayPreference(
+    raw.dispatcherTargetLocations,
+    normalizeTargetLocationFilterToken
+  );
+
+  return {
+    ...(warehousemanSourceWarehouses !== undefined
+      ? { warehousemanSourceWarehouses }
+      : {}),
+    ...(dispatcherTargetLocations !== undefined ? { dispatcherTargetLocations } : {})
+  };
+};
+
 export const hasPushSubscriptionForUser = async (userId: string) => {
   if (!userId) return false;
   const { count, error } = await supabaseAdmin
@@ -288,11 +531,37 @@ export const hasPushSubscriptionForUser = async (userId: string) => {
 export const upsertPushSubscriptionForUser = async (
   userId: string,
   subscription: PushSubscriptionInput,
-  userAgent?: string | null
+  userAgent?: string | null,
+  preferences?: PushSubscriptionPreferencesInput
 ) => {
   const nowIso = new Date().toISOString();
-  const { error } = await supabaseAdmin.from('push_subscriptions').upsert(
-    {
+  const payload = {
+    user_id: userId,
+    endpoint: subscription.endpoint,
+    p256dh: subscription.keys.p256dh,
+    auth: subscription.keys.auth,
+    user_agent: userAgent ? toCleanString(userAgent) || null : null,
+    updated_at: nowIso,
+    last_seen_at: nowIso,
+    ...(Object.prototype.hasOwnProperty.call(preferences ?? {}, 'warehousemanSourceWarehouses')
+      ? {
+          erp_warehouseman_source_warehouses:
+            preferences?.warehousemanSourceWarehouses ?? null
+        }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(preferences ?? {}, 'dispatcherTargetLocations')
+      ? {
+          erp_dispatcher_target_locations: preferences?.dispatcherTargetLocations ?? null
+        }
+      : {})
+  };
+
+  let { error } = await supabaseAdmin
+    .from('push_subscriptions')
+    .upsert(payload, { onConflict: 'endpoint' });
+
+  if (error && String((error as { code?: string }).code ?? '') === '42703') {
+    const fallbackPayload = {
       user_id: userId,
       endpoint: subscription.endpoint,
       p256dh: subscription.keys.p256dh,
@@ -300,9 +569,13 @@ export const upsertPushSubscriptionForUser = async (
       user_agent: userAgent ? toCleanString(userAgent) || null : null,
       updated_at: nowIso,
       last_seen_at: nowIso
-    },
-    { onConflict: 'endpoint' }
-  );
+    };
+    const fallback = await supabaseAdmin
+      .from('push_subscriptions')
+      .upsert(fallbackPayload, { onConflict: 'endpoint' });
+    error = fallback.error;
+  }
+
   if (error) throw error;
   console.warn('[push] Subscription upserted', {
     userId,
@@ -346,7 +619,12 @@ export const sendWarehouseTransferDocumentCreatedPush = async (
     body,
     url: '/przesuniecia-magazynowe',
     tag: `erp-document-created-${payload.documentId}`,
-    requiredTabs: ['erp-magazynier', 'erp-rozdzielca']
+    requiredTabs: ['erp-magazynier', 'erp-rozdzielca'],
+    context: {
+      sourceWarehouse: payload.sourceWarehouse,
+      targetWarehouse: payload.targetWarehouse,
+      note: payload.note
+    }
   });
 };
 
@@ -369,6 +647,11 @@ export const sendWarehouseTransferDocumentIssuedPush = async (
     body,
     url: '/przesuniecia-magazynowe',
     tag: `erp-document-issued-${payload.documentId}`,
-    requiredTabs: ['erp-magazynier', 'erp-rozdzielca']
+    requiredTabs: ['erp-magazynier', 'erp-rozdzielca'],
+    context: {
+      sourceWarehouse: payload.sourceWarehouse,
+      targetWarehouse: payload.targetWarehouse,
+      note: payload.note
+    }
   });
 };

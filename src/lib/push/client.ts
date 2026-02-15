@@ -2,6 +2,7 @@ import {
   getErpPushStatus,
   subscribeErpPush,
   unsubscribeErpPush,
+  type ErpPushPreferences,
   type ErpPushStatus
 } from '@/lib/api';
 
@@ -155,4 +156,17 @@ export const disableErpPushNotifications = async () => {
   if (endpoint) {
     await unsubscribeErpPush(endpoint);
   }
+};
+
+export const syncErpPushPreferences = async (
+  preferences: ErpPushPreferences
+) => {
+  if (!canUsePushApi()) return;
+  if (Notification.permission !== 'granted') return;
+
+  const registration = await getServiceWorkerRegistration();
+  const subscription = await registration.pushManager.getSubscription();
+  if (!subscription) return;
+
+  await subscribeErpPush(subscription.toJSON(), preferences);
 };

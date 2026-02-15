@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { ArrowLeftRight, Bell, LogOut, Menu } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useUiStore } from '@/lib/store/ui';
 import { Button } from '@/components/ui/Button';
-import { getAccessibleWarehouses } from '@/lib/auth/access';
+import { canSeeTab, getAccessibleWarehouses } from '@/lib/auth/access';
 import { logoutUser } from '@/lib/api';
 import { useToastStore } from '@/components/ui/Toast';
 import {
@@ -24,6 +24,7 @@ export const Topbar = ({
   showSidebarToggle?: boolean;
 }) => {
   const router = useRouter();
+  const pathname = usePathname();
   const toast = useToastStore((state) => state.push);
   const {
     toggleSidebar,
@@ -38,6 +39,11 @@ export const Topbar = ({
   const warehouses = getAccessibleWarehouses(user);
   const canSwitch = warehouses.length > 1;
   const isErpModule = activeWarehouse === 'PRZESUNIECIA_ERP';
+  const hasErpDocumentPushRole =
+    canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-magazynier') ||
+    canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-rozdzielca');
+  const isErpDocumentsPage = pathname.startsWith('/przesuniecia-magazynowe');
+  const canManageErpDocumentPush = isErpModule && isErpDocumentsPage && hasErpDocumentPushRole;
   const [erpNotificationsBusy, setErpNotificationsBusy] = useState(false);
 
   const handleLogout = async () => {
@@ -52,7 +58,7 @@ export const Topbar = ({
   };
 
   useEffect(() => {
-    if (!isErpModule) return;
+    if (!canManageErpDocumentPush) return;
     let cancelled = false;
 
     const syncStatus = async () => {
@@ -71,10 +77,10 @@ export const Topbar = ({
     return () => {
       cancelled = true;
     };
-  }, [isErpModule, setErpDocumentNotificationsEnabled]);
+  }, [canManageErpDocumentPush, setErpDocumentNotificationsEnabled]);
 
   const handleToggleErpNotifications = async () => {
-    if (!isErpModule || erpNotificationsBusy) return;
+    if (!canManageErpDocumentPush || erpNotificationsBusy) return;
 
     const shouldEnable = !erpDocumentNotificationsEnabled;
     setErpNotificationsBusy(true);
@@ -187,32 +193,30 @@ export const Topbar = ({
             </Button>
           </>
         )}
-        <Button
-          variant="ghost"
-          onClick={isErpModule ? () => void handleToggleErpNotifications() : undefined}
-          disabled={isErpModule ? erpNotificationsBusy : false}
-          className={`h-10 min-h-10 w-10 px-0 py-0 ${
-            isErpModule && erpDocumentNotificationsEnabled
-              ? 'border-[color:color-mix(in_srgb,var(--brand)_55%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] text-brand'
-              : ''
-          }`}
-          aria-label={
-            isErpModule
-              ? erpDocumentNotificationsEnabled
+        {canManageErpDocumentPush && (
+          <Button
+            variant="ghost"
+            onClick={() => void handleToggleErpNotifications()}
+            disabled={erpNotificationsBusy}
+            className={`h-10 min-h-10 w-10 px-0 py-0 ${
+              erpDocumentNotificationsEnabled
+                ? 'border-[color:color-mix(in_srgb,var(--brand)_55%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] text-brand'
+                : ''
+            }`}
+            aria-label={
+              erpDocumentNotificationsEnabled
                 ? 'Wyłącz powiadomienia ERP'
                 : 'Włącz powiadomienia ERP'
-              : 'Powiadomienia'
-          }
-          title={
-            isErpModule
-              ? erpDocumentNotificationsEnabled
+            }
+            title={
+              erpDocumentNotificationsEnabled
                 ? 'Powiadomienia ERP: włączone'
                 : 'Powiadomienia ERP: wyłączone'
-              : undefined
-          }
-        >
-          <Bell className="h-4 w-4" />
-        </Button>
+            }
+          >
+            <Bell className="h-4 w-4" />
+          </Button>
+        )}
         <div className="hidden h-10 w-10 rounded-full bg-surface2 md:block" />
       </div>
     </header>

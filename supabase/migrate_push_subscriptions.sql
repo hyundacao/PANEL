@@ -7,10 +7,18 @@ create table if not exists public.push_subscriptions (
   p256dh text not null,
   auth text not null,
   user_agent text,
+  erp_warehouseman_source_warehouses text[],
+  erp_dispatcher_target_locations text[],
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now()
 );
+
+alter table if exists public.push_subscriptions
+  add column if not exists erp_warehouseman_source_warehouses text[];
+
+alter table if exists public.push_subscriptions
+  add column if not exists erp_dispatcher_target_locations text[];
 
 create unique index if not exists push_subscriptions_endpoint_uq
   on public.push_subscriptions (endpoint);

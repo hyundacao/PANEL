@@ -622,6 +622,8 @@ create table if not exists public.push_subscriptions (
   p256dh text not null,
   auth text not null,
   user_agent text,
+  erp_warehouseman_source_warehouses text[],
+  erp_dispatcher_target_locations text[],
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now()

@@ -91,15 +91,21 @@ export type ErpPushStatus = {
   publicKey: string | null;
 };
 
+export type ErpPushPreferences = {
+  warehousemanSourceWarehouses?: string[] | null;
+  dispatcherTargetLocations?: string[] | null;
+};
+
 export const getErpPushStatus = async (): Promise<ErpPushStatus> =>
   apiRequest('/api/push/status', { cache: 'no-store' });
 
 export const subscribeErpPush = async (
-  subscription: PushSubscriptionJSON
+  subscription: PushSubscriptionJSON,
+  preferences?: ErpPushPreferences
 ): Promise<{ enabled: boolean }> =>
   apiRequest('/api/push/subscribe', {
     method: 'POST',
-    body: JSON.stringify({ subscription })
+    body: JSON.stringify(preferences ? { subscription, preferences } : { subscription })
   });
 
 export const unsubscribeErpPush = async (

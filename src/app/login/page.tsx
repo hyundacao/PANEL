@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/Button';
 import { Toggle } from '@/components/ui/Toggle';
 import { useToastStore } from '@/components/ui/Toast';
 import { useUiStore } from '@/lib/store/ui';
-import { canAccessWarehouse } from '@/lib/auth/access';
+import { canSeeTab } from '@/lib/auth/access';
 import {
   disableErpPushNotifications,
   enableErpPushNotifications,
@@ -46,7 +46,11 @@ export default function LoginPage() {
       setUser(data);
       clearActiveWarehouse();
 
-      if (canAccessWarehouse(data, 'PRZESUNIECIA_ERP')) {
+      const canManageErpDocumentPush =
+        canSeeTab(data, 'PRZESUNIECIA_ERP', 'erp-magazynier') ||
+        canSeeTab(data, 'PRZESUNIECIA_ERP', 'erp-rozdzielca');
+
+      if (canManageErpDocumentPush) {
         try {
           if (typeof window !== 'undefined' && 'Notification' in window) {
             if (Notification.permission === 'default') {

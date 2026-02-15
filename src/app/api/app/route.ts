@@ -3057,6 +3057,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         documentNumber: createdDocument.document.documentNumber,
         sourceWarehouse: createdDocument.document.sourceWarehouse,
         targetWarehouse: createdDocument.document.targetWarehouse,
+        note: createdDocument.document.note,
         actorUserId: currentUser.id ?? null
       });
       return createdDocument;
@@ -3119,6 +3120,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         documentNumber: issuedDocument.documentNumber,
         sourceWarehouse: issuedDocument.sourceWarehouse,
         targetWarehouse: issuedDocument.targetWarehouse,
+        note: issuedDocument.note,
         actorUserId: currentUser.id ?? null
       });
       return issuedDocument;

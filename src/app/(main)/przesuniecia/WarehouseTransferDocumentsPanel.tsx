@@ -32,6 +32,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Toggle } from '@/components/ui/Toggle';
 import { useToastStore } from '@/components/ui/Toast';
 import { canSeeTab } from '@/lib/auth/access';
+import { syncErpPushPreferences } from '@/lib/push/client';
 import { useUiStore, type ErpWorkspaceTab } from '@/lib/store/ui';
 
 type ParsedItemInput = {
@@ -2916,6 +2917,31 @@ export function WarehouseTransferDocumentsPanel() {
         .filter((option) => allowedOptions.has(option))
     );
   }, [dispatcherTargetLocationFilter, dispatcherTargetLocationOptions]);
+  const dispatcherTargetLocationFilterForPush = useMemo(() => {
+    if (dispatcherTargetLocationFilterSet === null) return null;
+    return [...dispatcherTargetLocationFilterSet].sort();
+  }, [dispatcherTargetLocationFilterSet]);
+  useEffect(() => {
+    if (!erpDocumentNotificationsEnabled) return;
+    if (!warehousemanSourceWarehouseFilterHydrated) return;
+    if (!canSeeWarehousemanTab && !canSeeDispatcherTab) return;
+
+    void syncErpPushPreferences({
+      warehousemanSourceWarehouses: canSeeWarehousemanTab
+        ? [...warehousemanSourceWarehouseFilter]
+        : null,
+      dispatcherTargetLocations: canSeeDispatcherTab
+        ? dispatcherTargetLocationFilterForPush
+        : null
+    }).catch(() => undefined);
+  }, [
+    canSeeDispatcherTab,
+    canSeeWarehousemanTab,
+    dispatcherTargetLocationFilterForPush,
+    erpDocumentNotificationsEnabled,
+    warehousemanSourceWarehouseFilter,
+    warehousemanSourceWarehouseFilterHydrated
+  ]);
   const filteredDispatcherDocuments = useMemo(() => {
     return dispatcherDocuments.filter((document) =>
       parseWarehouseTransferFlowKindFromNote(document.note) === 'ZWROT'
