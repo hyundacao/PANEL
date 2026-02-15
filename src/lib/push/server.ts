@@ -116,7 +116,6 @@ type SendWarehouseTransferPushInput = {
   body: string;
   url: string;
   tag: string;
-  actorUserId?: string | null;
   requiredTabs: WarehouseTab[];
 };
 
@@ -125,18 +124,13 @@ const sendWarehouseTransferPush = async ({
   body,
   url,
   tag,
-  actorUserId,
   requiredTabs
 }: SendWarehouseTransferPushInput) => {
   if (!initVapid()) return;
 
-  let query = supabaseAdmin
+  const query = supabaseAdmin
     .from('push_subscriptions')
     .select('id, user_id, endpoint, p256dh, auth');
-
-  if (actorUserId) {
-    query = query.neq('user_id', actorUserId);
-  }
 
   const { data, error } = await query;
   if (error) {
@@ -274,7 +268,6 @@ export const sendWarehouseTransferDocumentCreatedPush = async (
     body,
     url: '/przesuniecia-magazynowe',
     tag: `erp-document-created-${payload.documentId}`,
-    actorUserId: payload.actorUserId ?? null,
     requiredTabs: ['erp-magazynier']
   });
 };
@@ -298,7 +291,6 @@ export const sendWarehouseTransferDocumentIssuedPush = async (
     body,
     url: '/przesuniecia-magazynowe',
     tag: `erp-document-issued-${payload.documentId}`,
-    actorUserId: payload.actorUserId ?? null,
     requiredTabs: ['erp-rozdzielca']
   });
 };
