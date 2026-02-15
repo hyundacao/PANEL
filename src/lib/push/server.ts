@@ -233,20 +233,13 @@ export const upsertPushSubscriptionForUser = async (
 export const removePushSubscriptionForUser = async (userId: string, endpoint?: string) => {
   if (!userId) return;
   const normalizedEndpoint = toCleanString(endpoint);
-  if (normalizedEndpoint) {
-    const { error } = await supabaseAdmin
-      .from('push_subscriptions')
-      .delete()
-      .eq('user_id', userId)
-      .eq('endpoint', normalizedEndpoint);
-    if (error) throw error;
-    return;
-  }
+  if (!normalizedEndpoint) return;
 
   const { error } = await supabaseAdmin
     .from('push_subscriptions')
     .delete()
-    .eq('user_id', userId);
+    .eq('user_id', userId)
+    .eq('endpoint', normalizedEndpoint);
   if (error) throw error;
 };
 

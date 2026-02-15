@@ -62,14 +62,12 @@ export const syncErpPushStatus = async (): Promise<ErpPushStatus> => {
   }
 
   if (Notification.permission !== 'granted') {
-    await unsubscribeErpPush();
     return pushStatusDisabled(status);
   }
 
   const registration = await getServiceWorkerRegistration();
   const subscription = await registration.pushManager.getSubscription();
   if (!subscription) {
-    await unsubscribeErpPush();
     return pushStatusDisabled(status);
   }
 
@@ -122,5 +120,7 @@ export const disableErpPushNotifications = async () => {
       await subscription.unsubscribe();
     }
   }
-  await unsubscribeErpPush(endpoint);
+  if (endpoint) {
+    await unsubscribeErpPush(endpoint);
+  }
 };
