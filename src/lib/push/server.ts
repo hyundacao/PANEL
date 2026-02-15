@@ -139,10 +139,25 @@ const sendWarehouseTransferPush = async ({
   }
 
   const allSubscriptions = (data ?? []) as PushSubscriptionRow[];
-  if (allSubscriptions.length === 0) return;
+  if (allSubscriptions.length === 0) {
+    console.info('[push] No subscriptions found');
+    return;
+  }
 
   const subscriptions = await filterSubscriptionsByErpTabs(allSubscriptions, requiredTabs);
-  if (subscriptions.length === 0) return;
+  if (subscriptions.length === 0) {
+    console.info('[push] No subscriptions after ERP tab filtering', {
+      requiredTabs,
+      totalSubscriptions: allSubscriptions.length
+    });
+    return;
+  }
+  console.info('[push] Sending ERP push', {
+    requiredTabs,
+    totalSubscriptions: allSubscriptions.length,
+    filteredSubscriptions: subscriptions.length,
+    tag
+  });
 
   const message = JSON.stringify({
     title,
@@ -167,7 +182,8 @@ const sendWarehouseTransferPush = async ({
         }
         console.error('[push] Send failed', {
           endpoint: row.endpoint,
-          statusCode
+          statusCode,
+          message: pushError?.message ?? 'UNKNOWN'
         });
       }
     })

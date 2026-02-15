@@ -39,10 +39,26 @@ const toUint8Array = (base64: string) => {
   return output;
 };
 
+const toUint8ArrayOrNull = (value: ArrayBuffer | null) => {
+  if (!value) return null;
+  return new Uint8Array(value);
+};
+
+const areUint8ArraysEqual = (left: Uint8Array | null, right: Uint8Array | null) => {
+  if (!left || !right) return false;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+};
+
 const getServiceWorkerRegistration = async () => {
-  const existing = await navigator.serviceWorker.getRegistration(SERVICE_WORKER_SCOPE);
-  if (existing) return existing;
-  await navigator.serviceWorker.register(SERVICE_WORKER_PATH, { scope: SERVICE_WORKER_SCOPE });
+  const registration = await navigator.serviceWorker.register(SERVICE_WORKER_PATH, {
+    scope: SERVICE_WORKER_SCOPE,
+    updateViaCache: 'none'
+  });
+  await registration.update();
   return navigator.serviceWorker.ready;
 };
 
@@ -66,9 +82,21 @@ export const syncErpPushStatus = async (): Promise<ErpPushStatus> => {
   }
 
   const registration = await getServiceWorkerRegistration();
-  const subscription = await registration.pushManager.getSubscription();
+  let subscription = await registration.pushManager.getSubscription();
   if (!subscription) {
     return pushStatusDisabled(status);
+  }
+
+  const expectedServerKey = toUint8Array(status.publicKey);
+  const currentServerKey = toUint8ArrayOrNull(subscription.options.applicationServerKey);
+  if (!areUint8ArraysEqual(currentServerKey, expectedServerKey)) {
+    const previousEndpoint = subscription.endpoint;
+    await subscription.unsubscribe().catch(() => undefined);
+    await unsubscribeErpPush(previousEndpoint).catch(() => undefined);
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: expectedServerKey
+    });
   }
 
   await subscribeErpPush(subscription.toJSON());
@@ -95,13 +123,17 @@ export const enableErpPushNotifications = async (): Promise<ErpPushStatus> => {
   }
 
   const registration = await getServiceWorkerRegistration();
+  const applicationServerKey = toUint8Array(status.publicKey);
   let subscription = await registration.pushManager.getSubscription();
-  if (!subscription) {
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: toUint8Array(status.publicKey)
-    });
+  if (subscription) {
+    const endpoint = subscription.endpoint;
+    await subscription.unsubscribe().catch(() => undefined);
+    await unsubscribeErpPush(endpoint).catch(() => undefined);
   }
+  subscription = await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey
+  });
 
   await subscribeErpPush(subscription.toJSON());
   return {
