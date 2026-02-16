@@ -1435,6 +1435,8 @@ export default function AdminPage() {
         SYNC_FAILED: 'Haslo zmienione czesciowo. Sprawdz migracje kolumny active_session_id.',
         UPDATE_USER_RPC_MISSING:
           'Brak zgodnej funkcji update_app_user w SQL. Uruchom ponownie pelny skrypt SQL.',
+        DB_42702:
+          'Funkcja update_app_user ma blad SQL (niejednoznaczna kolumna). Uruchom fix SQL.',
         DB_42703: 'Brak kolumny active_session_id w app_users. Uruchom migracje SQL.',
         DB_42P01: 'Brak tabeli w bazie. Uruchom pelny skrypt SQL.',
         DB_42501: 'Brak uprawnien SQL (service_role). Sprawdz klucz i grant execute.',

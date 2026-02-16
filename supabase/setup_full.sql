@@ -133,7 +133,7 @@ security definer
 set search_path = public, extensions
 as $$
 declare
-  record public.app_users;
+  v_record public.app_users%rowtype;
 begin
   if p_id is null then
     raise exception 'NOT_FOUND' using errcode = 'P0001';
@@ -153,29 +153,29 @@ begin
     raise exception 'DUPLICATE' using errcode = 'P0001';
   end if;
 
-  update public.app_users
-    set name = coalesce(nullif(trim(p_name), ''), name),
-        username = coalesce(nullif(trim(p_username), ''), username),
+  update public.app_users as u
+    set name = coalesce(nullif(trim(p_name), ''), u.name),
+        username = coalesce(nullif(trim(p_username), ''), u.username),
         password_hash = case
-          when p_password is null or length(trim(p_password)) = 0 then password_hash
+          when p_password is null or length(trim(p_password)) = 0 then u.password_hash
           else extensions.crypt(p_password, extensions.gen_salt('bf'))
         end,
         role = case
           when p_role in ('VIEWER', 'USER', 'ADMIN', 'HEAD_ADMIN') then p_role
-          else role
+          else u.role
         end,
-        access = coalesce(p_access, access),
-        is_active = coalesce(p_is_active, is_active)
-  where id = p_id
-  returning * into record;
+        access = coalesce(p_access, u.access),
+        is_active = coalesce(p_is_active, u.is_active)
+  where u.id = p_id
+  returning u.* into v_record;
 
   if not found then
     raise exception 'NOT_FOUND' using errcode = 'P0001';
   end if;
 
   return query
-  select record.id, record.name, record.username, record.role, record.access,
-         record.is_active, record.created_at, record.last_login;
+  select v_record.id, v_record.name, v_record.username, v_record.role, v_record.access,
+         v_record.is_active, v_record.created_at, v_record.last_login;
 end;
 $$;
 
