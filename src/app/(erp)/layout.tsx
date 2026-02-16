@@ -3,9 +3,9 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  canAccessErpWorkspaceItem,
   ErpSidebar,
-  ERP_WORKSPACE_ITEMS,
-  ERP_WORKSPACE_TAB_ACCESS
+  ERP_WORKSPACE_ITEMS
 } from '@/components/layout/ErpSidebar';
 import { Topbar } from '@/components/layout/Topbar';
 import { ContentScrim } from '@/components/ui/ContentScrim';
@@ -39,7 +39,7 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
   } = useUiStore();
   const allowed = hasErpAccess(user);
   const visibleWorkspaceItems = ERP_WORKSPACE_ITEMS.filter((item) =>
-    canSeeTab(user, 'PRZESUNIECIA_ERP', ERP_WORKSPACE_TAB_ACCESS[item.key])
+    canAccessErpWorkspaceItem(user, item.key)
   );
   const hasVisibleWorkspace = visibleWorkspaceItems.length > 0;
 

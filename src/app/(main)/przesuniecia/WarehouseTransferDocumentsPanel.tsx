@@ -4,16 +4,24 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
 import {
+  addLocation,
+  addWarehouse,
   addWarehouseTransferItemIssue,
   addWarehouseTransferItemReceipt,
   closeWarehouseTransferDocument,
   createWarehouseTransferDocument,
+  getLocationsAdmin,
+  getWarehousesAdmin,
   getWarehouseTransferDocument,
   getWarehouseTransferDocuments,
   markWarehouseTransferDocumentIssued,
+  removeLocation,
+  removeWarehouse,
   removeWarehouseTransferItemIssue,
   removeWarehouseTransferItemReceipt,
   removeWarehouseTransferDocument,
+  updateLocation,
+  updateWarehouse,
   updateWarehouseTransferItemIssue,
   updateWarehouseTransferItemReceipt
 } from '@/lib/api';
@@ -30,8 +38,9 @@ import { Badge } from '@/components/ui/Badge';
 import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Toggle } from '@/components/ui/Toggle';
+import { SelectField } from '@/components/ui/Select';
 import { useToastStore } from '@/components/ui/Toast';
-import { canSeeTab } from '@/lib/auth/access';
+import { canSeeTab, isWarehouseAdmin } from '@/lib/auth/access';
 import { syncErpPushPreferences } from '@/lib/push/client';
 import { useUiStore, type ErpWorkspaceTab } from '@/lib/store/ui';
 
@@ -61,6 +70,16 @@ type NonInventoryItemDraft = {
   unit: string;
   note: string;
   priority: WarehouseTransferItemPriority;
+};
+
+type ErpWarehouseDraft = {
+  name: string;
+  orderNo: string;
+};
+
+type ErpLocationDraft = {
+  name: string;
+  orderNo: string;
 };
 
 type SplitMode = 'delimited' | 'whitespace';
@@ -162,6 +181,17 @@ const formatValue = (value: number) =>
 
 const formatQty = (value: number, unit?: string) => `${formatValue(value)} ${unit || 'kg'}`;
 
+const parseOrderNo = (value: string) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? undefined : parsed;
+};
+
+const isErpWarehouseDraftEqual = (left: ErpWarehouseDraft, right: ErpWarehouseDraft) =>
+  left.name === right.name && left.orderNo === right.orderNo;
+
+const isErpLocationDraftEqual = (left: ErpLocationDraft, right: ErpLocationDraft) =>
+  left.name === right.name && left.orderNo === right.orderNo;
+
 const formatDateTime = (value: string) =>
   new Intl.DateTimeFormat('pl-PL', {
     dateStyle: 'short',
@@ -211,6 +241,32 @@ const ISSUE_TARGET_LOCATION_PRESETS = [
   'LAKIERNIA',
   'INNA LOKALIZACJA'
 ] as const;
+const ERP_LOCATION_ASSIGNMENT_DEFAULT_OPTIONS = [
+  'HALA 1',
+  'HALA 2',
+  'HALA 3',
+  'BAKOMA',
+  'PACZKA',
+  'LAKIERNIA',
+  'INNA'
+] as const;
+const ERP_LOCATION_ASSIGNMENT_STORAGE_KEY = 'apka:erp:location-assignment-options';
+const normalizeErpLocationAssignmentLabel = (value: string) =>
+  value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+const normalizeErpLocationAssignmentOptions = (value: unknown) => {
+  if (!Array.isArray(value)) return [...ERP_LOCATION_ASSIGNMENT_DEFAULT_OPTIONS];
+  const unique = new Set<string>();
+  value.forEach((item) => {
+    const normalized = normalizeErpLocationAssignmentLabel(String(item ?? ''));
+    if (!normalized) return;
+    unique.add(normalized);
+  });
+  if (unique.size === 0) return [...ERP_LOCATION_ASSIGNMENT_DEFAULT_OPTIONS];
+  return [...unique];
+};
 const CUSTOM_TARGET_LOCATION_PRESET = 'INNA LOKALIZACJA';
 const DISPATCHER_TARGET_LOCATION_FILTER_OPTIONS = ISSUE_TARGET_LOCATION_PRESETS.filter(
   (preset) => preset !== CUSTOM_TARGET_LOCATION_PRESET
@@ -2525,6 +2581,7 @@ export function WarehouseTransferDocumentsPanel() {
   const canSeeWarehousemanTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-magazynier');
   const canSeeDispatcherTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-rozdzielca');
   const canSeeHistoryTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-historia-dokumentow');
+  const canManageErpSettings = isWarehouseAdmin(currentUser, 'PRZESUNIECIA_ERP');
   const allowedWorkspaceTabs = useMemo(() => {
     const next: ErpWorkspaceTab[] = [];
     if (canSeeIssuerTab) next.push('issuer');
@@ -2532,7 +2589,12 @@ export function WarehouseTransferDocumentsPanel() {
     if (canSeeDispatcherTab) next.push('dispatcher');
     if (canSeeHistoryTab) next.push('history');
     return next;
-  }, [canSeeDispatcherTab, canSeeHistoryTab, canSeeIssuerTab, canSeeWarehousemanTab]);
+  }, [
+    canSeeDispatcherTab,
+    canSeeHistoryTab,
+    canSeeIssuerTab,
+    canSeeWarehousemanTab
+  ]);
   const hasAnyWorkspaceAccess = allowedWorkspaceTabs.length > 0;
   const warehousemanSourceWarehouseFilterStorageKey = useMemo(() => {
     const userId = String(currentUser?.id ?? '').trim();
@@ -2559,6 +2621,31 @@ export function WarehouseTransferDocumentsPanel() {
   const [dispatcherTargetLocationFilter, setDispatcherTargetLocationFilter] = useState<
     string[] | null
   >(null);
+  const [erpWarehouseForm, setErpWarehouseForm] = useState({
+    name: '',
+    orderNo: ''
+  });
+  const [erpLocationForm, setErpLocationForm] = useState<{
+    warehouseId: string;
+    name: string;
+    orderNo: string;
+  }>({
+    warehouseId: '',
+    name: '',
+    orderNo: ''
+  });
+  const [erpWarehouseDrafts, setErpWarehouseDrafts] = useState<Record<string, ErpWarehouseDraft>>(
+    {}
+  );
+  const [erpLocationDrafts, setErpLocationDrafts] = useState<Record<string, ErpLocationDraft>>({});
+  const [erpLocationAssignmentOptions, setErpLocationAssignmentOptions] = useState<string[]>(
+    [...ERP_LOCATION_ASSIGNMENT_DEFAULT_OPTIONS]
+  );
+  const [erpLocationAssignmentDrafts, setErpLocationAssignmentDrafts] = useState<
+    Record<string, string>
+  >({});
+  const [erpLocationAssignmentNew, setErpLocationAssignmentNew] = useState('');
+  const [erpLocationToDeleteId, setErpLocationToDeleteId] = useState('');
   const normalizedFormFlowKind = normalizeWarehouseTransferFlowKind(form.documentFlowKind);
   const targetLocationPresetOptions = useMemo<readonly string[]>(
     () =>
@@ -2833,6 +2920,88 @@ export function WarehouseTransferDocumentsPanel() {
       ]),
     [handlePriorityToggle, handleQtyOverrideChange, sortedParsedItemsWithPriority]
   );
+
+  const { data: erpWarehousesData = [], isLoading: erpWarehousesLoading } = useQuery({
+    queryKey: ['warehouses-admin', 'ERP'],
+    queryFn: () => getWarehousesAdmin('ERP'),
+    enabled: canManageErpSettings
+  });
+  const { data: erpLocationsData = [], isLoading: erpLocationsLoading } = useQuery({
+    queryKey: ['locations-admin', 'ERP'],
+    queryFn: () => getLocationsAdmin('ERP'),
+    enabled: canManageErpSettings
+  });
+  const activeErpWarehouses = useMemo(() => {
+    return [...erpWarehousesData]
+      .filter((warehouse) => warehouse.isActive)
+      .sort((a, b) => {
+        const orderDiff = a.orderNo - b.orderNo;
+        if (orderDiff !== 0) return orderDiff;
+        return a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' });
+      });
+  }, [erpWarehousesData]);
+  const erpWarehouseNameMap = useMemo(
+    () => new Map(erpWarehousesData.map((warehouse) => [warehouse.id, warehouse.name])),
+    [erpWarehousesData]
+  );
+  const erpWarehouseOrderMap = useMemo(
+    () => new Map(erpWarehousesData.map((warehouse) => [warehouse.id, warehouse.orderNo])),
+    [erpWarehousesData]
+  );
+  const activeErpLocations = useMemo(() => {
+    return [...erpLocationsData]
+      .filter((location) => location.isActive)
+      .sort((a, b) => {
+        const warehouseOrderDiff =
+          (erpWarehouseOrderMap.get(a.warehouseId) ?? 0) - (erpWarehouseOrderMap.get(b.warehouseId) ?? 0);
+        if (warehouseOrderDiff !== 0) return warehouseOrderDiff;
+        const orderDiff = a.orderNo - b.orderNo;
+        if (orderDiff !== 0) return orderDiff;
+        return a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' });
+      });
+  }, [erpLocationsData, erpWarehouseOrderMap]);
+  const erpLocationPlaceholder = 'np. HALA 1';
+
+  useEffect(() => {
+    if (!canManageErpSettings) return;
+    if (activeErpWarehouses.length === 0) {
+      if (!erpLocationForm.warehouseId) return;
+      setErpLocationForm((prev) => ({ ...prev, warehouseId: '' }));
+      return;
+    }
+    const selectedExists = activeErpWarehouses.some(
+      (warehouse) => warehouse.id === erpLocationForm.warehouseId
+    );
+    if (selectedExists) return;
+    setErpLocationForm((prev) => ({ ...prev, warehouseId: activeErpWarehouses[0].id }));
+  }, [activeErpWarehouses, canManageErpSettings, erpLocationForm.warehouseId]);
+
+  useEffect(() => {
+    if (!erpLocationToDeleteId) return;
+    const exists = activeErpLocations.some((location) => location.id === erpLocationToDeleteId);
+    if (exists) return;
+    setErpLocationToDeleteId('');
+  }, [activeErpLocations, erpLocationToDeleteId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(ERP_LOCATION_ASSIGNMENT_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      setErpLocationAssignmentOptions(normalizeErpLocationAssignmentOptions(parsed));
+    } catch {
+      // ignore invalid local config and keep defaults
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(
+      ERP_LOCATION_ASSIGNMENT_STORAGE_KEY,
+      JSON.stringify(erpLocationAssignmentOptions)
+    );
+  }, [erpLocationAssignmentOptions]);
 
   const { data: documents = [], isLoading: documentsLoading, isFetched: documentsFetched } = useQuery({
     queryKey: ['warehouse-transfer-documents'],
@@ -3444,6 +3613,195 @@ export function WarehouseTransferDocumentsPanel() {
       });
     }
   });
+
+  const addErpWarehouseMutation = useMutation({
+    mutationFn: addWarehouse,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['warehouses-admin'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouses'] });
+      toast({ title: 'Dodano magazyn', tone: 'success' });
+      setErpWarehouseForm((prev) => ({ ...prev, name: '', orderNo: '' }));
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        DUPLICATE: 'Magazyn już istnieje.',
+        FORBIDDEN: 'Brak uprawnień do dodania magazynu.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie udało się dodać magazynu.', tone: 'error' });
+    }
+  });
+
+  const updateErpWarehouseMutation = useMutation({
+    mutationFn: updateWarehouse,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['warehouses-admin'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouses'] });
+      queryClient.invalidateQueries({ queryKey: ['locations-admin'] });
+      toast({ title: 'Zapisano magazyn', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        FORBIDDEN: 'Brak uprawnień do edycji magazynu.',
+        NOT_FOUND: 'Nie znaleziono magazynu.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie zapisano magazynu.', tone: 'error' });
+    }
+  });
+
+  const removeErpWarehouseMutation = useMutation({
+    mutationFn: (id: string) => removeWarehouse(id, 'ERP'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['warehouses-admin'] });
+      queryClient.invalidateQueries({ queryKey: ['locations-admin'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouses'] });
+      queryClient.invalidateQueries({ queryKey: ['locations'] });
+      toast({ title: 'Usunięto magazyn', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        FORBIDDEN: 'Brak uprawnień do usunięcia magazynu.',
+        NOT_FOUND: 'Nie znaleziono magazynu.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie usunięto magazynu.', tone: 'error' });
+    }
+  });
+
+  const addErpLocationMutation = useMutation({
+    mutationFn: addLocation,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['locations-admin'] });
+      queryClient.invalidateQueries({ queryKey: ['locations'] });
+      toast({ title: 'Dodano lokalizację', tone: 'success' });
+      setErpLocationForm((prev) => ({ ...prev, name: '', orderNo: '' }));
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        DUPLICATE: 'Lokalizacja już istnieje.',
+        WAREHOUSE_MISSING: 'Wybierz magazyn.',
+        INVALID_NAME: 'Podaj poprawną nazwę lokalizacji.',
+        FORBIDDEN: 'Brak uprawnień do dodania lokalizacji.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie dodano lokalizacji.', tone: 'error' });
+    }
+  });
+
+  const updateErpLocationMutation = useMutation({
+    mutationFn: updateLocation,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['locations-admin'] });
+      queryClient.invalidateQueries({ queryKey: ['locations'] });
+      toast({ title: 'Zapisano lokalizację', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        FORBIDDEN: 'Brak uprawnień do edycji lokalizacji.',
+        NOT_FOUND: 'Nie znaleziono lokalizacji.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie zapisano lokalizacji.', tone: 'error' });
+    }
+  });
+
+  const removeErpLocationMutation = useMutation({
+    mutationFn: (id: string) => removeLocation(id, 'ERP'),
+    onSuccess: (_, removedLocationId) => {
+      queryClient.invalidateQueries({ queryKey: ['locations-admin'] });
+      queryClient.invalidateQueries({ queryKey: ['locations'] });
+      setErpLocationToDeleteId((prev) => (prev === removedLocationId ? '' : prev));
+      toast({ title: 'Usunięto lokalizację', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        FORBIDDEN: 'Brak uprawnień do usunięcia lokalizacji.',
+        NOT_FOUND: 'Nie znaleziono lokalizacji.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie usunięto lokalizacji.', tone: 'error' });
+    }
+  });
+
+  const handleAddErpWarehouse = () => {
+    const name = erpWarehouseForm.name.trim();
+    if (!name) {
+      toast({ title: 'Podaj nazwę magazynu.', tone: 'error' });
+      return;
+    }
+    addErpWarehouseMutation.mutate({
+      name,
+      orderNo: parseOrderNo(erpWarehouseForm.orderNo),
+      scope: 'ERP'
+    });
+  };
+
+  const handleAddErpLocation = () => {
+    const name = erpLocationForm.name.trim();
+    if (!name) {
+      toast({ title: 'Podaj nazwę lokalizacji.', tone: 'error' });
+      return;
+    }
+    if (!erpLocationForm.warehouseId) {
+      toast({ title: 'Wybierz magazyn.', tone: 'error' });
+      return;
+    }
+    addErpLocationMutation.mutate({
+      warehouseId: erpLocationForm.warehouseId,
+      type: 'pole',
+      name,
+      orderNo: parseOrderNo(erpLocationForm.orderNo),
+      scope: 'ERP'
+    });
+  };
+
+  const handleAddErpLocationAssignment = () => {
+    const normalized = normalizeErpLocationAssignmentLabel(erpLocationAssignmentNew);
+    if (!normalized) {
+      toast({ title: 'Podaj nazwę przypisu.', tone: 'error' });
+      return;
+    }
+    if (erpLocationAssignmentOptions.includes(normalized)) {
+      toast({ title: 'Taki przypis już istnieje.', tone: 'error' });
+      return;
+    }
+    setErpLocationAssignmentOptions((prev) => [...prev, normalized]);
+    setErpLocationAssignmentNew('');
+    toast({ title: 'Dodano przypis lokalizacji.', tone: 'success' });
+  };
+
+  const handleSaveErpLocationAssignment = (currentValue: string) => {
+    const draftRaw = erpLocationAssignmentDrafts[currentValue] ?? currentValue;
+    const normalized = normalizeErpLocationAssignmentLabel(draftRaw);
+    if (!normalized) {
+      toast({ title: 'Nazwa przypisu nie może być pusta.', tone: 'error' });
+      return;
+    }
+    if (normalized !== currentValue && erpLocationAssignmentOptions.includes(normalized)) {
+      toast({ title: 'Taki przypis już istnieje.', tone: 'error' });
+      return;
+    }
+    if (normalized === currentValue) return;
+
+    setErpLocationAssignmentOptions((prev) =>
+      prev.map((item) => (item === currentValue ? normalized : item))
+    );
+    setErpLocationAssignmentDrafts((prev) => {
+      const next = { ...prev };
+      delete next[currentValue];
+      return next;
+    });
+    toast({ title: 'Zapisano przypis lokalizacji.', tone: 'success' });
+  };
+
+  const handleRemoveErpLocationAssignment = (value: string) => {
+    if (erpLocationAssignmentOptions.length <= 1) {
+      toast({ title: 'Musi zostać co najmniej jeden przypis.', tone: 'error' });
+      return;
+    }
+    setErpLocationAssignmentOptions((prev) => prev.filter((item) => item !== value));
+    setErpLocationAssignmentDrafts((prev) => {
+      const next = { ...prev };
+      delete next[value];
+      return next;
+    });
+    toast({ title: 'Usunięto przypis lokalizacji.', tone: 'success' });
+  };
 
   const handleCreateDocument = () => {
     if (!form.documentNumber.trim()) {
@@ -4070,6 +4428,7 @@ export function WarehouseTransferDocumentsPanel() {
   const isWarehousemanTab = workspaceTab === 'warehouseman' && canSeeWarehousemanTab;
   const isDispatcherTab = workspaceTab === 'dispatcher' && canSeeDispatcherTab;
   const isHistoryTab = workspaceTab === 'history' && canSeeHistoryTab;
+  const isManagementTab = workspaceTab === 'management' && canManageErpSettings;
   const currentActorName = currentUser?.name?.trim() || currentUser?.username?.trim() || '';
 
   const detailsEmptyDescription = isHistoryTab
@@ -5114,6 +5473,399 @@ export function WarehouseTransferDocumentsPanel() {
             </Button>
           </div>
         </Card>
+      )}
+
+      {isManagementTab && (
+        <>
+          <Card className="space-y-1">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              Panel administracyjny ERP
+            </p>
+            <p className="text-sm text-dim">
+              Zarządzanie strukturą modułu ERP: magazyny i lokalizacje.
+            </p>
+          </Card>
+
+          <Card className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              Dodaj magazyn ERP
+            </p>
+            <div className="grid gap-3 md:grid-cols-[2fr_1fr_auto] md:items-end">
+              <div>
+                <label className="text-xs uppercase tracking-wide text-dim">Nazwa magazynu</label>
+                <Input
+                  value={erpWarehouseForm.name}
+                  onChange={(event) =>
+                    setErpWarehouseForm((prev) => ({ ...prev, name: event.target.value }))
+                  }
+                  placeholder="np. Magazyn 57"
+                />
+              </div>
+              <div>
+                <label className="text-xs uppercase tracking-wide text-dim">Kolejność</label>
+                <Input
+                  value={erpWarehouseForm.orderNo}
+                  onChange={(event) =>
+                    setErpWarehouseForm((prev) => ({ ...prev, orderNo: event.target.value }))
+                  }
+                  inputMode="numeric"
+                  placeholder="np. 57"
+                />
+              </div>
+              <Button
+                onClick={handleAddErpWarehouse}
+                disabled={addErpWarehouseMutation.isPending}
+                className="w-full md:w-auto"
+              >
+                Dodaj magazyn
+              </Button>
+            </div>
+          </Card>
+
+          {erpWarehousesLoading ? (
+            <Card>
+              <p className="text-sm text-dim">Ładowanie magazynów...</p>
+            </Card>
+          ) : activeErpWarehouses.length === 0 ? (
+            <Card>
+              <EmptyState
+                title="Brak magazynów"
+                description="Dodaj pierwszy magazyn, aby skonfigurować ERP."
+              />
+            </Card>
+          ) : (
+            <Card>
+              <DataTable
+                columns={['Magazyn', 'Kolejność', 'Status', 'Akcje']}
+                rows={activeErpWarehouses.map((warehouse) => {
+                  const draft = erpWarehouseDrafts[warehouse.id] ?? {
+                    name: warehouse.name,
+                    orderNo: String(warehouse.orderNo)
+                  };
+                  const isDirty = !isErpWarehouseDraftEqual(draft, {
+                    name: warehouse.name,
+                    orderNo: String(warehouse.orderNo)
+                  });
+                  return [
+                    <Input
+                      key={`${warehouse.id}-name`}
+                      value={draft.name}
+                      onChange={(event) =>
+                        setErpWarehouseDrafts((prev) => ({
+                          ...prev,
+                          [warehouse.id]: { ...draft, name: event.target.value }
+                        }))
+                      }
+                    />,
+                    <Input
+                      key={`${warehouse.id}-order`}
+                      value={draft.orderNo}
+                      onChange={(event) =>
+                        setErpWarehouseDrafts((prev) => ({
+                          ...prev,
+                          [warehouse.id]: { ...draft, orderNo: event.target.value }
+                        }))
+                      }
+                      inputMode="numeric"
+                    />,
+                    <Badge key={`${warehouse.id}-status`} tone="success">
+                      Aktywny
+                    </Badge>,
+                    <div key={`${warehouse.id}-actions`} className="flex flex-wrap gap-2">
+                      <Button
+                        variant="secondary"
+                        disabled={!isDirty || updateErpWarehouseMutation.isPending}
+                        onClick={() =>
+                          updateErpWarehouseMutation.mutate({
+                            id: warehouse.id,
+                            name: draft.name,
+                            orderNo: parseOrderNo(draft.orderNo),
+                            scope: 'ERP'
+                          })
+                        }
+                      >
+                        Zapisz
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={removeErpWarehouseMutation.isPending}
+                        onClick={() => removeErpWarehouseMutation.mutate(warehouse.id)}
+                      >
+                        Usuń
+                      </Button>
+                    </div>
+                  ];
+                })}
+              />
+            </Card>
+          )}
+
+          <Card className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              Dodaj lokalizację
+            </p>
+            {activeErpWarehouses.length === 0 ? (
+              <p className="text-sm text-dim">Najpierw dodaj magazyn.</p>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-dim">Magazyn</label>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {activeErpWarehouses.map((warehouse) => {
+                      const active = erpLocationForm.warehouseId === warehouse.id;
+                      return (
+                        <Button
+                          key={warehouse.id}
+                          variant="secondary"
+                          className={
+                            active
+                              ? 'border-[rgba(255,106,0,0.55)] bg-brandSoft text-title ring-2 ring-[rgba(255,122,26,0.45)]'
+                              : ''
+                          }
+                          onClick={() =>
+                            setErpLocationForm((prev) => ({ ...prev, warehouseId: warehouse.id }))
+                          }
+                        >
+                          {warehouse.name}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-dim">Nazwa lokalizacji</label>
+                  <Input
+                    value={erpLocationForm.name}
+                    onChange={(event) =>
+                      setErpLocationForm((prev) => ({ ...prev, name: event.target.value }))
+                    }
+                    placeholder={erpLocationPlaceholder}
+                  />
+                </div>
+                <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
+                  <div>
+                    <label className="text-xs uppercase tracking-wide text-dim">Kolejność</label>
+                    <Input
+                      value={erpLocationForm.orderNo}
+                      onChange={(event) =>
+                        setErpLocationForm((prev) => ({ ...prev, orderNo: event.target.value }))
+                      }
+                      inputMode="numeric"
+                      placeholder="np. 1"
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      setErpLocationForm((prev) => ({
+                        ...prev,
+                        name: '',
+                        orderNo: ''
+                      }))
+                    }
+                    className="w-full md:w-auto"
+                  >
+                    Wyczyść
+                  </Button>
+                  <Button
+                    onClick={handleAddErpLocation}
+                    disabled={addErpLocationMutation.isPending}
+                    className="w-full md:w-auto"
+                  >
+                    Dodaj lokalizację
+                  </Button>
+                </div>
+              </div>
+            )}
+          </Card>
+
+          <Card className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              Przypisy lokalizacji ERP
+            </p>
+            <div className="grid gap-3 md:grid-cols-[2fr_auto] md:items-end">
+              <div>
+                <label className="text-xs uppercase tracking-wide text-dim">Nowy przypis</label>
+                <Input
+                  value={erpLocationAssignmentNew}
+                  onChange={(event) => setErpLocationAssignmentNew(event.target.value)}
+                  placeholder="np. HALA 4"
+                />
+              </div>
+              <Button
+                onClick={handleAddErpLocationAssignment}
+                className="w-full md:w-auto"
+              >
+                Dodaj przypis
+              </Button>
+            </div>
+            {erpLocationAssignmentOptions.length === 0 ? (
+              <p className="text-sm text-dim">Brak przypisów lokalizacji.</p>
+            ) : (
+              <DataTable
+                columns={['Przypis', 'Akcje']}
+                rows={erpLocationAssignmentOptions.map((assignment) => {
+                  const draft = erpLocationAssignmentDrafts[assignment] ?? assignment;
+                  const normalizedDraft = normalizeErpLocationAssignmentLabel(draft);
+                  const isDirty = normalizedDraft !== assignment;
+                  return [
+                    <Input
+                      key={`assignment-${assignment}`}
+                      value={draft}
+                      onChange={(event) =>
+                        setErpLocationAssignmentDrafts((prev) => ({
+                          ...prev,
+                          [assignment]: event.target.value
+                        }))
+                      }
+                    />,
+                    <div
+                      key={`assignment-actions-${assignment}`}
+                      className="flex flex-wrap gap-2"
+                    >
+                      <Button
+                        variant="secondary"
+                        disabled={!isDirty}
+                        onClick={() => handleSaveErpLocationAssignment(assignment)}
+                      >
+                        Zapisz
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
+                        onClick={() => handleRemoveErpLocationAssignment(assignment)}
+                      >
+                        Usuń
+                      </Button>
+                    </div>
+                  ];
+                })}
+              />
+            )}
+          </Card>
+
+          <Card className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              Usuń lokalizację ERP
+            </p>
+            {activeErpLocations.length === 0 ? (
+              <p className="text-sm text-dim">Brak lokalizacji do usunięcia.</p>
+            ) : (
+              <div className="grid gap-3 md:grid-cols-[2fr_auto] md:items-end">
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-dim">
+                    Wybierz lokalizację
+                  </label>
+                  <SelectField
+                    value={erpLocationToDeleteId}
+                    onChange={(event) => setErpLocationToDeleteId(event.target.value)}
+                  >
+                    <option value="">Wybierz lokalizację</option>
+                    {activeErpLocations.map((location) => (
+                      <option key={`delete-location-${location.id}`} value={location.id}>
+                        {(erpWarehouseNameMap.get(location.warehouseId) ?? location.warehouseId) +
+                          ' | ' +
+                          location.name}
+                      </option>
+                    ))}
+                  </SelectField>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => removeErpLocationMutation.mutate(erpLocationToDeleteId)}
+                  disabled={!erpLocationToDeleteId || removeErpLocationMutation.isPending}
+                  className="w-full border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)] md:w-auto"
+                >
+                  Usuń lokalizację
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {erpLocationsLoading ? (
+            <Card>
+              <p className="text-sm text-dim">Ładowanie lokalizacji...</p>
+            </Card>
+          ) : activeErpLocations.length === 0 ? (
+            <Card>
+              <EmptyState
+                title="Brak lokalizacji"
+                description="Dodaj lokalizacje dla magazynów ERP."
+              />
+            </Card>
+          ) : (
+            <Card>
+              <DataTable
+                columns={['Magazyn', 'Typ', 'Lokalizacja', 'Kolejność', 'Status', 'Akcje']}
+                rows={activeErpLocations.map((location) => {
+                  const draft = erpLocationDrafts[location.id] ?? {
+                    name: location.name,
+                    orderNo: String(location.orderNo)
+                  };
+                  const isDirty = !isErpLocationDraftEqual(draft, {
+                    name: location.name,
+                    orderNo: String(location.orderNo)
+                  });
+                  return [
+                    <span key={`${location.id}-warehouse`} className="text-body">
+                      {erpWarehouseNameMap.get(location.warehouseId) ?? location.warehouseId}
+                    </span>,
+                    <span key={`${location.id}-type`} className="text-body">
+                      {location.type === 'wtr' ? 'WTR' : 'Pole odkładcze'}
+                    </span>,
+                    <Input
+                      key={`${location.id}-name`}
+                      value={draft.name}
+                      onChange={(event) =>
+                        setErpLocationDrafts((prev) => ({
+                          ...prev,
+                          [location.id]: { ...draft, name: event.target.value }
+                        }))
+                      }
+                    />,
+                    <Input
+                      key={`${location.id}-order`}
+                      value={draft.orderNo}
+                      onChange={(event) =>
+                        setErpLocationDrafts((prev) => ({
+                          ...prev,
+                          [location.id]: { ...draft, orderNo: event.target.value }
+                        }))
+                      }
+                      inputMode="numeric"
+                    />,
+                    <Badge key={`${location.id}-status`} tone="success">
+                      Aktywna
+                    </Badge>,
+                    <div key={`${location.id}-actions`} className="flex flex-wrap gap-2">
+                      <Button
+                        variant="secondary"
+                        disabled={!isDirty || updateErpLocationMutation.isPending}
+                        onClick={() =>
+                          updateErpLocationMutation.mutate({
+                            id: location.id,
+                            name: draft.name,
+                            orderNo: parseOrderNo(draft.orderNo),
+                            scope: 'ERP'
+                          })
+                        }
+                      >
+                        Zapisz
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={removeErpLocationMutation.isPending}
+                        onClick={() => removeErpLocationMutation.mutate(location.id)}
+                      >
+                        Usuń
+                      </Button>
+                    </div>
+                  ];
+                })}
+              />
+            </Card>
+          )}
+        </>
       )}
 
       {(isWarehousemanTab || isDispatcherTab) && (

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
+import { useSearchParams } from 'next/navigation';
 import {
   addLocation,
   addCatalog,
@@ -125,6 +126,12 @@ type PrzemialyAdminTab =
   | 'audit'
   | 'positions'
   | 'dryers';
+
+type AccountsAdminTab = 'users' | 'add-user' | 'groups';
+const DEFAULT_RESET_PASSWORD = 'MAX123';
+
+const isAccountsAdminTab = (value: string | null): value is AccountsAdminTab =>
+  value === 'users' || value === 'add-user' || value === 'groups';
 
 const roleOptions = [
   { value: 'HEAD_ADMIN', label: 'Head admin' },
@@ -285,6 +292,7 @@ const AdminToggle = ({
 
 
 export default function AdminPage() {
+  const searchParams = useSearchParams();
   const { user: currentUser, activeWarehouse } = useUiStore();
   const toast = useToastStore((state) => state.push);
   const queryClient = useQueryClient();
@@ -517,6 +525,7 @@ export default function AdminPage() {
   >({});
   const [selectedAccessUserId, setSelectedAccessUserId] = useState<string | null>(null);
   const [selectedPermissionGroupId, setSelectedPermissionGroupId] = useState<string | null>(null);
+  const [accountsTab, setAccountsTab] = useState<AccountsAdminTab>('users');
   const [przemialyTab, setPrzemialyTab] = useState<PrzemialyAdminTab>('warehouses');
   const [tabReady, setTabReady] = useState(false);
   const [dryerForm, setDryerForm] = useState({
@@ -926,6 +935,12 @@ export default function AdminPage() {
       isRecordEqual(prev, next, isPermissionGroupDraftEqual) ? prev : next
     );
   }, [permissionGroups]);
+
+  useEffect(() => {
+    const section = searchParams.get('section');
+    const next = isAccountsAdminTab(section) ? section : 'users';
+    setAccountsTab((prev) => (prev === next ? prev : next));
+  }, [searchParams]);
 
   useEffect(() => {
     if (!selectedPermissionGroupId) return;
@@ -1374,6 +1389,27 @@ export default function AdminPage() {
       };
       toast({
         title: messageMap[err.message] ?? 'Nie zapisano uzytkownika.',
+        tone: 'error'
+      });
+    }
+  });
+
+  const resetUserPasswordMutation = useMutation({
+    mutationFn: ({ userId }: { userId: string }) =>
+      updateUser({ id: userId, password: DEFAULT_RESET_PASSWORD }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast({
+        title: `Haslo zresetowane do ${DEFAULT_RESET_PASSWORD}`,
+        tone: 'success'
+      });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        NOT_FOUND: 'Nie znaleziono uzytkownika.'
+      };
+      toast({
+        title: messageMap[err.message] ?? 'Nie udalo sie zresetowac hasla.',
         tone: 'error'
       });
     }
@@ -1926,6 +1962,19 @@ export default function AdminPage() {
     removeUserMutation.mutate(userId);
   };
 
+  const handleResetUserPassword = (userId: string, name: string) => {
+    const isSelfTarget = currentUser?.id === userId;
+    const suffix = isSelfTarget ? ' Twoja aktywna sesja zostanie wylogowana.' : '';
+    if (
+      !confirm(
+        `Zresetowac haslo uzytkownika ${name} do domyslnego ${DEFAULT_RESET_PASSWORD}?${suffix}`
+      )
+    ) {
+      return;
+    }
+    resetUserPasswordMutation.mutate({ userId });
+  };
+
   const handleApplyInventory = () => {
     const qtyValue = parseQtyInput(inventoryForm.qty);
     if (qtyValue === null) {
@@ -2163,7 +2212,7 @@ export default function AdminPage() {
       />
 
       <div className="space-y-10">
-        {isHead && (
+        {isHead && activeWarehouse !== 'PRZEMIALY' && (
         <section className="space-y-4">
           <div className="space-y-1">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">Konta</p>
@@ -2173,7 +2222,8 @@ export default function AdminPage() {
             </p>
           </div>
           <div className="space-y-4">
-            <Card className="space-y-4">
+              <div className={cn(accountsTab !== 'groups' && 'hidden')}>
+                <Card className="space-y-4">
               <div className="space-y-1">
                 <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                   Grupy uprawnien
@@ -2410,7 +2460,9 @@ export default function AdminPage() {
                 />
               </Card>
             )}
-            <Card className="space-y-3">
+              </div>
+              <div className={cn(accountsTab !== 'add-user' && 'hidden')}>
+                <Card className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dodaj uzytkownika</p>
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
@@ -2537,15 +2589,16 @@ export default function AdminPage() {
                   Dodaj uzytkownika
                 </Button>
               </div>
-            </Card>
-{users.length === 0 ? (
+                </Card>
+              </div>
+              <div className={cn(accountsTab !== 'users' && 'hidden')}>
+                {users.length === 0 ? (
               <EmptyState
                 title="Brak uzytkownikow"
                 description="Dodaj pierwszego uzytkownika, aby nadac dostep."
               />
             ) : (
               <div className="space-y-4">
-                <Card>
                   <DataTable
                     columns={[
                       'Imie i nazwisko',
@@ -2677,6 +2730,14 @@ export default function AdminPage() {
                         >
                           Usuń
                         </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => handleResetUserPassword(item.id, item.name)}
+                          disabled={resetUserPasswordMutation.isPending}
+                          className="col-span-2 w-full"
+                        >
+                          Reset hasla (MAX123)
+                        </Button>
                       </div>
                     ];
                   })}
@@ -2761,7 +2822,7 @@ export default function AdminPage() {
                               draft.role
                             )}
                           </div>
-                          <div className="flex justify-end">
+                          <div className="flex flex-wrap items-center justify-end gap-2">
                             <Button
                               variant="secondary"
                               onClick={() => handleSaveUser(item.id)}
@@ -2775,9 +2836,9 @@ export default function AdminPage() {
                       );
                     }}
                   />
-                </Card>
               </div>
             )}
+              </div>
           </div>
         </section>
         )}

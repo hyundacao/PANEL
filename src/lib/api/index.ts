@@ -97,6 +97,8 @@ export type ErpPushPreferences = {
   dispatcherTargetLocations?: string[] | null;
 };
 
+export type WarehouseAdminScope = 'PRZEMIALY' | 'ERP';
+
 export const getErpPushStatus = async (): Promise<ErpPushStatus> =>
   apiRequest('/api/push/status', { cache: 'no-store' });
 
@@ -227,6 +229,7 @@ export const addWarehouse = async (payload: {
   orderNo?: number;
   includeInSpis?: boolean;
   includeInStats?: boolean;
+  scope?: WarehouseAdminScope;
 }): Promise<Warehouse> => appRequest('addWarehouse', payload);
 
 export const updateWarehouse = async (payload: {
@@ -235,33 +238,42 @@ export const updateWarehouse = async (payload: {
   orderNo?: number;
   includeInSpis?: boolean;
   includeInStats?: boolean;
+  scope?: WarehouseAdminScope;
 }): Promise<Warehouse> => appRequest('updateWarehouse', payload);
 
-export const removeWarehouse = async (id: string): Promise<Warehouse> =>
-  appRequest('removeWarehouse', { id });
+export const removeWarehouse = async (
+  id: string,
+  scope?: WarehouseAdminScope
+): Promise<Warehouse> =>
+  appRequest('removeWarehouse', scope ? { id, scope } : { id });
 
 export const addLocation = async (payload: {
   warehouseId: string;
   name: string;
   type: Location['type'];
   orderNo?: number;
+  scope?: WarehouseAdminScope;
 }): Promise<Location> => appRequest('addLocation', payload);
 
 export const updateLocation = async (payload: {
   id: string;
   name?: string;
   orderNo?: number;
+  scope?: WarehouseAdminScope;
 }): Promise<Location> => appRequest('updateLocation', payload);
 
-export const removeLocation = async (id: string): Promise<Location> =>
-  appRequest('removeLocation', { id });
+export const removeLocation = async (
+  id: string,
+  scope?: WarehouseAdminScope
+): Promise<Location> =>
+  appRequest('removeLocation', scope ? { id, scope } : { id });
 
 export const getAudit = async (): Promise<AuditEvent[]> => appRequest('getAudit');
 
 export const getLocations = async (): Promise<LocationOption[]> => appRequest('getLocations');
 
-export const getLocationsAdmin = async (): Promise<Location[]> =>
-  appRequest('getLocationsAdmin');
+export const getLocationsAdmin = async (scope?: WarehouseAdminScope): Promise<Location[]> =>
+  appRequest('getLocationsAdmin', scope ? { scope } : undefined);
 
 export const getTransfers = async (dateKey?: string): Promise<Transfer[]> =>
   appRequest('getTransfers', { dateKey });
@@ -501,6 +513,15 @@ export const authenticateUser = async (payload: {
     body: JSON.stringify(payload)
   });
 
+export const changeOwnPassword = async (payload: {
+  currentPassword: string;
+  newPassword: string;
+}): Promise<{ ok: boolean }> =>
+  apiRequest('/api/auth/password', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+
 export const logoutUser = async (): Promise<void> =>
   apiRequest('/api/auth/logout', {
     method: 'POST'
@@ -593,8 +614,8 @@ export const adjustSparePart = async (payload: {
 
 export const getWarehouses = async (): Promise<Warehouse[]> => appRequest('getWarehouses');
 
-export const getWarehousesAdmin = async (): Promise<Warehouse[]> =>
-  appRequest('getWarehousesAdmin');
+export const getWarehousesAdmin = async (scope?: WarehouseAdminScope): Promise<Warehouse[]> =>
+  appRequest('getWarehousesAdmin', scope ? { scope } : undefined);
 
 export const getWarehouse = async (id: string): Promise<Warehouse | null> =>
   appRequest('getWarehouse', { id });

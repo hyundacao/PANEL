@@ -1,12 +1,14 @@
 ﻿'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowLeftRight, Bell, LogOut, Menu } from 'lucide-react';
+import { useMutation } from '@tanstack/react-query';
+import { ArrowLeftRight, Bell, KeyRound, LogOut, Menu, X } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useUiStore } from '@/lib/store/ui';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { canSeeTab, getAccessibleWarehouses } from '@/lib/auth/access';
-import { logoutUser } from '@/lib/api';
+import { changeOwnPassword, logoutUser } from '@/lib/api';
 import { useToastStore } from '@/components/ui/Toast';
 import {
   disableErpPushNotifications,
@@ -30,6 +32,7 @@ export const Topbar = ({
     toggleSidebar,
     sidebarCollapsed,
     user,
+    setUser,
     clearActiveWarehouse,
     logout,
     activeWarehouse,
@@ -44,7 +47,40 @@ export const Topbar = ({
     canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-rozdzielca');
   const isErpDocumentsPage = pathname.startsWith('/przesuniecia-magazynowe');
   const canManageErpDocumentPush = isErpModule && isErpDocumentsPage && hasErpDocumentPushRole;
+  const mustChangePassword = Boolean(user?.mustChangePassword);
   const [erpNotificationsBusy, setErpNotificationsBusy] = useState(false);
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+
+  const changePasswordMutation = useMutation({
+    mutationFn: changeOwnPassword,
+    onSuccess: () => {
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordDialogOpen(false);
+      if (user) {
+        setUser({ ...user, mustChangePassword: false });
+      }
+      toast({ title: 'Haslo zostalo zmienione', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        CURRENT_PASSWORD_REQUIRED: 'Podaj aktualne haslo.',
+        NEW_PASSWORD_REQUIRED: 'Podaj nowe haslo.',
+        SAME_PASSWORD: 'Nowe haslo musi byc inne niz aktualne.',
+        INVALID_CURRENT_PASSWORD: 'Aktualne haslo jest nieprawidlowe.',
+        INACTIVE: 'Twoje konto jest nieaktywne.'
+      };
+      toast({
+        title: 'Nie udalo sie zmienic hasla',
+        description: messageMap[err.message] ?? 'Sprobuj ponownie.',
+        tone: 'error'
+      });
+    }
+  });
 
   const handleLogout = async () => {
     try {
@@ -78,6 +114,25 @@ export const Topbar = ({
       cancelled = true;
     };
   }, [canManageErpDocumentPush, setErpDocumentNotificationsEnabled]);
+
+  useEffect(() => {
+    if (mustChangePassword) {
+      setPasswordDialogOpen(true);
+    }
+  }, [mustChangePassword]);
+
+  useEffect(() => {
+    if (!passwordDialogOpen || mustChangePassword) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPasswordDialogOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [mustChangePassword, passwordDialogOpen]);
 
   const handleToggleErpNotifications = async () => {
     if (!canManageErpDocumentPush || erpNotificationsBusy) return;
@@ -129,8 +184,34 @@ export const Topbar = ({
     }
   };
 
+  const handleChangePassword = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const current = currentPassword.trim();
+    const next = newPassword.trim();
+    const confirmation = confirmPassword.trim();
+
+    if (!current) {
+      toast({ title: 'Podaj aktualne haslo', tone: 'error' });
+      return;
+    }
+    if (!next) {
+      toast({ title: 'Podaj nowe haslo', tone: 'error' });
+      return;
+    }
+    if (next !== confirmation) {
+      toast({ title: 'Nowe hasla nie sa takie same', tone: 'error' });
+      return;
+    }
+
+    changePasswordMutation.mutate({
+      currentPassword: current,
+      newPassword: next
+    });
+  };
+
   return (
-    <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-surface px-3 py-2 backdrop-blur md:gap-6 md:px-6 md:py-4">
+    <>
+      <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-surface px-3 py-2 backdrop-blur md:gap-6 md:px-6 md:py-4">
       <div className="flex min-w-0 flex-1 items-center gap-2 md:gap-3">
         <Button
           variant="ghost"
@@ -167,6 +248,26 @@ export const Topbar = ({
       </div>
 
       <div className="ml-auto flex items-center justify-end gap-2 md:gap-3">
+        {user && (
+          <>
+            <Button
+              variant="ghost"
+              className="h-10 min-h-10 w-10 px-0 py-0 md:hidden"
+              aria-label="Zmien haslo"
+              onClick={() => setPasswordDialogOpen(true)}
+            >
+              <KeyRound className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              className="hidden md:inline-flex"
+              onClick={() => setPasswordDialogOpen(true)}
+            >
+              <KeyRound className="mr-2 h-4 w-4" />
+              Zmien haslo
+            </Button>
+          </>
+        )}
         {canSwitch && (
           <>
             <Button
@@ -219,7 +320,85 @@ export const Topbar = ({
         )}
         <div className="hidden h-10 w-10 rounded-full bg-surface2 md:block" />
       </div>
-    </header>
+      </header>
+      {user && passwordDialogOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-[990] bg-[var(--scrim)]"
+            onClick={() => {
+              if (!mustChangePassword) {
+                setPasswordDialogOpen(false);
+              }
+            }}
+          />
+          <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
+            <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[rgba(10,11,15,0.98)] p-6 shadow-[0_22px_50px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)]">
+              {!mustChangePassword && (
+                <button
+                  type="button"
+                  className="absolute right-4 top-4 text-dim hover:text-title"
+                  onClick={() => setPasswordDialogOpen(false)}
+                  aria-label="Zamknij"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+              <div className="space-y-2">
+                <p className="text-lg font-semibold text-title">Zmiana hasla</p>
+                <p className="text-sm text-dim">
+                  {mustChangePassword
+                    ? 'Administrator zresetowal haslo. Ustaw nowe haslo, aby kontynuowac.'
+                    : 'Podaj aktualne haslo i ustaw nowe.'}
+                </p>
+              </div>
+              <form onSubmit={handleChangePassword} className="mt-4 space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs uppercase tracking-wide text-dim">
+                    Aktualne haslo
+                  </label>
+                  <Input
+                    type="password"
+                    value={currentPassword}
+                    onChange={(event) => setCurrentPassword(event.target.value)}
+                    autoComplete="current-password"
+                    placeholder="••••••"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs uppercase tracking-wide text-dim">
+                    Nowe haslo
+                  </label>
+                  <Input
+                    type="password"
+                    value={newPassword}
+                    onChange={(event) => setNewPassword(event.target.value)}
+                    autoComplete="new-password"
+                    placeholder="••••••"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs uppercase tracking-wide text-dim">
+                    Powtorz nowe haslo
+                  </label>
+                  <Input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                    autoComplete="new-password"
+                    placeholder="••••••"
+                  />
+                </div>
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={changePasswordMutation.isPending}>
+                    Zapisz nowe haslo
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </>
+      )}
+    </>
   );
 };
 

@@ -104,6 +104,31 @@ export async function PATCH(
       return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
     }
 
+    const currentAccess =
+      row.access && typeof row.access === 'object'
+        ? (row.access as Record<string, unknown>)
+        : ({ admin: false, warehouses: {} } as Record<string, unknown>);
+    const accessWithResetFlag = {
+      ...currentAccess,
+      mustChangePassword: true
+    };
+    const { data: syncedUserRow, error: syncUserError } = await supabaseAdmin
+      .from('app_users')
+      .update({
+        active_session_id: null,
+        access: accessWithResetFlag
+      })
+      .eq('id', userId)
+      .select('*')
+      .maybeSingle();
+    if (syncUserError) {
+      return NextResponse.json({ code: 'UNKNOWN' }, { status: 500 });
+    }
+    const rowForResponse = (syncedUserRow as DbUserRow | null) ?? {
+      ...row,
+      access: accessWithResetFlag as DbUserRow['access']
+    };
+
     if (shouldUpdateGroups) {
       try {
         await setUserPermissionGroups(userId, payload?.groupIds);
@@ -128,7 +153,7 @@ export async function PATCH(
     }
 
     const groupsByUserId = await loadUserGroupsByUserIds([userId]);
-    return NextResponse.json(mapDbUser(row, groupsByUserId.get(userId) ?? []));
+    return NextResponse.json(mapDbUser(rowForResponse, groupsByUserId.get(userId) ?? []));
   }
 
   const updatePayload: Record<string, unknown> = {};
@@ -146,6 +171,33 @@ export async function PATCH(
   }
   if (typeof payload?.isActive === 'boolean') {
     updatePayload.is_active = payload.isActive;
+  }
+
+  if (payload?.access !== undefined) {
+    const { data: currentAccessRow, error: currentAccessError } = await supabaseAdmin
+      .from('app_users')
+      .select('access')
+      .eq('id', userId)
+      .maybeSingle();
+    if (currentAccessError) {
+      const code = getErrorCode(currentAccessError.message, currentAccessError.code);
+      const status = code === 'NOT_FOUND' ? 404 : 400;
+      return NextResponse.json({ code }, { status });
+    }
+    const currentMustChangePassword = Boolean(
+      currentAccessRow?.access &&
+        typeof currentAccessRow.access === 'object' &&
+        'mustChangePassword' in (currentAccessRow.access as Record<string, unknown>) &&
+        (currentAccessRow.access as Record<string, unknown>).mustChangePassword
+    );
+    const nextAccess =
+      updatePayload.access && typeof updatePayload.access === 'object'
+        ? (updatePayload.access as Record<string, unknown>)
+        : ({ admin: false, warehouses: {} } as Record<string, unknown>);
+    updatePayload.access = {
+      ...nextAccess,
+      mustChangePassword: currentMustChangePassword
+    };
   }
 
   if (Object.keys(updatePayload).length === 0 && !shouldUpdateGroups) {

@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils/cn';
 import { useUiStore, type ErpWorkspaceTab } from '@/lib/store/ui';
 import { canSeeTab, getRoleLabel } from '@/lib/auth/access';
 import { logoutUser } from '@/lib/api';
-import type { WarehouseTab } from '@/lib/api/types';
+import type { AppUser, WarehouseTab } from '@/lib/api/types';
 
 export const ERP_WORKSPACE_ITEMS: Array<{
   key: ErpWorkspaceTab;
@@ -19,11 +19,20 @@ export const ERP_WORKSPACE_ITEMS: Array<{
   { key: 'history', label: 'Historia dokumentów', icon: History }
 ];
 
-export const ERP_WORKSPACE_TAB_ACCESS: Record<ErpWorkspaceTab, WarehouseTab> = {
+export const ERP_WORKSPACE_TAB_ACCESS: Partial<Record<ErpWorkspaceTab, WarehouseTab>> = {
   issuer: 'erp-wypisz-dokument',
   warehouseman: 'erp-magazynier',
   dispatcher: 'erp-rozdzielca',
   history: 'erp-historia-dokumentow'
+};
+
+export const canAccessErpWorkspaceItem = (
+  user: AppUser | null | undefined,
+  workspaceTab: ErpWorkspaceTab
+) => {
+  const requiredTab = ERP_WORKSPACE_TAB_ACCESS[workspaceTab];
+  if (!requiredTab) return false;
+  return canSeeTab(user, 'PRZESUNIECIA_ERP', requiredTab);
 };
 
 export const ErpSidebar = () => {
@@ -38,7 +47,7 @@ export const ErpSidebar = () => {
   const roleLabel = getRoleLabel(user, 'PRZESUNIECIA_ERP');
   const displayName = user?.name ?? 'Gość';
   const visibleItems = ERP_WORKSPACE_ITEMS.filter((item) =>
-    canSeeTab(user, 'PRZESUNIECIA_ERP', ERP_WORKSPACE_TAB_ACCESS[item.key])
+    canAccessErpWorkspaceItem(user, item.key)
   );
 
   useEffect(() => {

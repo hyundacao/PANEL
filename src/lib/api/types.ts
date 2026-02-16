@@ -330,6 +330,7 @@ export type AppUser = {
   role: Role;
   access: UserAccess;
   directAccess?: UserAccess;
+  mustChangePassword?: boolean;
   groups?: UserPermissionGroup[];
   groupIds?: string[];
   isActive: boolean;

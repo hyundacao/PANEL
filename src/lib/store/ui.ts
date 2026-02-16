@@ -9,13 +9,14 @@ export type UiFilters = {
   search: string;
 };
 
-export type ErpWorkspaceTab = 'issuer' | 'warehouseman' | 'dispatcher' | 'history';
+export type ErpWorkspaceTab = 'issuer' | 'warehouseman' | 'dispatcher' | 'history' | 'management';
 
 const normalizeErpWorkspaceTab = (value: unknown): ErpWorkspaceTab => {
   if (value === 'issuer') return 'issuer';
   if (value === 'warehouseman') return 'warehouseman';
   if (value === 'dispatcher') return 'dispatcher';
   if (value === 'history') return 'history';
+  if (value === 'management') return 'issuer';
   // Backward compatibility with previously persisted tab key.
   if (value === 'operator') return 'warehouseman';
   return 'issuer';

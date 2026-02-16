@@ -15,7 +15,7 @@ export type DbUserRow = {
   name: string;
   username: string;
   role: Role;
-  access: UserAccess | null;
+  access: (UserAccess & { mustChangePassword?: boolean }) | null;
   is_active: boolean;
   created_at: string;
   last_login: string | null;
@@ -31,6 +31,10 @@ export type DbPermissionGroupRow = {
 };
 
 const defaultAccess: UserAccess = { admin: false, warehouses: {} };
+const defaultAccessWithPasswordFlag = {
+  ...defaultAccess,
+  mustChangePassword: false
+} as UserAccess & { mustChangePassword?: boolean };
 const validWarehouseKeys: WarehouseKey[] = [
   'PRZEMIALY',
   'CZESCI',
@@ -119,6 +123,14 @@ const normalizeAccessFromDb = (access: UserAccess | null | undefined): UserAcces
   };
 };
 
+const readMustChangePassword = (
+  access: (UserAccess & { mustChangePassword?: boolean }) | null | undefined
+) => {
+  if (!access || typeof access !== 'object') return false;
+  const source = access as Record<string, unknown>;
+  return Boolean(source.mustChangePassword);
+};
+
 export const normalizeAccessForDb = (
   access: UserAccess | null | undefined
 ): UserAccess | null => {
@@ -172,7 +184,9 @@ export const toUserPermissionGroup = (
 };
 
 export const mapDbUser = (row: DbUserRow, groups: UserPermissionGroup[] = []): AppUser => {
-  const directAccess = normalizeAccessFromDb(row.access);
+  const rawAccess = row.access ?? defaultAccessWithPasswordFlag;
+  const directAccess = normalizeAccessFromDb(rawAccess);
+  const mustChangePassword = readMustChangePassword(rawAccess);
   const activeGroupAccesses = groups
     .filter((group) => group.isActive)
     .map((group) => normalizeAccessFromDb(group.access));
@@ -185,6 +199,7 @@ export const mapDbUser = (row: DbUserRow, groups: UserPermissionGroup[] = []): A
     role: row.role,
     access: effectiveAccess,
     directAccess,
+    mustChangePassword,
     groups: groups.map((group) => ({
       ...group,
       access: normalizeAccessFromDb(group.access)

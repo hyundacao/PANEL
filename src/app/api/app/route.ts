@@ -74,6 +74,7 @@ type TransferAdjustmentsByDate = Record<string, Record<string, TransferAdjustmen
 type TransferAdjustmentsByWarehouse = Record<string, Record<string, TransferAdjustment>>;
 type TransferCommentsByDate = Record<string, Record<string, string[]>>;
 type TransferDeltasByDate = Record<string, Record<string, Record<string, number>>>;
+type WarehouseAdminScope = 'PRZEMIALY' | 'ERP';
 type WarehouseTransferDocumentItemBase = Omit<
   WarehouseTransferDocumentItem,
   'issuedQty' | 'receivedQty' | 'diffQty' | 'status' | 'issues' | 'receipts'
@@ -160,6 +161,32 @@ const mapLocation = (row: any): Location => ({
   type: row.type,
   isActive: row.is_active ?? true
 });
+
+const ERP_WAREHOUSE_ID_PREFIX = 'erp-wh-';
+const ERP_LOCATION_ID_PREFIX = 'erp-loc-';
+
+const normalizeWarehouseAdminScope = (value: unknown): WarehouseAdminScope =>
+  String(value ?? '')
+    .trim()
+    .toUpperCase() === 'ERP'
+    ? 'ERP'
+    : 'PRZEMIALY';
+
+const isErpWarehouseId = (id: string) => id.startsWith(ERP_WAREHOUSE_ID_PREFIX);
+const isErpLocationId = (id: string) => id.startsWith(ERP_LOCATION_ID_PREFIX);
+
+const isWarehouseInScope = (
+  warehouse: Pick<Warehouse, 'id'>,
+  scope: WarehouseAdminScope
+) => (scope === 'ERP' ? isErpWarehouseId(warehouse.id) : !isErpWarehouseId(warehouse.id));
+
+const isLocationInScope = (
+  location: Pick<Location, 'id' | 'warehouseId'>,
+  scope: WarehouseAdminScope
+) =>
+  scope === 'ERP'
+    ? isErpLocationId(location.id) || isErpWarehouseId(location.warehouseId)
+    : !isErpLocationId(location.id) && !isErpWarehouseId(location.warehouseId);
 
 const mapMaterial = (row: any): Material => ({
   id: row.id,
@@ -450,6 +477,30 @@ const requireWarehouseAdminAccess = (user: AppUser, warehouse: WarehouseKey) => 
 const getActorName = (user: AppUser) =>
   user.name?.trim() || user.username?.trim() || 'nieznany';
 
+const isErpWarehouseManagementAction = (action: string, payload: any) => {
+  switch (action) {
+    case 'addWarehouse':
+    case 'addLocation':
+    case 'getWarehousesAdmin':
+    case 'getLocationsAdmin':
+      return normalizeWarehouseAdminScope(payload?.scope) === 'ERP';
+    case 'updateWarehouse':
+    case 'removeWarehouse':
+      return (
+        normalizeWarehouseAdminScope(payload?.scope) === 'ERP' ||
+        isErpWarehouseId(String(payload?.id ?? '').trim())
+      );
+    case 'updateLocation':
+    case 'removeLocation':
+      return (
+        normalizeWarehouseAdminScope(payload?.scope) === 'ERP' ||
+        isErpLocationId(String(payload?.id ?? '').trim())
+      );
+    default:
+      return false;
+  }
+};
+
 const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
   switch (action) {
     case 'getDashboard':
@@ -576,9 +627,22 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'getMaterials':
       requireWarehouseAccess(user, 'PRZEMIALY');
       return;
-    case 'getAudit':
     case 'getLocationsAdmin':
     case 'getWarehousesAdmin':
+    case 'addWarehouse':
+    case 'updateWarehouse':
+    case 'removeWarehouse':
+    case 'addLocation':
+    case 'updateLocation':
+    case 'removeLocation': {
+      if (isErpWarehouseManagementAction(action, payload)) {
+        requireWarehouseAdminAccess(user, 'PRZESUNIECIA_ERP');
+        return;
+      }
+      requireWarehouseAdminAccess(user, 'PRZEMIALY');
+      return;
+    }
+    case 'getAudit':
     case 'addCatalog':
     case 'addMaterialCatalogBulk':
     case 'getCatalogs':
@@ -587,12 +651,6 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'updateMaterialCatalog':
     case 'updateMaterial':
     case 'removeCatalog':
-    case 'addWarehouse':
-    case 'updateWarehouse':
-    case 'removeWarehouse':
-    case 'addLocation':
-    case 'updateLocation':
-    case 'removeLocation':
     case 'applyInventoryAdjustment':
     case 'getInventoryAdjustments':
     case 'addDryer':
@@ -777,7 +835,18 @@ const toAuditNumber = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const getAuditWarehouse = (action: string): WarehouseKey => {
+const getAuditWarehouse = (action: string, payload: any): WarehouseKey => {
+  if (
+    (action === 'addWarehouse' ||
+      action === 'updateWarehouse' ||
+      action === 'removeWarehouse' ||
+      action === 'addLocation' ||
+      action === 'updateLocation' ||
+      action === 'removeLocation') &&
+    isErpWarehouseManagementAction(action, payload)
+  ) {
+    return 'PRZESUNIECIA_ERP';
+  }
   if (CZESCI_AUDIT_ACTIONS.has(action)) return 'CZESCI';
   if (RAPORT_ZMIANOWY_AUDIT_ACTIONS.has(action)) return 'RAPORT_ZMIANOWY';
   if (ERP_AUDIT_ACTIONS.has(action)) return 'PRZESUNIECIA_ERP';
@@ -885,7 +954,7 @@ const writeAuditLog = async (
 ) => {
   if (!AUDITABLE_ACTIONS.has(action)) return;
 
-  const warehouse = getAuditWarehouse(action);
+  const warehouse = getAuditWarehouse(action, payload);
   const location = getAuditLocation(payload);
   const material = getAuditMaterial(action, payload);
   const qty = getAuditQty(action, payload, data);
@@ -2731,21 +2800,24 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'addWarehouse': {
       const name = String(payload?.name ?? '').trim();
       if (!name) throw new Error('INVALID_NAME');
+      const scope = normalizeWarehouseAdminScope(payload?.scope);
       const warehouses = await fetchWarehouses();
-      const exists = warehouses.some(
+      const scopeWarehouses = warehouses.filter((item) => isWarehouseInScope(item, scope));
+      const exists = scopeWarehouses.some(
         (item) => item.isActive && item.name.toLowerCase() === name.toLowerCase()
       );
       if (exists) throw new Error('DUPLICATE');
       const nextOrder =
         typeof payload?.orderNo === 'number' && !Number.isNaN(payload.orderNo)
           ? payload.orderNo
-          : Math.max(0, ...warehouses.map((item) => item.orderNo)) + 1;
+          : Math.max(0, ...scopeWarehouses.map((item) => item.orderNo)) + 1;
+      const isErpScope = scope === 'ERP';
       const warehouse: Warehouse = {
-        id: `wh-${Date.now()}`,
+        id: `${isErpScope ? ERP_WAREHOUSE_ID_PREFIX : 'wh-'}${Date.now()}-${randomUUID().slice(0, 8)}`,
         name,
         orderNo: nextOrder,
-        includeInSpis: payload?.includeInSpis ?? true,
-        includeInStats: payload?.includeInStats ?? true,
+        includeInSpis: isErpScope ? false : payload?.includeInSpis ?? true,
+        includeInStats: isErpScope ? false : payload?.includeInStats ?? true,
         isActive: true
       };
       const { error } = await supabaseAdmin.from('warehouses').insert({
@@ -2760,8 +2832,21 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return warehouse;
     }
     case 'updateWarehouse': {
-      const id = String(payload?.id ?? '');
+      const id = String(payload?.id ?? '').trim();
       if (!id) throw new Error('NOT_FOUND');
+      const scope = normalizeWarehouseAdminScope(payload?.scope);
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('warehouses')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) throw new Error('NOT_FOUND');
+      const existingWarehouse = mapWarehouse(existing);
+      if (!isWarehouseInScope(existingWarehouse, scope)) {
+        throw new Error('FORBIDDEN');
+      }
+      const isErpScope = scope === 'ERP';
       const updates: Record<string, unknown> = {};
       if (typeof payload?.name === 'string') {
         const trimmed = payload.name.trim();
@@ -2771,21 +2856,18 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (typeof payload?.orderNo === 'number' && !Number.isNaN(payload.orderNo)) {
         updates.order_no = payload.orderNo;
       }
-      if (typeof payload?.includeInSpis === 'boolean') {
+      if (!isErpScope && typeof payload?.includeInSpis === 'boolean') {
         updates.include_in_spis = payload.includeInSpis;
       }
-      if (typeof payload?.includeInStats === 'boolean') {
+      if (!isErpScope && typeof payload?.includeInStats === 'boolean') {
         updates.include_in_stats = payload.includeInStats;
       }
+      if (isErpScope) {
+        updates.include_in_spis = false;
+        updates.include_in_stats = false;
+      }
       if (Object.keys(updates).length === 0) {
-        const { data, error } = await supabaseAdmin
-          .from('warehouses')
-          .select('*')
-          .eq('id', id)
-          .maybeSingle();
-        if (error) throw error;
-        if (!data) throw new Error('NOT_FOUND');
-        return mapWarehouse(data);
+        return existingWarehouse;
       }
       const { data, error } = await supabaseAdmin
         .from('warehouses')
@@ -2798,8 +2880,20 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return mapWarehouse(data);
     }
     case 'removeWarehouse': {
-      const id = String(payload?.id ?? '');
+      const id = String(payload?.id ?? '').trim();
       if (!id) throw new Error('NOT_FOUND');
+      const scope = normalizeWarehouseAdminScope(payload?.scope);
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('warehouses')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) throw new Error('NOT_FOUND');
+      const existingWarehouse = mapWarehouse(existing);
+      if (!isWarehouseInScope(existingWarehouse, scope)) {
+        throw new Error('FORBIDDEN');
+      }
       const { data, error } = await supabaseAdmin
         .from('warehouses')
         .update({ is_active: false })
@@ -2812,12 +2906,15 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return mapWarehouse(data);
     }
     case 'addLocation': {
+      const scope = normalizeWarehouseAdminScope(payload?.scope);
       const warehouseId = String(payload?.warehouseId ?? '');
       const type = payload?.type === 'pole' ? 'pole' : 'wtr';
       const name = String(payload?.name ?? '');
       if (!warehouseId) throw new Error('WAREHOUSE_MISSING');
       const warehouses = await fetchWarehouses();
-      const warehouse = warehouses.find((item) => item.id === warehouseId && item.isActive);
+      const warehouse = warehouses.find(
+        (item) => item.id === warehouseId && item.isActive && isWarehouseInScope(item, scope)
+      );
       if (!warehouse) throw new Error('WAREHOUSE_MISSING');
       const normalizedName = normalizeLocationName(name, type);
       if (!normalizedName) throw new Error('INVALID_NAME');
@@ -2839,7 +2936,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
                 .map((item) => item.orderNo)
             ) + 1;
       const location: Location = {
-        id: `loc-${Date.now()}`,
+        id: `${scope === 'ERP' ? ERP_LOCATION_ID_PREFIX : 'loc-'}${Date.now()}-${randomUUID().slice(0, 8)}`,
         warehouseId,
         name: normalizedName,
         orderNo: nextOrder,
@@ -2858,8 +2955,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return location;
     }
     case 'updateLocation': {
-      const id = String(payload?.id ?? '');
+      const id = String(payload?.id ?? '').trim();
       if (!id) throw new Error('NOT_FOUND');
+      const scope = normalizeWarehouseAdminScope(payload?.scope);
       const { data: existing, error: existingError } = await supabaseAdmin
         .from('locations')
         .select('*')
@@ -2867,6 +2965,10 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .maybeSingle();
       if (existingError) throw existingError;
       if (!existing) throw new Error('NOT_FOUND');
+      const existingLocation = mapLocation(existing);
+      if (!isLocationInScope(existingLocation, scope)) {
+        throw new Error('FORBIDDEN');
+      }
       const updates: Record<string, unknown> = {};
       if (typeof payload?.name === 'string') {
         const normalizedName = normalizeLocationName(payload.name, existing.type);
@@ -2875,6 +2977,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }
       if (typeof payload?.orderNo === 'number' && !Number.isNaN(payload.orderNo)) {
         updates.order_no = payload.orderNo;
+      }
+      if (Object.keys(updates).length === 0) {
+        return existingLocation;
       }
       const { data, error } = await supabaseAdmin
         .from('locations')
@@ -2887,8 +2992,20 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return mapLocation(data);
     }
     case 'removeLocation': {
-      const id = String(payload?.id ?? '');
+      const id = String(payload?.id ?? '').trim();
       if (!id) throw new Error('NOT_FOUND');
+      const scope = normalizeWarehouseAdminScope(payload?.scope);
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('locations')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) throw new Error('NOT_FOUND');
+      const existingLocation = mapLocation(existing);
+      if (!isLocationInScope(existingLocation, scope)) {
+        throw new Error('FORBIDDEN');
+      }
       const { data, error } = await supabaseAdmin
         .from('locations')
         .update({ is_active: false })
@@ -2920,9 +3037,17 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     }
     case 'getLocations': {
       const [warehouses, locations] = await Promise.all([fetchWarehouses(), fetchLocations()]);
-      const warehouseMap = new Map(warehouses.map((warehouse) => [warehouse.id, warehouse]));
+      const filteredWarehouses = warehouses.filter((warehouse) =>
+        isWarehouseInScope(warehouse, 'PRZEMIALY')
+      );
+      const warehouseMap = new Map(filteredWarehouses.map((warehouse) => [warehouse.id, warehouse]));
       return locations
-        .filter((loc) => loc.isActive)
+        .filter(
+          (loc) =>
+            loc.isActive &&
+            isLocationInScope(loc, 'PRZEMIALY') &&
+            warehouseMap.has(loc.warehouseId)
+        )
         .map((loc) => ({
           id: loc.id,
           warehouseId: loc.warehouseId,
@@ -2940,9 +3065,16 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         }) satisfies LocationOption[];
     }
     case 'getLocationsAdmin': {
+      const scope = normalizeWarehouseAdminScope(payload?.scope);
       const [warehouses, locations] = await Promise.all([fetchWarehouses(), fetchLocations()]);
-      const warehouseOrderMap = new Map(warehouses.map((warehouse) => [warehouse.id, warehouse.orderNo]));
-      return [...locations].sort((a, b) => {
+      const scopedWarehouses = warehouses.filter((warehouse) => isWarehouseInScope(warehouse, scope));
+      const warehouseOrderMap = new Map(scopedWarehouses.map((warehouse) => [warehouse.id, warehouse.orderNo]));
+      return [...locations]
+        .filter(
+          (location) =>
+            isLocationInScope(location, scope) && warehouseOrderMap.has(location.warehouseId)
+        )
+        .sort((a, b) => {
         const warehouseOrder =
           (warehouseOrderMap.get(a.warehouseId) ?? 0) -
           (warehouseOrderMap.get(b.warehouseId) ?? 0);
@@ -4732,12 +4864,18 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'getWarehouses': {
       const warehouses = await fetchWarehouses();
       return warehouses
-        .filter((item) => item.isActive && item.includeInSpis)
+        .filter(
+          (item) =>
+            isWarehouseInScope(item, 'PRZEMIALY') && item.isActive && item.includeInSpis
+        )
         .sort((a, b) => a.orderNo - b.orderNo);
     }
     case 'getWarehousesAdmin': {
+      const scope = normalizeWarehouseAdminScope(payload?.scope);
       const warehouses = await fetchWarehouses();
-      return [...warehouses].sort((a, b) => a.orderNo - b.orderNo);
+      return [...warehouses]
+        .filter((warehouse) => isWarehouseInScope(warehouse, scope))
+        .sort((a, b) => a.orderNo - b.orderNo);
     }
     case 'getWarehouse': {
       const id = String(payload?.id ?? '');

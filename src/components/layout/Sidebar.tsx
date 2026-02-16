@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import {
   LayoutGrid,
   ClipboardList,
@@ -14,11 +14,19 @@ import {
   Shuffle,
   Wind,
   LogOut,
-  History
+  History,
+  Users,
+  UserPlus
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useUiStore } from '@/lib/store/ui';
-import { canSeeTab, getRoleLabel, getWarehouseLabel, hasAnyAdminAccess } from '@/lib/auth/access';
+import {
+  canSeeTab,
+  getRoleLabel,
+  getWarehouseLabel,
+  isHeadAdmin,
+  isWarehouseAdmin
+} from '@/lib/auth/access';
 import type { WarehouseKey, WarehouseTab } from '@/lib/api/types';
 import { logoutUser } from '@/lib/api';
 
@@ -27,6 +35,16 @@ type NavItem = {
   href: string;
   icon: typeof LayoutGrid;
   tab?: WarehouseTab;
+  requiresAdmin?: boolean;
+};
+
+type AdminSection = 'users' | 'add-user' | 'groups';
+
+type AdminNavItem = {
+  label: string;
+  href: string;
+  icon: typeof LayoutGrid;
+  section: AdminSection;
 };
 
 const navItemsPrzemialy: NavItem[] = [
@@ -42,7 +60,13 @@ const navItemsPrzemialy: NavItem[] = [
   { label: 'Raporty', href: '/raporty', icon: FileText, tab: 'raporty' },
   { label: 'Stany magazynowe', href: '/kartoteka', icon: Layers, tab: 'kartoteka' },
   { label: 'Suszarki', href: '/suszarki', icon: Wind, tab: 'suszarki' },
-  { label: 'Wymieszane tworzywa', href: '/wymieszane', icon: Shuffle, tab: 'wymieszane' }
+  { label: 'Wymieszane tworzywa', href: '/wymieszane', icon: Shuffle, tab: 'wymieszane' },
+  {
+    label: 'Zarządzanie',
+    href: '/admin?tab=warehouses',
+    icon: Shield,
+    requiresAdmin: true
+  }
 ];
 
 const navItemsCzesci: NavItem[] = [
@@ -55,11 +79,28 @@ const navItemsRaport: NavItem[] = [
   { label: 'Raport zmianowy', href: '/raport-zmianowy', icon: FileText, tab: 'raport-zmianowy' }
 ];
 
+const adminNavItems: AdminNavItem[] = [
+  { label: 'Użytkownicy', href: '/admin?section=users', icon: Users, section: 'users' },
+  {
+    label: 'Dodaj użytkownika',
+    href: '/admin?section=add-user',
+    icon: UserPlus,
+    section: 'add-user'
+  },
+  { label: 'Grupy', href: '/admin?section=groups', icon: Shield, section: 'groups' }
+];
+
 export const Sidebar = () => {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse } = useUiStore();
   const warehouse = activeWarehouse as WarehouseKey | null;
   const isAdminRoute = pathname.startsWith('/admin');
+  const adminSectionParam = searchParams.get('section');
+  const activeAdminSection: AdminSection =
+    adminSectionParam === 'add-user' || adminSectionParam === 'groups' || adminSectionParam === 'users'
+      ? adminSectionParam
+      : 'users';
   const roleLabel = getRoleLabel(user, warehouse);
   const displayName = user?.name ?? 'Gość';
   const items =
@@ -70,12 +111,16 @@ export const Sidebar = () => {
         : navItemsPrzemialy;
   const visibleItems = items.filter((item) => {
     if (!warehouse) return false;
+    if (item.requiresAdmin && !isWarehouseAdmin(user, warehouse)) {
+      return false;
+    }
     if (!item.tab) return true;
     return canSeeTab(user, warehouse, item.tab);
   });
-  const showAdmin = hasAnyAdminAccess(user);
+  const showAdmin = Boolean(user && isHeadAdmin(user) && isAdminRoute);
   const warehouseLabel = getWarehouseLabel(warehouse);
   const isActivePath = (href: string) => {
+    if (href.startsWith('/admin')) return isAdminRoute;
     if (href === '/czesci') return pathname === '/czesci';
     if (href === '/spis') return pathname === '/spis' || pathname.startsWith('/spis/');
     if (href === '/spis-oryginalow') {
@@ -172,23 +217,25 @@ export const Sidebar = () => {
           })}
           {showAdmin && (
             <div>
-              <Link
-                href="/admin"
-                onClick={closeOnMobile}
-                className={cn(
-                  'flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[rgba(255,255,255,0.04)] hover:text-brandHover',
-                  pathname.startsWith('/admin') && 'bg-[rgba(255,255,255,0.06)]'
-                )}
-              >
-                <span
-                  className={cn(
-                    'h-8 w-[2px] rounded-full bg-transparent',
-                    pathname.startsWith('/admin') && 'bg-brand'
-                  )}
-                />
-                <Shield className="h-4 w-4" style={{ color: 'var(--brand)' }} />
-                {!sidebarCollapsed && <span style={{ color: 'var(--brand)' }}>ZARZĄDZANIE</span>}
-              </Link>
+              {adminNavItems.map((item) => {
+                const active = isAdminRoute && activeAdminSection === item.section;
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={closeOnMobile}
+                    className={cn(
+                      'flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[rgba(255,255,255,0.04)] hover:text-brandHover',
+                      active && 'bg-[rgba(255,255,255,0.06)]'
+                    )}
+                  >
+                    <span className={cn('h-8 w-[2px] rounded-full bg-transparent', active && 'bg-brand')} />
+                    <Icon className="h-4 w-4" style={{ color: 'var(--brand)' }} />
+                    {!sidebarCollapsed && <span style={{ color: 'var(--brand)' }}>{item.label}</span>}
+                  </Link>
+                );
+              })}
               {!sidebarCollapsed && (
                 <div className="flex justify-center pt-3">
                   <Image
