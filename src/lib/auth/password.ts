@@ -1,0 +1,1 @@
+export const DEFAULT_RESET_PASSWORD = 'MAX123';

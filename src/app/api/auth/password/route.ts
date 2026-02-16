@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { getErrorCode } from '@/lib/supabase/users';
+import { DEFAULT_RESET_PASSWORD } from '@/lib/auth/password';
 
 type ChangePasswordPayload = {
   currentPassword?: string;
@@ -30,6 +31,9 @@ export async function POST(request: NextRequest) {
   }
   if (currentPassword === newPassword) {
     return NextResponse.json({ code: 'SAME_PASSWORD' }, { status: 400 });
+  }
+  if (auth.user.mustChangePassword && currentPassword !== DEFAULT_RESET_PASSWORD) {
+    return NextResponse.json({ code: 'INVALID_CURRENT_PASSWORD' }, { status: 400 });
   }
 
   const { error: verifyError } = await supabaseAdmin.rpc('authenticate_user', {

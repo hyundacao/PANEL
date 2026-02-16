@@ -71,6 +71,7 @@ import type {
   WarehouseTab
 } from '@/lib/api/types';
 import { getRolePreset, isHeadAdmin, isWarehouseAdmin } from '@/lib/auth/access';
+import { DEFAULT_RESET_PASSWORD } from '@/lib/auth/password';
 
 type WarehouseDraft = {
   name: string;
@@ -128,7 +129,6 @@ type PrzemialyAdminTab =
   | 'dryers';
 
 type AccountsAdminTab = 'users' | 'add-user' | 'groups';
-const DEFAULT_RESET_PASSWORD = 'MAX123';
 
 const isAccountsAdminTab = (value: string | null): value is AccountsAdminTab =>
   value === 'users' || value === 'add-user' || value === 'groups';

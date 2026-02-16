@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { getErrorCode, mapDbUser, type DbUserRow } from '@/lib/supabase/users';
 import { loadUserGroupsByUserIds } from '@/lib/supabase/permission-groups';
+import { DEFAULT_RESET_PASSWORD } from '@/lib/auth/password';
 import {
   buildLoginRateLimitKey,
   clearLoginFailures,
@@ -66,9 +67,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ code: 'INVALID_CREDENTIALS' }, { status: 401 });
   }
 
-  clearLoginFailures(rateLimitKey);
   const groupsByUserId = await loadUserGroupsByUserIds([row.id]);
   const user = mapDbUser(row, groupsByUserId.get(row.id) ?? []);
+  if (user.mustChangePassword && password !== DEFAULT_RESET_PASSWORD) {
+    registerLoginFailure(rateLimitKey);
+    return NextResponse.json({ code: 'INVALID_CREDENTIALS' }, { status: 401 });
+  }
+  clearLoginFailures(rateLimitKey);
   const sessionId = randomUUID();
   const { data: sessionRow, error: sessionError } = await supabaseAdmin
     .from('app_users')
