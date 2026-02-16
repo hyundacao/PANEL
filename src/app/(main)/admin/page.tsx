@@ -1395,8 +1395,30 @@ export default function AdminPage() {
   });
 
   const resetUserPasswordMutation = useMutation({
-    mutationFn: ({ userId }: { userId: string }) =>
-      updateUser({ id: userId, password: DEFAULT_RESET_PASSWORD }),
+    mutationFn: async ({ userId }: { userId: string }) => {
+      const response = await fetch(`/api/users/${userId}/reset-password`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      if (!response.ok) {
+        let code = 'UNKNOWN';
+        try {
+          const body = (await response.json().catch(() => null)) as { code?: string } | null;
+          if (body?.code) {
+            code = String(body.code);
+          } else {
+            code = `HTTP_${response.status}`;
+          }
+        } catch {
+          code = `HTTP_${response.status}`;
+        }
+        throw new Error(code);
+      }
+      return response.json() as Promise<{ ok: boolean; partial?: boolean; code?: string }>;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       toast({
@@ -1414,7 +1436,10 @@ export default function AdminPage() {
         UPDATE_USER_RPC_MISSING:
           'Brak zgodnej funkcji update_app_user w SQL. Uruchom ponownie pelny skrypt SQL.',
         DB_42703: 'Brak kolumny active_session_id w app_users. Uruchom migracje SQL.',
-        DB_42P01: 'Brak tabeli w bazie. Uruchom pelny skrypt SQL.'
+        DB_42P01: 'Brak tabeli w bazie. Uruchom pelny skrypt SQL.',
+        DB_42501: 'Brak uprawnien SQL (service_role). Sprawdz klucz i grant execute.',
+        HTTP_500: 'Blad serwera resetu hasla. Sprawdz backend.',
+        HTTP_404: 'Nie znaleziono endpointu resetu hasla. Odswiez serwer dev.'
       };
       toast({
         title: messageMap[err.message] ?? `Nie udalo sie zresetowac hasla (${err.message}).`,

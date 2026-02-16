@@ -99,35 +99,36 @@ export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const auth = await requireHeadAdmin(request);
-  if (auth.denied) return auth.denied;
+  try {
+    const auth = await requireHeadAdmin(request);
+    if (auth.denied) return auth.denied;
 
-  const { id } = await context.params;
-  const userId = id ?? '';
-  if (!userId) {
-    return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
-  }
+    const { id } = await context.params;
+    const userId = id ?? '';
+    if (!userId) {
+      return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+    }
 
-  const payload = (await request.json().catch(() => null)) as UpdateUserPayload | null;
-  const name = payload?.name?.trim();
-  const username = payload?.username?.trim();
-  const password = payload?.password?.trim();
-  const normalizedRole = normalizeRole(payload?.role);
-  const normalizedAccess =
-    payload?.access === undefined ? undefined : normalizeAccessForDb(payload.access);
-  const shouldUpdateGroups = payload?.groupIds !== undefined;
+    const payload = (await request.json().catch(() => null)) as UpdateUserPayload | null;
+    const name = payload?.name?.trim();
+    const username = payload?.username?.trim();
+    const password = payload?.password?.trim();
+    const normalizedRole = normalizeRole(payload?.role);
+    const normalizedAccess =
+      payload?.access === undefined ? undefined : normalizeAccessForDb(payload.access);
+    const shouldUpdateGroups = payload?.groupIds !== undefined;
 
-  if (payload?.name !== undefined && !name) {
-    return NextResponse.json({ code: 'NAME_REQUIRED' }, { status: 400 });
-  }
-  if (payload?.username !== undefined && !username) {
-    return NextResponse.json({ code: 'USERNAME_REQUIRED' }, { status: 400 });
-  }
-  if (payload?.isActive === false && auth.userId === userId) {
-    return NextResponse.json({ code: 'SELF_DISABLE_FORBIDDEN' }, { status: 400 });
-  }
+    if (payload?.name !== undefined && !name) {
+      return NextResponse.json({ code: 'NAME_REQUIRED' }, { status: 400 });
+    }
+    if (payload?.username !== undefined && !username) {
+      return NextResponse.json({ code: 'USERNAME_REQUIRED' }, { status: 400 });
+    }
+    if (payload?.isActive === false && auth.userId === userId) {
+      return NextResponse.json({ code: 'SELF_DISABLE_FORBIDDEN' }, { status: 400 });
+    }
 
-  if (password) {
+    if (password) {
     const minimalRpcPayload: Record<string, unknown> = {
       p_id: userId,
       p_password: password
@@ -173,14 +174,17 @@ export async function PATCH(
 
     const { data, error } = passwordUpdateResult;
 
-    if (error) {
-      if (isFunctionResolutionError(error)) {
-        return NextResponse.json({ code: 'UPDATE_USER_RPC_MISSING' }, { status: 500 });
+      if (error) {
+        if (isFunctionResolutionError(error)) {
+          return NextResponse.json({ code: 'UPDATE_USER_RPC_MISSING' }, { status: 500 });
+        }
+        const code = getErrorCode(error.message, error.code);
+        if (code === 'UNKNOWN') {
+          return NextResponse.json({ code: getUnexpectedCode(error) }, { status: 500 });
+        }
+        const status = code === 'DUPLICATE' ? 409 : code === 'NOT_FOUND' ? 404 : 400;
+        return NextResponse.json({ code }, { status });
       }
-      const code = getErrorCode(error.message, error.code);
-      const status = code === 'DUPLICATE' ? 409 : code === 'NOT_FOUND' ? 404 : 400;
-      return NextResponse.json({ code }, { status });
-    }
 
     const row = (Array.isArray(data) ? data[0] : data) as DbUserRow | null;
     if (!row) {
@@ -244,141 +248,144 @@ export async function PATCH(
       }
     }
 
-    try {
+      try {
+        const groupsByUserId = await loadUserGroupsByUserIds([userId]);
+        return NextResponse.json(mapDbUser(rowForResponse, groupsByUserId.get(userId) ?? []));
+      } catch {
+        return NextResponse.json(mapDbUser(rowForResponse, []));
+      }
+    }
+
+    const updatePayload: Record<string, unknown> = {};
+    if (payload?.name !== undefined) {
+      updatePayload.name = name;
+    }
+    if (payload?.username !== undefined) {
+      updatePayload.username = username;
+    }
+    if (payload?.role !== undefined && normalizedRole) {
+      updatePayload.role = normalizedRole;
+    }
+    if (payload?.access !== undefined) {
+      updatePayload.access = normalizedAccess ?? { admin: false, warehouses: {} };
+    }
+    if (typeof payload?.isActive === 'boolean') {
+      updatePayload.is_active = payload.isActive;
+    }
+
+    if (payload?.access !== undefined) {
+      const { data: currentAccessRow, error: currentAccessError } = await supabaseAdmin
+        .from('app_users')
+        .select('access')
+        .eq('id', userId)
+        .maybeSingle();
+      if (currentAccessError) {
+        const code = getErrorCode(currentAccessError.message, currentAccessError.code);
+        const status = code === 'NOT_FOUND' ? 404 : 400;
+        return NextResponse.json({ code }, { status });
+      }
+      const currentMustChangePassword = Boolean(
+        currentAccessRow?.access &&
+          typeof currentAccessRow.access === 'object' &&
+          'mustChangePassword' in (currentAccessRow.access as Record<string, unknown>) &&
+          (currentAccessRow.access as Record<string, unknown>).mustChangePassword
+      );
+      const nextAccess =
+        updatePayload.access && typeof updatePayload.access === 'object'
+          ? (updatePayload.access as Record<string, unknown>)
+          : ({ admin: false, warehouses: {} } as Record<string, unknown>);
+      updatePayload.access = {
+        ...nextAccess,
+        mustChangePassword: currentMustChangePassword
+      };
+    }
+
+    if (Object.keys(updatePayload).length === 0 && !shouldUpdateGroups) {
+      const { data: unchangedRow, error: unchangedError } = await supabaseAdmin
+        .from('app_users')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+      if (unchangedError) {
+        const code = getErrorCode(unchangedError.message, unchangedError.code);
+        const status = code === 'NOT_FOUND' ? 404 : 400;
+        return NextResponse.json({ code }, { status });
+      }
+      if (!unchangedRow) {
+        return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+      }
       const groupsByUserId = await loadUserGroupsByUserIds([userId]);
-      return NextResponse.json(mapDbUser(rowForResponse, groupsByUserId.get(userId) ?? []));
-    } catch {
-      return NextResponse.json(mapDbUser(rowForResponse, []));
-    }
-  }
-
-  const updatePayload: Record<string, unknown> = {};
-  if (payload?.name !== undefined) {
-    updatePayload.name = name;
-  }
-  if (payload?.username !== undefined) {
-    updatePayload.username = username;
-  }
-  if (payload?.role !== undefined && normalizedRole) {
-    updatePayload.role = normalizedRole;
-  }
-  if (payload?.access !== undefined) {
-    updatePayload.access = normalizedAccess ?? { admin: false, warehouses: {} };
-  }
-  if (typeof payload?.isActive === 'boolean') {
-    updatePayload.is_active = payload.isActive;
-  }
-
-  if (payload?.access !== undefined) {
-    const { data: currentAccessRow, error: currentAccessError } = await supabaseAdmin
-      .from('app_users')
-      .select('access')
-      .eq('id', userId)
-      .maybeSingle();
-    if (currentAccessError) {
-      const code = getErrorCode(currentAccessError.message, currentAccessError.code);
-      const status = code === 'NOT_FOUND' ? 404 : 400;
-      return NextResponse.json({ code }, { status });
-    }
-    const currentMustChangePassword = Boolean(
-      currentAccessRow?.access &&
-        typeof currentAccessRow.access === 'object' &&
-        'mustChangePassword' in (currentAccessRow.access as Record<string, unknown>) &&
-        (currentAccessRow.access as Record<string, unknown>).mustChangePassword
-    );
-    const nextAccess =
-      updatePayload.access && typeof updatePayload.access === 'object'
-        ? (updatePayload.access as Record<string, unknown>)
-        : ({ admin: false, warehouses: {} } as Record<string, unknown>);
-    updatePayload.access = {
-      ...nextAccess,
-      mustChangePassword: currentMustChangePassword
-    };
-  }
-
-  if (Object.keys(updatePayload).length === 0 && !shouldUpdateGroups) {
-    const { data: unchangedRow, error: unchangedError } = await supabaseAdmin
-      .from('app_users')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
-    if (unchangedError) {
-      const code = getErrorCode(unchangedError.message, unchangedError.code);
-      const status = code === 'NOT_FOUND' ? 404 : 400;
-      return NextResponse.json({ code }, { status });
-    }
-    if (!unchangedRow) {
-      return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
-    }
-    const groupsByUserId = await loadUserGroupsByUserIds([userId]);
-    return NextResponse.json(
-      mapDbUser(unchangedRow as DbUserRow, groupsByUserId.get(userId) ?? [])
-    );
-  }
-
-  let directRow: DbUserRow | null = null;
-  if (Object.keys(updatePayload).length > 0) {
-    const { data, error: directError } = await supabaseAdmin
-      .from('app_users')
-      .update(updatePayload)
-      .eq('id', userId)
-      .select('*')
-      .maybeSingle();
-
-    if (directError) {
-      const code = getErrorCode(directError.message, directError.code);
-      const status = code === 'DUPLICATE' ? 409 : code === 'NOT_FOUND' ? 404 : 400;
-      return NextResponse.json({ code }, { status });
+      return NextResponse.json(
+        mapDbUser(unchangedRow as DbUserRow, groupsByUserId.get(userId) ?? [])
+      );
     }
 
-    directRow = data as DbUserRow | null;
+    let directRow: DbUserRow | null = null;
+    if (Object.keys(updatePayload).length > 0) {
+      const { data, error: directError } = await supabaseAdmin
+        .from('app_users')
+        .update(updatePayload)
+        .eq('id', userId)
+        .select('*')
+        .maybeSingle();
+
+      if (directError) {
+        const code = getErrorCode(directError.message, directError.code);
+        const status = code === 'DUPLICATE' ? 409 : code === 'NOT_FOUND' ? 404 : 400;
+        return NextResponse.json({ code }, { status });
+      }
+
+      directRow = data as DbUserRow | null;
+      if (!directRow) {
+        return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+      }
+    }
+
+    if (shouldUpdateGroups) {
+      try {
+        await setUserPermissionGroups(userId, payload?.groupIds);
+      } catch (groupError: unknown) {
+        const code = (() => {
+          if (groupError instanceof Error && groupError.message === 'GROUPS_SCHEMA_MISSING') {
+            return 'GROUPS_SCHEMA_MISSING';
+          }
+          if (
+            typeof groupError === 'object' &&
+            groupError &&
+            'code' in groupError &&
+            groupError.code === '23503'
+          ) {
+            return 'GROUP_NOT_FOUND';
+          }
+          return 'UNKNOWN';
+        })();
+        const status = code === 'GROUPS_SCHEMA_MISSING' ? 500 : 400;
+        return NextResponse.json({ code }, { status });
+      }
+    }
+
     if (!directRow) {
-      return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+      const { data: fallbackRow, error: fallbackError } = await supabaseAdmin
+        .from('app_users')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+      if (fallbackError) {
+        const code = getErrorCode(fallbackError.message, fallbackError.code);
+        const status = code === 'NOT_FOUND' ? 404 : 400;
+        return NextResponse.json({ code }, { status });
+      }
+      if (!fallbackRow) {
+        return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+      }
+      directRow = fallbackRow as DbUserRow;
     }
-  }
 
-  if (shouldUpdateGroups) {
-    try {
-      await setUserPermissionGroups(userId, payload?.groupIds);
-    } catch (groupError: unknown) {
-      const code = (() => {
-        if (groupError instanceof Error && groupError.message === 'GROUPS_SCHEMA_MISSING') {
-          return 'GROUPS_SCHEMA_MISSING';
-        }
-        if (
-          typeof groupError === 'object' &&
-          groupError &&
-          'code' in groupError &&
-          groupError.code === '23503'
-        ) {
-          return 'GROUP_NOT_FOUND';
-        }
-        return 'UNKNOWN';
-      })();
-      const status = code === 'GROUPS_SCHEMA_MISSING' ? 500 : 400;
-      return NextResponse.json({ code }, { status });
-    }
+    const groupsByUserId = await loadUserGroupsByUserIds([userId]);
+    return NextResponse.json(mapDbUser(directRow, groupsByUserId.get(userId) ?? []));
+  } catch (error) {
+    return NextResponse.json({ code: getUnexpectedCode(error) }, { status: 500 });
   }
-
-  if (!directRow) {
-    const { data: fallbackRow, error: fallbackError } = await supabaseAdmin
-      .from('app_users')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
-    if (fallbackError) {
-      const code = getErrorCode(fallbackError.message, fallbackError.code);
-      const status = code === 'NOT_FOUND' ? 404 : 400;
-      return NextResponse.json({ code }, { status });
-    }
-    if (!fallbackRow) {
-      return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
-    }
-    directRow = fallbackRow as DbUserRow;
-  }
-
-  const groupsByUserId = await loadUserGroupsByUserIds([userId]);
-  return NextResponse.json(mapDbUser(directRow, groupsByUserId.get(userId) ?? []));
 }
 
 export async function DELETE(
