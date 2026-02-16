@@ -1164,7 +1164,7 @@ export default function AdminPage() {
   });
 
   const removeWarehouseMutation = useMutation({
-    mutationFn: removeWarehouse,
+    mutationFn: (id: string) => removeWarehouse(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['warehouses-admin'] });
       queryClient.invalidateQueries({ queryKey: ['locations-admin'] });
@@ -1220,7 +1220,7 @@ export default function AdminPage() {
   });
 
   const removeLocationMutation = useMutation({
-    mutationFn: removeLocation,
+    mutationFn: (id: string) => removeLocation(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['locations-admin'] });
       queryClient.invalidateQueries({ queryKey: ['locations'] });
