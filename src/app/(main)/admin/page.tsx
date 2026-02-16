@@ -1410,7 +1410,9 @@ export default function AdminPage() {
         FORBIDDEN: 'Brak uprawnien do resetu hasla (wymagany head admin).',
         SESSION_EXPIRED: 'Sesja wygasla. Zaloguj sie ponownie.',
         UNAUTHORIZED: 'Brak autoryzacji. Zaloguj sie ponownie.',
-        SYNC_FAILED: 'Haslo zmienione czesciowo. Sprawdz migracje kolumny active_session_id.'
+        SYNC_FAILED: 'Haslo zmienione czesciowo. Sprawdz migracje kolumny active_session_id.',
+        UPDATE_USER_RPC_MISSING:
+          'Brak zgodnej funkcji update_app_user w SQL. Uruchom ponownie pelny skrypt SQL.'
       };
       toast({
         title: messageMap[err.message] ?? `Nie udalo sie zresetowac hasla (${err.message}).`,

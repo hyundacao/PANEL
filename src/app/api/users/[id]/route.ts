@@ -29,6 +29,20 @@ const normalizeRole = (role?: Role) =>
     ? role
     : null;
 
+const isFunctionResolutionError = (
+  error: { code?: string | null; message?: string | null } | null
+) => {
+  if (!error) return false;
+  const code = String(error.code ?? '');
+  const message = String(error.message ?? '').toLowerCase();
+  return (
+    code === 'PGRST202' ||
+    code === '42883' ||
+    message.includes('function') ||
+    message.includes('update_app_user')
+  );
+};
+
 const isMissingColumnError = (error: { code?: string | null; message?: string | null } | null) => {
   if (!error) return false;
   const code = String(error.code ?? '');
@@ -95,28 +109,28 @@ export async function PATCH(
   }
 
   if (password) {
-    const rpcPayload: Record<string, unknown> = {
+    const minimalRpcPayload: Record<string, unknown> = {
       p_id: userId,
       p_password: password
     };
     if (name !== undefined) {
-      rpcPayload.p_name = name;
+      minimalRpcPayload.p_name = name;
     }
     if (username !== undefined) {
-      rpcPayload.p_username = username;
+      minimalRpcPayload.p_username = username;
     }
     if (normalizedRole !== null) {
-      rpcPayload.p_role = normalizedRole;
+      minimalRpcPayload.p_role = normalizedRole;
     }
     if (normalizedAccess !== undefined) {
-      rpcPayload.p_access = normalizedAccess;
+      minimalRpcPayload.p_access = normalizedAccess;
     }
     if (typeof payload?.isActive === 'boolean') {
-      rpcPayload.p_is_active = payload.isActive;
+      minimalRpcPayload.p_is_active = payload.isActive;
     }
 
-    let passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', rpcPayload);
-    if (passwordUpdateResult.error) {
+    let passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', minimalRpcPayload);
+    if (passwordUpdateResult.error && isFunctionResolutionError(passwordUpdateResult.error)) {
       passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', {
         p_id: userId,
         p_name: name ?? null,
@@ -127,10 +141,23 @@ export async function PATCH(
         p_is_active: typeof payload?.isActive === 'boolean' ? payload.isActive : null
       });
     }
+    if (passwordUpdateResult.error && isFunctionResolutionError(passwordUpdateResult.error)) {
+      passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', {
+        p_id: userId,
+        p_name: name ?? null,
+        p_username: username ?? null,
+        p_password: password,
+        p_role: normalizedRole,
+        p_access: normalizedAccess ?? null
+      });
+    }
 
     const { data, error } = passwordUpdateResult;
 
     if (error) {
+      if (isFunctionResolutionError(error)) {
+        return NextResponse.json({ code: 'UPDATE_USER_RPC_MISSING' }, { status: 500 });
+      }
       const code = getErrorCode(error.message, error.code);
       const status = code === 'DUPLICATE' ? 409 : code === 'NOT_FOUND' ? 404 : 400;
       return NextResponse.json({ code }, { status });
