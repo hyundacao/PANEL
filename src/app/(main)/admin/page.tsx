@@ -1409,10 +1409,11 @@ export default function AdminPage() {
         NOT_FOUND: 'Nie znaleziono uzytkownika.',
         FORBIDDEN: 'Brak uprawnien do resetu hasla (wymagany head admin).',
         SESSION_EXPIRED: 'Sesja wygasla. Zaloguj sie ponownie.',
-        UNAUTHORIZED: 'Brak autoryzacji. Zaloguj sie ponownie.'
+        UNAUTHORIZED: 'Brak autoryzacji. Zaloguj sie ponownie.',
+        SYNC_FAILED: 'Haslo zmienione czesciowo. Sprawdz migracje kolumny active_session_id.'
       };
       toast({
-        title: messageMap[err.message] ?? 'Nie udalo sie zresetowac hasla.',
+        title: messageMap[err.message] ?? `Nie udalo sie zresetowac hasla (${err.message}).`,
         tone: 'error'
       });
     }

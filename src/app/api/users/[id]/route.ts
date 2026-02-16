@@ -29,6 +29,18 @@ const normalizeRole = (role?: Role) =>
     ? role
     : null;
 
+const isMissingColumnError = (error: { code?: string | null; message?: string | null } | null) => {
+  if (!error) return false;
+  const code = String(error.code ?? '');
+  const message = String(error.message ?? '').toLowerCase();
+  return (
+    code === '42703' ||
+    message.includes('column') ||
+    message.includes('does not exist') ||
+    message.includes('active_session_id')
+  );
+};
+
 const requireHeadAdmin = async (request: Request) => {
   const auth = await getAuthenticatedUser(request);
   if (!auth.user) {
@@ -104,11 +116,7 @@ export async function PATCH(
     }
 
     let passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', rpcPayload);
-    if (
-      passwordUpdateResult.error &&
-      (passwordUpdateResult.error.code === 'PGRST202' ||
-        passwordUpdateResult.error.code === '42883')
-    ) {
+    if (passwordUpdateResult.error) {
       passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', {
         p_id: userId,
         p_name: name ?? null,
@@ -141,7 +149,7 @@ export async function PATCH(
       ...currentAccess,
       mustChangePassword: true
     };
-    const { data: syncedUserRow, error: syncUserError } = await supabaseAdmin
+    let syncResult = await supabaseAdmin
       .from('app_users')
       .update({
         active_session_id: null,
@@ -150,10 +158,21 @@ export async function PATCH(
       .eq('id', userId)
       .select('*')
       .maybeSingle();
-    if (syncUserError) {
-      return NextResponse.json({ code: 'UNKNOWN' }, { status: 500 });
+    if (syncResult.error && isMissingColumnError(syncResult.error)) {
+      syncResult = await supabaseAdmin
+        .from('app_users')
+        .update({
+          access: accessWithResetFlag
+        })
+        .eq('id', userId)
+        .select('*')
+        .maybeSingle();
     }
-    const rowForResponse = (syncedUserRow as DbUserRow | null) ?? {
+    if (syncResult.error) {
+      const code = getErrorCode(syncResult.error.message, syncResult.error.code);
+      return NextResponse.json({ code: code === 'UNKNOWN' ? 'SYNC_FAILED' : code }, { status: 500 });
+    }
+    const rowForResponse = (syncResult.data as DbUserRow | null) ?? {
       ...row,
       access: accessWithResetFlag as DbUserRow['access']
     };
