@@ -59,6 +59,7 @@ export const Sidebar = () => {
   const pathname = usePathname();
   const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse } = useUiStore();
   const warehouse = activeWarehouse as WarehouseKey | null;
+  const isAdminRoute = pathname.startsWith('/admin');
   const roleLabel = getRoleLabel(user, warehouse);
   const displayName = user?.name ?? 'Gość';
   const items =
@@ -85,14 +86,20 @@ export const Sidebar = () => {
     }
     return pathname.startsWith(href);
   };
-  const panelLabel =
-    warehouse === 'CZESCI'
+  const panelLabel = isAdminRoute
+    ? 'PANEL ADMINISTRATORA'
+    : warehouse === 'CZESCI'
       ? 'PANEL MAGAZYNU CZĘŚCI ZAMIENNYCH'
       : warehouse === 'PRZEMIALY'
         ? 'PANEL MAGAZYNU PRZEMIAŁÓW'
         : warehouse === 'RAPORT_ZMIANOWY'
           ? 'PANEL RAPORTU ZMIANOWEGO'
-          : 'Panel produkcji';
+          : warehouse === 'PRZESUNIECIA_ERP'
+            ? 'PANEL PRZESUNIĘĆ ERP'
+            : 'PANEL MODUŁU';
+  const headerLabel = isAdminRoute ? 'MODUŁY' : warehouseLabel;
+  const showHeaderLabel =
+    isAdminRoute || (warehouse !== 'CZESCI' && warehouse !== 'PRZEMIALY');
   const closeOnMobile = () => {
     if (typeof window === 'undefined') return;
     if (window.matchMedia('(max-width: 767px)').matches) {
@@ -121,9 +128,9 @@ export const Sidebar = () => {
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-brand" />
           {!sidebarCollapsed && (
             <div className="text-center">
-              {warehouse !== 'CZESCI' && warehouse !== 'PRZEMIALY' && (
+              {showHeaderLabel && (
                 <p className="text-sm font-semibold" style={{ color: 'var(--brand)' }}>
-                  {warehouseLabel}
+                  {headerLabel}
                 </p>
               )}
               <p

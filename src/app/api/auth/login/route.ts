@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'crypto';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { getErrorCode, mapDbUser, type DbUserRow } from '@/lib/supabase/users';
+import { loadUserGroupsByUserIds } from '@/lib/supabase/permission-groups';
 import {
   buildLoginRateLimitKey,
   clearLoginFailures,
@@ -66,7 +67,8 @@ export async function POST(request: NextRequest) {
   }
 
   clearLoginFailures(rateLimitKey);
-  const user = mapDbUser(row);
+  const groupsByUserId = await loadUserGroupsByUserIds([row.id]);
+  const user = mapDbUser(row, groupsByUserId.get(row.id) ?? []);
   const sessionId = randomUUID();
   const { data: sessionRow, error: sessionError } = await supabaseAdmin
     .from('app_users')

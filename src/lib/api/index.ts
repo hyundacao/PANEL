@@ -23,6 +23,7 @@ import type {
   OriginalInventoryCatalogEntry,
   OriginalInventoryCatalogImportResult,
   OriginalInventoryEntry,
+  PermissionGroup,
   PeriodReport,
   ReportRow,
   Role,
@@ -432,6 +433,7 @@ export const addUser = async (payload: {
   password: string;
   role: Role;
   access?: UserAccess;
+  groupIds?: string[];
 }): Promise<AppUser> =>
   apiRequest('/api/users', {
     method: 'POST',
@@ -445,11 +447,43 @@ export const updateUser = async (payload: {
   password?: string;
   role?: Role;
   access?: UserAccess;
+  groupIds?: string[];
   isActive?: boolean;
 }): Promise<AppUser> =>
   apiRequest(`/api/users/${payload.id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload)
+  });
+
+export const getPermissionGroups = async (): Promise<PermissionGroup[]> =>
+  apiRequest('/api/permission-groups', { cache: 'no-store' });
+
+export const addPermissionGroup = async (payload: {
+  name: string;
+  description?: string | null;
+  access?: UserAccess;
+  isActive?: boolean;
+}): Promise<PermissionGroup> =>
+  apiRequest('/api/permission-groups', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+
+export const updatePermissionGroup = async (payload: {
+  id: string;
+  name?: string;
+  description?: string | null;
+  access?: UserAccess;
+  isActive?: boolean;
+}): Promise<PermissionGroup> =>
+  apiRequest(`/api/permission-groups/${payload.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  });
+
+export const removePermissionGroup = async (id: string): Promise<PermissionGroup> =>
+  apiRequest(`/api/permission-groups/${id}`, {
+    method: 'DELETE'
   });
 
 export const removeUser = async (id: string): Promise<AppUser> =>

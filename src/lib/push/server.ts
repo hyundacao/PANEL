@@ -5,6 +5,7 @@ import webpush, {
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { canSeeTab } from '@/lib/auth/access';
 import { mapDbUser, type DbUserRow } from '@/lib/supabase/users';
+import { loadUserGroupsByUserIds } from '@/lib/supabase/permission-groups';
 import type { AppUser, WarehouseTab } from '@/lib/api/types';
 
 type PushSubscriptionRow = {
@@ -162,7 +163,19 @@ const loadActiveUsersById = async (userIds: string[]) => {
     return new Map<string, AppUser>();
   }
 
-  return new Map(((data ?? []) as DbUserRow[]).map(mapDbUser).map((user) => [user.id, user]));
+  const rows = (data ?? []) as DbUserRow[];
+  let groupsByUserId = new Map<string, AppUser['groups']>();
+  try {
+    groupsByUserId = await loadUserGroupsByUserIds(rows.map((row) => row.id));
+  } catch (groupError) {
+    console.error('[push] Failed to load user permission groups for tab filtering', groupError);
+  }
+
+  return new Map(
+    rows
+      .map((row) => mapDbUser(row, groupsByUserId.get(row.id) ?? []))
+      .map((user) => [user.id, user])
+  );
 };
 
 const filterSubscriptionsByErpTabs = (

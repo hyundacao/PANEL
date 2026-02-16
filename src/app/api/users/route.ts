@@ -6,6 +6,10 @@ import {
   normalizeAccessForDb,
   type DbUserRow
 } from '@/lib/supabase/users';
+import {
+  loadUserGroupsByUserIds,
+  setUserPermissionGroups
+} from '@/lib/supabase/permission-groups';
 import type { Role, UserAccess } from '@/lib/api/types';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { isHeadAdmin } from '@/lib/auth/access';
@@ -16,6 +20,7 @@ type CreateUserPayload = {
   password?: string;
   role?: Role;
   access?: UserAccess;
+  groupIds?: string[];
 };
 
 const normalizeRole = (role?: Role) =>
@@ -50,7 +55,10 @@ export async function GET(request: NextRequest) {
   }
 
   const rows = (data ?? []) as DbUserRow[];
-  return NextResponse.json(rows.map(mapDbUser));
+  const groupsByUserId = await loadUserGroupsByUserIds(rows.map((row) => row.id));
+  return NextResponse.json(
+    rows.map((row) => mapDbUser(row, groupsByUserId.get(row.id) ?? []))
+  );
 }
 
 export async function POST(request: NextRequest) {
@@ -85,5 +93,27 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ code: 'UNKNOWN' }, { status: 500 });
   }
 
-  return NextResponse.json(mapDbUser(row));
+  try {
+    await setUserPermissionGroups(row.id, payload?.groupIds);
+  } catch (groupError: unknown) {
+    await supabaseAdmin.from('app_users').delete().eq('id', row.id);
+    const code = (() => {
+      if (groupError instanceof Error && groupError.message === 'GROUPS_SCHEMA_MISSING') {
+        return 'GROUPS_SCHEMA_MISSING';
+      }
+      if (
+        typeof groupError === 'object' &&
+        groupError &&
+        'code' in groupError &&
+        groupError.code === '23503'
+      ) {
+        return 'GROUP_NOT_FOUND';
+      }
+      return 'UNKNOWN';
+    })();
+    const status = code === 'GROUPS_SCHEMA_MISSING' ? 500 : 400;
+    return NextResponse.json({ code }, { status });
+  }
+  const groupsByUserId = await loadUserGroupsByUserIds([row.id]);
+  return NextResponse.json(mapDbUser(row, groupsByUserId.get(row.id) ?? []));
 }

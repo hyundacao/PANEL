@@ -11,6 +11,7 @@ import {
   addMaterialCatalogBulk,
   addMaterial,
   addSparePart,
+  addPermissionGroup,
   addUser,
   addWarehouse,
   addDryer,
@@ -19,6 +20,7 @@ import {
   getCatalog,
   getCatalogs,
   getDryers,
+  getPermissionGroups,
   getLocationsAdmin,
   getLocationDetail,
   getOriginalInventoryCatalog,
@@ -33,6 +35,7 @@ import {
   removeMaterial,
   removeSparePart,
   removeDryer,
+  removePermissionGroup,
   removeUser,
   removeWarehouse,
   updateMaterial,
@@ -40,6 +43,7 @@ import {
   setSparePartQty,
   updateSparePart,
   updateLocation,
+  updatePermissionGroup,
   updateUser,
   updateWarehouse
 } from '@/lib/api';
@@ -57,7 +61,14 @@ import { useUiStore } from '@/lib/store/ui';
 import { useToastStore } from '@/components/ui/Toast';
 import { cn } from '@/lib/utils/cn';
 import { formatKg, parseQtyInput } from '@/lib/utils/format';
-import type { AppUser, Role, UserAccess, WarehouseKey, WarehouseRole, WarehouseTab } from '@/lib/api/types';
+import type {
+  AppUser,
+  Role,
+  UserAccess,
+  WarehouseKey,
+  WarehouseRole,
+  WarehouseTab
+} from '@/lib/api/types';
 import { getRolePreset, isHeadAdmin, isWarehouseAdmin } from '@/lib/auth/access';
 
 type WarehouseDraft = {
@@ -84,6 +95,14 @@ type UserDraft = {
   name: string;
   username: string;
   role: Role;
+  access: UserAccess;
+  groupIds: string[];
+  isActive: boolean;
+};
+
+type PermissionGroupDraft = {
+  name: string;
+  description: string;
   access: UserAccess;
   isActive: boolean;
 };
@@ -188,6 +207,11 @@ const accessKey = (access: UserAccess) => {
   return `${access.admin ? 1 : 0}|${warehouseKey}`;
 };
 
+const groupIdsKey = (groupIds: string[]) =>
+  [...new Set(groupIds.map((item) => item.trim()).filter(Boolean))]
+    .sort((a, b) => collator.compare(a, b))
+    .join('|');
+
 const isWarehouseDraftEqual = (left: WarehouseDraft, right: WarehouseDraft) =>
   left.name === right.name &&
   left.orderNo === right.orderNo &&
@@ -211,6 +235,16 @@ const isUserDraftEqual = (left: UserDraft, right: UserDraft) =>
   left.name === right.name &&
   left.username === right.username &&
   left.role === right.role &&
+  left.isActive === right.isActive &&
+  groupIdsKey(left.groupIds) === groupIdsKey(right.groupIds) &&
+  accessKey(left.access) === accessKey(right.access);
+
+const isPermissionGroupDraftEqual = (
+  left: PermissionGroupDraft,
+  right: PermissionGroupDraft
+) =>
+  left.name === right.name &&
+  left.description === right.description &&
   left.isActive === right.isActive &&
   accessKey(left.access) === accessKey(right.access);
 
@@ -255,6 +289,7 @@ export default function AdminPage() {
   const toast = useToastStore((state) => state.push);
   const queryClient = useQueryClient();
   const today = getTodayKey();
+  const canManageAccounts = Boolean(currentUser && isHeadAdmin(currentUser));
   const glowClass = 'ring-2 ring-[rgba(255,122,26,0.45)] shadow-[0_0_0_3px_rgba(255,122,26,0.18)]';
   const { data: auditData } = useQuery({ queryKey: ['audit'], queryFn: getAudit });
   const { data: warehousesData } = useQuery({
@@ -295,7 +330,13 @@ export default function AdminPage() {
   });
   const { data: usersData } = useQuery({
     queryKey: ['users'],
-    queryFn: getUsers
+    queryFn: getUsers,
+    enabled: canManageAccounts
+  });
+  const { data: permissionGroupsData } = useQuery({
+    queryKey: ['permission-groups'],
+    queryFn: getPermissionGroups,
+    enabled: canManageAccounts
   });
 
   const audit = useMemo(() => auditData ?? [], [auditData]);
@@ -311,6 +352,10 @@ export default function AdminPage() {
   const spareParts = useMemo(() => sparePartsData ?? [], [sparePartsData]);
   const spareHistory = useMemo(() => spareHistoryData ?? [], [spareHistoryData]);
   const users = useMemo(() => usersData ?? [], [usersData]);
+  const permissionGroups = useMemo(
+    () => permissionGroupsData ?? [],
+    [permissionGroupsData]
+  );
   const dryers = useMemo(() => dryersData ?? [], [dryersData]);
 
   const activeWarehouses = useMemo(
@@ -451,15 +496,27 @@ export default function AdminPage() {
     password: string;
     role: Role;
     access: UserAccess;
+    groupIds: string[];
   }>({
     name: '',
     username: '',
     password: '',
     role: 'USER',
-    access: { admin: false, warehouses: {} }
+    access: { admin: false, warehouses: {} },
+    groupIds: []
   });
   const [userDrafts, setUserDrafts] = useState<Record<string, UserDraft>>({});
+  const [permissionGroupForm, setPermissionGroupForm] = useState<PermissionGroupDraft>({
+    name: '',
+    description: '',
+    access: { admin: false, warehouses: {} },
+    isActive: true
+  });
+  const [permissionGroupDrafts, setPermissionGroupDrafts] = useState<
+    Record<string, PermissionGroupDraft>
+  >({});
   const [selectedAccessUserId, setSelectedAccessUserId] = useState<string | null>(null);
+  const [selectedPermissionGroupId, setSelectedPermissionGroupId] = useState<string | null>(null);
   const [przemialyTab, setPrzemialyTab] = useState<PrzemialyAdminTab>('warehouses');
   const [tabReady, setTabReady] = useState(false);
   const [dryerForm, setDryerForm] = useState({
@@ -501,6 +558,13 @@ export default function AdminPage() {
     setUserForm((prev) => ({ ...prev, access: updater(cloneAccess(prev.access)) }));
   };
 
+  const updatePermissionGroupFormAccess = (updater: (current: UserAccess) => UserAccess) => {
+    setPermissionGroupForm((prev) => ({
+      ...prev,
+      access: updater(cloneAccess(prev.access))
+    }));
+  };
+
   const updateUserDraftAccess = (userId: string, updater: (current: UserAccess) => UserAccess) => {
     setUserDrafts((prev) => {
       const draft = prev[userId];
@@ -509,10 +573,50 @@ export default function AdminPage() {
     });
   };
 
-  const formatAccessSummary = (access: UserAccess, role: Role) => {
+  const updatePermissionGroupDraftAccess = (
+    groupId: string,
+    updater: (current: UserAccess) => UserAccess
+  ) => {
+    setPermissionGroupDrafts((prev) => {
+      const draft = prev[groupId];
+      if (!draft) return prev;
+      return { ...prev, [groupId]: { ...draft, access: updater(cloneAccess(draft.access)) } };
+    });
+  };
+
+  const toggleUserFormGroup = (groupId: string, checked: boolean) => {
+    setUserForm((prev) => {
+      const nextSet = new Set(prev.groupIds);
+      if (checked) {
+        nextSet.add(groupId);
+      } else {
+        nextSet.delete(groupId);
+      }
+      return { ...prev, groupIds: Array.from(nextSet) };
+    });
+  };
+
+  const toggleUserDraftGroup = (userId: string, groupId: string, checked: boolean) => {
+    setUserDrafts((prev) => {
+      const draft = prev[userId];
+      if (!draft) return prev;
+      const nextSet = new Set(draft.groupIds);
+      if (checked) {
+        nextSet.add(groupId);
+      } else {
+        nextSet.delete(groupId);
+      }
+      return { ...prev, [userId]: { ...draft, groupIds: Array.from(nextSet) } };
+    });
+  };
+
+  const formatAccessSummary = (access: UserAccess, role: Role, groupIds: string[] = []) => {
     if (role === 'HEAD_ADMIN') {
       return 'Head admin (pelny dostep)';
     }
+    const assignedGroupNames = permissionGroups
+      .filter((group) => groupIds.includes(group.id))
+      .map((group) => group.name);
     const entries = Object.entries(access.warehouses)
       .map(([key, value]) => {
         if (!value) return null;
@@ -522,9 +626,15 @@ export default function AdminPage() {
       })
       .filter(Boolean);
     if (entries.length === 0) {
-      return 'Brak przypisanych magazynow';
+      if (assignedGroupNames.length === 0) {
+        return 'Brak przypisanych uprawnien';
+      }
+      return `Grupy: ${assignedGroupNames.join(', ')}`;
     }
-    return entries.join(', ');
+    if (assignedGroupNames.length === 0) {
+      return entries.join(', ');
+    }
+    return `Grupy: ${assignedGroupNames.join(', ')} | Ręczne: ${entries.join(', ')}`;
   };
 
   const renderWarehouseAccess = (
@@ -794,12 +904,35 @@ export default function AdminPage() {
         name: user.name,
         username: user.username,
         role: user.role,
-        access: cloneAccess(user.access),
+        access: cloneAccess(user.directAccess ?? user.access),
+        groupIds: [...(user.groupIds ?? [])],
         isActive: user.isActive
       };
     });
     setUserDrafts((prev) => (isRecordEqual(prev, next, isUserDraftEqual) ? prev : next));
   }, [users]);
+
+  useEffect(() => {
+    const next: Record<string, PermissionGroupDraft> = {};
+    permissionGroups.forEach((group) => {
+      next[group.id] = {
+        name: group.name,
+        description: group.description ?? '',
+        access: cloneAccess(group.access),
+        isActive: group.isActive
+      };
+    });
+    setPermissionGroupDrafts((prev) =>
+      isRecordEqual(prev, next, isPermissionGroupDraftEqual) ? prev : next
+    );
+  }, [permissionGroups]);
+
+  useEffect(() => {
+    if (!selectedPermissionGroupId) return;
+    if (!permissionGroups.some((group) => group.id === selectedPermissionGroupId)) {
+      setSelectedPermissionGroupId(null);
+    }
+  }, [permissionGroups, selectedPermissionGroupId]);
 
   useEffect(() => {
     const next: Record<string, SparePartDraft> = {};
@@ -882,7 +1015,6 @@ export default function AdminPage() {
       : typeof currentInventoryRow.todayQty === 'number'
       ? currentInventoryRow.todayQty
       : currentInventoryRow.yesterdayQty;
-  const selectedDraft = selectedAccessUserId ? userDrafts[selectedAccessUserId] ?? null : null;
 
   const invalidateMaterialQueries = () => {
     queryClient.invalidateQueries({ queryKey: ['catalog'] });
@@ -1138,19 +1270,85 @@ export default function AdminPage() {
     }
   });
 
+  const addPermissionGroupMutation = useMutation({
+    mutationFn: addPermissionGroup,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['permission-groups'] });
+      toast({ title: 'Dodano grupe uprawnien', tone: 'success' });
+      setPermissionGroupForm({
+        name: '',
+        description: '',
+        access: { admin: false, warehouses: {} },
+        isActive: true
+      });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        NAME_REQUIRED: 'Podaj nazwe grupy.',
+        DUPLICATE: 'Grupa o takiej nazwie juz istnieje.'
+      };
+      toast({
+        title: messageMap[err.message] ?? 'Nie udalo sie dodac grupy uprawnien.',
+        tone: 'error'
+      });
+    }
+  });
+
+  const updatePermissionGroupMutation = useMutation({
+    mutationFn: updatePermissionGroup,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['permission-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast({ title: 'Zapisano grupe uprawnien', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        NAME_REQUIRED: 'Podaj nazwe grupy.',
+        DUPLICATE: 'Grupa o takiej nazwie juz istnieje.',
+        NOT_FOUND: 'Nie znaleziono grupy.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie zapisano grupy uprawnien.', tone: 'error' });
+    }
+  });
+
+  const removePermissionGroupMutation = useMutation({
+    mutationFn: removePermissionGroup,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['permission-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast({ title: 'Usunieto grupe uprawnien', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        NOT_FOUND: 'Nie znaleziono grupy.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie usunieto grupy uprawnien.', tone: 'error' });
+    }
+  });
+
   const addUserMutation = useMutation({
     mutationFn: addUser,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['permission-groups'] });
       toast({ title: 'Dodano uzytkownika', tone: 'success' });
-      setUserForm({ name: '', username: '', password: '', role: 'USER', access: { admin: false, warehouses: {} } });
+      setUserForm({
+        name: '',
+        username: '',
+        password: '',
+        role: 'USER',
+        access: { admin: false, warehouses: {} },
+        groupIds: []
+      });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
         NAME_REQUIRED: 'Podaj imie i nazwisko.',
         USERNAME_REQUIRED: 'Podaj login.',
         PASSWORD_REQUIRED: 'Podaj haslo.',
-        DUPLICATE: 'Login jest juz zajety.'
+        DUPLICATE: 'Login jest juz zajety.',
+        GROUP_NOT_FOUND: 'Jedna z wybranych grup nie istnieje.',
+        GROUPS_SCHEMA_MISSING: 'Najpierw uruchom migracje grup uprawnien w bazie.'
       };
       toast({
         title: messageMap[err.message] ?? 'Nie udalo sie dodac uzytkownika.',
@@ -1163,13 +1361,16 @@ export default function AdminPage() {
     mutationFn: updateUser,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['permission-groups'] });
       toast({ title: 'Zapisano uzytkownika', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
         NAME_REQUIRED: 'Podaj imie i nazwisko.',
         USERNAME_REQUIRED: 'Podaj login.',
-        DUPLICATE: 'Login jest juz zajety.'
+        DUPLICATE: 'Login jest juz zajety.',
+        GROUP_NOT_FOUND: 'Jedna z wybranych grup nie istnieje.',
+        GROUPS_SCHEMA_MISSING: 'Najpierw uruchom migracje grup uprawnien w bazie.'
       };
       toast({
         title: messageMap[err.message] ?? 'Nie zapisano uzytkownika.',
@@ -1249,6 +1450,7 @@ export default function AdminPage() {
         return next;
       });
       queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['permission-groups'] });
       toast({ title: 'Usunieto uzytkownika', tone: 'success' });
     },
     onError: (err: Error) => {
@@ -1624,6 +1826,52 @@ export default function AdminPage() {
       catalogId: catalogId ? catalogId : null
     });
   };
+
+  const normalizeGroupIds = (groupIds: string[]) =>
+    Array.from(
+      new Set(
+        groupIds
+          .map((value) => value.trim())
+          .filter(Boolean)
+      )
+    );
+
+  const handleAddPermissionGroup = () => {
+    const name = permissionGroupForm.name.trim();
+    if (!name) {
+      toast({ title: 'Podaj nazwe grupy', tone: 'error' });
+      return;
+    }
+    addPermissionGroupMutation.mutate({
+      name,
+      description: permissionGroupForm.description.trim() || null,
+      access: permissionGroupForm.access,
+      isActive: permissionGroupForm.isActive
+    });
+  };
+
+  const handleSavePermissionGroup = (groupId: string) => {
+    const draft = permissionGroupDrafts[groupId];
+    if (!draft) return;
+    const name = draft.name.trim();
+    if (!name) {
+      toast({ title: 'Podaj nazwe grupy', tone: 'error' });
+      return;
+    }
+    updatePermissionGroupMutation.mutate({
+      id: groupId,
+      name,
+      description: draft.description.trim() || null,
+      access: draft.access,
+      isActive: draft.isActive
+    });
+  };
+
+  const handleRemovePermissionGroup = (groupId: string, name: string) => {
+    if (!confirm(`Usunac grupe uprawnien ${name}?`)) return;
+    removePermissionGroupMutation.mutate(groupId);
+  };
+
   const handleAddUser = () => {
     const name = userForm.name.trim();
     const username = userForm.username.trim();
@@ -1640,7 +1888,14 @@ export default function AdminPage() {
       toast({ title: 'Podaj haslo', tone: 'error' });
       return;
     }
-    addUserMutation.mutate({ name, username, password, role: userForm.role, access: userForm.access });
+    addUserMutation.mutate({
+      name,
+      username,
+      password,
+      role: userForm.role,
+      access: userForm.access,
+      groupIds: normalizeGroupIds(userForm.groupIds)
+    });
   };
 
   const handleSaveUser = (userId: string) => {
@@ -1652,6 +1907,7 @@ export default function AdminPage() {
       username: draft.username,
       role: draft.role,
       access: draft.access,
+      groupIds: normalizeGroupIds(draft.groupIds),
       isActive: draft.isActive
     });
   };
@@ -1907,7 +2163,7 @@ export default function AdminPage() {
       />
 
       <div className="space-y-10">
-        {isHead && activeWarehouse === null && (
+        {isHead && (
         <section className="space-y-4">
           <div className="space-y-1">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">Konta</p>
@@ -1917,6 +2173,243 @@ export default function AdminPage() {
             </p>
           </div>
           <div className="space-y-4">
+            <Card className="space-y-4">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                  Grupy uprawnien
+                </p>
+                <p className="text-sm text-dim">
+                  Tworzysz raz grupe i przypisujesz ja do wielu kont.
+                </p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-dim">Nazwa grupy</label>
+                  <Input
+                    value={permissionGroupForm.name}
+                    onChange={(event) =>
+                      setPermissionGroupForm((prev) => ({ ...prev, name: event.target.value }))
+                    }
+                    placeholder="np. Przemialy - Brygada A"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-dim">
+                    Opis (opcjonalnie)
+                  </label>
+                  <Input
+                    value={permissionGroupForm.description}
+                    onChange={(event) =>
+                      setPermissionGroupForm((prev) => ({
+                        ...prev,
+                        description: event.target.value
+                      }))
+                    }
+                    placeholder="Krotki opis zakresu grupy"
+                  />
+                </div>
+              </div>
+              <AdminToggle
+                checked={permissionGroupForm.isActive}
+                onCheckedChange={(value) =>
+                  setPermissionGroupForm((prev) => ({ ...prev, isActive: value }))
+                }
+                label="Grupa aktywna"
+                disabled={addPermissionGroupMutation.isPending}
+              />
+              <div className="space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                  Uprawnienia grupy
+                </p>
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {renderWarehouseAccess(
+                    'PRZEMIALY',
+                    permissionGroupForm.access,
+                    updatePermissionGroupFormAccess,
+                    'ADMIN'
+                  )}
+                  {renderErpModuleAccess(
+                    permissionGroupForm.access,
+                    updatePermissionGroupFormAccess,
+                    'ADMIN'
+                  )}
+                  {renderWarehouseAccess(
+                    'CZESCI',
+                    permissionGroupForm.access,
+                    updatePermissionGroupFormAccess,
+                    'ADMIN'
+                  )}
+                  {renderWarehouseAccess(
+                    'RAPORT_ZMIANOWY',
+                    permissionGroupForm.access,
+                    updatePermissionGroupFormAccess,
+                    'ADMIN'
+                  )}
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <Button
+                  onClick={handleAddPermissionGroup}
+                  disabled={addPermissionGroupMutation.isPending}
+                >
+                  Dodaj grupe
+                </Button>
+              </div>
+            </Card>
+            {permissionGroups.length === 0 ? (
+              <EmptyState
+                title="Brak grup uprawnien"
+                description="Dodaj pierwsza grupe, aby szybko przypisywac dostepy."
+              />
+            ) : (
+              <Card>
+                <DataTable
+                  columns={['Nazwa', 'Opis', 'Uzytkownicy', 'Status', 'Akcje']}
+                  rows={permissionGroups.map((group) => {
+                    const draft = permissionGroupDrafts[group.id] ?? {
+                      name: group.name,
+                      description: group.description ?? '',
+                      access: cloneAccess(group.access),
+                      isActive: group.isActive
+                    };
+                    const isSelected = selectedPermissionGroupId === group.id;
+                    return [
+                      <Input
+                        key={`${group.id}-name`}
+                        value={draft.name}
+                        onChange={(event) =>
+                          setPermissionGroupDrafts((prev) => ({
+                            ...prev,
+                            [group.id]: { ...draft, name: event.target.value }
+                          }))
+                        }
+                      />,
+                      <Input
+                        key={`${group.id}-description`}
+                        value={draft.description}
+                        onChange={(event) =>
+                          setPermissionGroupDrafts((prev) => ({
+                            ...prev,
+                            [group.id]: { ...draft, description: event.target.value }
+                          }))
+                        }
+                        placeholder="Opis"
+                      />,
+                      <span key={`${group.id}-count`} className="text-sm text-dim">
+                        {group.assignedUsersCount ?? 0}
+                      </span>,
+                      <AdminToggle
+                        key={`${group.id}-active`}
+                        checked={draft.isActive}
+                        onCheckedChange={(value) =>
+                          setPermissionGroupDrafts((prev) => ({
+                            ...prev,
+                            [group.id]: { ...draft, isActive: value }
+                          }))
+                        }
+                        label={draft.isActive ? 'Aktywna' : 'Nieaktywna'}
+                        disabled={updatePermissionGroupMutation.isPending}
+                      />,
+                      <div key={`${group.id}-actions`} className="grid grid-cols-2 gap-2">
+                        <Button
+                          variant="secondary"
+                          onClick={() => handleSavePermissionGroup(group.id)}
+                          disabled={updatePermissionGroupMutation.isPending}
+                          className="w-full"
+                        >
+                          Zapisz
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() =>
+                            setSelectedPermissionGroupId((prev) =>
+                              prev === group.id ? null : group.id
+                            )
+                          }
+                          disabled={updatePermissionGroupMutation.isPending}
+                          className="w-full"
+                        >
+                          {isSelected ? 'Zamknij uprawnienia' : 'Uprawnienia'}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => handleRemovePermissionGroup(group.id, group.name)}
+                          disabled={removePermissionGroupMutation.isPending}
+                          className="col-span-2 w-full border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
+                        >
+                          Usuń
+                        </Button>
+                      </div>
+                    ];
+                  })}
+                  renderRowDetails={(rowIndex) => {
+                    const group = permissionGroups[rowIndex];
+                    if (!group || selectedPermissionGroupId !== group.id) return null;
+                    const draft = permissionGroupDrafts[group.id] ?? {
+                      name: group.name,
+                      description: group.description ?? '',
+                      access: cloneAccess(group.access),
+                      isActive: group.isActive
+                    };
+
+                    return (
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                              Uprawnienia grupy
+                            </p>
+                            <p className="text-sm font-semibold text-title">{draft.name}</p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            onClick={() => setSelectedPermissionGroupId(null)}
+                            disabled={updatePermissionGroupMutation.isPending}
+                          >
+                            Zamknij
+                          </Button>
+                        </div>
+                        <div className="grid gap-4 lg:grid-cols-2">
+                          {renderWarehouseAccess(
+                            'PRZEMIALY',
+                            draft.access,
+                            (updater) => updatePermissionGroupDraftAccess(group.id, updater),
+                            'ADMIN'
+                          )}
+                          {renderErpModuleAccess(
+                            draft.access,
+                            (updater) => updatePermissionGroupDraftAccess(group.id, updater),
+                            'ADMIN'
+                          )}
+                          {renderWarehouseAccess(
+                            'CZESCI',
+                            draft.access,
+                            (updater) => updatePermissionGroupDraftAccess(group.id, updater),
+                            'ADMIN'
+                          )}
+                          {renderWarehouseAccess(
+                            'RAPORT_ZMIANOWY',
+                            draft.access,
+                            (updater) => updatePermissionGroupDraftAccess(group.id, updater),
+                            'ADMIN'
+                          )}
+                        </div>
+                        <div className="flex justify-end">
+                          <Button
+                            variant="secondary"
+                            onClick={() => handleSavePermissionGroup(group.id)}
+                            disabled={updatePermissionGroupMutation.isPending}
+                            className="w-full sm:w-auto"
+                          >
+                            Zapisz uprawnienia grupy
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  }}
+                />
+              </Card>
+            )}
             <Card className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dodaj uzytkownika</p>
               <div className="grid gap-3 md:grid-cols-2">
@@ -1989,7 +2482,29 @@ export default function AdminPage() {
               </div>
               <div className="space-y-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-                  Uprawnienia magazynow
+                  Grupy uprawnien
+                </p>
+                {permissionGroups.length === 0 ? (
+                  <p className="text-xs text-dim">
+                    Brak skonfigurowanych grup. Dodaj grupy uprawnien ponizej.
+                  </p>
+                ) : (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {permissionGroups.map((group) => (
+                      <AdminToggle
+                        key={`user-form-group-${group.id}`}
+                        checked={userForm.groupIds.includes(group.id)}
+                        onCheckedChange={(value) => toggleUserFormGroup(group.id, value)}
+                        label={`${group.name}${group.isActive ? '' : ' (nieaktywna)'}`}
+                        disabled={addUserMutation.isPending}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                  Reczne uprawnienia magazynow
                 </p>
                 <div className="grid gap-4 lg:grid-cols-2">
                   {renderWarehouseAccess(
@@ -2046,7 +2561,8 @@ export default function AdminPage() {
                       name: item.name,
                       username: item.username,
                       role: item.role,
-                      access: cloneAccess(item.access),
+                      access: cloneAccess(item.directAccess ?? item.access),
+                      groupIds: [...(item.groupIds ?? [])],
                       isActive: item.isActive
                     };
                     const isSelf = currentUser?.id === item.id;
@@ -2112,7 +2628,7 @@ export default function AdminPage() {
                         ))}
                       </SelectField>,
                       <span key={`${item.id}-access`} className="text-sm text-dim">
-                        {formatAccessSummary(draft.access, draft.role)}
+                        {formatAccessSummary(draft.access, draft.role, draft.groupIds)}
                       </span>,
                       <Badge
                         key={`${item.id}-status`}
@@ -2123,11 +2639,15 @@ export default function AdminPage() {
                       <span key={`${item.id}-last`} className="text-sm text-dim">
                         {item.lastLogin ? new Date(item.lastLogin).toLocaleString('pl-PL') : '-'}
                       </span>,
-                      <div key={`${item.id}-actions`} className="flex flex-wrap gap-2">
+                      <div
+                        key={`${item.id}-actions`}
+                        className="grid w-full grid-cols-2 gap-2 md:min-w-[18rem]"
+                      >
                         <Button
                           variant="secondary"
                           onClick={() => handleSaveUser(item.id)}
                           disabled={updateUserMutation.isPending}
+                          className="w-full"
                         >
                           Zapisz
                         </Button>
@@ -2137,6 +2657,7 @@ export default function AdminPage() {
                             setSelectedAccessUserId((prev) => (prev === item.id ? null : item.id))
                           }
                           disabled={updateUserMutation.isPending}
+                          className="w-full"
                         >
                           {isSelected ? 'Zamknij uprawnienia' : 'Uprawnienia'}
                         </Button>
@@ -2144,6 +2665,7 @@ export default function AdminPage() {
                           variant="outline"
                           onClick={() => handleToggleUserStatus(item.id, !draft.isActive)}
                           disabled={updateUserMutation.isPending || isSelf}
+                          className="w-full"
                         >
                           {draft.isActive ? 'Zablokuj' : 'Aktywuj'}
                         </Button>
@@ -2151,64 +2673,109 @@ export default function AdminPage() {
                           variant="outline"
                           onClick={() => handleRemoveUser(item.id, item.name)}
                           disabled={removeUserMutation.isPending || isSelf}
-                          className="border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
+                          className="w-full border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
                         >
-                          Usun
+                          Usuń
                         </Button>
                       </div>
                     ];
                   })}
+                    renderRowDetails={(rowIndex) => {
+                      const item = users[rowIndex];
+                      if (!item || selectedAccessUserId !== item.id) return null;
+                      const draft = userDrafts[item.id] ?? {
+                        name: item.name,
+                        username: item.username,
+                        role: item.role,
+                        access: cloneAccess(item.directAccess ?? item.access),
+                        groupIds: [...(item.groupIds ?? [])],
+                        isActive: item.isActive
+                      };
+
+                      return (
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                                Uprawnienia magazynow
+                              </p>
+                              <p className="text-sm font-semibold text-title">{draft.name}</p>
+                            </div>
+                            <Button
+                              variant="outline"
+                              onClick={() => setSelectedAccessUserId(null)}
+                              disabled={updateUserMutation.isPending}
+                            >
+                              Zamknij
+                            </Button>
+                          </div>
+                          <Card className="space-y-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                              Grupy uprawnien
+                            </p>
+                            {permissionGroups.length === 0 ? (
+                              <p className="text-xs text-dim">
+                                Brak skonfigurowanych grup. Dodaj grupe w sekcji ponizej.
+                              </p>
+                            ) : (
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                {permissionGroups.map((group) => (
+                                  <AdminToggle
+                                    key={`user-draft-group-${item.id}-${group.id}`}
+                                    checked={draft.groupIds.includes(group.id)}
+                                    onCheckedChange={(value) =>
+                                      toggleUserDraftGroup(item.id, group.id, value)
+                                    }
+                                    label={`${group.name}${group.isActive ? '' : ' (nieaktywna)'}`}
+                                    disabled={updateUserMutation.isPending}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                          </Card>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                            Reczne uprawnienia magazynow
+                          </p>
+                          <div className="grid gap-4 lg:grid-cols-2">
+                            {renderWarehouseAccess(
+                              'PRZEMIALY',
+                              draft.access,
+                              (updater) => updateUserDraftAccess(item.id, updater),
+                              draft.role
+                            )}
+                            {renderErpModuleAccess(
+                              draft.access,
+                              (updater) => updateUserDraftAccess(item.id, updater),
+                              draft.role
+                            )}
+                            {renderWarehouseAccess(
+                              'CZESCI',
+                              draft.access,
+                              (updater) => updateUserDraftAccess(item.id, updater),
+                              draft.role
+                            )}
+                            {renderWarehouseAccess(
+                              'RAPORT_ZMIANOWY',
+                              draft.access,
+                              (updater) => updateUserDraftAccess(item.id, updater),
+                              draft.role
+                            )}
+                          </div>
+                          <div className="flex justify-end">
+                            <Button
+                              variant="secondary"
+                              onClick={() => handleSaveUser(item.id)}
+                              disabled={updateUserMutation.isPending}
+                              className="w-full sm:w-auto"
+                            >
+                              Zapisz uprawnienia
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    }}
                   />
                 </Card>
-                {selectedDraft && selectedAccessUserId && (
-                  <Card className="space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-                          Uprawnienia magazynow
-                        </p>
-                        <p className="text-sm font-semibold text-title">{selectedDraft.name}</p>
-                      </div>
-                      <Button variant="outline" onClick={() => setSelectedAccessUserId(null)}>
-                        Zamknij
-                      </Button>
-                    </div>
-                    <div className="grid gap-4 lg:grid-cols-2">
-                    {renderWarehouseAccess(
-                      'PRZEMIALY',
-                      selectedDraft.access,
-                      (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
-                      selectedDraft.role
-                    )}
-                    {renderErpModuleAccess(
-                      selectedDraft.access,
-                      (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
-                      selectedDraft.role
-                    )}
-                    {renderWarehouseAccess(
-                      'CZESCI',
-                      selectedDraft.access,
-                      (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
-                      selectedDraft.role
-                    )}
-                    {renderWarehouseAccess(
-                      'RAPORT_ZMIANOWY',
-                      selectedDraft.access,
-                      (updater) => updateUserDraftAccess(selectedAccessUserId, updater),
-                      selectedDraft.role
-                    )}
-                    </div>
-                    <div className="flex justify-end">
-                      <Button
-                        variant="secondary"
-                        onClick={() => handleSaveUser(selectedAccessUserId)}
-                        disabled={updateUserMutation.isPending}
-                      >
-                        Zapisz uprawnienia
-                      </Button>
-                    </div>
-                  </Card>
-                )}
               </div>
             )}
           </div>

@@ -6,6 +6,10 @@ import {
   normalizeAccessForDb,
   type DbUserRow
 } from '@/lib/supabase/users';
+import {
+  loadUserGroupsByUserIds,
+  setUserPermissionGroups
+} from '@/lib/supabase/permission-groups';
 import type { Role, UserAccess } from '@/lib/api/types';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { isHeadAdmin } from '@/lib/auth/access';
@@ -16,6 +20,7 @@ type UpdateUserPayload = {
   password?: string;
   role?: Role;
   access?: UserAccess;
+  groupIds?: string[];
   isActive?: boolean;
 };
 
@@ -65,6 +70,7 @@ export async function PATCH(
   const normalizedRole = normalizeRole(payload?.role);
   const normalizedAccess =
     payload?.access === undefined ? undefined : normalizeAccessForDb(payload.access);
+  const shouldUpdateGroups = payload?.groupIds !== undefined;
 
   if (payload?.name !== undefined && !name) {
     return NextResponse.json({ code: 'NAME_REQUIRED' }, { status: 400 });
@@ -98,7 +104,31 @@ export async function PATCH(
       return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
     }
 
-    return NextResponse.json(mapDbUser(row));
+    if (shouldUpdateGroups) {
+      try {
+        await setUserPermissionGroups(userId, payload?.groupIds);
+      } catch (groupError: unknown) {
+        const code = (() => {
+          if (groupError instanceof Error && groupError.message === 'GROUPS_SCHEMA_MISSING') {
+            return 'GROUPS_SCHEMA_MISSING';
+          }
+          if (
+            typeof groupError === 'object' &&
+            groupError &&
+            'code' in groupError &&
+            groupError.code === '23503'
+          ) {
+            return 'GROUP_NOT_FOUND';
+          }
+          return 'UNKNOWN';
+        })();
+        const status = code === 'GROUPS_SCHEMA_MISSING' ? 500 : 400;
+        return NextResponse.json({ code }, { status });
+      }
+    }
+
+    const groupsByUserId = await loadUserGroupsByUserIds([userId]);
+    return NextResponse.json(mapDbUser(row, groupsByUserId.get(userId) ?? []));
   }
 
   const updatePayload: Record<string, unknown> = {};
@@ -118,7 +148,7 @@ export async function PATCH(
     updatePayload.is_active = payload.isActive;
   }
 
-  if (Object.keys(updatePayload).length === 0) {
+  if (Object.keys(updatePayload).length === 0 && !shouldUpdateGroups) {
     const { data: unchangedRow, error: unchangedError } = await supabaseAdmin
       .from('app_users')
       .select('*')
@@ -132,27 +162,75 @@ export async function PATCH(
     if (!unchangedRow) {
       return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
     }
-    return NextResponse.json(mapDbUser(unchangedRow as DbUserRow));
+    const groupsByUserId = await loadUserGroupsByUserIds([userId]);
+    return NextResponse.json(
+      mapDbUser(unchangedRow as DbUserRow, groupsByUserId.get(userId) ?? [])
+    );
   }
 
-  const { data: directRow, error: directError } = await supabaseAdmin
-    .from('app_users')
-    .update(updatePayload)
-    .eq('id', userId)
-    .select('*')
-    .maybeSingle();
+  let directRow: DbUserRow | null = null;
+  if (Object.keys(updatePayload).length > 0) {
+    const { data, error: directError } = await supabaseAdmin
+      .from('app_users')
+      .update(updatePayload)
+      .eq('id', userId)
+      .select('*')
+      .maybeSingle();
 
-  if (directError) {
-    const code = getErrorCode(directError.message, directError.code);
-    const status = code === 'DUPLICATE' ? 409 : code === 'NOT_FOUND' ? 404 : 400;
-    return NextResponse.json({ code }, { status });
+    if (directError) {
+      const code = getErrorCode(directError.message, directError.code);
+      const status = code === 'DUPLICATE' ? 409 : code === 'NOT_FOUND' ? 404 : 400;
+      return NextResponse.json({ code }, { status });
+    }
+
+    directRow = data as DbUserRow | null;
+    if (!directRow) {
+      return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+    }
+  }
+
+  if (shouldUpdateGroups) {
+    try {
+      await setUserPermissionGroups(userId, payload?.groupIds);
+    } catch (groupError: unknown) {
+      const code = (() => {
+        if (groupError instanceof Error && groupError.message === 'GROUPS_SCHEMA_MISSING') {
+          return 'GROUPS_SCHEMA_MISSING';
+        }
+        if (
+          typeof groupError === 'object' &&
+          groupError &&
+          'code' in groupError &&
+          groupError.code === '23503'
+        ) {
+          return 'GROUP_NOT_FOUND';
+        }
+        return 'UNKNOWN';
+      })();
+      const status = code === 'GROUPS_SCHEMA_MISSING' ? 500 : 400;
+      return NextResponse.json({ code }, { status });
+    }
   }
 
   if (!directRow) {
-    return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+    const { data: fallbackRow, error: fallbackError } = await supabaseAdmin
+      .from('app_users')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+    if (fallbackError) {
+      const code = getErrorCode(fallbackError.message, fallbackError.code);
+      const status = code === 'NOT_FOUND' ? 404 : 400;
+      return NextResponse.json({ code }, { status });
+    }
+    if (!fallbackRow) {
+      return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+    }
+    directRow = fallbackRow as DbUserRow;
   }
 
-  return NextResponse.json(mapDbUser(directRow as DbUserRow));
+  const groupsByUserId = await loadUserGroupsByUserIds([userId]);
+  return NextResponse.json(mapDbUser(directRow, groupsByUserId.get(userId) ?? []));
 }
 
 export async function DELETE(
@@ -189,5 +267,5 @@ export async function DELETE(
     return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
   }
 
-  return NextResponse.json(mapDbUser(row));
+  return NextResponse.json(mapDbUser(row, []));
 }

@@ -46,6 +46,24 @@ export type UserAccess = {
   warehouses: Partial<Record<WarehouseKey, WarehouseAccess>>;
 };
 
+export type PermissionGroup = {
+  id: string;
+  name: string;
+  description?: string | null;
+  access: UserAccess;
+  isActive: boolean;
+  createdAt: string;
+  assignedUsersCount?: number;
+};
+
+export type UserPermissionGroup = {
+  id: string;
+  name: string;
+  description?: string | null;
+  access: UserAccess;
+  isActive: boolean;
+};
+
 export type Warehouse = {
   id: string;
   name: string;
@@ -311,6 +329,9 @@ export type AppUser = {
   username: string;
   role: Role;
   access: UserAccess;
+  directAccess?: UserAccess;
+  groups?: UserPermissionGroup[];
+  groupIds?: string[];
   isActive: boolean;
   createdAt: string;
   lastLogin?: string | null;

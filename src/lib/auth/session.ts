@@ -3,6 +3,7 @@ import type { NextResponse } from 'next/server';
 import type { AppUser } from '@/lib/api/types';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { mapDbUser, type DbUserRow } from '@/lib/supabase/users';
+import { loadUserGroupsByUserIds } from '@/lib/supabase/permission-groups';
 
 const SESSION_COOKIE_NAME = 'apka_session';
 const SESSION_VERSION = 1;
@@ -189,7 +190,8 @@ export const getAuthenticatedUser = async (request: Request): Promise<AuthResult
     return { user: null, code: 'SESSION_EXPIRED' };
   }
 
-  const user = mapDbUser(row);
+  const groupsByUserId = await loadUserGroupsByUserIds([row.id]);
+  const user = mapDbUser(row, groupsByUserId.get(row.id) ?? []);
   if (!user.isActive) {
     return { user: null, code: 'UNAUTHORIZED' };
   }
