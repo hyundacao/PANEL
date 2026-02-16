@@ -83,15 +83,44 @@ export async function PATCH(
   }
 
   if (password) {
-    const { data, error } = await supabaseAdmin.rpc('update_app_user', {
+    const rpcPayload: Record<string, unknown> = {
       p_id: userId,
-      p_name: name ?? null,
-      p_username: username ?? null,
-      p_password: password,
-      p_role: normalizedRole,
-      p_access: normalizedAccess ?? null,
-      p_is_active: typeof payload?.isActive === 'boolean' ? payload.isActive : null
-    });
+      p_password: password
+    };
+    if (name !== undefined) {
+      rpcPayload.p_name = name;
+    }
+    if (username !== undefined) {
+      rpcPayload.p_username = username;
+    }
+    if (normalizedRole !== null) {
+      rpcPayload.p_role = normalizedRole;
+    }
+    if (normalizedAccess !== undefined) {
+      rpcPayload.p_access = normalizedAccess;
+    }
+    if (typeof payload?.isActive === 'boolean') {
+      rpcPayload.p_is_active = payload.isActive;
+    }
+
+    let passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', rpcPayload);
+    if (
+      passwordUpdateResult.error &&
+      (passwordUpdateResult.error.code === 'PGRST202' ||
+        passwordUpdateResult.error.code === '42883')
+    ) {
+      passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', {
+        p_id: userId,
+        p_name: name ?? null,
+        p_username: username ?? null,
+        p_password: password,
+        p_role: normalizedRole,
+        p_access: normalizedAccess ?? null,
+        p_is_active: typeof payload?.isActive === 'boolean' ? payload.isActive : null
+      });
+    }
+
+    const { data, error } = passwordUpdateResult;
 
     if (error) {
       const code = getErrorCode(error.message, error.code);
