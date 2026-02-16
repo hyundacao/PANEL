@@ -302,7 +302,7 @@ export default function AdminPage() {
   const { data: auditData } = useQuery({ queryKey: ['audit'], queryFn: getAudit });
   const { data: warehousesData } = useQuery({
     queryKey: ['warehouses-admin'],
-    queryFn: getWarehousesAdmin
+    queryFn: () => getWarehousesAdmin()
   });
   const { data: catalogData } = useQuery({
     queryKey: ['catalog'],
@@ -318,7 +318,7 @@ export default function AdminPage() {
   });
   const { data: locationsData } = useQuery({
     queryKey: ['locations-admin'],
-    queryFn: getLocationsAdmin
+    queryFn: () => getLocationsAdmin()
   });
   const { data: inventoryAdjustmentsData } = useQuery({
     queryKey: ['inventory-adjustments'],
