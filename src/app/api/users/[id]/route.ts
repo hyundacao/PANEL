@@ -29,6 +29,17 @@ const normalizeRole = (role?: Role) =>
     ? role
     : null;
 
+const getUnexpectedCode = (error: unknown) => {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const dbCode = String((error as { code?: unknown }).code ?? '').trim();
+    if (dbCode) return `DB_${dbCode}`;
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return `ERR_${error.message.trim().toUpperCase().replace(/[^A-Z0-9_]+/g, '_')}`;
+  }
+  return 'UNKNOWN';
+};
+
 const isFunctionResolutionError = (
   error: { code?: string | null; message?: string | null } | null
 ) => {
@@ -56,7 +67,15 @@ const isMissingColumnError = (error: { code?: string | null; message?: string | 
 };
 
 const requireHeadAdmin = async (request: Request) => {
-  const auth = await getAuthenticatedUser(request);
+  let auth: Awaited<ReturnType<typeof getAuthenticatedUser>>;
+  try {
+    auth = await getAuthenticatedUser(request);
+  } catch (error) {
+    return {
+      denied: NextResponse.json({ code: getUnexpectedCode(error) }, { status: 500 }),
+      userId: null as string | null
+    };
+  }
   if (!auth.user) {
     const response = NextResponse.json({ code: auth.code }, { status: 401 });
     if (auth.code === 'SESSION_EXPIRED') {
@@ -195,14 +214,12 @@ export async function PATCH(
         .select('*')
         .maybeSingle();
     }
-    if (syncResult.error) {
-      const code = getErrorCode(syncResult.error.message, syncResult.error.code);
-      return NextResponse.json({ code: code === 'UNKNOWN' ? 'SYNC_FAILED' : code }, { status: 500 });
-    }
-    const rowForResponse = (syncResult.data as DbUserRow | null) ?? {
-      ...row,
-      access: accessWithResetFlag as DbUserRow['access']
-    };
+    const rowForResponse = syncResult.error
+      ? row
+      : ((syncResult.data as DbUserRow | null) ?? {
+          ...row,
+          access: accessWithResetFlag as DbUserRow['access']
+        });
 
     if (shouldUpdateGroups) {
       try {
@@ -227,8 +244,12 @@ export async function PATCH(
       }
     }
 
-    const groupsByUserId = await loadUserGroupsByUserIds([userId]);
-    return NextResponse.json(mapDbUser(rowForResponse, groupsByUserId.get(userId) ?? []));
+    try {
+      const groupsByUserId = await loadUserGroupsByUserIds([userId]);
+      return NextResponse.json(mapDbUser(rowForResponse, groupsByUserId.get(userId) ?? []));
+    } catch {
+      return NextResponse.json(mapDbUser(rowForResponse, []));
+    }
   }
 
   const updatePayload: Record<string, unknown> = {};

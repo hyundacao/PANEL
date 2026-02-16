@@ -1412,7 +1412,9 @@ export default function AdminPage() {
         UNAUTHORIZED: 'Brak autoryzacji. Zaloguj sie ponownie.',
         SYNC_FAILED: 'Haslo zmienione czesciowo. Sprawdz migracje kolumny active_session_id.',
         UPDATE_USER_RPC_MISSING:
-          'Brak zgodnej funkcji update_app_user w SQL. Uruchom ponownie pelny skrypt SQL.'
+          'Brak zgodnej funkcji update_app_user w SQL. Uruchom ponownie pelny skrypt SQL.',
+        DB_42703: 'Brak kolumny active_session_id w app_users. Uruchom migracje SQL.',
+        DB_42P01: 'Brak tabeli w bazie. Uruchom pelny skrypt SQL.'
       };
       toast({
         title: messageMap[err.message] ?? `Nie udalo sie zresetowac hasla (${err.message}).`,
