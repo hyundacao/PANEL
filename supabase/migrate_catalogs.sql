@@ -18,9 +18,13 @@ create index if not exists materials_catalog_idx
 alter table if exists public.material_catalogs enable row level security;
 
 insert into public.material_catalogs (id, name, is_active)
-select concat('cat-', md5(lower(code))) as id, code as name, true
-from public.materials
-group by code
+select concat('cat-', md5(lower(src.code))) as id, src.code as name, true
+from (
+  select min(trim(code)) as code
+  from public.materials
+  where code is not null and length(trim(code)) > 0
+  group by lower(trim(code))
+) as src
 on conflict (id) do update
 set name = excluded.name;
 

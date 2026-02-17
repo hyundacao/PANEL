@@ -68,6 +68,7 @@ const moduleOptions: ModuleOption[] = [
     requiredTabs: [
       'erp-magazynier',
       'erp-rozdzielca',
+      'erp-rozdzielca-zmianowy',
       'erp-wypisz-dokument',
       'erp-historia-dokumentow'
     ],

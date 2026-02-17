@@ -25,6 +25,7 @@ export type RaportZmianowyTab = 'raport-zmianowy';
 export type ErpTransfersTab =
   | 'erp-magazynier'
   | 'erp-rozdzielca'
+  | 'erp-rozdzielca-zmianowy'
   | 'erp-wypisz-dokument'
   | 'erp-historia-dokumentow';
 
@@ -398,6 +399,16 @@ export type WarehouseTransferDocumentSummary = WarehouseTransferDocument & {
   plannedQtyTotal: number;
   issuedQtyTotal: number;
   receivedQtyTotal: number;
+  searchText?: string;
+};
+
+export type ErpTargetLocation = {
+  id: string;
+  name: string;
+  orderNo: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type WarehouseTransferItemIssue = {

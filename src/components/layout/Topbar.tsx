@@ -1,8 +1,8 @@
 ﻿'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { ArrowLeftRight, Bell, KeyRound, LogOut, Menu, X } from 'lucide-react';
+import { ArrowLeftRight, Bell, Cog, KeyRound, LogOut, Menu, X } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useUiStore } from '@/lib/store/ui';
 import { Button } from '@/components/ui/Button';
@@ -13,8 +13,14 @@ import { useToastStore } from '@/components/ui/Toast';
 import {
   disableErpPushNotifications,
   enableErpPushNotifications,
+  syncErpPushPreferences,
   syncErpPushStatus
 } from '@/lib/push/client';
+import {
+  getDefaultDispatcherSelection,
+  normalizeDispatcherSelection,
+  normalizeWarehousemanSelection
+} from '@/lib/push/preferences';
 
 export const Topbar = ({
   title,
@@ -37,18 +43,31 @@ export const Topbar = ({
     logout,
     activeWarehouse,
     erpDocumentNotificationsEnabled,
-    setErpDocumentNotificationsEnabled
+    setErpDocumentNotificationsEnabled,
+    erpPushWarehousemanOptions,
+    erpPushWarehousemanSourceSelection,
+    setErpPushWarehousemanSourceSelection,
+    erpPushDispatcherTargetOptions,
+    erpPushDispatcherTargetSelection,
+    setErpPushDispatcherTargetSelection
   } = useUiStore();
   const warehouses = getAccessibleWarehouses(user);
   const canSwitch = warehouses.length > 1;
   const isErpModule = activeWarehouse === 'PRZESUNIECIA_ERP';
+  const canConfigureWarehousemanPush = canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-magazynier');
+  const canConfigureDispatcherPush =
+    canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-rozdzielca') ||
+    canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-rozdzielca-zmianowy');
   const hasErpDocumentPushRole =
-    canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-magazynier') ||
-    canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-rozdzielca');
+    canConfigureWarehousemanPush || canConfigureDispatcherPush;
   const isErpDocumentsPage = pathname.startsWith('/przesuniecia-magazynowe');
   const canManageErpDocumentPush = isErpModule && isErpDocumentsPage && hasErpDocumentPushRole;
   const mustChangePassword = Boolean(user?.mustChangePassword);
   const [erpNotificationsBusy, setErpNotificationsBusy] = useState(false);
+  const [erpPreferencesDialogOpen, setErpPreferencesDialogOpen] = useState(false);
+  const [erpPreferencesBusy, setErpPreferencesBusy] = useState(false);
+  const [warehousemanSelectionDraft, setWarehousemanSelectionDraft] = useState<string[]>([]);
+  const [dispatcherSelectionDraft, setDispatcherSelectionDraft] = useState<string[]>([]);
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -93,6 +112,16 @@ export const Topbar = ({
     }
   };
 
+  const buildPushPreferencesPayload = useCallback(
+    (warehousemanSelection: string[], dispatcherSelection: string[]) => ({
+      warehousemanSourceWarehouses: canConfigureWarehousemanPush
+        ? warehousemanSelection
+        : null,
+      dispatcherTargetLocations: canConfigureDispatcherPush ? dispatcherSelection : null
+    }),
+    [canConfigureDispatcherPush, canConfigureWarehousemanPush]
+  );
+
   useEffect(() => {
     if (!canManageErpDocumentPush) return;
     let cancelled = false;
@@ -102,6 +131,14 @@ export const Topbar = ({
         const status = await syncErpPushStatus();
         if (cancelled) return;
         setErpDocumentNotificationsEnabled(status.enabled);
+        if (status.enabled) {
+          await syncErpPushPreferences(
+            buildPushPreferencesPayload(
+              erpPushWarehousemanSourceSelection,
+              erpPushDispatcherTargetSelection
+            )
+          ).catch(() => undefined);
+        }
       } catch {
         if (cancelled) return;
         setErpDocumentNotificationsEnabled(false);
@@ -113,7 +150,13 @@ export const Topbar = ({
     return () => {
       cancelled = true;
     };
-  }, [canManageErpDocumentPush, setErpDocumentNotificationsEnabled]);
+  }, [
+    buildPushPreferencesPayload,
+    canManageErpDocumentPush,
+    erpPushDispatcherTargetSelection,
+    erpPushWarehousemanSourceSelection,
+    setErpDocumentNotificationsEnabled
+  ]);
 
   useEffect(() => {
     if (mustChangePassword) {
@@ -122,17 +165,32 @@ export const Topbar = ({
   }, [mustChangePassword]);
 
   useEffect(() => {
-    if (!passwordDialogOpen || mustChangePassword) return;
+    if (!erpPreferencesDialogOpen) return;
+    setWarehousemanSelectionDraft([...erpPushWarehousemanSourceSelection]);
+    setDispatcherSelectionDraft([...erpPushDispatcherTargetSelection]);
+  }, [
+    erpPreferencesDialogOpen,
+    erpPushDispatcherTargetSelection,
+    erpPushWarehousemanSourceSelection
+  ]);
+
+  useEffect(() => {
+    if ((!passwordDialogOpen && !erpPreferencesDialogOpen) || mustChangePassword) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setPasswordDialogOpen(false);
+        if (passwordDialogOpen) {
+          setPasswordDialogOpen(false);
+        }
+        if (erpPreferencesDialogOpen) {
+          setErpPreferencesDialogOpen(false);
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [mustChangePassword, passwordDialogOpen]);
+  }, [erpPreferencesDialogOpen, mustChangePassword, passwordDialogOpen]);
 
   const handleToggleErpNotifications = async () => {
     if (!canManageErpDocumentPush || erpNotificationsBusy) return;
@@ -143,6 +201,12 @@ export const Topbar = ({
       if (shouldEnable) {
         await enableErpPushNotifications();
         setErpDocumentNotificationsEnabled(true);
+        await syncErpPushPreferences(
+          buildPushPreferencesPayload(
+            erpPushWarehousemanSourceSelection,
+            erpPushDispatcherTargetSelection
+          )
+        ).catch(() => undefined);
         toast({
           title: 'Powiadomienia ERP włączone',
           description: 'Powiadomienia o dokumentach ERP będą wysyłane systemowo.',
@@ -181,6 +245,75 @@ export const Topbar = ({
       });
     } finally {
       setErpNotificationsBusy(false);
+    }
+  };
+
+  const toggleWarehousemanDraftOption = (option: string) => {
+    setWarehousemanSelectionDraft((prev) => {
+      const next = new Set(prev);
+      if (next.has(option)) {
+        next.delete(option);
+      } else {
+        next.add(option);
+      }
+      return [...next];
+    });
+  };
+
+  const toggleDispatcherDraftOption = (option: string) => {
+    setDispatcherSelectionDraft((prev) => {
+      const next = new Set(prev);
+      if (next.has(option)) {
+        next.delete(option);
+      } else {
+        next.add(option);
+      }
+      return [...next];
+    });
+  };
+
+  const handleSaveErpPushPreferences = async () => {
+    const normalizedWarehouseman = normalizeWarehousemanSelection(
+      warehousemanSelectionDraft,
+      erpPushWarehousemanOptions
+    );
+    const normalizedDispatcher = normalizeDispatcherSelection(
+      dispatcherSelectionDraft,
+      erpPushDispatcherTargetOptions
+    );
+
+    setErpPushWarehousemanSourceSelection(normalizedWarehouseman);
+    setErpPushDispatcherTargetSelection(normalizedDispatcher);
+
+    if (!erpDocumentNotificationsEnabled) {
+      toast({
+        title: 'Ustawienia zapisane lokalnie',
+        description: 'Włącz powiadomienia ERP, aby wysłać te preferencje do systemu.',
+        tone: 'info'
+      });
+      setErpPreferencesDialogOpen(false);
+      return;
+    }
+
+    setErpPreferencesBusy(true);
+    try {
+      await syncErpPushPreferences(
+        buildPushPreferencesPayload(normalizedWarehouseman, normalizedDispatcher)
+      );
+      toast({
+        title: 'Zapisano ustawienia powiadomień',
+        description: 'Preferencje powiadomień ERP zostały zaktualizowane.',
+        tone: 'success'
+      });
+      setErpPreferencesDialogOpen(false);
+    } catch {
+      toast({
+        title: 'Nie udało się zapisać preferencji',
+        description: 'Sprawdź połączenie i spróbuj ponownie.',
+        tone: 'error'
+      });
+    } finally {
+      setErpPreferencesBusy(false);
     }
   };
 
@@ -295,32 +428,204 @@ export const Topbar = ({
           </>
         )}
         {canManageErpDocumentPush && (
-          <Button
-            variant="ghost"
-            onClick={() => void handleToggleErpNotifications()}
-            disabled={erpNotificationsBusy}
-            className={`h-10 min-h-10 w-10 px-0 py-0 ${
-              erpDocumentNotificationsEnabled
-                ? 'border-[color:color-mix(in_srgb,var(--brand)_55%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] text-brand'
-                : ''
-            }`}
-            aria-label={
-              erpDocumentNotificationsEnabled
-                ? 'Wyłącz powiadomienia ERP'
-                : 'Włącz powiadomienia ERP'
-            }
-            title={
-              erpDocumentNotificationsEnabled
-                ? 'Powiadomienia ERP: włączone'
-                : 'Powiadomienia ERP: wyłączone'
-            }
-          >
-            <Bell className="h-4 w-4" />
-          </Button>
+          <>
+            <Button
+              variant="ghost"
+              onClick={() => void handleToggleErpNotifications()}
+              disabled={erpNotificationsBusy}
+              className={`h-10 min-h-10 w-10 px-0 py-0 ${
+                erpDocumentNotificationsEnabled
+                  ? 'border-[color:color-mix(in_srgb,var(--brand)_55%,transparent)] bg-[color:color-mix(in_srgb,var(--brand)_14%,transparent)] text-brand'
+                  : ''
+              }`}
+              aria-label={
+                erpDocumentNotificationsEnabled
+                  ? 'Wyłącz powiadomienia ERP'
+                  : 'Włącz powiadomienia ERP'
+              }
+              title={
+                erpDocumentNotificationsEnabled
+                  ? 'Powiadomienia ERP: włączone'
+                  : 'Powiadomienia ERP: wyłączone'
+              }
+            >
+              <Bell className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              className="h-10 min-h-10 w-10 px-0 py-0"
+              onClick={() => setErpPreferencesDialogOpen(true)}
+              aria-label="Ustawienia powiadomień ERP"
+              title="Ustawienia powiadomień ERP"
+            >
+              <Cog className="h-4 w-4" />
+            </Button>
+          </>
         )}
         <div className="hidden h-10 w-10 rounded-full bg-surface2 md:block" />
       </div>
       </header>
+      {canManageErpDocumentPush && erpPreferencesDialogOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-[992] bg-[var(--scrim)]"
+            onClick={() => setErpPreferencesDialogOpen(false)}
+          />
+          <div className="fixed inset-0 z-[993] flex items-center justify-center p-4">
+            <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[rgba(10,11,15,0.98)] p-6 shadow-[0_22px_50px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)]">
+              <button
+                type="button"
+                className="absolute right-4 top-4 text-dim hover:text-title"
+                onClick={() => setErpPreferencesDialogOpen(false)}
+                aria-label="Zamknij"
+              >
+                <X className="h-4 w-4" />
+              </button>
+              <div className="space-y-2">
+                <p className="text-lg font-semibold text-title">Ustawienia powiadomień ERP</p>
+                <p className="text-sm text-dim">
+                  Wybierz, dla jakich przypisań mają przychodzić powiadomienia push.
+                </p>
+              </div>
+
+              <div className="mt-5 space-y-5">
+                {canConfigureWarehousemanPush && (
+                  <div className="space-y-3 rounded-2xl border border-border bg-surface2 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                        Magazynier: magazyny źródłowe
+                      </p>
+                      <p className="text-sm text-dim">
+                        Wybrane: {warehousemanSelectionDraft.length}/
+                        {erpPushWarehousemanOptions.length}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {erpPushWarehousemanOptions.map((option) => {
+                        const active = warehousemanSelectionDraft.includes(option);
+                        return (
+                          <button
+                            key={`warehouseman-pref-${option}`}
+                            type="button"
+                            onClick={() => toggleWarehousemanDraftOption(option)}
+                            className={`min-h-[34px] rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                              active
+                                ? 'border-[color:color-mix(in_srgb,var(--brand)_42%,var(--border))] bg-[color:color-mix(in_srgb,var(--brand)_16%,transparent)] text-title'
+                                : 'border-border bg-surface text-dim hover:border-borderStrong hover:text-title'
+                            }`}
+                          >
+                            {option}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        className="min-h-[36px] px-3 py-1.5 text-xs"
+                        onClick={() =>
+                          setWarehousemanSelectionDraft([
+                            ...erpPushWarehousemanOptions
+                          ])
+                        }
+                      >
+                        Zaznacz wszystkie
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="min-h-[36px] px-3 py-1.5 text-xs"
+                        onClick={() => setWarehousemanSelectionDraft([])}
+                      >
+                        Wyczysc
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {canConfigureDispatcherPush && (
+                  <div className="space-y-3 rounded-2xl border border-border bg-surface2 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                        Rozdzielca: lokalizacje docelowe
+                      </p>
+                      <p className="text-sm text-dim">
+                        Wybrane: {dispatcherSelectionDraft.length}/
+                        {erpPushDispatcherTargetOptions.length}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {erpPushDispatcherTargetOptions.map((option) => {
+                        const active = dispatcherSelectionDraft.includes(option);
+                        return (
+                          <button
+                            key={`dispatcher-pref-${option}`}
+                            type="button"
+                            onClick={() => toggleDispatcherDraftOption(option)}
+                            className={`min-h-[34px] rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                              active
+                                ? 'border-[color:color-mix(in_srgb,var(--brand)_42%,var(--border))] bg-[color:color-mix(in_srgb,var(--brand)_16%,transparent)] text-title'
+                                : 'border-border bg-surface text-dim hover:border-borderStrong hover:text-title'
+                            }`}
+                          >
+                            {option}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        className="min-h-[36px] px-3 py-1.5 text-xs"
+                        onClick={() =>
+                          setDispatcherSelectionDraft([
+                            ...erpPushDispatcherTargetOptions
+                          ])
+                        }
+                      >
+                        Zaznacz wszystkie
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="min-h-[36px] px-3 py-1.5 text-xs"
+                        onClick={() =>
+                          setDispatcherSelectionDraft([
+                            ...getDefaultDispatcherSelection(erpPushDispatcherTargetOptions)
+                          ])
+                        }
+                      >
+                        Przywróć domyślne
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="min-h-[36px] px-3 py-1.5 text-xs"
+                        onClick={() => setDispatcherSelectionDraft([])}
+                      >
+                        Wyczysc
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-6 flex flex-wrap justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => setErpPreferencesDialogOpen(false)}
+                  disabled={erpPreferencesBusy}
+                >
+                  Anuluj
+                </Button>
+                <Button
+                  onClick={() => void handleSaveErpPushPreferences()}
+                  disabled={erpPreferencesBusy}
+                >
+                  Zapisz ustawienia
+                </Button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
       {user && passwordDialogOpen && (
         <>
           <div

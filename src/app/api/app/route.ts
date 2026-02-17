@@ -13,7 +13,8 @@ import {
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import {
   sendWarehouseTransferDocumentCreatedPush,
-  sendWarehouseTransferDocumentIssuedPush
+  sendWarehouseTransferDocumentIssuedPush,
+  sendWarehouseTransferPackageRequestedPush
 } from '@/lib/push/server';
 import type {
   AuditEvent,
@@ -22,6 +23,7 @@ import type {
   DailyTotals,
   DashboardSummary,
   Dryer,
+  ErpTargetLocation,
   InventoryAdjustment,
   InventoryTotalPoint,
   Location,
@@ -103,6 +105,42 @@ const toNumber = (value: unknown) => {
   return Number.isNaN(parsed) ? 0 : parsed;
 };
 
+const normalizeTargetLocationFilterToken = (value: string | null | undefined) =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+
+const isPaczkaTargetLocation = (value: string | null | undefined) =>
+  normalizeTargetLocationFilterToken(value).includes('paczka');
+
+const PACZKA_REQUEST_NOTE_TAG_REGEX = /\[PACZKA_REQUESTED\|([^|\]]+)\|([^|\]]*)\]/i;
+
+const stripWarehouseTransferFlowKindFromNote = (note: string | null | undefined) =>
+  String(note ?? '')
+    .replace(PACZKA_REQUEST_NOTE_TAG_REGEX, '')
+    .replace(/\bFLOW_KIND\s*:\s*(?:WYDANIE|ZWROT)\b\s*(?:[|,;:-]\s*)?/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+const hasPaczkaRequestNoteTag = (note: string | null | undefined) =>
+  PACZKA_REQUEST_NOTE_TAG_REGEX.test(String(note ?? ''));
+
+const sanitizePaczkaRequestActorName = (value: string) =>
+  String(value)
+    .replace(/[\[\]|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const buildPaczkaRequestNoteTag = (requestedAtIso: string, requestedByName: string) =>
+  `[PACZKA_REQUESTED|${requestedAtIso}|${requestedByName}]`;
+
+const appendPaczkaRequestNoteTag = (note: string | null | undefined, tag: string) => {
+  const trimmed = String(note ?? '').trim();
+  if (!trimmed) return tag;
+  return `${trimmed} ${tag}`.trim();
+};
+
 const parseDateKey = (dateKey: string) => {
   const [year, month, day] = dateKey.split('-').map(Number);
   return new Date(year, month - 1, day);
@@ -160,6 +198,15 @@ const mapLocation = (row: any): Location => ({
   orderNo: row.order_no ?? 0,
   type: row.type,
   isActive: row.is_active ?? true
+});
+
+const mapErpTargetLocation = (row: any): ErpTargetLocation => ({
+  id: String(row.id),
+  name: String(row.name ?? '').trim(),
+  orderNo: toNumber(row.order_no),
+  isActive: row.is_active ?? true,
+  createdAt: row.created_at ?? new Date().toISOString(),
+  updatedAt: row.updated_at ?? row.created_at ?? new Date().toISOString()
 });
 
 const ERP_WAREHOUSE_ID_PREFIX = 'erp-wh-';
@@ -240,6 +287,12 @@ const mapWarehouseTransferDocument = (row: any): WarehouseTransferDocument => {
     closedByName: row.closed_by_name ?? null
   };
 };
+
+const isPaczkaWarehouseTransferDocument = (
+  document: Pick<WarehouseTransferDocument, 'targetWarehouse' | 'note'>
+) =>
+  isPaczkaTargetLocation(document.targetWarehouse) ||
+  isPaczkaTargetLocation(stripWarehouseTransferFlowKindFromNote(document.note));
 
 const mapWarehouseTransferDocumentItem = (row: any): WarehouseTransferDocumentItemBase => ({
   id: row.id,
@@ -430,6 +483,7 @@ const ERP_MODULE_TABS: WarehouseTab[] = [
   'erp-wypisz-dokument',
   'erp-magazynier',
   'erp-rozdzielca',
+  'erp-rozdzielca-zmianowy',
   'erp-historia-dokumentow'
 ];
 
@@ -541,6 +595,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       return;
     case 'getWarehouseTransferDocuments':
     case 'getWarehouseTransferDocument':
+    case 'getErpTargetLocations':
       requireAnyTabAccess(user, 'PRZESUNIECIA_ERP', ERP_MODULE_TABS);
       return;
     case 'addTransfer':
@@ -557,6 +612,9 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'markWarehouseTransferDocumentIssued':
       requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', ['erp-magazynier']);
       return;
+    case 'requestWarehouseTransferPackage':
+      requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', ['erp-rozdzielca-zmianowy']);
+      return;
     case 'addWarehouseTransferItemReceipt':
     case 'updateWarehouseTransferItemReceipt':
     case 'removeWarehouseTransferItemReceipt':
@@ -565,6 +623,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'closeWarehouseTransferDocument':
       requireTabWriteAccess(user, 'PRZESUNIECIA_ERP', [
         'erp-rozdzielca',
+        'erp-rozdzielca-zmianowy',
         'erp-historia-dokumentow'
       ]);
       return;
@@ -574,6 +633,11 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
         'erp-rozdzielca',
         'erp-historia-dokumentow'
       ]);
+      return;
+    case 'addErpTargetLocation':
+    case 'updateErpTargetLocation':
+    case 'removeErpTargetLocation':
+      requireWarehouseAdminAccess(user, 'PRZESUNIECIA_ERP');
       return;
     case 'getMixedMaterials':
       requireAnyTabAccess(user, 'PRZEMIALY', ['wymieszane']);
@@ -724,11 +788,15 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'updateWarehouseTransferItemIssue',
   'removeWarehouseTransferItemIssue',
   'markWarehouseTransferDocumentIssued',
+  'requestWarehouseTransferPackage',
   'addWarehouseTransferItemReceipt',
   'updateWarehouseTransferItemReceipt',
   'removeWarehouseTransferItemReceipt',
   'closeWarehouseTransferDocument',
   'removeWarehouseTransferDocument',
+  'addErpTargetLocation',
+  'updateErpTargetLocation',
+  'removeErpTargetLocation',
   'applyInventoryAdjustment',
   'addMixedMaterial',
   'removeMixedMaterial',
@@ -782,6 +850,7 @@ const ERP_AUDIT_ACTIONS = new Set<string>([
   'updateWarehouseTransferItemIssue',
   'removeWarehouseTransferItemIssue',
   'markWarehouseTransferDocumentIssued',
+  'requestWarehouseTransferPackage',
   'addWarehouseTransferItemReceipt',
   'updateWarehouseTransferItemReceipt',
   'removeWarehouseTransferItemReceipt',
@@ -799,6 +868,7 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   updateWarehouseTransferItemIssue: 'Przesuniecia magazynowe: edycja wydania',
   removeWarehouseTransferItemIssue: 'Przesuniecia magazynowe: usuniecie wydania',
   markWarehouseTransferDocumentIssued: 'Przesuniecia magazynowe: wydano wszystkie pozycje',
+  requestWarehouseTransferPackage: 'Przesuniecia magazynowe: prosba o paczke',
   addWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: przyjecie pozycji',
   updateWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: edycja przyjecia',
   removeWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: usuniecie przyjecia',
@@ -1207,6 +1277,33 @@ const fetchLocations = async () => {
   return (data ?? []).map(mapLocation);
 };
 
+const isMissingErpTargetLocationsTableError = (error: unknown) => {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; message?: unknown; details?: unknown };
+  const code = String(candidate.code ?? '').trim();
+  if (code === '42P01') return true;
+  const text = [String(candidate.message ?? ''), String(candidate.details ?? '')]
+    .join(' ')
+    .toLowerCase();
+  return text.includes('erp_target_locations');
+};
+
+const fetchErpTargetLocations = async (): Promise<ErpTargetLocation[]> => {
+  const { data, error } = await supabaseAdmin
+    .from('erp_target_locations')
+    .select('*')
+    .eq('is_active', true)
+    .order('order_no', { ascending: true })
+    .order('name', { ascending: true });
+  if (error) {
+    if (isMissingErpTargetLocationsTableError(error)) {
+      throw new Error('MIGRATION_REQUIRED_ERP_TARGET_LOCATIONS');
+    }
+    throw error;
+  }
+  return (data ?? []).map(mapErpTargetLocation);
+};
+
 const fetchMaterials = async () => {
   const { data, error } = await supabaseAdmin
     .from('materials')
@@ -1246,6 +1343,32 @@ const resolveWarehouseTransferItemStatus = (
   return 'OVER';
 };
 
+const buildWarehouseTransferDocumentSearchText = (
+  document: WarehouseTransferDocument,
+  items: WarehouseTransferDocumentItemBase[]
+) => {
+  const chunks: Array<string | null | undefined> = [
+    document.documentNumber,
+    document.sourceWarehouse,
+    document.targetWarehouse,
+    stripWarehouseTransferFlowKindFromNote(document.note)
+  ];
+  items.forEach((item) => {
+    chunks.push(
+      item.indexCode,
+      item.indexCode2,
+      item.name,
+      item.batch,
+      item.location,
+      item.note
+    );
+  });
+  return chunks
+    .map((chunk) => String(chunk ?? '').trim())
+    .filter((chunk) => chunk.length > 0)
+    .join(' ');
+};
+
 const buildWarehouseTransferDocumentSummary = (
   document: WarehouseTransferDocument,
   items: WarehouseTransferDocumentItemBase[],
@@ -1274,7 +1397,8 @@ const buildWarehouseTransferDocumentSummary = (
     completedItemsCount,
     plannedQtyTotal,
     issuedQtyTotal,
-    receivedQtyTotal
+    receivedQtyTotal,
+    searchText: buildWarehouseTransferDocumentSearchText(document, items)
   };
 };
 
@@ -3090,6 +3214,173 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!documentId) throw new Error('NOT_FOUND');
       return fetchWarehouseTransferDocumentDetails(documentId);
     }
+    case 'getErpTargetLocations': {
+      try {
+        return await fetchErpTargetLocations();
+      } catch (error) {
+        const code = errorCodeFromError(error);
+        if (code === 'MIGRATION_REQUIRED_ERP_TARGET_LOCATIONS') {
+          // Backward compatibility: allow UI fallback while migration is pending.
+          return [] as ErpTargetLocation[];
+        }
+        throw error;
+      }
+    }
+    case 'addErpTargetLocation': {
+      const normalizedName = String(payload?.name ?? '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toUpperCase();
+      if (!normalizedName) throw new Error('INVALID_NAME');
+
+      const nowIso = new Date().toISOString();
+      const { data: existingRows, error: existingError } = await supabaseAdmin
+        .from('erp_target_locations')
+        .select('*')
+        .order('order_no', { ascending: true })
+        .order('name', { ascending: true });
+      if (existingError) {
+        if (isMissingErpTargetLocationsTableError(existingError)) {
+          throw new Error('MIGRATION_REQUIRED_ERP_TARGET_LOCATIONS');
+        }
+        throw existingError;
+      }
+
+      const existing = (existingRows ?? []).map(mapErpTargetLocation);
+      const duplicateActive = existing.find(
+        (item) => item.isActive && item.name.toLowerCase() === normalizedName.toLowerCase()
+      );
+      if (duplicateActive) throw new Error('DUPLICATE');
+
+      const duplicateInactive = existing.find(
+        (item) => !item.isActive && item.name.toLowerCase() === normalizedName.toLowerCase()
+      );
+
+      const requestedOrderNo =
+        typeof payload?.orderNo === 'number' && !Number.isNaN(payload.orderNo)
+          ? Math.max(0, Math.round(payload.orderNo))
+          : null;
+      const nextOrderNo =
+        requestedOrderNo ??
+        Math.max(0, ...existing.filter((item) => item.isActive).map((item) => item.orderNo)) + 1;
+
+      if (duplicateInactive) {
+        const { data, error } = await supabaseAdmin
+          .from('erp_target_locations')
+          .update({
+            name: normalizedName,
+            order_no: nextOrderNo,
+            is_active: true,
+            updated_at: nowIso
+          })
+          .eq('id', duplicateInactive.id)
+          .select('*')
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) throw new Error('NOT_FOUND');
+        return mapErpTargetLocation(data);
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('erp_target_locations')
+        .insert({
+          id: randomUUID(),
+          name: normalizedName,
+          order_no: nextOrderNo,
+          is_active: true,
+          created_at: nowIso,
+          updated_at: nowIso
+        })
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (isMissingErpTargetLocationsTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_ERP_TARGET_LOCATIONS');
+        }
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      return mapErpTargetLocation(data);
+    }
+    case 'updateErpTargetLocation': {
+      const id = String(payload?.id ?? '').trim();
+      if (!id) throw new Error('NOT_FOUND');
+
+      const { data: existingRow, error: existingError } = await supabaseAdmin
+        .from('erp_target_locations')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (existingError) {
+        if (isMissingErpTargetLocationsTableError(existingError)) {
+          throw new Error('MIGRATION_REQUIRED_ERP_TARGET_LOCATIONS');
+        }
+        throw existingError;
+      }
+      if (!existingRow) throw new Error('NOT_FOUND');
+      const existing = mapErpTargetLocation(existingRow);
+
+      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (typeof payload?.name === 'string') {
+        const normalizedName = payload.name.trim().replace(/\s+/g, ' ').toUpperCase();
+        if (!normalizedName) throw new Error('INVALID_NAME');
+
+        const { data: duplicatesRaw, error: duplicatesError } = await supabaseAdmin
+          .from('erp_target_locations')
+          .select('id, name, is_active')
+          .neq('id', id);
+        if (duplicatesError) throw duplicatesError;
+        const duplicate = (duplicatesRaw ?? []).find((row) => {
+          const rowName = String((row as { name?: unknown }).name ?? '')
+            .trim()
+            .toLowerCase();
+          const isActive = Boolean((row as { is_active?: unknown }).is_active);
+          return isActive && rowName === normalizedName.toLowerCase();
+        });
+        if (duplicate) throw new Error('DUPLICATE');
+
+        updates.name = normalizedName;
+      }
+      if (typeof payload?.orderNo === 'number' && !Number.isNaN(payload.orderNo)) {
+        updates.order_no = Math.max(0, Math.round(payload.orderNo));
+      }
+
+      if (Object.keys(updates).length === 1 && existing.isActive) {
+        return existing;
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('erp_target_locations')
+        .update(updates)
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapErpTargetLocation(data);
+    }
+    case 'removeErpTargetLocation': {
+      const id = String(payload?.id ?? '').trim();
+      if (!id) throw new Error('NOT_FOUND');
+
+      const { data, error } = await supabaseAdmin
+        .from('erp_target_locations')
+        .update({
+          is_active: false,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (isMissingErpTargetLocationsTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_ERP_TARGET_LOCATIONS');
+        }
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      return mapErpTargetLocation(data);
+    }
     case 'createWarehouseTransferDocument': {
       const documentNumber = String(payload?.documentNumber ?? '').trim();
       if (!documentNumber) throw new Error('DOCUMENT_NUMBER_REQUIRED');
@@ -3256,6 +3547,55 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         actorUserId: currentUser.id ?? null
       });
       return issuedDocument;
+    }
+    case 'requestWarehouseTransferPackage': {
+      const documentId = String(payload?.documentId ?? '').trim();
+      if (!documentId) throw new Error('NOT_FOUND');
+
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .select('*')
+        .eq('id', documentId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) throw new Error('NOT_FOUND');
+
+      const existingDocument = mapWarehouseTransferDocument(existing);
+      if (existingDocument.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+      if (!isPaczkaWarehouseTransferDocument(existingDocument)) {
+        throw new Error('NOT_PACZKA_DOCUMENT');
+      }
+      if (hasPaczkaRequestNoteTag(existingDocument.note)) {
+        throw new Error('PACKAGE_ALREADY_REQUESTED');
+      }
+
+      const requestedAtIso = new Date().toISOString();
+      const requestedByName =
+        sanitizePaczkaRequestActorName(getActorName(currentUser)) || 'nieznany';
+      const updatedNote = appendPaczkaRequestNoteTag(
+        existingDocument.note,
+        buildPaczkaRequestNoteTag(requestedAtIso, requestedByName)
+      );
+
+      const { data, error } = await supabaseAdmin
+        .from('warehouse_transfer_documents')
+        .update({ note: updatedNote })
+        .eq('id', documentId)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+
+      const updatedDocument = mapWarehouseTransferDocument(data);
+      await sendWarehouseTransferPackageRequestedPush({
+        documentId: updatedDocument.id,
+        documentNumber: updatedDocument.documentNumber,
+        sourceWarehouse: updatedDocument.sourceWarehouse,
+        targetWarehouse: updatedDocument.targetWarehouse,
+        note: updatedDocument.note,
+        actorUserId: currentUser.id ?? null
+      });
+      return updatedDocument;
     }
     case 'addWarehouseTransferItemIssue': {
       const documentId = String(payload?.documentId ?? '').trim();

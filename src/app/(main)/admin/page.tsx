@@ -159,7 +159,8 @@ const raportZmianowyTabOptions: Array<{ key: WarehouseTab; label: string }> = [
 ];
 const erpModuleTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'erp-magazynier', label: 'Magazynier' },
-  { key: 'erp-rozdzielca', label: 'Rozdzielca' },
+  { key: 'erp-rozdzielca', label: 'Rozdzielca Wydziałowy' },
+  { key: 'erp-rozdzielca-zmianowy', label: 'Rozdzielca zmianowy' },
   { key: 'erp-wypisz-dokument', label: 'Wypisz dokument' },
   { key: 'erp-historia-dokumentow', label: 'Historia dokumentow' }
 ];

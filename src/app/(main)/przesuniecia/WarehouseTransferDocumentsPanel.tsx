@@ -4,23 +4,24 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as XLSX from 'xlsx';
 import {
-  addLocation,
+  addErpTargetLocation,
   addWarehouse,
   addWarehouseTransferItemIssue,
   addWarehouseTransferItemReceipt,
   closeWarehouseTransferDocument,
   createWarehouseTransferDocument,
-  getLocationsAdmin,
+  getErpTargetLocations,
   getWarehousesAdmin,
   getWarehouseTransferDocument,
   getWarehouseTransferDocuments,
   markWarehouseTransferDocumentIssued,
-  removeLocation,
+  removeErpTargetLocation,
+  requestWarehouseTransferPackage,
   removeWarehouse,
   removeWarehouseTransferItemIssue,
   removeWarehouseTransferItemReceipt,
   removeWarehouseTransferDocument,
-  updateLocation,
+  updateErpTargetLocation,
   updateWarehouse,
   updateWarehouseTransferItemIssue,
   updateWarehouseTransferItemReceipt
@@ -38,10 +39,8 @@ import { Badge } from '@/components/ui/Badge';
 import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Toggle } from '@/components/ui/Toggle';
-import { SelectField } from '@/components/ui/Select';
 import { useToastStore } from '@/components/ui/Toast';
 import { canSeeTab, isWarehouseAdmin } from '@/lib/auth/access';
-import { syncErpPushPreferences } from '@/lib/push/client';
 import { useUiStore, type ErpWorkspaceTab } from '@/lib/store/ui';
 
 type ParsedItemInput = {
@@ -77,9 +76,8 @@ type ErpWarehouseDraft = {
   orderNo: string;
 };
 
-type ErpLocationDraft = {
+type ErpTargetLocationDraft = {
   name: string;
-  orderNo: string;
 };
 
 type SplitMode = 'delimited' | 'whitespace';
@@ -189,9 +187,6 @@ const parseOrderNo = (value: string) => {
 const isErpWarehouseDraftEqual = (left: ErpWarehouseDraft, right: ErpWarehouseDraft) =>
   left.name === right.name && left.orderNo === right.orderNo;
 
-const isErpLocationDraftEqual = (left: ErpLocationDraft, right: ErpLocationDraft) =>
-  left.name === right.name && left.orderNo === right.orderNo;
-
 const formatDateTime = (value: string) =>
   new Intl.DateTimeFormat('pl-PL', {
     dateStyle: 'short',
@@ -232,15 +227,7 @@ const WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS = [
   '56'
 ] as const;
 
-const ISSUE_TARGET_LOCATION_PRESETS = [
-  'HALA 1',
-  'HALA 2',
-  'HALA 3',
-  'BAKOMA',
-  'PACZKA',
-  'LAKIERNIA',
-  'INNA LOKALIZACJA'
-] as const;
+const CUSTOM_TARGET_LOCATION_PRESET = 'INNA LOKALIZACJA';
 const ERP_LOCATION_ASSIGNMENT_DEFAULT_OPTIONS = [
   'HALA 1',
   'HALA 2',
@@ -248,29 +235,28 @@ const ERP_LOCATION_ASSIGNMENT_DEFAULT_OPTIONS = [
   'BAKOMA',
   'PACZKA',
   'LAKIERNIA',
-  'INNA'
+  CUSTOM_TARGET_LOCATION_PRESET
 ] as const;
-const ERP_LOCATION_ASSIGNMENT_STORAGE_KEY = 'apka:erp:location-assignment-options';
 const normalizeErpLocationAssignmentLabel = (value: string) =>
   value
     .trim()
     .replace(/\s+/g, ' ')
     .toUpperCase();
+const normalizeErpLocationAssignmentOptionAlias = (value: string) =>
+  value === 'INNA' ? CUSTOM_TARGET_LOCATION_PRESET : value;
 const normalizeErpLocationAssignmentOptions = (value: unknown) => {
   if (!Array.isArray(value)) return [...ERP_LOCATION_ASSIGNMENT_DEFAULT_OPTIONS];
   const unique = new Set<string>();
   value.forEach((item) => {
-    const normalized = normalizeErpLocationAssignmentLabel(String(item ?? ''));
+    const normalized = normalizeErpLocationAssignmentOptionAlias(
+      normalizeErpLocationAssignmentLabel(String(item ?? ''))
+    );
     if (!normalized) return;
     unique.add(normalized);
   });
   if (unique.size === 0) return [...ERP_LOCATION_ASSIGNMENT_DEFAULT_OPTIONS];
   return [...unique];
 };
-const CUSTOM_TARGET_LOCATION_PRESET = 'INNA LOKALIZACJA';
-const DISPATCHER_TARGET_LOCATION_FILTER_OPTIONS = ISSUE_TARGET_LOCATION_PRESETS.filter(
-  (preset) => preset !== CUSTOM_TARGET_LOCATION_PRESET
-);
 const RETURN_TARGET_LOCATION_PRESETS = WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS.filter(
   (warehouseNo) => warehouseNo !== '40' && warehouseNo !== '41'
 ).map((warehouseNo) => `MAGAZYN ${warehouseNo}`);
@@ -281,6 +267,12 @@ const WAREHOUSE_TRANSFER_FLOW_KIND_LABELS: Record<WarehouseTransferFlowKind, str
   ZWROT: 'Zwrot z Hali'
 };
 const WAREHOUSE_TRANSFER_FLOW_KIND_NOTE_PREFIX = 'FLOW_KIND:';
+const PACZKA_REQUEST_NOTE_TAG_REGEX = /\[PACZKA_REQUESTED\|([^|\]]+)\|([^|\]]*)\]/i;
+
+type PaczkaRequestMeta = {
+  requestedAt: string | null;
+  requestedBy: string | null;
+};
 
 const extractWarehousemanSourceWarehouseKey = (value: string | null | undefined) => {
   const normalized = String(value ?? '').trim();
@@ -322,10 +314,39 @@ const parseWarehouseTransferFlowKindFromNote = (
   return normalizeWarehouseTransferFlowKind(normalizedNote);
 };
 
-const stripWarehouseTransferFlowKindFromNote = (note: string | null | undefined) =>
-  String(note ?? '')
+const parsePaczkaRequestMetaFromNote = (note: string | null | undefined): PaczkaRequestMeta | null => {
+  const match = String(note ?? '').match(PACZKA_REQUEST_NOTE_TAG_REGEX);
+  if (!match) return null;
+
+  const requestedAtRaw = String(match[1] ?? '').trim();
+  const requestedByRaw = String(match[2] ?? '').trim();
+  const requestedAtIso = requestedAtRaw && !Number.isNaN(new Date(requestedAtRaw).getTime())
+    ? requestedAtRaw
+    : null;
+
+  return {
+    requestedAt: requestedAtIso,
+    requestedBy: requestedByRaw || null
+  };
+};
+
+const stripPaczkaRequestTagFromNote = (note: string | null | undefined) =>
+  String(note ?? '').replace(PACZKA_REQUEST_NOTE_TAG_REGEX, '').trim();
+
+const stripWarehouseTransferFlowKindFromNote = (note: string | null | undefined) => {
+  const withoutFlowKind = String(note ?? '')
     .replace(/\bFLOW_KIND\s*:\s*(?:WYDANIE|ZWROT)\b\s*(?:[|,;:-]\s*)?/i, '')
     .trim();
+  return stripPaczkaRequestTagFromNote(withoutFlowKind).replace(/\s{2,}/g, ' ').trim();
+};
+
+const getDocumentTargetLocationLabel = (
+  document: Pick<WarehouseTransferDocumentSummary, 'targetWarehouse' | 'note'>
+) => {
+  const targetWarehouse = String(document.targetWarehouse ?? '').trim();
+  if (targetWarehouse) return targetWarehouse;
+  return stripWarehouseTransferFlowKindFromNote(document.note);
+};
 
 const getDefaultWarehousemanSourceWarehouseFilter = () => [
   ...WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS
@@ -349,6 +370,39 @@ const normalizeTargetLocationFilterToken = (value: string | null | undefined) =>
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ');
+
+const isPaczkaTargetLocation = (value: string | null | undefined) =>
+  normalizeTargetLocationFilterToken(value).includes('paczka');
+
+const toUniqueTargetLocationOptions = (
+  values: Array<string | null | undefined>,
+  options?: { excludeCustom?: boolean; onlyPaczka?: boolean }
+) => {
+  const unique = new Map<string, string>();
+  values.forEach((value) => {
+    const normalizedLabel = normalizeErpLocationAssignmentOptionAlias(
+      normalizeErpLocationAssignmentLabel(String(value ?? ''))
+    );
+    if (!normalizedLabel) return;
+    if (options?.excludeCustom && normalizedLabel === CUSTOM_TARGET_LOCATION_PRESET) return;
+    if (options?.onlyPaczka && !isPaczkaTargetLocation(normalizedLabel)) return;
+    const token = normalizeTargetLocationFilterToken(normalizedLabel);
+    if (!token || unique.has(token)) return;
+    unique.set(token, normalizedLabel);
+  });
+  return [...unique.values()];
+};
+
+const buildDispatcherDocumentSearchText = (document: WarehouseTransferDocumentSummary) =>
+  [
+    document.documentNumber,
+    document.sourceWarehouse,
+    getDocumentTargetLocationLabel(document),
+    stripWarehouseTransferFlowKindFromNote(document.note),
+    document.searchText
+  ]
+    .filter(Boolean)
+    .join(' ');
 
 const normalizeUnitToken = (value: string) => {
   const normalized = value
@@ -2572,6 +2626,9 @@ export function WarehouseTransferDocumentsPanel() {
   const currentUser = useUiStore((state) => state.user);
   const workspaceTab = useUiStore((state) => state.erpWorkspaceTab);
   const setWorkspaceTab = useUiStore((state) => state.setErpWorkspaceTab);
+  const setErpPushDispatcherTargetOptions = useUiStore(
+    (state) => state.setErpPushDispatcherTargetOptions
+  );
   const erpDocumentNotificationsEnabled = useUiStore(
     (state) => state.erpDocumentNotificationsEnabled
   );
@@ -2580,6 +2637,11 @@ export function WarehouseTransferDocumentsPanel() {
   const canSeeIssuerTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-wypisz-dokument');
   const canSeeWarehousemanTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-magazynier');
   const canSeeDispatcherTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-rozdzielca');
+  const canSeeDispatcherShiftTab = canSeeTab(
+    currentUser,
+    'PRZESUNIECIA_ERP',
+    'erp-rozdzielca-zmianowy'
+  );
   const canSeeHistoryTab = canSeeTab(currentUser, 'PRZESUNIECIA_ERP', 'erp-historia-dokumentow');
   const canManageErpSettings = isWarehouseAdmin(currentUser, 'PRZESUNIECIA_ERP');
   const allowedWorkspaceTabs = useMemo(() => {
@@ -2587,15 +2649,40 @@ export function WarehouseTransferDocumentsPanel() {
     if (canSeeIssuerTab) next.push('issuer');
     if (canSeeWarehousemanTab) next.push('warehouseman');
     if (canSeeDispatcherTab) next.push('dispatcher');
+    if (canSeeDispatcherShiftTab) next.push('dispatcher-shift');
     if (canSeeHistoryTab) next.push('history');
+    if (canManageErpSettings) next.push('management');
     return next;
   }, [
+    canManageErpSettings,
     canSeeDispatcherTab,
+    canSeeDispatcherShiftTab,
     canSeeHistoryTab,
     canSeeIssuerTab,
     canSeeWarehousemanTab
   ]);
   const hasAnyWorkspaceAccess = allowedWorkspaceTabs.length > 0;
+  const { data: erpTargetLocationsData = [] } = useQuery({
+    queryKey: ['erp-target-locations'],
+    queryFn: getErpTargetLocations,
+    enabled: hasAnyWorkspaceAccess
+  });
+  const erpLocationAssignments = useMemo(
+    () =>
+      [...erpTargetLocationsData].sort((a, b) => {
+        const orderDiff = a.orderNo - b.orderNo;
+        if (orderDiff !== 0) return orderDiff;
+        return a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' });
+      }),
+    [erpTargetLocationsData]
+  );
+  const erpLocationAssignmentOptions = useMemo(() => {
+    const fromDb = normalizeErpLocationAssignmentOptions(
+      erpLocationAssignments.map((assignment) => assignment.name)
+    );
+    if (fromDb.length > 0) return fromDb;
+    return [...ERP_LOCATION_ASSIGNMENT_DEFAULT_OPTIONS];
+  }, [erpLocationAssignments]);
   const warehousemanSourceWarehouseFilterStorageKey = useMemo(() => {
     const userId = String(currentUser?.id ?? '').trim();
     return userId ? `apka:erp:warehouseman-source-warehouse-filter:${userId}` : null;
@@ -2607,11 +2694,17 @@ export function WarehouseTransferDocumentsPanel() {
     documentId: string;
     itemId: string;
   } | null>(null);
+  const [autoMarkIssuedPrompt, setAutoMarkIssuedPrompt] = useState<{
+    documentId: string;
+    documentLabel: string;
+    flowKind: WarehouseTransferFlowKind;
+  } | null>(null);
   const [priorityOverrides, setPriorityOverrides] = useState<
     Record<string, WarehouseTransferItemPriority>
   >({});
   const [qtyOverrides, setQtyOverrides] = useState<Record<string, string>>({});
   const [showCommentPresetSuggestions, setShowCommentPresetSuggestions] = useState(false);
+  const [dispatcherShiftSearch, setDispatcherShiftSearch] = useState('');
   const [historySearch, setHistorySearch] = useState('');
   const [warehousemanSourceWarehouseFilter, setWarehousemanSourceWarehouseFilter] = useState<
     string[]
@@ -2621,38 +2714,31 @@ export function WarehouseTransferDocumentsPanel() {
   const [dispatcherTargetLocationFilter, setDispatcherTargetLocationFilter] = useState<
     string[] | null
   >(null);
+  const [dispatcherShiftTargetLocationFilter, setDispatcherShiftTargetLocationFilter] = useState<
+    string[] | null
+  >(null);
   const [erpWarehouseForm, setErpWarehouseForm] = useState({
-    name: '',
-    orderNo: ''
-  });
-  const [erpLocationForm, setErpLocationForm] = useState<{
-    warehouseId: string;
-    name: string;
-    orderNo: string;
-  }>({
-    warehouseId: '',
     name: '',
     orderNo: ''
   });
   const [erpWarehouseDrafts, setErpWarehouseDrafts] = useState<Record<string, ErpWarehouseDraft>>(
     {}
   );
-  const [erpLocationDrafts, setErpLocationDrafts] = useState<Record<string, ErpLocationDraft>>({});
-  const [erpLocationAssignmentOptions, setErpLocationAssignmentOptions] = useState<string[]>(
-    [...ERP_LOCATION_ASSIGNMENT_DEFAULT_OPTIONS]
-  );
   const [erpLocationAssignmentDrafts, setErpLocationAssignmentDrafts] = useState<
-    Record<string, string>
+    Record<string, ErpTargetLocationDraft>
   >({});
   const [erpLocationAssignmentNew, setErpLocationAssignmentNew] = useState('');
-  const [erpLocationToDeleteId, setErpLocationToDeleteId] = useState('');
   const normalizedFormFlowKind = normalizeWarehouseTransferFlowKind(form.documentFlowKind);
+  const issueTargetLocationPresetOptions = useMemo<readonly string[]>(
+    () => normalizeErpLocationAssignmentOptions(erpLocationAssignmentOptions),
+    [erpLocationAssignmentOptions]
+  );
   const targetLocationPresetOptions = useMemo<readonly string[]>(
     () =>
       normalizedFormFlowKind === 'ZWROT'
         ? RETURN_TARGET_LOCATION_PRESETS
-        : ISSUE_TARGET_LOCATION_PRESETS,
-    [normalizedFormFlowKind]
+        : issueTargetLocationPresetOptions,
+    [issueTargetLocationPresetOptions, normalizedFormFlowKind]
   );
   const showCustomTargetLocationInput =
     normalizedFormFlowKind === 'WYDANIE' &&
@@ -2665,6 +2751,10 @@ export function WarehouseTransferDocumentsPanel() {
       : 'Wybierz lokalizację docelową';
 
   useEffect(() => {
+    setErpPushDispatcherTargetOptions([...issueTargetLocationPresetOptions]);
+  }, [issueTargetLocationPresetOptions, setErpPushDispatcherTargetOptions]);
+
+  useEffect(() => {
     if (!hasAnyWorkspaceAccess) return;
     if (allowedWorkspaceTabs.includes(workspaceTab)) return;
     setWorkspaceTab(allowedWorkspaceTabs[0]);
@@ -2674,7 +2764,7 @@ export function WarehouseTransferDocumentsPanel() {
     setForm((prev) => {
       const flowKind = normalizeWarehouseTransferFlowKind(prev.documentFlowKind);
       const presets: readonly string[] =
-        flowKind === 'ZWROT' ? RETURN_TARGET_LOCATION_PRESETS : ISSUE_TARGET_LOCATION_PRESETS;
+        flowKind === 'ZWROT' ? RETURN_TARGET_LOCATION_PRESETS : issueTargetLocationPresetOptions;
       const presetIsValid = presets.includes(prev.documentCommentPreset);
       const nextPreset = presetIsValid ? prev.documentCommentPreset : '';
       const nextCustom = flowKind === 'ZWROT' ? '' : prev.documentCommentCustom;
@@ -2687,7 +2777,7 @@ export function WarehouseTransferDocumentsPanel() {
         documentCommentCustom: nextCustom
       };
     });
-  }, [normalizedFormFlowKind]);
+  }, [issueTargetLocationPresetOptions, normalizedFormFlowKind]);
 
   useEffect(() => {
     if (!showCommentPresetSuggestions) return;
@@ -2926,11 +3016,6 @@ export function WarehouseTransferDocumentsPanel() {
     queryFn: () => getWarehousesAdmin('ERP'),
     enabled: canManageErpSettings
   });
-  const { data: erpLocationsData = [], isLoading: erpLocationsLoading } = useQuery({
-    queryKey: ['locations-admin', 'ERP'],
-    queryFn: () => getLocationsAdmin('ERP'),
-    enabled: canManageErpSettings
-  });
   const activeErpWarehouses = useMemo(() => {
     return [...erpWarehousesData]
       .filter((warehouse) => warehouse.isActive)
@@ -2940,68 +3025,6 @@ export function WarehouseTransferDocumentsPanel() {
         return a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' });
       });
   }, [erpWarehousesData]);
-  const erpWarehouseNameMap = useMemo(
-    () => new Map(erpWarehousesData.map((warehouse) => [warehouse.id, warehouse.name])),
-    [erpWarehousesData]
-  );
-  const erpWarehouseOrderMap = useMemo(
-    () => new Map(erpWarehousesData.map((warehouse) => [warehouse.id, warehouse.orderNo])),
-    [erpWarehousesData]
-  );
-  const activeErpLocations = useMemo(() => {
-    return [...erpLocationsData]
-      .filter((location) => location.isActive)
-      .sort((a, b) => {
-        const warehouseOrderDiff =
-          (erpWarehouseOrderMap.get(a.warehouseId) ?? 0) - (erpWarehouseOrderMap.get(b.warehouseId) ?? 0);
-        if (warehouseOrderDiff !== 0) return warehouseOrderDiff;
-        const orderDiff = a.orderNo - b.orderNo;
-        if (orderDiff !== 0) return orderDiff;
-        return a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' });
-      });
-  }, [erpLocationsData, erpWarehouseOrderMap]);
-  const erpLocationPlaceholder = 'np. HALA 1';
-
-  useEffect(() => {
-    if (!canManageErpSettings) return;
-    if (activeErpWarehouses.length === 0) {
-      if (!erpLocationForm.warehouseId) return;
-      setErpLocationForm((prev) => ({ ...prev, warehouseId: '' }));
-      return;
-    }
-    const selectedExists = activeErpWarehouses.some(
-      (warehouse) => warehouse.id === erpLocationForm.warehouseId
-    );
-    if (selectedExists) return;
-    setErpLocationForm((prev) => ({ ...prev, warehouseId: activeErpWarehouses[0].id }));
-  }, [activeErpWarehouses, canManageErpSettings, erpLocationForm.warehouseId]);
-
-  useEffect(() => {
-    if (!erpLocationToDeleteId) return;
-    const exists = activeErpLocations.some((location) => location.id === erpLocationToDeleteId);
-    if (exists) return;
-    setErpLocationToDeleteId('');
-  }, [activeErpLocations, erpLocationToDeleteId]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(ERP_LOCATION_ASSIGNMENT_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      setErpLocationAssignmentOptions(normalizeErpLocationAssignmentOptions(parsed));
-    } catch {
-      // ignore invalid local config and keep defaults
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(
-      ERP_LOCATION_ASSIGNMENT_STORAGE_KEY,
-      JSON.stringify(erpLocationAssignmentOptions)
-    );
-  }, [erpLocationAssignmentOptions]);
 
   const { data: documents = [], isLoading: documentsLoading, isFetched: documentsFetched } = useQuery({
     queryKey: ['warehouse-transfer-documents'],
@@ -3050,19 +3073,30 @@ export function WarehouseTransferDocumentsPanel() {
       }),
     [warehousemanDocuments, warehousemanSourceWarehouseFilterSet]
   );
+  const filteredWarehousemanVisibleDocuments = useMemo(
+    () =>
+      filteredWarehousemanDocuments.filter((document) => {
+        const isPaczkaDocument =
+          isPaczkaTargetLocation(document.targetWarehouse) ||
+          isPaczkaTargetLocation(stripWarehouseTransferFlowKindFromNote(document.note));
+        if (!isPaczkaDocument) return true;
+        return Boolean(parsePaczkaRequestMetaFromNote(document.note));
+      }),
+    [filteredWarehousemanDocuments]
+  );
   const warehousemanIssueDocuments = useMemo(
     () =>
-      filteredWarehousemanDocuments.filter(
+      filteredWarehousemanVisibleDocuments.filter(
         (document) => parseWarehouseTransferFlowKindFromNote(document.note) === 'WYDANIE'
       ),
-    [filteredWarehousemanDocuments]
+    [filteredWarehousemanVisibleDocuments]
   );
   const warehousemanReturnDocuments = useMemo(
     () =>
-      filteredWarehousemanDocuments.filter(
+      filteredWarehousemanVisibleDocuments.filter(
         (document) => parseWarehouseTransferFlowKindFromNote(document.note) === 'ZWROT'
       ),
-    [filteredWarehousemanDocuments]
+    [filteredWarehousemanVisibleDocuments]
   );
   const dispatcherDocuments = useMemo(
     () =>
@@ -3074,7 +3108,18 @@ export function WarehouseTransferDocumentsPanel() {
       }),
     [issuedDocuments, openDocuments]
   );
-  const dispatcherTargetLocationOptions = DISPATCHER_TARGET_LOCATION_FILTER_OPTIONS;
+  const dispatcherTargetLocationOptions = useMemo(() => {
+    const dynamicIssueOptions = issueTargetLocationPresetOptions.filter(
+      (option) => option !== CUSTOM_TARGET_LOCATION_PRESET
+    );
+    const activeDocumentTargets = dispatcherDocuments
+      .filter((document) => parseWarehouseTransferFlowKindFromNote(document.note) !== 'ZWROT')
+      .map((document) => getDocumentTargetLocationLabel(document));
+    return toUniqueTargetLocationOptions(
+      [...dynamicIssueOptions, ...activeDocumentTargets],
+      { excludeCustom: true }
+    );
+  }, [dispatcherDocuments, issueTargetLocationPresetOptions]);
   const dispatcherTargetLocationFilterSet = useMemo(() => {
     if (dispatcherTargetLocationFilter === null) return null;
     const allowedOptions = new Set(
@@ -3086,41 +3131,21 @@ export function WarehouseTransferDocumentsPanel() {
         .filter((option) => allowedOptions.has(option))
     );
   }, [dispatcherTargetLocationFilter, dispatcherTargetLocationOptions]);
-  const dispatcherTargetLocationFilterForPush = useMemo(() => {
-    if (dispatcherTargetLocationFilterSet === null) return null;
-    return [...dispatcherTargetLocationFilterSet].sort();
-  }, [dispatcherTargetLocationFilterSet]);
-  useEffect(() => {
-    if (!erpDocumentNotificationsEnabled) return;
-    if (!warehousemanSourceWarehouseFilterHydrated) return;
-    if (!canSeeWarehousemanTab && !canSeeDispatcherTab) return;
-
-    void syncErpPushPreferences({
-      warehousemanSourceWarehouses: canSeeWarehousemanTab
-        ? [...warehousemanSourceWarehouseFilter]
-        : null,
-      dispatcherTargetLocations: canSeeDispatcherTab
-        ? dispatcherTargetLocationFilterForPush
-        : null
-    }).catch(() => undefined);
-  }, [
-    canSeeDispatcherTab,
-    canSeeWarehousemanTab,
-    dispatcherTargetLocationFilterForPush,
-    erpDocumentNotificationsEnabled,
-    warehousemanSourceWarehouseFilter,
-    warehousemanSourceWarehouseFilterHydrated
-  ]);
+  // Push preferences are managed explicitly from Topbar settings (gear icon).
   const filteredDispatcherDocuments = useMemo(() => {
-    return dispatcherDocuments.filter((document) =>
-      parseWarehouseTransferFlowKindFromNote(document.note) === 'ZWROT'
-        ? true
-        : dispatcherTargetLocationFilterSet === null
+    return dispatcherDocuments.filter((document) => {
+      const flowKind = parseWarehouseTransferFlowKindFromNote(document.note);
+      const targetLocationToken = normalizeTargetLocationFilterToken(
+        getDocumentTargetLocationLabel(document)
+      );
+      const matchesTargetLocation =
+        flowKind === 'ZWROT'
           ? true
-          : dispatcherTargetLocationFilterSet.has(
-              normalizeTargetLocationFilterToken(document.targetWarehouse)
-            )
-    );
+          : dispatcherTargetLocationFilterSet === null
+            ? true
+            : dispatcherTargetLocationFilterSet.has(targetLocationToken);
+      return matchesTargetLocation;
+    });
   }, [dispatcherDocuments, dispatcherTargetLocationFilterSet]);
   const dispatcherIssueDocuments = useMemo(
     () =>
@@ -3140,6 +3165,59 @@ export function WarehouseTransferDocumentsPanel() {
     () => documents.filter((document) => document.status === 'CLOSED'),
     [documents]
   );
+  const dispatcherShiftDocuments = useMemo(
+    () =>
+      [...documents]
+        .filter(
+          (document) =>
+            isPaczkaTargetLocation(document.targetWarehouse) ||
+            isPaczkaTargetLocation(stripWarehouseTransferFlowKindFromNote(document.note))
+        )
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    [documents]
+  );
+  const dispatcherShiftTargetLocationOptions = useMemo(() => {
+    const paczkaAssignments = issueTargetLocationPresetOptions.filter((option) =>
+      isPaczkaTargetLocation(option)
+    );
+    const paczkaTargetsFromDocuments = dispatcherShiftDocuments.map((document) =>
+      getDocumentTargetLocationLabel(document)
+    );
+    return toUniqueTargetLocationOptions(
+      [...paczkaAssignments, ...paczkaTargetsFromDocuments],
+      { onlyPaczka: true }
+    );
+  }, [dispatcherShiftDocuments, issueTargetLocationPresetOptions]);
+  const dispatcherShiftTargetLocationFilterSet = useMemo(() => {
+    if (dispatcherShiftTargetLocationFilter === null) return null;
+    const allowedOptions = new Set(
+      dispatcherShiftTargetLocationOptions.map((option) =>
+        normalizeTargetLocationFilterToken(option)
+      )
+    );
+    return new Set(
+      dispatcherShiftTargetLocationFilter
+        .map((option) => normalizeTargetLocationFilterToken(option))
+        .filter((option) => allowedOptions.has(option))
+    );
+  }, [dispatcherShiftTargetLocationFilter, dispatcherShiftTargetLocationOptions]);
+  const filteredDispatcherShiftDocuments = useMemo(() => {
+    const normalizedDispatcherShiftSearch = normalizeDocumentSearchToken(dispatcherShiftSearch);
+    return dispatcherShiftDocuments.filter((document) => {
+      const targetLocationToken = normalizeTargetLocationFilterToken(
+        getDocumentTargetLocationLabel(document)
+      );
+      const matchesTargetLocation =
+        dispatcherShiftTargetLocationFilterSet === null
+          ? true
+          : dispatcherShiftTargetLocationFilterSet.has(targetLocationToken);
+      if (!matchesTargetLocation) return false;
+      if (!normalizedDispatcherShiftSearch) return true;
+      return normalizeDocumentSearchToken(buildDispatcherDocumentSearchText(document)).includes(
+        normalizedDispatcherShiftSearch
+      );
+    });
+  }, [dispatcherShiftDocuments, dispatcherShiftSearch, dispatcherShiftTargetLocationFilterSet]);
   const filteredHistoryDocuments = useMemo(() => {
     const normalizedSearch = normalizeDocumentSearchToken(historySearch);
     if (!normalizedSearch) return historyDocuments;
@@ -3168,6 +3246,29 @@ export function WarehouseTransferDocumentsPanel() {
   }, []);
   const clearDispatcherTargetLocationFilter = useCallback(() => {
     setDispatcherTargetLocationFilter([]);
+  }, []);
+  const toggleDispatcherShiftTargetLocation = useCallback(
+    (targetLocation: string) => {
+      setDispatcherShiftTargetLocationFilter((prev) => {
+        const currentlySelected =
+          prev === null ? [...dispatcherShiftTargetLocationOptions] : prev;
+        const nextSet = new Set(currentlySelected);
+        if (nextSet.has(targetLocation)) {
+          nextSet.delete(targetLocation);
+        } else {
+          nextSet.add(targetLocation);
+        }
+        if (nextSet.size === dispatcherShiftTargetLocationOptions.length) return null;
+        return dispatcherShiftTargetLocationOptions.filter((option) => nextSet.has(option));
+      });
+    },
+    [dispatcherShiftTargetLocationOptions]
+  );
+  const selectAllDispatcherShiftTargetLocations = useCallback(() => {
+    setDispatcherShiftTargetLocationFilter(null);
+  }, []);
+  const clearDispatcherShiftTargetLocationFilter = useCallback(() => {
+    setDispatcherShiftTargetLocationFilter([]);
   }, []);
   const latestDocument = useMemo(() => {
     if (documents.length === 0) return null;
@@ -3214,16 +3315,21 @@ export function WarehouseTransferDocumentsPanel() {
     toast
   ]);
   const visibleDocuments = useMemo(() => {
-    if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab) return filteredWarehousemanDocuments;
+    if (workspaceTab === 'warehouseman' && canSeeWarehousemanTab)
+      return filteredWarehousemanVisibleDocuments;
     if (workspaceTab === 'dispatcher' && canSeeDispatcherTab) return filteredDispatcherDocuments;
+    if (workspaceTab === 'dispatcher-shift' && canSeeDispatcherShiftTab)
+      return filteredDispatcherShiftDocuments;
     if (workspaceTab === 'history' && canSeeHistoryTab) return filteredHistoryDocuments;
     return [];
   }, [
     canSeeDispatcherTab,
+    canSeeDispatcherShiftTab,
     canSeeHistoryTab,
     canSeeWarehousemanTab,
     filteredDispatcherDocuments,
-    filteredWarehousemanDocuments,
+    filteredWarehousemanVisibleDocuments,
+    filteredDispatcherShiftDocuments,
     filteredHistoryDocuments,
     workspaceTab
   ]);
@@ -3525,6 +3631,7 @@ export function WarehouseTransferDocumentsPanel() {
       queryClient.invalidateQueries({
         queryKey: ['warehouse-transfer-document', data.id]
       });
+      setAutoMarkIssuedPrompt(null);
       setLastMarkedIssuedDocumentId(data.id);
       toast({ title: 'Dokument oznaczono jako wydany', tone: 'success' });
     },
@@ -3556,6 +3663,7 @@ export function WarehouseTransferDocumentsPanel() {
 
     if (details.document.status !== 'OPEN') {
       setAutoMarkIssuedPromptCandidate(null);
+      setAutoMarkIssuedPrompt(null);
       return;
     }
 
@@ -3564,15 +3672,24 @@ export function WarehouseTransferDocumentsPanel() {
 
     const flowKind = parseWarehouseTransferFlowKindFromNote(details.document.note);
     const documentLabel = details.document.documentNumber || details.document.id;
-    const message =
-      flowKind === 'ZWROT'
-        ? `Odebrano ostatnią pozycję zwrotu w dokumencie ${documentLabel}. Oznaczyć dokument jako zakończony przez magazyniera?`
-        : `Wydano ostatnią pozycję w dokumencie ${documentLabel}. Oznaczyć dokument jako wydany?`;
-    const confirmed = window.confirm(message);
+    setAutoMarkIssuedPrompt({
+      documentId: details.document.id,
+      documentLabel,
+      flowKind
+    });
     setAutoMarkIssuedPromptCandidate(null);
-    if (!confirmed) return;
-    markDocumentIssuedMutation.mutate({ documentId: details.document.id });
-  }, [autoMarkIssuedPromptCandidate, details, markDocumentIssuedMutation]);
+  }, [autoMarkIssuedPromptCandidate, details]);
+
+  useEffect(() => {
+    if (!autoMarkIssuedPrompt) return;
+    if (activeDocumentId !== autoMarkIssuedPrompt.documentId) {
+      setAutoMarkIssuedPrompt(null);
+      return;
+    }
+    if (details && details.document.id === autoMarkIssuedPrompt.documentId && details.document.status !== 'OPEN') {
+      setAutoMarkIssuedPrompt(null);
+    }
+  }, [activeDocumentId, autoMarkIssuedPrompt, details]);
 
   const removeDocumentMutation = useMutation({
     mutationFn: removeWarehouseTransferDocument,
@@ -3609,6 +3726,33 @@ export function WarehouseTransferDocumentsPanel() {
       };
       toast({
         title: messageMap[err.message] ?? 'Nie udało się usunąć dokumentu.',
+        tone: 'error'
+      });
+    }
+  });
+
+  const requestWarehouseTransferPackageMutation = useMutation({
+    mutationFn: requestWarehouseTransferPackage,
+    onSuccess: (document) => {
+      queryClient.invalidateQueries({ queryKey: ['warehouse-transfer-documents'] });
+      queryClient.invalidateQueries({
+        queryKey: ['warehouse-transfer-document', document.id]
+      });
+      toast({
+        title: 'Wyslano prosbe o paczke do magazyniera.',
+        tone: 'success'
+      });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        FORBIDDEN: 'Brak uprawnien do wyslania prosby o paczke.',
+        NOT_FOUND: 'Nie znaleziono dokumentu.',
+        DOCUMENT_CLOSED: 'Dokument jest juz zamkniety.',
+        NOT_PACZKA_DOCUMENT: 'Ta operacja dziala tylko dla dokumentow z przypisem PACZKA.',
+        PACKAGE_ALREADY_REQUESTED: 'Prosba o paczke byla juz wyslana.'
+      };
+      toast({
+        title: messageMap[err.message] ?? 'Nie udalo sie wyslac prosby o paczke.',
         tone: 'error'
       });
     }
@@ -3666,55 +3810,77 @@ export function WarehouseTransferDocumentsPanel() {
     }
   });
 
-  const addErpLocationMutation = useMutation({
-    mutationFn: addLocation,
+  const addErpTargetLocationMutation = useMutation({
+    mutationFn: addErpTargetLocation,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['locations-admin'] });
-      queryClient.invalidateQueries({ queryKey: ['locations'] });
-      toast({ title: 'Dodano lokalizację', tone: 'success' });
-      setErpLocationForm((prev) => ({ ...prev, name: '', orderNo: '' }));
+      queryClient.invalidateQueries({ queryKey: ['erp-target-locations'] });
+      setErpLocationAssignmentNew('');
+      toast({ title: 'Dodano lokalizacje docelowa.', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        DUPLICATE: 'Lokalizacja już istnieje.',
-        WAREHOUSE_MISSING: 'Wybierz magazyn.',
-        INVALID_NAME: 'Podaj poprawną nazwę lokalizacji.',
-        FORBIDDEN: 'Brak uprawnień do dodania lokalizacji.'
+        DUPLICATE: 'Taka lokalizacja docelowa juz istnieje.',
+        FORBIDDEN: 'Brak uprawnien do dodania lokalizacji.',
+        MIGRATION_REQUIRED_ERP_TARGET_LOCATIONS:
+          'Brakuje migracji SQL dla lokalizacji docelowych ERP.'
       };
-      toast({ title: messageMap[err.message] ?? 'Nie dodano lokalizacji.', tone: 'error' });
+      toast({
+        title: messageMap[err.message] ?? 'Nie udalo sie dodac lokalizacji docelowej.',
+        tone: 'error'
+      });
     }
   });
 
-  const updateErpLocationMutation = useMutation({
-    mutationFn: updateLocation,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['locations-admin'] });
-      queryClient.invalidateQueries({ queryKey: ['locations'] });
-      toast({ title: 'Zapisano lokalizację', tone: 'success' });
+  const updateErpTargetLocationMutation = useMutation({
+    mutationFn: updateErpTargetLocation,
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['erp-target-locations'] });
+      setErpLocationAssignmentDrafts((prev) => {
+        if (!(variables.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[variables.id];
+        return next;
+      });
+      toast({ title: 'Zapisano lokalizacje docelowa.', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        FORBIDDEN: 'Brak uprawnień do edycji lokalizacji.',
-        NOT_FOUND: 'Nie znaleziono lokalizacji.'
+        DUPLICATE: 'Taka lokalizacja docelowa juz istnieje.',
+        NOT_FOUND: 'Nie znaleziono lokalizacji docelowej.',
+        FORBIDDEN: 'Brak uprawnien do edycji lokalizacji.',
+        MIGRATION_REQUIRED_ERP_TARGET_LOCATIONS:
+          'Brakuje migracji SQL dla lokalizacji docelowych ERP.'
       };
-      toast({ title: messageMap[err.message] ?? 'Nie zapisano lokalizacji.', tone: 'error' });
+      toast({
+        title: messageMap[err.message] ?? 'Nie udalo sie zapisac lokalizacji docelowej.',
+        tone: 'error'
+      });
     }
   });
 
-  const removeErpLocationMutation = useMutation({
-    mutationFn: (id: string) => removeLocation(id, 'ERP'),
-    onSuccess: (_, removedLocationId) => {
-      queryClient.invalidateQueries({ queryKey: ['locations-admin'] });
-      queryClient.invalidateQueries({ queryKey: ['locations'] });
-      setErpLocationToDeleteId((prev) => (prev === removedLocationId ? '' : prev));
-      toast({ title: 'Usunięto lokalizację', tone: 'success' });
+  const removeErpTargetLocationMutation = useMutation({
+    mutationFn: removeErpTargetLocation,
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['erp-target-locations'] });
+      setErpLocationAssignmentDrafts((prev) => {
+        if (!(variables.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[variables.id];
+        return next;
+      });
+      toast({ title: 'Usunieto lokalizacje docelowa.', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        FORBIDDEN: 'Brak uprawnień do usunięcia lokalizacji.',
-        NOT_FOUND: 'Nie znaleziono lokalizacji.'
+        NOT_FOUND: 'Nie znaleziono lokalizacji docelowej.',
+        FORBIDDEN: 'Brak uprawnien do usuniecia lokalizacji.',
+        MIGRATION_REQUIRED_ERP_TARGET_LOCATIONS:
+          'Brakuje migracji SQL dla lokalizacji docelowych ERP.'
       };
-      toast({ title: messageMap[err.message] ?? 'Nie usunięto lokalizacji.', tone: 'error' });
+      toast({
+        title: messageMap[err.message] ?? 'Nie udalo sie usunac lokalizacji docelowej.',
+        tone: 'error'
+      });
     }
   });
 
@@ -3731,27 +3897,10 @@ export function WarehouseTransferDocumentsPanel() {
     });
   };
 
-  const handleAddErpLocation = () => {
-    const name = erpLocationForm.name.trim();
-    if (!name) {
-      toast({ title: 'Podaj nazwę lokalizacji.', tone: 'error' });
-      return;
-    }
-    if (!erpLocationForm.warehouseId) {
-      toast({ title: 'Wybierz magazyn.', tone: 'error' });
-      return;
-    }
-    addErpLocationMutation.mutate({
-      warehouseId: erpLocationForm.warehouseId,
-      type: 'pole',
-      name,
-      orderNo: parseOrderNo(erpLocationForm.orderNo),
-      scope: 'ERP'
-    });
-  };
-
   const handleAddErpLocationAssignment = () => {
-    const normalized = normalizeErpLocationAssignmentLabel(erpLocationAssignmentNew);
+    const normalized = normalizeErpLocationAssignmentOptionAlias(
+      normalizeErpLocationAssignmentLabel(erpLocationAssignmentNew)
+    );
     if (!normalized) {
       toast({ title: 'Podaj nazwę przypisu.', tone: 'error' });
       return;
@@ -3760,14 +3909,14 @@ export function WarehouseTransferDocumentsPanel() {
       toast({ title: 'Taki przypis już istnieje.', tone: 'error' });
       return;
     }
-    setErpLocationAssignmentOptions((prev) => [...prev, normalized]);
-    setErpLocationAssignmentNew('');
-    toast({ title: 'Dodano przypis lokalizacji.', tone: 'success' });
+    addErpTargetLocationMutation.mutate({ name: normalized });
   };
 
-  const handleSaveErpLocationAssignment = (currentValue: string) => {
-    const draftRaw = erpLocationAssignmentDrafts[currentValue] ?? currentValue;
-    const normalized = normalizeErpLocationAssignmentLabel(draftRaw);
+  const handleSaveErpLocationAssignment = (assignmentId: string, currentValue: string) => {
+    const draftRaw = erpLocationAssignmentDrafts[assignmentId]?.name ?? currentValue;
+    const normalized = normalizeErpLocationAssignmentOptionAlias(
+      normalizeErpLocationAssignmentLabel(draftRaw)
+    );
     if (!normalized) {
       toast({ title: 'Nazwa przypisu nie może być pusta.', tone: 'error' });
       return;
@@ -3776,31 +3925,24 @@ export function WarehouseTransferDocumentsPanel() {
       toast({ title: 'Taki przypis już istnieje.', tone: 'error' });
       return;
     }
-    if (normalized === currentValue) return;
-
-    setErpLocationAssignmentOptions((prev) =>
-      prev.map((item) => (item === currentValue ? normalized : item))
-    );
-    setErpLocationAssignmentDrafts((prev) => {
-      const next = { ...prev };
-      delete next[currentValue];
-      return next;
-    });
-    toast({ title: 'Zapisano przypis lokalizacji.', tone: 'success' });
+    if (normalized === currentValue) {
+      setErpLocationAssignmentDrafts((prev) => {
+        if (!(assignmentId in prev)) return prev;
+        const next = { ...prev };
+        delete next[assignmentId];
+        return next;
+      });
+      return;
+    }
+    updateErpTargetLocationMutation.mutate({ id: assignmentId, name: normalized });
   };
 
-  const handleRemoveErpLocationAssignment = (value: string) => {
-    if (erpLocationAssignmentOptions.length <= 1) {
+  const handleRemoveErpLocationAssignment = (assignmentId: string) => {
+    if (erpLocationAssignments.length <= 1) {
       toast({ title: 'Musi zostać co najmniej jeden przypis.', tone: 'error' });
       return;
     }
-    setErpLocationAssignmentOptions((prev) => prev.filter((item) => item !== value));
-    setErpLocationAssignmentDrafts((prev) => {
-      const next = { ...prev };
-      delete next[value];
-      return next;
-    });
-    toast({ title: 'Usunięto przypis lokalizacji.', tone: 'success' });
+    removeErpTargetLocationMutation.mutate({ id: assignmentId });
   };
 
   const handleCreateDocument = () => {
@@ -4344,6 +4486,10 @@ export function WarehouseTransferDocumentsPanel() {
     dispatcherTargetLocationFilterSet === null
       ? dispatcherTargetLocationOptions.length
       : dispatcherTargetLocationFilterSet.size;
+  const dispatcherShiftSelectedTargetLocationCount =
+    dispatcherShiftTargetLocationFilterSet === null
+      ? dispatcherShiftTargetLocationOptions.length
+      : dispatcherShiftTargetLocationFilterSet.size;
   const historyCountLabel = historySearch.trim()
     ? `${filteredHistoryDocuments.length}/${historyDocuments.length}`
     : String(historyDocuments.length);
@@ -4429,6 +4575,7 @@ export function WarehouseTransferDocumentsPanel() {
   const isIssuerTab = workspaceTab === 'issuer' && canSeeIssuerTab;
   const isWarehousemanTab = workspaceTab === 'warehouseman' && canSeeWarehousemanTab;
   const isDispatcherTab = workspaceTab === 'dispatcher' && canSeeDispatcherTab;
+  const isDispatcherShiftTab = workspaceTab === 'dispatcher-shift' && canSeeDispatcherShiftTab;
   const isHistoryTab = workspaceTab === 'history' && canSeeHistoryTab;
   const isManagementTab = workspaceTab === 'management' && canManageErpSettings;
   const currentActorName = currentUser?.name?.trim() || currentUser?.username?.trim() || '';
@@ -4437,6 +4584,8 @@ export function WarehouseTransferDocumentsPanel() {
     ? 'Kliknij dokument z historii, aby zobaczyć szczegóły.'
     : isWarehousemanTab
       ? 'Kliknij dokument, aby zobaczyć listę rzeczy do wydania albo zwrotu.'
+      : isDispatcherShiftTab
+        ? 'Kliknij dokument PACZKA, aby zobaczyć pozycje i towar.'
       : isDispatcherTab
         ? 'Kliknij dokument, aby zobaczyć listę rzeczy do przyjęcia na halę.'
         : 'Kliknij dokument do realizacji, aby zobaczyć szczegóły.';
@@ -4469,12 +4618,24 @@ export function WarehouseTransferDocumentsPanel() {
     const expandedItemId = expandedItemIds[details.document.id] ?? null;
     const canEditIssue = isWarehousemanTab && details.document.status !== 'CLOSED';
     const canEditReceipt = isDispatcherTab && details.document.status !== 'CLOSED';
+    const canRemoveDocument = !isDispatcherShiftTab;
     const documentFlowKind = parseWarehouseTransferFlowKindFromNote(details.document.note);
     const isReturnDocument = documentFlowKind === 'ZWROT';
+    const isPaczkaDocument =
+      isPaczkaTargetLocation(details.document.targetWarehouse) ||
+      isPaczkaTargetLocation(stripWarehouseTransferFlowKindFromNote(details.document.note));
+    const paczkaRequestMeta = parsePaczkaRequestMetaFromNote(details.document.note);
+    const canRequestPaczka =
+      isDispatcherShiftTab &&
+      isPaczkaDocument &&
+      details.document.status !== 'CLOSED' &&
+      !paczkaRequestMeta;
     const itemListTitle = isWarehousemanTab
       ? isReturnDocument
         ? 'Lista zwrotów do odebrania'
         : 'Lista rzeczy do wydania'
+      : isDispatcherShiftTab
+        ? 'Pozycje paczki'
       : isDispatcherTab
         ? 'Lista rzeczy do przyjęcia na halę'
         : 'Pozycje dokumentu';
@@ -4483,6 +4644,8 @@ export function WarehouseTransferDocumentsPanel() {
     const warehousemanPrimaryActionLabel = isReturnDocument
       ? 'Odebrano wszystkie zwroty'
       : 'Wydano wszystkie pozycje';
+    const autoMarkIssuedPromptForActiveDocument =
+      autoMarkIssuedPrompt?.documentId === details.document.id ? autoMarkIssuedPrompt : null;
 
     return (
       <Card className="space-y-4">
@@ -4516,14 +4679,16 @@ export function WarehouseTransferDocumentsPanel() {
             >
               {isActiveDocumentCollapsed ? 'Rozwiń dokument' : 'Zwiń dokument'}
             </Button>
-            <Button
-              variant="outline"
-              className="w-full border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_12%,transparent)] sm:w-auto"
-              onClick={handleRemoveDocument}
-              disabled={removeDocumentMutation.isPending}
-            >
-              Usuń dokument
-            </Button>
+            {canRemoveDocument && (
+              <Button
+                variant="outline"
+                className="w-full border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_12%,transparent)] sm:w-auto"
+                onClick={handleRemoveDocument}
+                disabled={removeDocumentMutation.isPending}
+              >
+                Usuń dokument
+              </Button>
+            )}
             {isWarehousemanTab && details.document.status === 'OPEN' && (
               <Button
                 variant="outline"
@@ -4538,7 +4703,7 @@ export function WarehouseTransferDocumentsPanel() {
                 {warehousemanPrimaryActionLabel}
               </Button>
             )}
-            {isDispatcherTab && details.document.status === 'ISSUED' && (
+            {(isDispatcherTab || isDispatcherShiftTab) && details.document.status === 'ISSUED' && (
               <Button
                 variant="outline"
                 className="w-full sm:w-auto"
@@ -4547,16 +4712,72 @@ export function WarehouseTransferDocumentsPanel() {
                 }
                 disabled={closeDocumentMutation.isPending || removeDocumentMutation.isPending}
               >
-                Dokument zatwierdzony
+                Przyjmij
               </Button>
             )}
-            {isDispatcherTab && details.document.status === 'OPEN' && (
+            {(isDispatcherTab || isDispatcherShiftTab) && details.document.status === 'OPEN' && (
               <p className="w-full text-xs text-dim sm:text-right">
                 Dokument w przygotowaniu. Przyjmuj tylko pozycje, które mają już ilość wydaną.
               </p>
             )}
+            {isDispatcherShiftTab && paczkaRequestMeta && (
+              <p className="w-full text-xs text-dim sm:text-right">
+                Paczka zgłoszona: {paczkaRequestMeta.requestedBy || '-'}
+                {paczkaRequestMeta.requestedAt ? ` | ${formatDateTime(paczkaRequestMeta.requestedAt)}` : ''}
+              </p>
+            )}
+            {canRequestPaczka && (
+              <Button
+                variant="primaryEmber"
+                className="w-full border-[rgba(255,122,26,0.85)] text-bg shadow-[0_0_0_2px_rgba(255,145,0,0.45),0_18px_38px_-18px_rgba(255,106,0,0.95)] sm:w-auto"
+                onClick={() =>
+                  requestWarehouseTransferPackageMutation.mutate({ documentId: details.document.id })
+                }
+                disabled={requestWarehouseTransferPackageMutation.isPending}
+              >
+                Pobierz
+              </Button>
+            )}
           </div>
         </div>
+
+        {isWarehousemanTab &&
+          autoMarkIssuedPromptForActiveDocument &&
+          details.document.status === 'OPEN' && (
+            <div className="rounded-2xl border border-[color:color-mix(in_srgb,var(--brand)_48%,var(--border))] bg-[color:color-mix(in_srgb,var(--brand)_10%,transparent)] px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-brand">
+                Potwierdzenie wydania
+              </p>
+              <p className="mt-1 text-sm text-body">
+                {autoMarkIssuedPromptForActiveDocument.flowKind === 'ZWROT'
+                  ? `Odebrano ostatnią pozycję zwrotu w dokumencie ${autoMarkIssuedPromptForActiveDocument.documentLabel}. Oznaczyć dokument jako zakończony przez magazyniera?`
+                  : `Wydano ostatnią pozycję w dokumencie ${autoMarkIssuedPromptForActiveDocument.documentLabel}. Oznaczyć dokument jako wydany?`}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  variant="ghost"
+                  className="w-full sm:w-auto"
+                  onClick={() => setAutoMarkIssuedPrompt(null)}
+                  disabled={markDocumentIssuedMutation.isPending}
+                >
+                  Później
+                </Button>
+                <Button
+                  variant="primaryEmber"
+                  className="w-full sm:w-auto"
+                  onClick={() => {
+                    setAutoMarkIssuedPrompt(null);
+                    markDocumentIssuedMutation.mutate({ documentId: details.document.id });
+                  }}
+                  disabled={markDocumentIssuedMutation.isPending}
+                >
+                  {autoMarkIssuedPromptForActiveDocument.flowKind === 'ZWROT'
+                    ? 'Oznacz jako zakończony'
+                    : 'Oznacz jako wydany'}
+                </Button>
+              </div>
+            </div>
+          )}
 
         {isActiveDocumentCollapsed ? (
           <div className="rounded-2xl border border-border bg-surface2 px-4 py-3 text-sm text-dim">
@@ -4588,6 +4809,8 @@ export function WarehouseTransferDocumentsPanel() {
                     : 'border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_12%,transparent)] text-success';
               const qtyToIssue = Math.max(item.plannedQty - item.issuedQty, 0);
               const qtyToReceive = Math.max(item.issuedQty - item.receivedQty, 0);
+              const showIssueReceiveBuckets =
+                !isDispatcherTab && !isHistoryTab && !isDispatcherShiftTab;
               const issueQuickActionLabel = isReturnDocument ? 'Odebrano zwrot' : 'Wydano';
               const plannedQtyLabel = isReturnDocument ? 'ZWROT:' : 'WYPISANE:';
               const issuedQtyLabel = isReturnDocument ? 'ODEBRANE:' : 'WYDANE:';
@@ -4720,7 +4943,9 @@ export function WarehouseTransferDocumentsPanel() {
                         className={
                           isDispatcherTab
                             ? 'mt-3 grid grid-cols-2 gap-2 lg:grid-cols-3'
-                            : 'mt-3 grid grid-cols-2 gap-2 lg:grid-cols-5'
+                            : showIssueReceiveBuckets
+                              ? 'mt-3 grid grid-cols-2 gap-2 lg:grid-cols-5'
+                              : 'mt-3 grid grid-cols-2 gap-2 lg:grid-cols-3'
                         }
                       >
                         <div
@@ -4804,7 +5029,7 @@ export function WarehouseTransferDocumentsPanel() {
                             </>
                           )}
                         </div>
-                        {!isDispatcherTab && !isHistoryTab && (
+                        {showIssueReceiveBuckets && (
                           <div className="rounded-lg border border-[color:color-mix(in_srgb,var(--warning)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--warning)_12%,transparent)] px-2 py-2">
                             <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-dim">
                               Do wydania
@@ -4814,7 +5039,7 @@ export function WarehouseTransferDocumentsPanel() {
                             </p>
                           </div>
                         )}
-                        {!isDispatcherTab && !isHistoryTab && (
+                        {showIssueReceiveBuckets && (
                           <div className="rounded-lg border border-[color:color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_12%,transparent)] px-2 py-2">
                             <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-dim">
                               Na hale
@@ -5187,7 +5412,17 @@ export function WarehouseTransferDocumentsPanel() {
     warehousemanSourceWarehouseFilter.length === 0
       ? warehousemanNoFilterDescription
       : 'Brak zwrotów do odebrania dla wybranych magazynów.';
-
+  const dispatcherShiftCardTitle = 'Dokumenty PACZKA';
+  const dispatcherShiftNoTargetFilterDescription =
+    dispatcherShiftTargetLocationOptions.length === 0
+      ? 'Brak lokalizacji PACZKA na aktywnych dokumentach.'
+      : 'Wybierz co najmniej jedną lokalizację docelową, aby zobaczyć dokumenty.';
+  const dispatcherShiftEmptyDescription =
+    dispatcherShiftSelectedTargetLocationCount === 0
+      ? dispatcherShiftNoTargetFilterDescription
+      : dispatcherShiftSearch.trim().length > 0
+        ? 'Brak dokumentów PACZKA dla podanej frazy.'
+        : 'Brak dokumentów PACZKA dla wybranych lokalizacji.';
   if (!hasAnyWorkspaceAccess) {
     return (
       <Card className="space-y-4">
@@ -5196,6 +5431,143 @@ export function WarehouseTransferDocumentsPanel() {
           description="Skontaktuj się z administratorem, aby włączyć wymagane uprawnienia."
         />
       </Card>
+    );
+  }
+
+  if (isDispatcherShiftTab) {
+    return (
+      <div className="space-y-4">
+        <Card className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-dim">Rozdzielca zmianowy</p>
+          <h2 className="text-lg font-semibold text-title">PANEL PRZESUNIĘĆ PACZEK</h2>
+          <p className="text-sm text-dim">
+            Dokumenty z przypisem PACZKA. Kliknij dokument, aby zobaczyć towar i użyć akcji{' '}
+            <span className="font-semibold text-title">Pobierz</span>.
+          </p>
+        </Card>
+
+        <Card className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+            Wyszukaj dokument lub detal
+          </p>
+          <Input
+            value={dispatcherShiftSearch}
+            onChange={(event) => setDispatcherShiftSearch(event.target.value)}
+            placeholder="np. tray, 778, M-1-KAR"
+          />
+        </Card>
+
+        <Card className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              Filtr lokalizacji PACZKA
+            </p>
+            <p className="text-sm text-dim">
+              Wybrane: {dispatcherShiftSelectedTargetLocationCount}/
+              {dispatcherShiftTargetLocationOptions.length}
+            </p>
+          </div>
+          {dispatcherShiftTargetLocationOptions.length === 0 ? (
+            <p className="text-xs text-dim">
+              Brak lokalizacji PACZKA na aktywnych dokumentach.
+            </p>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-2">
+                {dispatcherShiftTargetLocationOptions.map((targetLocation) => {
+                  const targetLocationToken = normalizeTargetLocationFilterToken(targetLocation);
+                  const active =
+                    dispatcherShiftTargetLocationFilterSet === null ||
+                    dispatcherShiftTargetLocationFilterSet.has(targetLocationToken);
+                  return (
+                    <button
+                      key={targetLocation}
+                      type="button"
+                      onClick={() => toggleDispatcherShiftTargetLocation(targetLocation)}
+                      className={`min-h-[34px] rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                        active
+                          ? 'border-[color:color-mix(in_srgb,var(--brand)_42%,var(--border))] bg-[color:color-mix(in_srgb,var(--brand)_16%,transparent)] text-title'
+                          : 'border-border bg-surface2 text-dim hover:border-borderStrong hover:text-title'
+                      }`}
+                    >
+                      {targetLocation}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  className="min-h-[36px] px-3 py-1.5 text-xs"
+                  onClick={selectAllDispatcherShiftTargetLocations}
+                >
+                  Zaznacz wszystkie
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="min-h-[36px] px-3 py-1.5 text-xs"
+                  onClick={clearDispatcherShiftTargetLocationFilter}
+                >
+                  Wyczysc
+                </Button>
+              </div>
+            </>
+          )}
+        </Card>
+
+        <div className={mobileDocumentSectionClass}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              {dispatcherShiftCardTitle}
+            </p>
+            <p className="text-sm text-dim">
+              Aktywne: {filteredDispatcherShiftDocuments.length}/{dispatcherShiftDocuments.length}
+            </p>
+          </div>
+          {documentsLoading ? (
+            <Card>
+              <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+            </Card>
+          ) : filteredDispatcherShiftDocuments.length === 0 ? (
+            <Card>
+              <EmptyState title="Brak dokumentów" description={dispatcherShiftEmptyDescription} />
+            </Card>
+          ) : (
+            renderMobileDocumentCards(filteredDispatcherShiftDocuments)
+          )}
+        </div>
+
+        <Card className="hidden space-y-4 md:block">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              {dispatcherShiftCardTitle}
+            </p>
+            <p className="text-sm text-dim">
+              Aktywne: {filteredDispatcherShiftDocuments.length}/{dispatcherShiftDocuments.length}
+            </p>
+          </div>
+          {documentsLoading ? (
+            <p className="text-sm text-dim">Ładowanie dokumentów...</p>
+          ) : filteredDispatcherShiftDocuments.length === 0 ? (
+            <EmptyState title="Brak dokumentów" description={dispatcherShiftEmptyDescription} />
+          ) : (
+            <DataTable
+              columns={['Magazyn', 'Data', 'Dokument', 'Pozycje', 'Lokalizacja docelowa']}
+              rows={mapDocumentRows(filteredDispatcherShiftDocuments)}
+              getRowClassName={(rowIndex) =>
+                getDocumentRowClassName(filteredDispatcherShiftDocuments, rowIndex)
+              }
+              onRowClick={(rowIndex) =>
+                handleDocumentClick(filteredDispatcherShiftDocuments[rowIndex]?.id)
+              }
+            />
+          )}
+        </Card>
+
+        <div ref={detailsCardRef} className="scroll-mt-20">
+          {renderDetailsCard()}
+        </div>
+      </div>
     );
   }
 
@@ -5484,17 +5856,19 @@ export function WarehouseTransferDocumentsPanel() {
               Panel administracyjny ERP
             </p>
             <p className="text-sm text-dim">
-              Zarządzanie strukturą modułu ERP: magazyny i lokalizacje.
+              Zarządzanie strukturą modułu ERP: magazyny źródłowe i lokalizacje docelowe.
             </p>
           </Card>
 
           <Card className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              Dodaj magazyn ERP
+              Dodaj magazyn źródłowy ERP
             </p>
             <div className="grid gap-3 md:grid-cols-[2fr_1fr_auto] md:items-end">
               <div>
-                <label className="text-xs uppercase tracking-wide text-dim">Nazwa magazynu</label>
+                <label className="text-xs uppercase tracking-wide text-dim">
+                  Nazwa magazynu źródłowego
+                </label>
                 <Input
                   value={erpWarehouseForm.name}
                   onChange={(event) =>
@@ -5538,7 +5912,7 @@ export function WarehouseTransferDocumentsPanel() {
           ) : (
             <Card>
               <DataTable
-                columns={['Magazyn', 'Kolejność', 'Status', 'Akcje']}
+                columns={['Magazyn źródłowy', 'Kolejność', 'Status', 'Akcje']}
                 rows={activeErpWarehouses.map((warehouse) => {
                   const draft = erpWarehouseDrafts[warehouse.id] ?? {
                     name: warehouse.name,
@@ -5604,90 +5978,13 @@ export function WarehouseTransferDocumentsPanel() {
 
           <Card className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              Dodaj lokalizację
-            </p>
-            {activeErpWarehouses.length === 0 ? (
-              <p className="text-sm text-dim">Najpierw dodaj magazyn.</p>
-            ) : (
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs uppercase tracking-wide text-dim">Magazyn</label>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {activeErpWarehouses.map((warehouse) => {
-                      const active = erpLocationForm.warehouseId === warehouse.id;
-                      return (
-                        <Button
-                          key={warehouse.id}
-                          variant="secondary"
-                          className={
-                            active
-                              ? 'border-[rgba(255,106,0,0.55)] bg-brandSoft text-title ring-2 ring-[rgba(255,122,26,0.45)]'
-                              : ''
-                          }
-                          onClick={() =>
-                            setErpLocationForm((prev) => ({ ...prev, warehouseId: warehouse.id }))
-                          }
-                        >
-                          {warehouse.name}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs uppercase tracking-wide text-dim">Nazwa lokalizacji</label>
-                  <Input
-                    value={erpLocationForm.name}
-                    onChange={(event) =>
-                      setErpLocationForm((prev) => ({ ...prev, name: event.target.value }))
-                    }
-                    placeholder={erpLocationPlaceholder}
-                  />
-                </div>
-                <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
-                  <div>
-                    <label className="text-xs uppercase tracking-wide text-dim">Kolejność</label>
-                    <Input
-                      value={erpLocationForm.orderNo}
-                      onChange={(event) =>
-                        setErpLocationForm((prev) => ({ ...prev, orderNo: event.target.value }))
-                      }
-                      inputMode="numeric"
-                      placeholder="np. 1"
-                    />
-                  </div>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      setErpLocationForm((prev) => ({
-                        ...prev,
-                        name: '',
-                        orderNo: ''
-                      }))
-                    }
-                    className="w-full md:w-auto"
-                  >
-                    Wyczyść
-                  </Button>
-                  <Button
-                    onClick={handleAddErpLocation}
-                    disabled={addErpLocationMutation.isPending}
-                    className="w-full md:w-auto"
-                  >
-                    Dodaj lokalizację
-                  </Button>
-                </div>
-              </div>
-            )}
-          </Card>
-
-          <Card className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              Przypisy lokalizacji ERP
+              Lokalizacje docelowe ERP
             </p>
             <div className="grid gap-3 md:grid-cols-[2fr_auto] md:items-end">
               <div>
-                <label className="text-xs uppercase tracking-wide text-dim">Nowy przypis</label>
+                <label className="text-xs uppercase tracking-wide text-dim">
+                  Nowa lokalizacja docelowa
+                </label>
                 <Input
                   value={erpLocationAssignmentNew}
                   onChange={(event) => setErpLocationAssignmentNew(event.target.value)}
@@ -5696,168 +5993,54 @@ export function WarehouseTransferDocumentsPanel() {
               </div>
               <Button
                 onClick={handleAddErpLocationAssignment}
+                disabled={addErpTargetLocationMutation.isPending}
                 className="w-full md:w-auto"
               >
                 Dodaj przypis
               </Button>
             </div>
-            {erpLocationAssignmentOptions.length === 0 ? (
-              <p className="text-sm text-dim">Brak przypisów lokalizacji.</p>
+            {erpLocationAssignments.length === 0 ? (
+              <p className="text-sm text-dim">Brak zapisanych lokalizacji docelowych.</p>
             ) : (
               <DataTable
-                columns={['Przypis', 'Akcje']}
-                rows={erpLocationAssignmentOptions.map((assignment) => {
-                  const draft = erpLocationAssignmentDrafts[assignment] ?? assignment;
-                  const normalizedDraft = normalizeErpLocationAssignmentLabel(draft);
-                  const isDirty = normalizedDraft !== assignment;
+                columns={['Lokalizacja docelowa', 'Akcje']}
+                rows={erpLocationAssignments.map((assignment) => {
+                  const draftName =
+                    erpLocationAssignmentDrafts[assignment.id]?.name ?? assignment.name;
+                  const normalizedDraft =
+                    normalizeErpLocationAssignmentOptionAlias(
+                      normalizeErpLocationAssignmentLabel(draftName)
+                    );
+                  const isDirty = normalizedDraft !== assignment.name;
                   return [
                     <Input
-                      key={`assignment-${assignment}`}
-                      value={draft}
+                      key={`assignment-${assignment.id}`}
+                      value={draftName}
                       onChange={(event) =>
                         setErpLocationAssignmentDrafts((prev) => ({
                           ...prev,
-                          [assignment]: event.target.value
+                          [assignment.id]: { name: event.target.value }
                         }))
                       }
                     />,
                     <div
-                      key={`assignment-actions-${assignment}`}
+                      key={`assignment-actions-${assignment.id}`}
                       className="flex flex-wrap gap-2"
                     >
                       <Button
                         variant="secondary"
-                        disabled={!isDirty}
-                        onClick={() => handleSaveErpLocationAssignment(assignment)}
-                      >
-                        Zapisz
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
-                        onClick={() => handleRemoveErpLocationAssignment(assignment)}
-                      >
-                        Usuń
-                      </Button>
-                    </div>
-                  ];
-                })}
-              />
-            )}
-          </Card>
-
-          <Card className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              Usuń lokalizację ERP
-            </p>
-            {activeErpLocations.length === 0 ? (
-              <p className="text-sm text-dim">Brak lokalizacji do usunięcia.</p>
-            ) : (
-              <div className="grid gap-3 md:grid-cols-[2fr_auto] md:items-end">
-                <div>
-                  <label className="text-xs uppercase tracking-wide text-dim">
-                    Wybierz lokalizację
-                  </label>
-                  <SelectField
-                    value={erpLocationToDeleteId}
-                    onChange={(event) => setErpLocationToDeleteId(event.target.value)}
-                  >
-                    <option value="">Wybierz lokalizację</option>
-                    {activeErpLocations.map((location) => (
-                      <option key={`delete-location-${location.id}`} value={location.id}>
-                        {(erpWarehouseNameMap.get(location.warehouseId) ?? location.warehouseId) +
-                          ' | ' +
-                          location.name}
-                      </option>
-                    ))}
-                  </SelectField>
-                </div>
-                <Button
-                  variant="outline"
-                  onClick={() => removeErpLocationMutation.mutate(erpLocationToDeleteId)}
-                  disabled={!erpLocationToDeleteId || removeErpLocationMutation.isPending}
-                  className="w-full border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)] md:w-auto"
-                >
-                  Usuń lokalizację
-                </Button>
-              </div>
-            )}
-          </Card>
-
-          {erpLocationsLoading ? (
-            <Card>
-              <p className="text-sm text-dim">Ładowanie lokalizacji...</p>
-            </Card>
-          ) : activeErpLocations.length === 0 ? (
-            <Card>
-              <EmptyState
-                title="Brak lokalizacji"
-                description="Dodaj lokalizacje dla magazynów ERP."
-              />
-            </Card>
-          ) : (
-            <Card>
-              <DataTable
-                columns={['Magazyn', 'Typ', 'Lokalizacja', 'Kolejność', 'Status', 'Akcje']}
-                rows={activeErpLocations.map((location) => {
-                  const draft = erpLocationDrafts[location.id] ?? {
-                    name: location.name,
-                    orderNo: String(location.orderNo)
-                  };
-                  const isDirty = !isErpLocationDraftEqual(draft, {
-                    name: location.name,
-                    orderNo: String(location.orderNo)
-                  });
-                  return [
-                    <span key={`${location.id}-warehouse`} className="text-body">
-                      {erpWarehouseNameMap.get(location.warehouseId) ?? location.warehouseId}
-                    </span>,
-                    <span key={`${location.id}-type`} className="text-body">
-                      {location.type === 'wtr' ? 'WTR' : 'Pole odkładcze'}
-                    </span>,
-                    <Input
-                      key={`${location.id}-name`}
-                      value={draft.name}
-                      onChange={(event) =>
-                        setErpLocationDrafts((prev) => ({
-                          ...prev,
-                          [location.id]: { ...draft, name: event.target.value }
-                        }))
-                      }
-                    />,
-                    <Input
-                      key={`${location.id}-order`}
-                      value={draft.orderNo}
-                      onChange={(event) =>
-                        setErpLocationDrafts((prev) => ({
-                          ...prev,
-                          [location.id]: { ...draft, orderNo: event.target.value }
-                        }))
-                      }
-                      inputMode="numeric"
-                    />,
-                    <Badge key={`${location.id}-status`} tone="success">
-                      Aktywna
-                    </Badge>,
-                    <div key={`${location.id}-actions`} className="flex flex-wrap gap-2">
-                      <Button
-                        variant="secondary"
-                        disabled={!isDirty || updateErpLocationMutation.isPending}
+                        disabled={!isDirty || updateErpTargetLocationMutation.isPending}
                         onClick={() =>
-                          updateErpLocationMutation.mutate({
-                            id: location.id,
-                            name: draft.name,
-                            orderNo: parseOrderNo(draft.orderNo),
-                            scope: 'ERP'
-                          })
+                          handleSaveErpLocationAssignment(assignment.id, assignment.name)
                         }
                       >
                         Zapisz
                       </Button>
                       <Button
                         variant="outline"
-                        disabled={removeErpLocationMutation.isPending}
-                        onClick={() => removeErpLocationMutation.mutate(location.id)}
+                        className="border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
+                        disabled={removeErpTargetLocationMutation.isPending}
+                        onClick={() => handleRemoveErpLocationAssignment(assignment.id)}
                       >
                         Usuń
                       </Button>
@@ -5865,8 +6048,8 @@ export function WarehouseTransferDocumentsPanel() {
                   ];
                 })}
               />
-            </Card>
-          )}
+            )}
+          </Card>
         </>
       )}
 

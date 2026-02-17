@@ -5,6 +5,7 @@ import type {
   DailyTotals,
   DashboardSummary,
   Dryer,
+  ErpTargetLocation,
   InventoryAdjustment,
   InventoryTotalPoint,
   Location,
@@ -296,6 +297,24 @@ export const getWarehouseTransferDocument = async (
 ): Promise<WarehouseTransferDocumentDetails> =>
   appRequest('getWarehouseTransferDocument', { documentId });
 
+export const getErpTargetLocations = async (): Promise<ErpTargetLocation[]> =>
+  appRequest('getErpTargetLocations');
+
+export const addErpTargetLocation = async (payload: {
+  name: string;
+  orderNo?: number;
+}): Promise<ErpTargetLocation> => appRequest('addErpTargetLocation', payload);
+
+export const updateErpTargetLocation = async (payload: {
+  id: string;
+  name?: string;
+  orderNo?: number;
+}): Promise<ErpTargetLocation> => appRequest('updateErpTargetLocation', payload);
+
+export const removeErpTargetLocation = async (payload: {
+  id: string;
+}): Promise<ErpTargetLocation> => appRequest('removeErpTargetLocation', payload);
+
 export const createWarehouseTransferDocument = async (payload: {
   documentNumber: string;
   sourceWarehouse?: string;
@@ -371,6 +390,11 @@ export const markWarehouseTransferDocumentIssued = async (payload: {
   documentId: string;
 }): Promise<WarehouseTransferDocument> =>
   appRequest('markWarehouseTransferDocumentIssued', payload);
+
+export const requestWarehouseTransferPackage = async (payload: {
+  documentId: string;
+}): Promise<WarehouseTransferDocument> =>
+  appRequest('requestWarehouseTransferPackage', payload);
 
 export const removeWarehouseTransferDocument = async (payload: {
   documentId: string;

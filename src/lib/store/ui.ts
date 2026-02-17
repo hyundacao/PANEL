@@ -3,20 +3,37 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { AppUser, Role, WarehouseKey } from '@/lib/api/types';
+import {
+  ERP_PUSH_DEFAULT_DISPATCHER_TARGET_SELECTION,
+  ERP_PUSH_DEFAULT_WAREHOUSEMAN_SOURCE_SELECTION,
+  ERP_PUSH_DISPATCHER_TARGET_OPTIONS,
+  ERP_PUSH_WAREHOUSEMAN_SOURCE_OPTIONS,
+  normalizeDispatcherOptions,
+  normalizeDispatcherSelection,
+  normalizeWarehousemanOptions,
+  normalizeWarehousemanSelection
+} from '@/lib/push/preferences';
 
 export type UiFilters = {
   onlyPending: boolean;
   search: string;
 };
 
-export type ErpWorkspaceTab = 'issuer' | 'warehouseman' | 'dispatcher' | 'history' | 'management';
+export type ErpWorkspaceTab =
+  | 'issuer'
+  | 'warehouseman'
+  | 'dispatcher'
+  | 'dispatcher-shift'
+  | 'history'
+  | 'management';
 
 const normalizeErpWorkspaceTab = (value: unknown): ErpWorkspaceTab => {
   if (value === 'issuer') return 'issuer';
   if (value === 'warehouseman') return 'warehouseman';
   if (value === 'dispatcher') return 'dispatcher';
+  if (value === 'dispatcher-shift') return 'dispatcher-shift';
   if (value === 'history') return 'history';
-  if (value === 'management') return 'issuer';
+  if (value === 'management') return 'management';
   // Backward compatibility with previously persisted tab key.
   if (value === 'operator') return 'warehouseman';
   return 'issuer';
@@ -43,6 +60,14 @@ type UiState = {
   setErpWorkspaceTab: (value: ErpWorkspaceTab) => void;
   erpDocumentNotificationsEnabled: boolean;
   setErpDocumentNotificationsEnabled: (value: boolean) => void;
+  erpPushWarehousemanOptions: string[];
+  setErpPushWarehousemanOptions: (value: string[]) => void;
+  erpPushWarehousemanSourceSelection: string[];
+  setErpPushWarehousemanSourceSelection: (value: string[]) => void;
+  erpPushDispatcherTargetOptions: string[];
+  setErpPushDispatcherTargetOptions: (value: string[]) => void;
+  erpPushDispatcherTargetSelection: string[];
+  setErpPushDispatcherTargetSelection: (value: string[]) => void;
 };
 
 type PersistedUiState = Pick<
@@ -55,6 +80,10 @@ type PersistedUiState = Pick<
   | 'filters'
   | 'erpWorkspaceTab'
   | 'erpDocumentNotificationsEnabled'
+  | 'erpPushWarehousemanOptions'
+  | 'erpPushWarehousemanSourceSelection'
+  | 'erpPushDispatcherTargetOptions'
+  | 'erpPushDispatcherTargetSelection'
 >;
 
 const roleFromUser = (user: AppUser | null): Role => {
@@ -119,7 +148,47 @@ export const useUiStore = create<UiState>()(
       setErpWorkspaceTab: (value) => set({ erpWorkspaceTab: normalizeErpWorkspaceTab(value) }),
       erpDocumentNotificationsEnabled: false,
       setErpDocumentNotificationsEnabled: (value) =>
-        set({ erpDocumentNotificationsEnabled: value })
+        set({ erpDocumentNotificationsEnabled: value }),
+      erpPushWarehousemanOptions: [...ERP_PUSH_WAREHOUSEMAN_SOURCE_OPTIONS],
+      setErpPushWarehousemanOptions: (value) =>
+        set((state) => {
+          const options = normalizeWarehousemanOptions(value);
+          return {
+            erpPushWarehousemanOptions: options,
+            erpPushWarehousemanSourceSelection: normalizeWarehousemanSelection(
+              state.erpPushWarehousemanSourceSelection,
+              options
+            )
+          };
+        }),
+      erpPushWarehousemanSourceSelection: [...ERP_PUSH_DEFAULT_WAREHOUSEMAN_SOURCE_SELECTION],
+      setErpPushWarehousemanSourceSelection: (value) =>
+        set((state) => ({
+          erpPushWarehousemanSourceSelection: normalizeWarehousemanSelection(
+            value,
+            state.erpPushWarehousemanOptions
+          )
+        })),
+      erpPushDispatcherTargetOptions: [...ERP_PUSH_DISPATCHER_TARGET_OPTIONS],
+      setErpPushDispatcherTargetOptions: (value) =>
+        set((state) => {
+          const options = normalizeDispatcherOptions(value);
+          return {
+            erpPushDispatcherTargetOptions: options,
+            erpPushDispatcherTargetSelection: normalizeDispatcherSelection(
+              state.erpPushDispatcherTargetSelection,
+              options
+            )
+          };
+        }),
+      erpPushDispatcherTargetSelection: [...ERP_PUSH_DEFAULT_DISPATCHER_TARGET_SELECTION],
+      setErpPushDispatcherTargetSelection: (value) =>
+        set((state) => ({
+          erpPushDispatcherTargetSelection: normalizeDispatcherSelection(
+            value,
+            state.erpPushDispatcherTargetOptions
+          )
+        }))
     }),
     {
       name: storageKey,
@@ -132,13 +201,37 @@ export const useUiStore = create<UiState>()(
         rememberMe: state.rememberMe,
         filters: state.filters,
         erpWorkspaceTab: state.erpWorkspaceTab,
-        erpDocumentNotificationsEnabled: state.erpDocumentNotificationsEnabled
+        erpDocumentNotificationsEnabled: state.erpDocumentNotificationsEnabled,
+        erpPushWarehousemanOptions: state.erpPushWarehousemanOptions,
+        erpPushWarehousemanSourceSelection: state.erpPushWarehousemanSourceSelection,
+        erpPushDispatcherTargetOptions: state.erpPushDispatcherTargetOptions,
+        erpPushDispatcherTargetSelection: state.erpPushDispatcherTargetSelection
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated(true);
         if (state) {
           state.setRememberMe(getRememberFlag());
           state.setErpWorkspaceTab(normalizeErpWorkspaceTab(state.erpWorkspaceTab));
+          state.setErpPushWarehousemanOptions(
+            Array.isArray(state.erpPushWarehousemanOptions)
+              ? state.erpPushWarehousemanOptions
+              : [...ERP_PUSH_WAREHOUSEMAN_SOURCE_OPTIONS]
+          );
+          state.setErpPushDispatcherTargetOptions(
+            Array.isArray(state.erpPushDispatcherTargetOptions)
+              ? state.erpPushDispatcherTargetOptions
+              : [...ERP_PUSH_DISPATCHER_TARGET_OPTIONS]
+          );
+          state.setErpPushWarehousemanSourceSelection(
+            Array.isArray(state.erpPushWarehousemanSourceSelection)
+              ? state.erpPushWarehousemanSourceSelection
+              : [...ERP_PUSH_DEFAULT_WAREHOUSEMAN_SOURCE_SELECTION]
+          );
+          state.setErpPushDispatcherTargetSelection(
+            Array.isArray(state.erpPushDispatcherTargetSelection)
+              ? state.erpPushDispatcherTargetSelection
+              : [...ERP_PUSH_DEFAULT_DISPATCHER_TARGET_SELECTION]
+          );
         }
       }
     }

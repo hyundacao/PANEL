@@ -21,6 +21,7 @@ const hasErpAccess = (user: AppUser | null) =>
   (canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-wypisz-dokument') ||
     canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-magazynier') ||
     canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-rozdzielca') ||
+    canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-rozdzielca-zmianowy') ||
     canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-historia-dokumentow'));
 
 export default function ErpLayout({ children }: { children: React.ReactNode }) {

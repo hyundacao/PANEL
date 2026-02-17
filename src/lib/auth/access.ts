@@ -22,6 +22,7 @@ export const RAPORT_ZMIANOWY_TABS: WarehouseTab[] = ['raport-zmianowy'];
 export const ERP_TRANSFERS_TABS: WarehouseTab[] = [
   'erp-magazynier',
   'erp-rozdzielca',
+  'erp-rozdzielca-zmianowy',
   'erp-wypisz-dokument',
   'erp-historia-dokumentow'
 ];

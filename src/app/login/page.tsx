@@ -48,7 +48,8 @@ export default function LoginPage() {
 
       const canManageErpDocumentPush =
         canSeeTab(data, 'PRZESUNIECIA_ERP', 'erp-magazynier') ||
-        canSeeTab(data, 'PRZESUNIECIA_ERP', 'erp-rozdzielca');
+        canSeeTab(data, 'PRZESUNIECIA_ERP', 'erp-rozdzielca') ||
+        canSeeTab(data, 'PRZESUNIECIA_ERP', 'erp-rozdzielca-zmianowy');
 
       if (canManageErpDocumentPush) {
         try {

@@ -130,19 +130,6 @@ const isMissingPushPreferenceColumnsError = (error: unknown) => {
   );
 };
 
-const WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS = new Set([
-  '1',
-  '4',
-  '10',
-  '11',
-  '13',
-  '40',
-  '41',
-  '51',
-  'LAKIERNIA',
-  'INNA LOKALIZACJA'
-]);
-
 type WarehouseTransferFlowKind = 'WYDANIE' | 'ZWROT';
 
 const toDistinctUserIds = (rows: PushSubscriptionRow[]) => [
@@ -213,7 +200,8 @@ const extractWarehousemanSourceWarehouseKey = (value: string | null | undefined)
   if (/lakiernia/i.test(normalized)) return 'LAKIERNIA';
   if (/inna\s+lokalizacja/i.test(normalized)) return 'INNA LOKALIZACJA';
   const match = normalized.match(/\d+/);
-  return match ? match[0] : null;
+  if (match) return match[0];
+  return normalizeWarehousemanSourceWarehouseFilterToken(normalized);
 };
 
 const normalizeWarehousemanSourceWarehouseFilterToken = (value: unknown) => {
@@ -232,6 +220,8 @@ const normalizeTargetLocationFilterToken = (value: unknown) =>
   toCleanString(value)
     .toLowerCase()
     .replace(/\s+/g, ' ');
+
+const PACZKA_FILTER_TOKEN = 'paczka';
 
 const getDocumentSourceWarehouseKeyForWarehouseman = (
   payload?: SendWarehouseTransferPushContext
@@ -256,7 +246,6 @@ const shouldSendToWarehousemanSubscription = (
     selectedWarehouses
       .map(normalizeWarehousemanSourceWarehouseFilterToken)
       .filter((item): item is string => Boolean(item))
-      .filter((item) => WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS.has(item))
   );
   if (selectedSet.size === 0) return false;
   return selectedSet.has(documentWarehouseKey);
@@ -278,6 +267,12 @@ const shouldSendToDispatcherSubscription = (
       .filter((item) => item.length > 0)
   );
   if (selectedSet.size === 0) return false;
+  if (targetLocationToken.includes(PACZKA_FILTER_TOKEN)) {
+    return (
+      selectedSet.has(PACZKA_FILTER_TOKEN) ||
+      selectedSet.has(targetLocationToken)
+    );
+  }
   return selectedSet.has(targetLocationToken);
 };
 
@@ -529,8 +524,7 @@ export const normalizePushSubscriptionPreferences = (
 
   const warehousemanSourceWarehouses = normalizeStringArrayPreference(
     raw.warehousemanSourceWarehouses,
-    (item) => normalizeWarehousemanSourceWarehouseFilterToken(item) ?? '',
-    WAREHOUSEMAN_SOURCE_WAREHOUSE_OPTIONS
+    (item) => normalizeWarehousemanSourceWarehouseFilterToken(item) ?? ''
   );
 
   const dispatcherTargetLocations = normalizeStringArrayPreference(
@@ -676,6 +670,29 @@ export const sendWarehouseTransferDocumentIssuedPush = async (
     url: '/przesuniecia-magazynowe',
     tag: `erp-document-issued-${payload.documentId}`,
     requiredTabs: ['erp-magazynier', 'erp-rozdzielca'],
+    context: {
+      sourceWarehouse: payload.sourceWarehouse,
+      targetWarehouse: payload.targetWarehouse,
+      note: payload.note
+    }
+  });
+};
+
+export const sendWarehouseTransferPackageRequestedPush = async (
+  payload: WarehouseDocumentPushPayload
+) => {
+  const documentLabel = toPushText(payload.documentNumber);
+  const sourceWarehouseLabel = toPushText(payload.sourceWarehouse);
+  const targetLocationLabel = toPushText(payload.targetWarehouse);
+  const title = 'Zapotrzebowanie PACZKA';
+  const body = `Rozdzielca zmianowy poprosil o paczke: ${documentLabel} | Lokalizacja: ${targetLocationLabel} | Magazyn: ${sourceWarehouseLabel}`;
+
+  await sendWarehouseTransferPush({
+    title,
+    body,
+    url: '/przesuniecia-magazynowe',
+    tag: `erp-package-requested-${payload.documentId}`,
+    requiredTabs: ['erp-magazynier'],
     context: {
       sourceWarehouse: payload.sourceWarehouse,
       targetWarehouse: payload.targetWarehouse,

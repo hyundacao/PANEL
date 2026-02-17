@@ -1,10 +1,10 @@
 ﻿'use client';
 
 import { useEffect } from 'react';
-import { ArrowLeftRight, ClipboardList, History, LogOut } from 'lucide-react';
+import { ArrowLeftRight, ClipboardList, History, LogOut, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useUiStore, type ErpWorkspaceTab } from '@/lib/store/ui';
-import { canSeeTab, getRoleLabel } from '@/lib/auth/access';
+import { canSeeTab, getRoleLabel, isWarehouseAdmin } from '@/lib/auth/access';
 import { logoutUser } from '@/lib/api';
 import type { AppUser, WarehouseTab } from '@/lib/api/types';
 
@@ -15,14 +15,17 @@ export const ERP_WORKSPACE_ITEMS: Array<{
 }> = [
   { key: 'issuer', label: 'Wypisz dokument', icon: ClipboardList },
   { key: 'warehouseman', label: 'Magazynier', icon: ArrowLeftRight },
-  { key: 'dispatcher', label: 'Rozdzielca', icon: ArrowLeftRight },
-  { key: 'history', label: 'Historia dokumentów', icon: History }
+  { key: 'dispatcher', label: 'Rozdzielca Wydziałowy', icon: ArrowLeftRight },
+  { key: 'dispatcher-shift', label: 'Rozdzielca zmianowy', icon: ArrowLeftRight },
+  { key: 'history', label: 'Historia dokumentów', icon: History },
+  { key: 'management', label: 'Zarządzanie', icon: Settings }
 ];
 
 export const ERP_WORKSPACE_TAB_ACCESS: Partial<Record<ErpWorkspaceTab, WarehouseTab>> = {
   issuer: 'erp-wypisz-dokument',
   warehouseman: 'erp-magazynier',
   dispatcher: 'erp-rozdzielca',
+  'dispatcher-shift': 'erp-rozdzielca-zmianowy',
   history: 'erp-historia-dokumentow'
 };
 
@@ -30,6 +33,9 @@ export const canAccessErpWorkspaceItem = (
   user: AppUser | null | undefined,
   workspaceTab: ErpWorkspaceTab
 ) => {
+  if (workspaceTab === 'management') {
+    return isWarehouseAdmin(user, 'PRZESUNIECIA_ERP');
+  }
   const requiredTab = ERP_WORKSPACE_TAB_ACCESS[workspaceTab];
   if (!requiredTab) return false;
   return canSeeTab(user, 'PRZESUNIECIA_ERP', requiredTab);

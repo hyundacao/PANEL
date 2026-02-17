@@ -101,7 +101,7 @@ values
           "role": "ROZDZIELCA",
           "readOnly": false,
           "admin": true,
-          "tabs": ["erp-magazynier", "erp-rozdzielca", "erp-wypisz-dokument", "erp-historia-dokumentow"]
+          "tabs": ["erp-magazynier", "erp-rozdzielca", "erp-rozdzielca-zmianowy", "erp-wypisz-dokument", "erp-historia-dokumentow"]
         }
       }
     }'::jsonb
@@ -109,6 +109,21 @@ values
   (
     'ERP - rozdzielca',
     'Dashboard rozdzielcy i historia przesuniec ERP.',
+    '{
+      "admin": false,
+      "warehouses": {
+        "PRZESUNIECIA_ERP": {
+          "role": "ROZDZIELCA",
+          "readOnly": false,
+          "admin": false,
+          "tabs": ["erp-rozdzielca-zmianowy", "erp-historia-dokumentow"]
+        }
+      }
+    }'::jsonb
+  ),
+  (
+    'ERP - rozdzielca zmianowy',
+    'Dashboard rozdzielcy zmianowego i historia przesuniec ERP.',
     '{
       "admin": false,
       "warehouses": {
