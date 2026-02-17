@@ -4644,8 +4644,6 @@ export function WarehouseTransferDocumentsPanel() {
     const warehousemanPrimaryActionLabel = isReturnDocument
       ? 'Odebrano wszystkie zwroty'
       : 'Wydano wszystkie pozycje';
-    const autoMarkIssuedPromptForActiveDocument =
-      autoMarkIssuedPrompt?.documentId === details.document.id ? autoMarkIssuedPrompt : null;
 
     return (
       <Card className="space-y-4">
@@ -4740,44 +4738,6 @@ export function WarehouseTransferDocumentsPanel() {
             )}
           </div>
         </div>
-
-        {isWarehousemanTab &&
-          autoMarkIssuedPromptForActiveDocument &&
-          details.document.status === 'OPEN' && (
-            <div className="rounded-2xl border border-[color:color-mix(in_srgb,var(--brand)_48%,var(--border))] bg-[color:color-mix(in_srgb,var(--brand)_10%,transparent)] px-4 py-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-brand">
-                Potwierdzenie wydania
-              </p>
-              <p className="mt-1 text-sm text-body">
-                {autoMarkIssuedPromptForActiveDocument.flowKind === 'ZWROT'
-                  ? `Odebrano ostatnią pozycję zwrotu w dokumencie ${autoMarkIssuedPromptForActiveDocument.documentLabel}. Oznaczyć dokument jako zakończony przez magazyniera?`
-                  : `Wydano ostatnią pozycję w dokumencie ${autoMarkIssuedPromptForActiveDocument.documentLabel}. Oznaczyć dokument jako wydany?`}
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button
-                  variant="ghost"
-                  className="w-full sm:w-auto"
-                  onClick={() => setAutoMarkIssuedPrompt(null)}
-                  disabled={markDocumentIssuedMutation.isPending}
-                >
-                  Później
-                </Button>
-                <Button
-                  variant="primaryEmber"
-                  className="w-full sm:w-auto"
-                  onClick={() => {
-                    setAutoMarkIssuedPrompt(null);
-                    markDocumentIssuedMutation.mutate({ documentId: details.document.id });
-                  }}
-                  disabled={markDocumentIssuedMutation.isPending}
-                >
-                  {autoMarkIssuedPromptForActiveDocument.flowKind === 'ZWROT'
-                    ? 'Oznacz jako zakończony'
-                    : 'Oznacz jako wydany'}
-                </Button>
-              </div>
-            </div>
-          )}
 
         {isActiveDocumentCollapsed ? (
           <div className="rounded-2xl border border-border bg-surface2 px-4 py-3 text-sm text-dim">
@@ -6449,6 +6409,58 @@ export function WarehouseTransferDocumentsPanel() {
           </div>
         </>
       )}
+
+      {isWarehousemanTab &&
+        autoMarkIssuedPrompt &&
+        activeDocumentId === autoMarkIssuedPrompt.documentId && (
+          <>
+            <div
+              className="fixed inset-0 z-[992] bg-[rgba(5,6,10,0.78)]"
+              onClick={() => {
+                if (markDocumentIssuedMutation.isPending) return;
+                setAutoMarkIssuedPrompt(null);
+              }}
+            />
+            <div className="fixed inset-0 z-[993] flex items-center justify-center p-4">
+              <div className="w-full max-w-lg" onClick={(event) => event.stopPropagation()}>
+                <Card className="space-y-4 border-[color:color-mix(in_srgb,var(--brand)_42%,var(--border))] bg-[linear-gradient(180deg,rgba(17,17,20,0.98),rgba(10,10,12,0.98))]">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-brand">
+                    Potwierdzenie wydania
+                  </p>
+                  <p className="text-sm text-body">
+                    {autoMarkIssuedPrompt.flowKind === 'ZWROT'
+                      ? `Odebrano ostatnią pozycję zwrotu w dokumencie ${autoMarkIssuedPrompt.documentLabel}. Oznaczyć dokument jako zakończony przez magazyniera?`
+                      : `Wydano ostatnią pozycję w dokumencie ${autoMarkIssuedPrompt.documentLabel}. Oznaczyć dokument jako wydany?`}
+                  </p>
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                    <Button
+                      variant="ghost"
+                      className="w-full sm:w-auto"
+                      onClick={() => setAutoMarkIssuedPrompt(null)}
+                      disabled={markDocumentIssuedMutation.isPending}
+                    >
+                      Później
+                    </Button>
+                    <Button
+                      variant="primaryEmber"
+                      className="w-full sm:w-auto"
+                      onClick={() =>
+                        markDocumentIssuedMutation.mutate({
+                          documentId: autoMarkIssuedPrompt.documentId
+                        })
+                      }
+                      disabled={markDocumentIssuedMutation.isPending}
+                    >
+                      {autoMarkIssuedPrompt.flowKind === 'ZWROT'
+                        ? 'Oznacz jako zakończony'
+                        : 'Oznacz jako wydany'}
+                    </Button>
+                  </div>
+                </Card>
+              </div>
+            </div>
+          </>
+        )}
     </div>
   );
 }
