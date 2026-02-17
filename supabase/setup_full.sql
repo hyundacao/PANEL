@@ -641,30 +641,44 @@ create index if not exists push_subscriptions_last_seen_idx
 -- =========================
 -- SECURE RLS (server only)
 -- =========================
-alter table if exists public.app_users enable row level security;
-alter table if exists public.warehouses enable row level security;
-alter table if exists public.locations enable row level security;
-alter table if exists public.material_catalogs enable row level security;
-alter table if exists public.materials enable row level security;
-alter table if exists public.daily_entries enable row level security;
-alter table if exists public.daily_location_status enable row level security;
-alter table if exists public.transfers enable row level security;
-alter table if exists public.warehouse_transfer_documents enable row level security;
-alter table if exists public.warehouse_transfer_document_items enable row level security;
-alter table if exists public.warehouse_transfer_item_issues enable row level security;
-alter table if exists public.warehouse_transfer_item_receipts enable row level security;
-alter table if exists public.inventory_adjustments enable row level security;
-alter table if exists public.mixed_materials enable row level security;
-alter table if exists public.dryers enable row level security;
-alter table if exists public.spare_parts enable row level security;
-alter table if exists public.spare_part_history enable row level security;
-alter table if exists public.original_inventory_entries enable row level security;
-alter table if exists public.original_inventory_catalog enable row level security;
-alter table if exists public.raport_zmianowy_sessions enable row level security;
-alter table if exists public.raport_zmianowy_items enable row level security;
-alter table if exists public.raport_zmianowy_entries enable row level security;
-alter table if exists public.audit_logs enable row level security;
-alter table if exists public.push_subscriptions enable row level security;
+do $$
+declare
+  table_name text;
+begin
+  for table_name in
+    select unnest(
+      ARRAY[
+        'app_users',
+        'warehouses',
+        'locations',
+        'material_catalogs',
+        'materials',
+        'daily_entries',
+        'daily_location_status',
+        'transfers',
+        'warehouse_transfer_documents',
+        'warehouse_transfer_document_items',
+        'warehouse_transfer_item_issues',
+        'warehouse_transfer_item_receipts',
+        'inventory_adjustments',
+        'mixed_materials',
+        'dryers',
+        'spare_parts',
+        'spare_part_history',
+        'original_inventory_entries',
+        'original_inventory_catalog',
+        'raport_zmianowy_sessions',
+        'raport_zmianowy_items',
+        'raport_zmianowy_entries',
+        'audit_logs',
+        'push_subscriptions'
+      ]::text[]
+    )
+  loop
+    execute format('alter table if exists public.%I enable row level security', table_name);
+  end loop;
+end
+$$;
 
 drop policy if exists "locations_read" on public.locations;
 drop policy if exists "materials_read" on public.materials;
@@ -738,17 +752,38 @@ insert into public.materials (id, code, name, is_active) values
 on conflict (id) do nothing;
 
 insert into public.material_catalogs (id, name, is_active)
-select concat('cat-', md5(lower(code))) as id, code as name, true
-from public.materials
-group by code
-on conflict (id) do update
-set name = excluded.name;
+select
+  concat('cat-', md5(lower(src.code))) as id,
+  src.code as name,
+  true
+from (
+  select distinct trim(code) as code
+  from public.materials
+  where code is not null and length(trim(code)) > 0
+) as src
+where not exists (
+  select 1
+  from public.material_catalogs c
+  where lower(c.name) = lower(src.code)
+);
+
+update public.material_catalogs c
+set is_active = true
+where exists (
+  select 1
+  from public.materials m
+  where m.code is not null
+    and length(trim(m.code)) > 0
+    and lower(trim(m.code)) = lower(c.name)
+);
 
 update public.materials as m
 set catalog_id = c.id
 from public.material_catalogs as c
-where lower(m.code) = lower(c.name)
-  and m.catalog_id is null;
+where m.code is not null
+  and length(trim(m.code)) > 0
+  and lower(trim(m.code)) = lower(c.name)
+  and m.catalog_id is distinct from c.id;
 
 insert into public.spare_parts (id, code, name, unit, qty, location) values
   ('part-lozysko-6204', '6204', 'Lozysko 6204', 'szt', 24, 'Szafka A1'),
@@ -889,111 +924,135 @@ create index if not exists user_permission_groups_group_idx
 alter table if exists public.permission_groups enable row level security;
 alter table if exists public.user_permission_groups enable row level security;
 
-insert into public.permission_groups (name, description, access)
-values
-  (
-    'Przemiały - operator',
-    'Pełna praca operacyjna w module zarządzania przemiałami i przygotowaniem produkcji.',
-    '{
-      "admin": false,
-      "warehouses": {
-        "PRZEMIALY": {
-          "role": "ROZDZIELCA",
-          "readOnly": false,
-          "admin": false,
-          "tabs": ["dashboard", "spis", "spis-oryginalow", "przesuniecia", "raporty", "kartoteka", "wymieszane", "suszarki"]
-        }
-      }
-    }'::jsonb
-  ),
-  (
-    'Przemiały - podgląd',
-    'Podgląd przemiałów bez edycji.',
-    '{
-      "admin": false,
-      "warehouses": {
-        "PRZEMIALY": {
-          "role": "PODGLAD",
-          "readOnly": true,
-          "admin": false,
-          "tabs": ["dashboard", "raporty", "kartoteka", "wymieszane", "suszarki", "spis-oryginalow"]
-        }
-      }
-    }'::jsonb
-  ),
-  (
-    'Części - operator',
-    'Praca operacyjna w module magazynu części zamiennych.',
-    '{
-      "admin": false,
-      "warehouses": {
-        "CZESCI": {
-          "role": "MECHANIK",
-          "readOnly": false,
-          "admin": false,
-          "tabs": ["pobierz", "uzupelnij", "stany"]
-        }
-      }
-    }'::jsonb
-  ),
-  (
-    'Raport zmianowy - operator',
-    'Tworzenie i edycja wpisów raportu zmianowego.',
-    '{
-      "admin": false,
-      "warehouses": {
-        "RAPORT_ZMIANOWY": {
-          "role": "ROZDZIELCA",
-          "readOnly": false,
-          "admin": false,
-          "tabs": ["raport-zmianowy"]
-        }
-      }
-    }'::jsonb
-  ),
+with permission_group_seed(name, description, access) as (
+  values
     (
-    'ERP - administrator',
-    'Pelny dostep do modulu przesuniec magazynowych ERP.',
-    '{
-      "admin": false,
-      "warehouses": {
-        "PRZESUNIECIA_ERP": {
-          "role": "ROZDZIELCA",
-          "readOnly": false,
-          "admin": true,
-          "tabs": ["erp-magazynier", "erp-rozdzielca", "erp-wypisz-dokument", "erp-historia-dokumentow"]
+      'Przemialy - operator',
+      'Pelna praca operacyjna w module zarzadzania przemialami i przygotowaniem produkcji.',
+      '{
+        "admin": false,
+        "warehouses": {
+          "PRZEMIALY": {
+            "role": "ROZDZIELCA",
+            "readOnly": false,
+            "admin": false,
+            "tabs": ["dashboard", "spis", "spis-oryginalow", "przesuniecia", "raporty", "kartoteka", "wymieszane", "suszarki"]
+          }
         }
-      }
-    }'::jsonb
-  ),
-  (
-    'ERP - rozdzielca',
-    'Dashboard rozdzielcy i historia przesuniec ERP.',
-    '{
-      "admin": false,
-      "warehouses": {
-        "PRZESUNIECIA_ERP": {
-          "role": "ROZDZIELCA",
-          "readOnly": false,
-          "admin": false,
-          "tabs": ["erp-rozdzielca", "erp-historia-dokumentow"]
+      }'::jsonb
+    ),
+    (
+      'Przemialy - podglad',
+      'Podglad przemialow bez edycji.',
+      '{
+        "admin": false,
+        "warehouses": {
+          "PRZEMIALY": {
+            "role": "PODGLAD",
+            "readOnly": true,
+            "admin": false,
+            "tabs": ["dashboard", "raporty", "kartoteka", "wymieszane", "suszarki", "spis-oryginalow"]
+          }
         }
-      }
-    }'::jsonb
-  ),
-  (
-    'ERP - magazynier',
-    'Dashboard magazyniera i historia przesuniec ERP.',
-    '{
-      "admin": false,
-      "warehouses": {
-        "PRZESUNIECIA_ERP": {
-          "role": "ROZDZIELCA",
-          "readOnly": false,
-          "admin": false,
-          "tabs": ["erp-magazynier", "erp-historia-dokumentow"]
+      }'::jsonb
+    ),
+    (
+      'Czesci - operator',
+      'Praca operacyjna w module magazynu czesci zamiennych.',
+      '{
+        "admin": false,
+        "warehouses": {
+          "CZESCI": {
+            "role": "MECHANIK",
+            "readOnly": false,
+            "admin": false,
+            "tabs": ["pobierz", "uzupelnij", "stany"]
+          }
         }
-      }
-    }'::jsonb
-  )
-on conflict do nothing;
+      }'::jsonb
+    ),
+    (
+      'Raport zmianowy - operator',
+      'Tworzenie i edycja wpisow raportu zmianowego.',
+      '{
+        "admin": false,
+        "warehouses": {
+          "RAPORT_ZMIANOWY": {
+            "role": "ROZDZIELCA",
+            "readOnly": false,
+            "admin": false,
+            "tabs": ["raport-zmianowy"]
+          }
+        }
+      }'::jsonb
+    ),
+    (
+      'ERP - administrator',
+      'Pelny dostep do modulu przesuniec magazynowych ERP.',
+      '{
+        "admin": false,
+        "warehouses": {
+          "PRZESUNIECIA_ERP": {
+            "role": "ROZDZIELCA",
+            "readOnly": false,
+            "admin": true,
+            "tabs": ["erp-magazynier", "erp-rozdzielca", "erp-wypisz-dokument", "erp-historia-dokumentow"]
+          }
+        }
+      }'::jsonb
+    ),
+    (
+      'ERP - rozdzielca',
+      'Dashboard rozdzielcy i historia przesuniec ERP.',
+      '{
+        "admin": false,
+        "warehouses": {
+          "PRZESUNIECIA_ERP": {
+            "role": "ROZDZIELCA",
+            "readOnly": false,
+            "admin": false,
+            "tabs": ["erp-rozdzielca", "erp-historia-dokumentow"]
+          }
+        }
+      }'::jsonb
+    ),
+    (
+      'ERP - magazynier',
+      'Dashboard magazyniera i historia przesuniec ERP.',
+      '{
+        "admin": false,
+        "warehouses": {
+          "PRZESUNIECIA_ERP": {
+            "role": "ROZDZIELCA",
+            "readOnly": false,
+            "admin": false,
+            "tabs": ["erp-magazynier", "erp-historia-dokumentow"]
+          }
+        }
+      }'::jsonb
+    )
+),
+updated as (
+  update public.permission_groups pg
+  set description = seed.description,
+      access = seed.access,
+      is_active = true
+  from permission_group_seed seed
+  where lower(pg.name) = lower(seed.name)
+  returning lower(pg.name) as name_key
+)
+insert into public.permission_groups (name, description, access, is_active)
+select seed.name, seed.description, seed.access, true
+from permission_group_seed seed
+where not exists (
+  select 1
+  from updated
+  where updated.name_key = lower(seed.name)
+)
+and not exists (
+  select 1
+  from public.permission_groups pg
+  where lower(pg.name) = lower(seed.name)
+);
+
+notify pgrst, 'reload schema';
