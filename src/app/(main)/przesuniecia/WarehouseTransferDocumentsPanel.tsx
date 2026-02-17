@@ -4347,6 +4347,8 @@ export function WarehouseTransferDocumentsPanel() {
   const historyCountLabel = historySearch.trim()
     ? `${filteredHistoryDocuments.length}/${historyDocuments.length}`
     : String(historyDocuments.length);
+  const mobileDocumentSectionClass =
+    'space-y-3 rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(0,0,0,0.5))] p-3 shadow-[0_12px_28px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] md:hidden';
 
   const renderMobileDocumentCards = (docs: Array<(typeof documents)[number]>) => (
     <div className="space-y-2 md:hidden">
@@ -5872,8 +5874,8 @@ export function WarehouseTransferDocumentsPanel() {
         <>
           {isWarehousemanTab ? (
             <>
-              <div className="space-y-3 md:hidden">
-                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <div className={mobileDocumentSectionClass}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                     {warehousemanIssueCardTitle}
                   </p>
@@ -5921,8 +5923,8 @@ export function WarehouseTransferDocumentsPanel() {
                 )}
               </Card>
 
-              <div className="space-y-3 md:hidden">
-                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <div className={mobileDocumentSectionClass}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                     {warehousemanReturnCardTitle}
                   </p>
@@ -5972,8 +5974,8 @@ export function WarehouseTransferDocumentsPanel() {
             </>
           ) : (
             <>
-              <div className="space-y-3 md:hidden">
-                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <div className={mobileDocumentSectionClass}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                     {dispatcherIssueCardTitle}
                   </p>
@@ -6021,8 +6023,8 @@ export function WarehouseTransferDocumentsPanel() {
                 )}
               </Card>
 
-              <div className="space-y-3 md:hidden">
-                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <div className={mobileDocumentSectionClass}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                     {dispatcherReturnCardTitle}
                   </p>
@@ -6201,8 +6203,8 @@ export function WarehouseTransferDocumentsPanel() {
             />
           </Card>
 
-          <div className="space-y-3 md:hidden">
-            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+          <div className={mobileDocumentSectionClass}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                 Historia dokumentów
               </p>

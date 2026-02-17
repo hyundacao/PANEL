@@ -339,7 +339,7 @@ export default function MixedMaterialsPage() {
             <p className="text-sm text-dim">Brak mieszanek do wyświetlenia.</p>
           ) : (
             <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-[inset_0_1px_0_var(--inner-highlight)]">
-              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_140px] gap-4 bg-surface2 px-4 py-3 text-sm font-semibold text-dim">
+              <div className="hidden gap-4 bg-surface2 px-4 py-3 text-sm font-semibold text-dim sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_140px]">
                 <span>Mieszanka</span>
                 <span>Lokalizacja</span>
                 <span className="text-right">Ilość</span>
@@ -353,7 +353,7 @@ export default function MixedMaterialsPage() {
                     onClick={() => !readOnly && setSelectedId(item.id)}
                     disabled={readOnly}
                     className={[
-                      'grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)_140px] items-center gap-4 border-t border-border px-4 py-3 text-left text-sm text-body transition',
+                      'grid w-full gap-2 border-t border-border px-4 py-3 text-left text-sm text-body transition sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_140px] sm:items-center sm:gap-4',
                       readOnly ? 'cursor-default' : 'cursor-pointer',
                       index % 2 === 1 ? 'bg-surface2' : '',
                       isSelected
@@ -367,7 +367,7 @@ export default function MixedMaterialsPage() {
                     <span className="text-body">
                       {locationMap.get(item.locationId) ?? 'Nieznana lokacja'}
                     </span>
-                    <span className="text-right font-semibold tabular-nums">
+                    <span className="text-left font-semibold tabular-nums sm:text-right">
                       {formatKg(item.qty)}
                     </span>
                   </button>

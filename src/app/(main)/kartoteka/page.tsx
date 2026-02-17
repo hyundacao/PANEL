@@ -123,7 +123,7 @@ export default function CatalogPage() {
 
           <TabsContent value="materials" className="mt-4">
             <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-[inset_0_1px_0_var(--inner-highlight)]">
-              <div className="grid grid-cols-[minmax(0,1fr)_160px] gap-4 bg-surface2 px-4 py-3 text-sm font-semibold text-dim">
+              <div className="hidden gap-4 bg-surface2 px-4 py-3 text-sm font-semibold text-dim sm:grid sm:grid-cols-[minmax(0,1fr)_160px]">
                 <span>Przemiał</span>
                 <span className="text-right">Stan ogólny</span>
               </div>
@@ -137,7 +137,7 @@ export default function CatalogPage() {
                       type="button"
                       onClick={() => toggleExpanded(row.id)}
                       aria-expanded={isExpanded}
-                      className="grid w-full grid-cols-[minmax(0,1fr)_160px] items-center gap-4 px-4 py-3 text-left transition hover:bg-[rgba(255,255,255,0.03)]"
+                      className="grid w-full gap-2 px-4 py-3 text-left transition hover:bg-[rgba(255,255,255,0.03)] sm:grid-cols-[minmax(0,1fr)_160px] sm:items-center sm:gap-4"
                     >
                       <div className="flex items-center gap-3">
                         <ChevronDown
@@ -153,7 +153,7 @@ export default function CatalogPage() {
                         </div>
                       </div>
                       <span
-                        className="text-right text-base font-semibold tabular-nums"
+                        className="text-left text-base font-semibold tabular-nums sm:text-right"
                         style={{ color: 'var(--value-purple)' }}
                       >
                         {formatKg(total)}
@@ -162,7 +162,7 @@ export default function CatalogPage() {
                     {isExpanded && (
                       <div className="px-4 pb-4">
                         <div className="rounded-xl border border-border bg-surface2 px-4 py-3">
-                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px] gap-4 text-sm font-semibold text-dim">
+                          <div className="hidden gap-4 text-sm font-semibold text-dim sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px]">
                             <span>Magazyn</span>
                             <span>Lokalizacja</span>
                             <span className="text-right">Ilość (kg)</span>
@@ -173,12 +173,12 @@ export default function CatalogPage() {
                             locations.map((location) => (
                               <div
                                 key={`${row.id}-${location.locationId}`}
-                                className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px] gap-4 border-t border-border py-2 text-base"
+                                className="grid gap-2 border-t border-border py-2 text-base sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px] sm:gap-4"
                               >
                                 <span className="text-body">{location.warehouseName}</span>
                                 <span className="text-body">{location.locationName}</span>
                                 <span
-                                  className="text-right font-semibold tabular-nums"
+                                  className="text-left font-semibold tabular-nums sm:text-right"
                                   style={{ color: 'var(--value-purple)' }}
                                 >
                                   {formatKg(location.qty)}
@@ -197,7 +197,7 @@ export default function CatalogPage() {
 
           <TabsContent value="catalogs" className="mt-4">
             <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-[inset_0_1px_0_var(--inner-highlight)]">
-              <div className="grid grid-cols-[minmax(0,1fr)_160px] gap-4 bg-surface2 px-4 py-3 text-sm font-semibold text-dim">
+              <div className="hidden gap-4 bg-surface2 px-4 py-3 text-sm font-semibold text-dim sm:grid sm:grid-cols-[minmax(0,1fr)_160px]">
                 <span>Kartoteka</span>
                 <span className="text-right">Suma (kg)</span>
               </div>
@@ -210,7 +210,7 @@ export default function CatalogPage() {
                       type="button"
                       onClick={() => toggleCatalogExpanded(row.catalog)}
                       aria-expanded={isExpanded}
-                      className="grid w-full grid-cols-[minmax(0,1fr)_160px] items-center gap-4 px-4 py-3 text-left transition hover:bg-[rgba(255,255,255,0.03)]"
+                      className="grid w-full gap-2 px-4 py-3 text-left transition hover:bg-[rgba(255,255,255,0.03)] sm:grid-cols-[minmax(0,1fr)_160px] sm:items-center sm:gap-4"
                     >
                       <div className="flex items-center gap-3">
                         <ChevronDown
@@ -226,7 +226,7 @@ export default function CatalogPage() {
                         </div>
                       </div>
                       <span
-                        className="text-right text-base font-semibold tabular-nums"
+                        className="text-left text-base font-semibold tabular-nums sm:text-right"
                         style={{ color: 'var(--value-purple)' }}
                       >
                         {formatKg(row.total)}
@@ -235,7 +235,7 @@ export default function CatalogPage() {
                     {isExpanded && (
                       <div className="px-4 pb-4">
                         <div className="rounded-xl border border-border bg-surface2 px-4 py-3">
-                          <div className="grid grid-cols-[minmax(0,1fr)_120px] gap-4 text-sm font-semibold text-dim">
+                          <div className="hidden gap-4 text-sm font-semibold text-dim sm:grid sm:grid-cols-[minmax(0,1fr)_120px]">
                             <span>Przemiał</span>
                             <span className="text-right">Ilość (kg)</span>
                           </div>
@@ -245,11 +245,11 @@ export default function CatalogPage() {
                             items.map((item) => (
                               <div
                                 key={`${row.catalog}-${item.id}`}
-                                className="grid grid-cols-[minmax(0,1fr)_120px] gap-4 border-t border-border py-2 text-base"
+                                className="grid gap-2 border-t border-border py-2 text-base sm:grid-cols-[minmax(0,1fr)_120px] sm:gap-4"
                               >
                                 <span className="text-body">{item.name}</span>
                                 <span
-                                  className="text-right font-semibold tabular-nums"
+                                  className="text-left font-semibold tabular-nums sm:text-right"
                                   style={{ color: 'var(--value-purple)' }}
                                 >
                                   {formatKg(item.total)}
