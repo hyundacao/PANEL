@@ -567,6 +567,9 @@ export const getOriginalInventory = async (): Promise<OriginalInventoryEntry[]> 
 export const getOriginalInventoryCatalog = async (): Promise<OriginalInventoryCatalogEntry[]> =>
   appRequest('getOriginalInventoryCatalog');
 
+export const getOriginalInventoryCatalogFromErp = async (): Promise<OriginalInventoryCatalogEntry[]> =>
+  appRequest('getOriginalInventoryCatalogFromErp');
+
 export const addOriginalInventory = async (payload: {
   warehouseId: string;
   name: string;

@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
@@ -92,7 +92,7 @@ const navItemsRaport: MobileNavItem[] = [
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const title = getTitle(pathname);
+  const baseTitle = getTitle(pathname);
   const {
     sidebarCollapsed,
     setSidebarCollapsed,
@@ -107,6 +107,8 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   const tabFromPath = getTabFromPath(pathname);
   const autoCollapseDone = useRef(false);
   const previousPath = useRef<string | null>(null);
+  const [authBootstrapResolved, setAuthBootstrapResolved] = useState(false);
+  const authBootstrapDone = Boolean(user) || authBootstrapResolved;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -157,7 +159,26 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   }, [hydrated, sidebarCollapsed]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || user || authBootstrapResolved) return;
+    let cancelled = false;
+    getCurrentSessionUser()
+      .then((freshUser) => {
+        if (cancelled) return;
+        setUser(freshUser);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        logout();
+        setAuthBootstrapResolved(true);
+        router.replace('/login');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authBootstrapResolved, hydrated, logout, router, setUser, user]);
+
+  useEffect(() => {
+    if (!hydrated || !authBootstrapDone) return;
     if (!user) {
       router.replace('/login');
       return;
@@ -174,19 +195,23 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       }
       return;
     }
-    if (!activeWarehouse || !warehouseFromPath) {
+    if (!warehouseFromPath) {
       router.replace('/magazyny');
       return;
     }
-    if (activeWarehouse !== warehouseFromPath || !canAccessWarehouse(user, warehouseFromPath)) {
+    if (!canAccessWarehouse(user, warehouseFromPath)) {
       router.replace('/magazyny');
       return;
+    }
+    if (!activeWarehouse || activeWarehouse !== warehouseFromPath) {
+      setActiveWarehouse(warehouseFromPath);
     }
     if (tabFromPath && !canSeeTab(user, warehouseFromPath, tabFromPath)) {
       router.replace('/magazyny');
     }
   }, [
     activeWarehouse,
+    authBootstrapDone,
     hydrated,
     pathname,
     router,
@@ -238,7 +263,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     };
   }, [logout, router]);
 
-  if (!hydrated) {
+  if (!hydrated || !authBootstrapDone) {
     return <div className="min-h-screen bg-bg" />;
   }
 
@@ -247,8 +272,14 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   }
 
   const breadcrumb = pathname.startsWith('/admin')
-    ? 'Panel administratora'
+    ? activeWarehouse === 'PRZEMIALY'
+      ? 'Panel magazynu przemiałów'
+      : 'Panel administratora'
     : getWarehouseLabel(activeWarehouse ?? warehouseFromPath);
+  const title =
+    pathname.startsWith('/admin') && activeWarehouse === 'PRZEMIALY'
+      ? 'Zarządzanie modułem'
+      : baseTitle;
   const showMobileNav =
     !pathname.startsWith('/admin') && Boolean(activeWarehouse && warehouseFromPath);
   const isActivePath = (href: string) => {

@@ -3167,14 +3167,14 @@ export function WarehouseTransferDocumentsPanel() {
   );
   const dispatcherShiftDocuments = useMemo(
     () =>
-      [...documents]
+      [...issuedDocuments, ...openDocuments]
         .filter(
           (document) =>
             isPaczkaTargetLocation(document.targetWarehouse) ||
             isPaczkaTargetLocation(stripWarehouseTransferFlowKindFromNote(document.note))
         )
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
-    [documents]
+    [issuedDocuments, openDocuments]
   );
   const dispatcherShiftTargetLocationOptions = useMemo(() => {
     const paczkaAssignments = issueTargetLocationPresetOptions.filter((option) =>
@@ -4703,7 +4703,7 @@ export function WarehouseTransferDocumentsPanel() {
             )}
             {(isDispatcherTab || isDispatcherShiftTab) && details.document.status === 'ISSUED' && (
               <Button
-                variant="outline"
+                variant={isDispatcherShiftTab ? 'primaryEmber' : 'outline'}
                 className="w-full sm:w-auto"
                 onClick={() =>
                   closeDocumentMutation.mutate({ documentId: details.document.id })

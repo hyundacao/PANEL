@@ -1,18 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { ChangeEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import * as XLSX from 'xlsx';
 import {
   addOriginalInventory,
-  addOriginalInventoryCatalog,
-  addOriginalInventoryCatalogBulk,
   getOriginalInventory,
-  getOriginalInventoryCatalog,
+  getOriginalInventoryCatalogFromErp,
   getWarehouses,
   removeOriginalInventory,
-  removeOriginalInventoryCatalog,
   updateOriginalInventory
 } from '@/lib/api';
 import { Card } from '@/components/ui/Card';
@@ -29,6 +24,29 @@ const WAREHOUSE_STORAGE_KEY = 'spis-oryginalow-warehouse';
 const TAB_STORAGE_KEY = 'spis-oryginalow-tab';
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
+const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
+  [
+    'Source: ERP proxy API (aktywny)',
+    'Action: getOriginalInventoryCatalogFromErp',
+    'ENV: ERP_ORIGINALS_PROXY_URL',
+    'ENV: ERP_ORIGINALS_PROXY_TOKEN (opcjonalny)',
+    'ENV: ERP_ORIGINALS_PROXY_TIMEOUT_MS (opcjonalny, domyslnie 10000 ms)',
+    'Response: [] lub { items: [] }, pola: id/name/unit/createdAt'
+  ].join('\n');
+
+const getInitialTabValue = (): 'spis' | 'kartoteki' | 'raporty' => {
+  if (typeof window === 'undefined') return 'spis';
+  const saved = window.localStorage.getItem(TAB_STORAGE_KEY);
+  if (saved === 'spis' || saved === 'kartoteki' || saved === 'raporty') {
+    return saved;
+  }
+  return 'spis';
+};
+
+const getInitialWarehouseValue = () => {
+  if (typeof window === 'undefined') return '';
+  return window.localStorage.getItem(WAREHOUSE_STORAGE_KEY) ?? '';
+};
 
 const getLocalDateValue = (date = new Date()) => {
   const year = date.getFullYear();
@@ -76,9 +94,12 @@ export default function OriginalInventoryPage() {
   const toast = useToastStore((state) => state.push);
   const { user } = useUiStore();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'spis' | 'kartoteki' | 'raporty'>('spis');
-  const [tabReady, setTabReady] = useState(false);
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState('');
+  const [activeTab, setActiveTab] = useState<'spis' | 'kartoteki' | 'raporty'>(() =>
+    getInitialTabValue()
+  );
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState(() =>
+    getInitialWarehouseValue()
+  );
   const [expandedMaterialKey, setExpandedMaterialKey] = useState<string | null>(null);
   const [quickQty, setQuickQty] = useState('');
   const [quickWarehouseId, setQuickWarehouseId] = useState('');
@@ -86,18 +107,10 @@ export default function OriginalInventoryPage() {
     Record<string, { qty: string; warehouseId: string }>
   >({});
   const [showNameSuggestions, setShowNameSuggestions] = useState(false);
-  const [reportMaterialKey, setReportMaterialKey] = useState('');
   const [reportQuery, setReportQuery] = useState('');
   const [showReportSuggestions, setShowReportSuggestions] = useState(false);
   const [spisDate, setSpisDate] = useState(getLocalDateValue());
   const [catalogSearch, setCatalogSearch] = useState('');
-  const [catalogForm, setCatalogForm] = useState({ name: '', unit: 'kg' });
-  const [catalogImporting, setCatalogImporting] = useState(false);
-  const [catalogImportSummary, setCatalogImportSummary] = useState<{
-    total: number;
-    inserted: number;
-    skipped: number;
-  } | null>(null);
   const [form, setForm] = useState({
     name: '',
     qty: '',
@@ -112,43 +125,28 @@ export default function OriginalInventoryPage() {
     queryKey: ['spis-oryginalow'],
     queryFn: getOriginalInventory
   });
-  const { data: catalog = [] } = useQuery({
+  const { data: catalog = [], error: catalogError } = useQuery({
     queryKey: ['spis-oryginalow-catalog'],
-    queryFn: getOriginalInventoryCatalog
+    queryFn: getOriginalInventoryCatalogFromErp
   });
-
-  useEffect(() => {
-    if (warehouses.length === 0) return;
-    setSelectedWarehouseId((prev) => {
-      if (prev && warehouses.some((warehouse) => warehouse.id === prev)) {
-        return prev;
-      }
-      const saved = localStorage.getItem(WAREHOUSE_STORAGE_KEY);
-      if (saved && warehouses.some((warehouse) => warehouse.id === saved)) {
-        return saved;
-      }
-      return warehouses[0].id;
-    });
-  }, [warehouses]);
-
-  useEffect(() => {
-    if (!selectedWarehouseId) return;
-    localStorage.setItem(WAREHOUSE_STORAGE_KEY, selectedWarehouseId);
-  }, [selectedWarehouseId]);
+  const catalogErrorCode = catalogError instanceof Error ? catalogError.message : '';
+  const effectiveSelectedWarehouseId = useMemo(() => {
+    if (selectedWarehouseId && warehouses.some((warehouse) => warehouse.id === selectedWarehouseId)) {
+      return selectedWarehouseId;
+    }
+    return warehouses[0]?.id ?? '';
+  }, [selectedWarehouseId, warehouses]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const saved = window.localStorage.getItem(TAB_STORAGE_KEY);
-    if (saved === 'spis' || saved === 'kartoteki' || saved === 'raporty') {
-      setActiveTab(saved);
-    }
-    setTabReady(true);
-  }, []);
+    if (!effectiveSelectedWarehouseId) return;
+    window.localStorage.setItem(WAREHOUSE_STORAGE_KEY, effectiveSelectedWarehouseId);
+  }, [effectiveSelectedWarehouseId]);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !tabReady) return;
+    if (typeof window === 'undefined') return;
     window.localStorage.setItem(TAB_STORAGE_KEY, activeTab);
-  }, [activeTab, tabReady]);
+  }, [activeTab]);
 
   const addMutation = useMutation({
     mutationFn: addOriginalInventory,
@@ -164,21 +162,6 @@ export default function OriginalInventoryPage() {
         QTY_REQUIRED: 'Wpisz poprawną ilość.'
       };
       toast({ title: messageMap[err.message] ?? 'Nie dodano wpisu.', tone: 'error' });
-    }
-  });
-  const addCatalogMutation = useMutation({
-    mutationFn: addOriginalInventoryCatalog,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog'] });
-      setCatalogForm({ name: '', unit: 'kg' });
-      toast({ title: 'Dodano pozycje do kartoteki', tone: 'success' });
-    },
-    onError: (err: Error) => {
-      const messageMap: Record<string, string> = {
-        NAME_REQUIRED: 'Podaj nazwe pozycji.',
-        DUPLICATE: 'Taka pozycja juz istnieje.'
-      };
-      toast({ title: messageMap[err.message] ?? 'Nie dodano pozycji.', tone: 'error' });
     }
   });
   const updateMutation = useMutation({
@@ -209,24 +192,10 @@ export default function OriginalInventoryPage() {
       toast({ title: messageMap[err.message] ?? 'Nie usunieto wpisu.', tone: 'error' });
     }
   });
-  const removeCatalogMutation = useMutation({
-    mutationFn: removeOriginalInventoryCatalog,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog'] });
-      toast({ title: 'Usunieto pozycje z kartoteki', tone: 'success' });
-    },
-    onError: (err: Error) => {
-      const messageMap: Record<string, string> = {
-        ENTRY_MISSING: 'Nie znaleziono pozycji.'
-      };
-      toast({ title: messageMap[err.message] ?? 'Nie usunieto pozycji.', tone: 'error' });
-    }
-  });
-
   const handleAdd = () => {
     const name = form.name.trim();
     const qtyValue = parseQtyInput(form.qty);
-    if (!selectedWarehouseId) {
+    if (!effectiveSelectedWarehouseId) {
       toast({ title: 'Wybierz hale do spisu.', tone: 'error' });
       return;
     }
@@ -239,7 +208,7 @@ export default function OriginalInventoryPage() {
       return;
     }
     addMutation.mutate({
-      warehouseId: selectedWarehouseId,
+      warehouseId: effectiveSelectedWarehouseId,
       name,
       qty: qtyValue,
       unit: form.unit.trim() || 'kg',
@@ -247,111 +216,10 @@ export default function OriginalInventoryPage() {
       user: user?.username ?? user?.name ?? 'nieznany'
     });
   };
-
-  const handleCatalogAdd = () => {
-    const name = catalogForm.name.trim();
-    if (!name) {
-      toast({ title: 'Podaj nazwe pozycji.', tone: 'error' });
-      return;
-    }
-    addCatalogMutation.mutate({
-      name,
-      unit: catalogForm.unit.trim() || 'kg'
-    });
-  };
-
-  const handleCatalogAddFromForm = () => {
-    const name = form.name.trim();
-    if (!name) {
-      toast({ title: 'Podaj nazwe pozycji.', tone: 'error' });
-      return;
-    }
-    addCatalogMutation.mutate({
-      name,
-      unit: form.unit.trim() || 'kg'
-    });
-  };
-  const parseCatalogRows = (rows: Array<Array<unknown>>) => {
-    const normalize = (value: unknown) => String(value ?? '').trim();
-    const lower = (value: unknown) => normalize(value).toLowerCase();
-    const headerRow = rows[0] ?? [];
-    const headerLabels = headerRow.map((cell) => lower(cell));
-    const nameHeaders = ['nazwa', 'name', 'material', 'tworzywo', 'pozycja', 'kartoteka'];
-    const unitHeaders = ['jednostka', 'unit', 'jm', 'j.m.', 'j.m', 'j m'];
-    const nameIndex = headerLabels.findIndex((label) =>
-      nameHeaders.some((key) => label.includes(key))
-    );
-    const unitIndex = headerLabels.findIndex((label) =>
-      unitHeaders.some((key) => label.includes(key))
-    );
-    const startIndex = nameIndex >= 0 ? 1 : 0;
-
-    const items: Array<{ name: string; unit?: string }> = [];
-    for (let i = startIndex; i < rows.length; i += 1) {
-      const row = rows[i] ?? [];
-      const name = normalize(row[nameIndex >= 0 ? nameIndex : 0]);
-      if (!name) continue;
-      const unit = normalize(row[unitIndex >= 0 ? unitIndex : 1]);
-      items.push({ name, unit: unit || 'kg' });
-    }
-    return items;
-  };
-
-  const handleCatalogFile = async (file: File) => {
-    setCatalogImportSummary(null);
-    setCatalogImporting(true);
-    try {
-      let workbook: XLSX.WorkBook;
-      if (file.name.toLowerCase().endsWith('.csv')) {
-        const text = await file.text();
-        workbook = XLSX.read(text, { type: 'string' });
-      } else {
-        const buffer = await file.arrayBuffer();
-        workbook = XLSX.read(buffer, { type: 'array' });
-      }
-      const sheetName = workbook.SheetNames[0];
-      if (!sheetName) {
-        toast({ title: 'Brak arkusza w pliku', tone: 'error' });
-        return;
-      }
-      const sheet = workbook.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as Array<
-        Array<unknown>
-      >;
-      if (!rows || rows.length === 0) {
-        toast({ title: 'Plik jest pusty', tone: 'error' });
-        return;
-      }
-      const items = parseCatalogRows(rows);
-      if (items.length === 0) {
-        toast({ title: 'Nie znaleziono nazw kartotek w pliku', tone: 'error' });
-        return;
-      }
-      const result = await addOriginalInventoryCatalogBulk({ items });
-      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog'] });
-      setCatalogImportSummary(result);
-      toast({
-        title: 'Import zakonczony',
-        description: `Dodano: ${result.inserted}, pominieto: ${result.skipped}.`,
-        tone: 'success'
-      });
-    } catch {
-      toast({ title: 'Nie udalo sie zaimportowac pliku', tone: 'error' });
-    } finally {
-      setCatalogImporting(false);
-    }
-  };
-
-  const handleCatalogFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    await handleCatalogFile(file);
-    event.target.value = '';
-  };
   const handleQuickAdd = () => {
     if (!selectedGroup) return;
     const qtyValue = parseQtyInput(quickQty);
-    const warehouseId = quickWarehouseId || selectedWarehouseId;
+    const warehouseId = quickWarehouseId || effectiveSelectedWarehouseId;
     if (!warehouseId) {
       toast({ title: 'Wybierz hale do spisu.', tone: 'error' });
       return;
@@ -422,11 +290,6 @@ export default function OriginalInventoryPage() {
     return entries.filter((entry) => getEntryDateKey(entry.at) === spisDate);
   }, [entries, spisDate]);
 
-  const matchedCatalog = useMemo(() => {
-    const needle = form.name.trim().toLowerCase();
-    if (!needle) return null;
-    return catalog.find((item) => item.name.toLowerCase() === needle) ?? null;
-  }, [catalog, form.name]);
   const existingByName = useMemo(() => {
     const map = new Map<string, { name: string; unit: string; total: number }>();
     entriesForDate.forEach((entry) => {
@@ -481,16 +344,22 @@ export default function OriginalInventoryPage() {
     if (!needle) return catalog;
     return catalog.filter((item) => item.name.toLowerCase().includes(needle));
   }, [catalog, catalogSearch]);
-
-  useEffect(() => {
-    const matched = matchedExisting ?? matchedCatalog;
-    if (!matched) return;
-    setForm((prev) =>
-      prev.unit === matched.unit && prev.name === matched.name
-        ? prev
-        : { ...prev, name: matched.name, unit: matched.unit }
-    );
-  }, [matchedCatalog, matchedExisting]);
+  const applyNameToForm = (rawName: string) => {
+    const needle = rawName.trim().toLowerCase();
+    if (!needle) {
+      setForm((prev) => ({ ...prev, name: rawName }));
+      return;
+    }
+    const matched =
+      existingByName.get(needle) ??
+      catalog.find((item) => item.name.toLowerCase() === needle) ??
+      null;
+    if (matched) {
+      setForm((prev) => ({ ...prev, name: matched.name, unit: matched.unit }));
+      return;
+    }
+    setForm((prev) => ({ ...prev, name: rawName }));
+  };
 
   const materialGroups = useMemo(() => {
     const map = new Map<
@@ -519,12 +388,21 @@ export default function OriginalInventoryPage() {
     });
     return [...map.values()].sort((a, b) => collator.compare(a.name, b.name));
   }, [entries]);
+  const selectedReportMaterialKey = useMemo(() => {
+    if (reportOptions.length === 0) return '';
+    const query = reportQuery.trim().toLowerCase();
+    if (query) {
+      const exactMatch = reportOptions.find((option) => option.name.toLowerCase() === query);
+      if (exactMatch) return exactMatch.key;
+    }
+    return reportOptions[0].key;
+  }, [reportOptions, reportQuery]);
   const reportEntries = useMemo(() => {
-    if (!reportMaterialKey) return [];
+    if (!selectedReportMaterialKey) return [];
     return entries
-      .filter((entry) => entry.name.toLowerCase() === reportMaterialKey)
+      .filter((entry) => entry.name.toLowerCase() === selectedReportMaterialKey)
       .sort((a, b) => b.at.localeCompare(a.at));
-  }, [entries, reportMaterialKey]);
+  }, [entries, selectedReportMaterialKey]);
   const reportSuggestions = useMemo(() => {
     const needle = reportQuery.trim().toLowerCase();
     if (!needle) return [];
@@ -576,32 +454,6 @@ export default function OriginalInventoryPage() {
     URL.revokeObjectURL(url);
   };
 
-  useEffect(() => {
-    if (reportOptions.length === 0) return;
-    if (reportMaterialKey && reportOptions.some((opt) => opt.key === reportMaterialKey)) {
-      return;
-    }
-    setReportMaterialKey(reportOptions[0].key);
-  }, [reportMaterialKey, reportOptions]);
-
-  useEffect(() => {
-    if (!reportQuery.trim()) return;
-    const match = reportOptions.find(
-      (option) => option.name.toLowerCase() === reportQuery.trim().toLowerCase()
-    );
-    if (!match) return;
-    setReportMaterialKey(match.key);
-  }, [reportOptions, reportQuery]);
-
-  useEffect(() => {
-    const needle = form.name.trim().toLowerCase();
-    if (!needle) return;
-    const group = materialGroups.get(needle);
-    if (!group) return;
-    setExpandedMaterialKey(group.key);
-    setForm((prev) => ({ ...prev, name: '', qty: '' }));
-  }, [form.name, materialGroups]);
-
   const materialGroupList = useMemo(() => {
     const list = [...materialGroups.values()].map((group) => {
       const total = group.entries.reduce((sum, entry) => sum + entry.qty, 0);
@@ -628,39 +480,19 @@ export default function OriginalInventoryPage() {
     });
     return list.sort((a, b) => collator.compare(a.name, b.name));
   }, [materialGroups, warehouseNameMap, warehouseOrderMap]);
-  const selectedGroup = useMemo(() => {
-    if (!expandedMaterialKey) return null;
-    return materialGroups.get(expandedMaterialKey) ?? null;
-  }, [expandedMaterialKey, materialGroups]);
-  const selectedEntries = useMemo(() => {
-    if (!selectedGroup) return [];
-    return [...selectedGroup.entries].sort((a, b) => b.at.localeCompare(a.at));
-  }, [selectedGroup]);
-  const historyLine = useMemo(() => {
-    if (!selectedGroup) return '';
-    const parts = [...selectedGroup.entries]
-      .sort((a, b) => a.at.localeCompare(b.at))
-      .map((entry) => {
-        const warehouseLabel = warehouseNameMap.get(entry.warehouseId);
-        return warehouseLabel ? `${entry.qty} (${warehouseLabel})` : String(entry.qty);
-      });
-    return parts.join(' + ');
-  }, [selectedGroup, warehouseNameMap]);
-
-  useEffect(() => {
-    if (!selectedGroup) return;
-    setQuickQty('');
-    setQuickWarehouseId(selectedWarehouseId || warehouses[0]?.id || '');
-    setEditDrafts((prev) => {
-      const next = { ...prev };
-      selectedGroup.entries.forEach((entry) => {
-        if (!next[entry.id]) {
-          next[entry.id] = { qty: String(entry.qty), warehouseId: entry.warehouseId };
-        }
-      });
-      return next;
-    });
-  }, [selectedGroup, selectedWarehouseId, warehouses]);
+  const selectedGroup = expandedMaterialKey ? materialGroups.get(expandedMaterialKey) ?? null : null;
+  const selectedEntries = selectedGroup
+    ? [...selectedGroup.entries].sort((a, b) => b.at.localeCompare(a.at))
+    : [];
+  const historyLine = selectedGroup
+    ? [...selectedGroup.entries]
+        .sort((a, b) => a.at.localeCompare(b.at))
+        .map((entry) => {
+          const warehouseLabel = warehouseNameMap.get(entry.warehouseId);
+          return warehouseLabel ? `${entry.qty} (${warehouseLabel})` : String(entry.qty);
+        })
+        .join(' + ')
+    : '';
 
 
   return (
@@ -712,11 +544,11 @@ export default function OriginalInventoryPage() {
               <div className="lg:col-span-2">
                 <label className="text-xs uppercase tracking-wide text-dim">Hala</label>
                 <SelectField
-                  value={selectedWarehouseId}
+                  value={effectiveSelectedWarehouseId}
                   onChange={(event) => setSelectedWarehouseId(event.target.value)}
                   disabled={warehouses.length === 0}
                 >
-                  {!selectedWarehouseId && <option value="">Wybierz hale</option>}
+                  {!effectiveSelectedWarehouseId && <option value="">Wybierz hale</option>}
                   {warehouses.map((warehouse) => (
                     <option key={warehouse.id} value={warehouse.id}>
                       {warehouse.name}
@@ -732,7 +564,7 @@ export default function OriginalInventoryPage() {
                   <Input
                     value={form.name}
                     onChange={(event) => {
-                      setForm((prev) => ({ ...prev, name: event.target.value }));
+                      applyNameToForm(event.target.value);
                       setShowNameSuggestions(true);
                     }}
                     placeholder="np. BOREALIS HF700SA"
@@ -765,7 +597,7 @@ export default function OriginalInventoryPage() {
                           type="button"
                           onMouseDown={(event) => {
                             event.preventDefault();
-                            setForm((prev) => ({ ...prev, name }));
+                            applyNameToForm(name);
                             setShowNameSuggestions(false);
                           }}
                           className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]"
@@ -801,7 +633,7 @@ export default function OriginalInventoryPage() {
                   className="min-h-[46px]"
                 />
               </div>
-              <div className="flex items-end justify-end lg:col-span-3">
+              <div className="flex items-end justify-end lg:col-span-6">
                 <Button
                   variant="secondary"
                   type="submit"
@@ -809,17 +641,6 @@ export default function OriginalInventoryPage() {
                   className="w-full"
                 >
                   {matchedExisting ? 'Dodaj ilosc' : 'Dodaj wpis'}
-                </Button>
-              </div>
-              <div className="flex items-end justify-end lg:col-span-2">
-                <Button
-                  variant="secondary"
-                  onClick={handleCatalogAddFromForm}
-                  disabled={!form.name.trim() || addCatalogMutation.isPending || Boolean(matchedCatalog)}
-                  className="w-full"
-                  type="button"
-                >
-                  {matchedCatalog ? 'Juz w kartotece' : 'Dodaj do kartoteki'}
                 </Button>
               </div>
             </form>
@@ -851,7 +672,12 @@ export default function OriginalInventoryPage() {
                 onRowClick={(rowIndex) => {
                   const group = materialGroupList[rowIndex];
                   if (!group) return;
-                  setExpandedMaterialKey((prev) => (prev === group.key ? null : group.key));
+                  const nextKey = expandedMaterialKey === group.key ? null : group.key;
+                  setExpandedMaterialKey(nextKey);
+                  if (nextKey) {
+                    setQuickQty('');
+                    setQuickWarehouseId(effectiveSelectedWarehouseId || warehouses[0]?.id || '');
+                  }
                 }}
                 renderRowDetails={(rowIndex) => {
                   const group = materialGroupList[rowIndex];
@@ -897,11 +723,11 @@ export default function OriginalInventoryPage() {
                         <div>
                           <label className="text-xs uppercase tracking-wide text-dim">Hala</label>
                           <SelectField
-                            value={quickWarehouseId || selectedWarehouseId}
+                            value={quickWarehouseId || effectiveSelectedWarehouseId}
                             onChange={(event) => setQuickWarehouseId(event.target.value)}
                             disabled={warehouses.length === 0}
                           >
-                            {!quickWarehouseId && !selectedWarehouseId && (
+                            {!quickWarehouseId && !effectiveSelectedWarehouseId && (
                               <option value="">Wybierz hale</option>
                             )}
                             {warehouses.map((warehouse) => (
@@ -985,88 +811,42 @@ export default function OriginalInventoryPage() {
 
         <TabsContent value="kartoteki" className="space-y-4">
           <Card className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              Import kartotek (Excel/CSV)
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Integracja ERP</p>
+            <p className="text-sm text-dim">
+              W tym module reczne dodawanie/usuwanie kartotek i import plikow zostaly celowo
+              wylaczone. Kartoteki maja byc dostarczane z systemu ERP przez API aplikacji
+              posredniej.
             </p>
-            <div className="grid gap-3 md:grid-cols-3 md:items-end">
-              <div className="md:col-span-2">
-                <p className="text-xs text-dim">
-                  Format: kolumna A = nazwa, kolumna B = jednostka (opcjonalnie). Pierwszy
-                  arkusz w pliku.
-                </p>
-              </div>
-              <div className="flex items-center justify-end gap-3">
-                <input
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  onChange={handleCatalogFileChange}
-                  className="text-xs text-dim file:mr-3 file:rounded-lg file:border file:border-[rgba(255,122,26,0.45)] file:bg-[rgba(255,255,255,0.06)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-body hover:file:border-[rgba(255,122,26,0.75)]"
-                  disabled={catalogImporting}
-                />
-              </div>
-              {catalogImportSummary && (
-                <div className="md:col-span-3">
-                  <p className="text-xs text-dim">
-                    Wczytano: {catalogImportSummary.total}, dodano:{' '}
-                    {catalogImportSummary.inserted}, pominieto: {catalogImportSummary.skipped}.
-                  </p>
-                </div>
-              )}
+            {catalogErrorCode && (
+              <p className="text-xs text-danger">
+                Blad zrodla ERP: {catalogErrorCode}
+              </p>
+            )}
+            <div className="rounded-xl border border-[rgba(255,122,26,0.35)] bg-[rgba(255,122,26,0.08)] p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                Pole dla kolejnego programisty
+              </p>
+              <p className="mt-2 whitespace-pre-line font-mono text-xs text-body">
+                {ERP_ORIGINALS_INTEGRATION_PLACEHOLDER}
+              </p>
             </div>
           </Card>
 
           <Card className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Kartoteki</p>
-            <div className="grid gap-3 md:grid-cols-3">
-              <div className="md:col-span-2">
-                <label className="text-xs uppercase tracking-wide text-dim">Nazwa pozycji</label>
-                <Input
-                  value={catalogForm.name}
-                  onChange={(event) => setCatalogForm((prev) => ({ ...prev, name: event.target.value }))}
-                  placeholder="np. BOREALIS HF700SA"
-                />
-              </div>
-              <div>
-                <label className="text-xs uppercase tracking-wide text-dim">Jednostka</label>
-                <Input
-                  value={catalogForm.unit}
-                  onChange={(event) => setCatalogForm((prev) => ({ ...prev, unit: event.target.value }))}
-                  placeholder="kg"
-                />
-              </div>
-              <div className="md:col-span-3 flex justify-end">
-                <Button
-                  onClick={handleCatalogAdd}
-                  disabled={addCatalogMutation.isPending}
-                >
-                  Dodaj do kartoteki
-                </Button>
-              </div>
-            </div>
-          </Card>
-
-          <Card className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Wyszukiwarka kartotek</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              Kartoteki (tylko odczyt)
+            </p>
             <Input
               value={catalogSearch}
               onChange={(event) => setCatalogSearch(event.target.value)}
               placeholder="Szukaj po nazwie"
             />
             <DataTable
-              columns={['Nazwa', 'Jedn.', 'Utworzono', 'Akcje']}
+              columns={['Nazwa', 'Jedn.', 'Utworzono']}
               rows={filteredCatalog.map((item) => [
                 item.name,
                 item.unit,
-                new Date(item.createdAt).toLocaleString('pl-PL'),
-                <Button
-                  key={`${item.id}-remove`}
-                  variant="outline"
-                  onClick={() => removeCatalogMutation.mutate(item.id)}
-                  disabled={removeCatalogMutation.isPending}
-                  className="h-8 w-8 border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
-                >
-                  X
-                </Button>
+                new Date(item.createdAt).toLocaleString('pl-PL')
               ])}
             />
           </Card>
@@ -1130,7 +910,7 @@ export default function OriginalInventoryPage() {
                 </div>
               </div>
             </div>
-            {reportMaterialKey && (
+            {selectedReportMaterialKey && (
               <DataTable
                 columns={['Kiedy', 'Ilosc', 'Jedn.', 'Hala', 'Kto']}
                 rows={reportEntries.map((entry) => [

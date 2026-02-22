@@ -170,6 +170,97 @@ const warehouseLabels: Record<WarehouseKey, string> = {
   RAPORT_ZMIANOWY: 'Raport zmianowy',
   PRZESUNIECIA_ERP: 'Przesuniecia magazynowe ERP'
 };
+
+const rawErpAuditActions = new Set([
+  'addErpTargetLocation',
+  'updateErpTargetLocation',
+  'removeErpTargetLocation',
+  'createWarehouseTransferDocument',
+  'addWarehouseTransferItemIssue',
+  'updateWarehouseTransferItemIssue',
+  'removeWarehouseTransferItemIssue',
+  'markWarehouseTransferDocumentIssued',
+  'requestWarehouseTransferPackage',
+  'addWarehouseTransferItemReceipt',
+  'updateWarehouseTransferItemReceipt',
+  'removeWarehouseTransferItemReceipt',
+  'closeWarehouseTransferDocument',
+  'removeWarehouseTransferDocument'
+]);
+
+const auditActionFallbackLabels: Record<string, string> = {
+  addErpTargetLocation: 'Przesuniecia magazynowe: dodanie lokalizacji docelowej',
+  updateErpTargetLocation: 'Przesuniecia magazynowe: edycja lokalizacji docelowej',
+  removeErpTargetLocation: 'Przesuniecia magazynowe: usuniecie lokalizacji docelowej'
+};
+
+const formatAuditActionLabel = (action?: string) => {
+  const value = String(action ?? '').trim();
+  if (!value) return '-';
+  return auditActionFallbackLabels[value] ?? value;
+};
+
+const formatAuditQtyChange = (
+  prevQty: number | null | undefined,
+  nextQty: number | null | undefined
+) => {
+  const prev = typeof prevQty === 'number' ? formatKg(prevQty) : null;
+  const next = typeof nextQty === 'number' ? formatKg(nextQty) : null;
+  if (prev && next) return `${prev} -> ${next}`;
+  if (!prev && next) return `ustawiono ${next}`;
+  if (prev && !next) return `usunieto (${prev})`;
+  return '-';
+};
+
+const isErpAuditAction = (action?: string) => {
+  const value = String(action ?? '').trim();
+  if (!value) return false;
+  if (rawErpAuditActions.has(value)) return true;
+  return value.toLowerCase().startsWith('przesuniecia magazynowe:');
+};
+
+const getAuditWarehouseLabel = (warehouse: string | undefined, action?: string) => {
+  if (isErpAuditAction(action)) {
+    return warehouseLabels.PRZESUNIECIA_ERP;
+  }
+  if (!warehouse) return '-';
+  return warehouseLabels[warehouse as WarehouseKey] ?? warehouse;
+};
+
+const formatAuditLocationLabel = (location?: string) => {
+  const text = String(location ?? '').trim();
+  if (!text) return '-';
+  const documentMatch = text.match(/^dokument:(.+)$/i);
+  if (!documentMatch) return text;
+  const rawValue = documentMatch[1]?.trim() ?? '';
+  const isUuid =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      rawValue
+    );
+  if (isUuid) return `Dokument #${rawValue.slice(0, 8)}`;
+  return `Dokument ${rawValue}`;
+};
+
+const formatAuditElementLabel = (element?: string) => {
+  const text = String(element ?? '').trim();
+  if (!text) return '-';
+  const positionMatch = text.match(/^pozycja:(.+)$/i);
+  if (positionMatch) {
+    const rawValue = positionMatch[1]?.trim() ?? '';
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        rawValue
+      );
+    if (isUuid) return `Pozycja #${rawValue.slice(0, 8)}`;
+    return `Pozycja ${rawValue}`;
+  }
+  const documentMatch = text.match(/^dok:(.+)$/i);
+  if (documentMatch) {
+    return `Dokument ${documentMatch[1]?.trim() ?? ''}`.trim();
+  }
+  return text;
+};
+
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const compareByName = (a: { name: string }, b: { name: string }) =>
   collator.compare(a.name, b.name);
@@ -349,6 +440,13 @@ export default function AdminPage() {
   });
 
   const audit = useMemo(() => auditData ?? [], [auditData]);
+  const przemialyAudit = useMemo(
+    () =>
+      audit.filter((entry) => {
+        return entry.warehouse === 'PRZEMIALY' && !isErpAuditAction(entry.action);
+      }),
+    [audit]
+  );
   const warehouses = useMemo(() => warehousesData ?? [], [warehousesData]);
   const catalog = useMemo(() => catalogData ?? [], [catalogData]);
   const catalogs = useMemo(() => catalogsData ?? [], [catalogsData]);
@@ -2888,9 +2986,9 @@ export default function AdminPage() {
             <TabsList>
               <TabsTrigger value="warehouses">Magazyny</TabsTrigger>
               <TabsTrigger value="locations">Lokalizacje</TabsTrigger>
-              <TabsTrigger value="inventory">Inwentaryzacja</TabsTrigger>
-              <TabsTrigger value="audit">REJESTR DZIALAN</TabsTrigger>
-              <TabsTrigger value="positions">KARTOTEKI/NAZWY PRZEMIALOW</TabsTrigger>
+              <TabsTrigger value="inventory">Inwentaryzacja magazynu przemiałów</TabsTrigger>
+              <TabsTrigger value="audit">Rejestr działań</TabsTrigger>
+              <TabsTrigger value="positions">Kartoteki/nazwy przemiałów</TabsTrigger>
               <TabsTrigger value="dryers">Suszarki</TabsTrigger>
             </TabsList>
 
@@ -3633,21 +3731,44 @@ export default function AdminPage() {
 <TabsContent value="audit" className="mt-6">
           <Card>
             <DataTable
-              columns={['Data', 'Uzytkownik', 'Akcja', 'Lokalizacja']}
-              rows={(audit ?? []).map((row) => [
-                <span key={`${row.id}-date`} className="text-dim">
-                  {new Date(row.at).toLocaleString('pl-PL')}
-                </span>,
-                <span key={`${row.id}-user`} className="text-body">
-                  {row.user}
-                </span>,
-                <span key={`${row.id}-action`} className="text-body">
-                  {row.action}
-                </span>,
-                <span key={`${row.id}-loc`} className="cursor-pointer text-body transition hover:text-brandHover">
-                  {row.location ?? '-'}
-                </span>
-              ])}
+              columns={[
+                'Data i godzina',
+                'Użytkownik',
+                'Obszar',
+                'Co się stało',
+                'Dokument / miejsce',
+                'Pozycja / materiał',
+                'Zmiana ilości'
+              ]}
+              rows={przemialyAudit.map((row) => {
+                const actionLabel = formatAuditActionLabel(row.action);
+                const locationLabel = formatAuditLocationLabel(row.location);
+                const elementLabel = formatAuditElementLabel(row.material);
+                const qtyLabel = formatAuditQtyChange(row.prevQty, row.nextQty);
+                return [
+                  <span key={`${row.id}-date`} className="text-dim">
+                    {new Date(row.at).toLocaleString('pl-PL')}
+                  </span>,
+                  <span key={`${row.id}-user`} className="text-body">
+                    {row.user}
+                  </span>,
+                  <span key={`${row.id}-warehouse`} className="text-dim">
+                    {getAuditWarehouseLabel(row.warehouse, row.action)}
+                  </span>,
+                  <span key={`${row.id}-action`} className="text-body">
+                    {actionLabel}
+                  </span>,
+                  <span key={`${row.id}-loc`} className="text-body">
+                    {locationLabel}
+                  </span>,
+                  <span key={`${row.id}-material`} className="text-body">
+                    {elementLabel}
+                  </span>,
+                  <span key={`${row.id}-qty`} className="text-dim">
+                    {qtyLabel}
+                  </span>
+                ];
+              })}
             />
           </Card>
         </TabsContent>
@@ -3714,8 +3835,8 @@ export default function AdminPage() {
             </div>
           </Card>
           <Card className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              KARTOTEKI/NAZWY PRZEMIALOW
+            <p className="text-xs font-semibold tracking-wide text-dim">
+              Kartoteki/nazwy przemiałów
             </p>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <Button

@@ -1,8 +1,7 @@
 ﻿'use client';
 
 import Link from 'next/link';
-import Image from 'next/image';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import {
   LayoutGrid,
   ClipboardList,
@@ -14,9 +13,7 @@ import {
   Shuffle,
   Wind,
   LogOut,
-  History,
-  Users,
-  UserPlus
+  History
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useUiStore } from '@/lib/store/ui';
@@ -24,7 +21,6 @@ import {
   canSeeTab,
   getRoleLabel,
   getWarehouseLabel,
-  isHeadAdmin,
   isWarehouseAdmin
 } from '@/lib/auth/access';
 import type { WarehouseKey, WarehouseTab } from '@/lib/api/types';
@@ -36,15 +32,6 @@ type NavItem = {
   icon: typeof LayoutGrid;
   tab?: WarehouseTab;
   requiresAdmin?: boolean;
-};
-
-type AdminSection = 'users' | 'add-user' | 'groups';
-
-type AdminNavItem = {
-  label: string;
-  href: string;
-  icon: typeof LayoutGrid;
-  section: AdminSection;
 };
 
 const navItemsPrzemialy: NavItem[] = [
@@ -62,7 +49,7 @@ const navItemsPrzemialy: NavItem[] = [
   { label: 'Suszarki', href: '/suszarki', icon: Wind, tab: 'suszarki' },
   { label: 'Wymieszane tworzywa', href: '/wymieszane', icon: Shuffle, tab: 'wymieszane' },
   {
-    label: 'Zarządzanie',
+    label: 'Zarządzanie Modułem',
     href: '/admin?tab=warehouses',
     icon: Shield,
     requiresAdmin: true
@@ -79,28 +66,11 @@ const navItemsRaport: NavItem[] = [
   { label: 'Raport zmianowy', href: '/raport-zmianowy', icon: FileText, tab: 'raport-zmianowy' }
 ];
 
-const adminNavItems: AdminNavItem[] = [
-  { label: 'Użytkownicy', href: '/admin?section=users', icon: Users, section: 'users' },
-  {
-    label: 'Dodaj użytkownika',
-    href: '/admin?section=add-user',
-    icon: UserPlus,
-    section: 'add-user'
-  },
-  { label: 'Grupy', href: '/admin?section=groups', icon: Shield, section: 'groups' }
-];
-
 export const Sidebar = () => {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse } = useUiStore();
   const warehouse = activeWarehouse as WarehouseKey | null;
   const isAdminRoute = pathname.startsWith('/admin');
-  const adminSectionParam = searchParams.get('section');
-  const activeAdminSection: AdminSection =
-    adminSectionParam === 'add-user' || adminSectionParam === 'groups' || adminSectionParam === 'users'
-      ? adminSectionParam
-      : 'users';
   const roleLabel = getRoleLabel(user, warehouse);
   const displayName = user?.name ?? 'Gość';
   const items =
@@ -117,8 +87,8 @@ export const Sidebar = () => {
     if (!item.tab) return true;
     return canSeeTab(user, warehouse, item.tab);
   });
-  const showAdmin = Boolean(user && isHeadAdmin(user) && isAdminRoute);
   const warehouseLabel = getWarehouseLabel(warehouse);
+  const isPrzemialyModuleManagementRoute = isAdminRoute && warehouse === 'PRZEMIALY';
   const isActivePath = (href: string) => {
     if (href.startsWith('/admin')) return isAdminRoute;
     if (href === '/czesci') return pathname === '/czesci';
@@ -131,7 +101,7 @@ export const Sidebar = () => {
     }
     return pathname.startsWith(href);
   };
-  const panelLabel = isAdminRoute
+  const panelLabel = isAdminRoute && !isPrzemialyModuleManagementRoute
     ? 'PANEL ADMINISTRATORA'
     : warehouse === 'CZESCI'
       ? 'PANEL MAGAZYNU CZĘŚCI ZAMIENNYCH'
@@ -142,9 +112,10 @@ export const Sidebar = () => {
           : warehouse === 'PRZESUNIECIA_ERP'
             ? 'PANEL PRZESUNIĘĆ ERP'
             : 'PANEL MODUŁU';
-  const headerLabel = isAdminRoute ? 'MODUŁY' : warehouseLabel;
+  const headerLabel = isAdminRoute && !isPrzemialyModuleManagementRoute ? 'MODUŁY' : warehouseLabel;
   const showHeaderLabel =
-    isAdminRoute || (warehouse !== 'CZESCI' && warehouse !== 'PRZEMIALY');
+    (isAdminRoute && !isPrzemialyModuleManagementRoute) ||
+    (warehouse !== 'CZESCI' && warehouse !== 'PRZEMIALY');
   const closeOnMobile = () => {
     if (typeof window === 'undefined') return;
     if (window.matchMedia('(max-width: 767px)').matches) {
@@ -215,41 +186,6 @@ export const Sidebar = () => {
               </Link>
             );
           })}
-          {showAdmin && (
-            <div>
-              {adminNavItems.map((item) => {
-                const active = isAdminRoute && activeAdminSection === item.section;
-                const Icon = item.icon;
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={closeOnMobile}
-                    className={cn(
-                      'flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[rgba(255,255,255,0.04)] hover:text-brandHover',
-                      active && 'bg-[rgba(255,255,255,0.06)]'
-                    )}
-                  >
-                    <span className={cn('h-8 w-[2px] rounded-full bg-transparent', active && 'bg-brand')} />
-                    <Icon className="h-4 w-4" style={{ color: 'var(--brand)' }} />
-                    {!sidebarCollapsed && <span style={{ color: 'var(--brand)' }}>{item.label}</span>}
-                  </Link>
-                );
-              })}
-              {!sidebarCollapsed && (
-                <div className="flex justify-center pt-3">
-                  <Image
-                    src="/logo.png"
-                    alt=""
-                    aria-hidden="true"
-                    width={260}
-                    height={120}
-                    className="w-full max-w-[260px] opacity-45 grayscale"
-                  />
-                </div>
-              )}
-            </div>
-          )}
         </nav>
 
         <div className="rounded-xl border border-border bg-surface2 p-3 shadow-[inset_0_1px_0_var(--inner-highlight)]">

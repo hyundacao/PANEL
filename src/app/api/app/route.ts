@@ -105,6 +105,40 @@ const toNumber = (value: unknown) => {
   return Number.isNaN(parsed) ? 0 : parsed;
 };
 
+const firstNonEmptyText = (...values: unknown[]) => {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+};
+
+const normalizeOriginalUnit = (value: unknown) => {
+  const unit = String(value ?? '').trim();
+  return unit || 'kg';
+};
+
+const toIsoOrNow = (value: unknown) => {
+  const text = String(value ?? '').trim();
+  if (!text) return new Date().toISOString();
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return new Date().toISOString();
+  return parsed.toISOString();
+};
+
+const buildErpOriginalCatalogId = (rawId: unknown, name: string, fallbackIndex: number) => {
+  const provided = String(rawId ?? '').trim();
+  if (provided) return `erp-orig-${provided}`;
+  const normalized = name
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (normalized) return `erp-orig-${normalized}`;
+  return `erp-orig-${fallbackIndex + 1}`;
+};
+
 const normalizeTargetLocationFilterToken = (value: string | null | undefined) =>
   String(value ?? '')
     .trim()
@@ -211,6 +245,13 @@ const mapErpTargetLocation = (row: any): ErpTargetLocation => ({
 
 const ERP_WAREHOUSE_ID_PREFIX = 'erp-wh-';
 const ERP_LOCATION_ID_PREFIX = 'erp-loc-';
+const ERP_ORIGINALS_PROXY_URL = String(process.env.ERP_ORIGINALS_PROXY_URL ?? '').trim();
+const ERP_ORIGINALS_PROXY_TOKEN = String(process.env.ERP_ORIGINALS_PROXY_TOKEN ?? '').trim();
+const ERP_ORIGINALS_PROXY_TIMEOUT_MS = (() => {
+  const parsed = Number(process.env.ERP_ORIGINALS_PROXY_TIMEOUT_MS ?? 10000);
+  if (!Number.isFinite(parsed)) return 10000;
+  return Math.min(30000, Math.max(1000, Math.trunc(parsed)));
+})();
 
 const normalizeWarehouseAdminScope = (value: unknown): WarehouseAdminScope =>
   String(value ?? '')
@@ -427,6 +468,95 @@ const mapAuditEvent = (row: any): AuditEvent => ({
   nextQty: row.next_qty ?? null
 });
 
+const AUDIT_DOCUMENT_LOCATION_REGEX =
+  /^dokument:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+const AUDIT_ITEM_MATERIAL_REGEX =
+  /^pozycja:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+
+const extractDocumentIdFromAuditLocation = (value: string | undefined) => {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const match = text.match(AUDIT_DOCUMENT_LOCATION_REGEX);
+  return match?.[1] ?? null;
+};
+
+const extractItemIdFromAuditMaterial = (value: string | undefined) => {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const match = text.match(AUDIT_ITEM_MATERIAL_REGEX);
+  return match?.[1] ?? null;
+};
+
+const enrichAuditEventsForDisplay = async (events: AuditEvent[]) => {
+  const documentIds = new Set<string>();
+  const itemIds = new Set<string>();
+
+  events.forEach((event) => {
+    const documentId = extractDocumentIdFromAuditLocation(event.location);
+    if (documentId) {
+      documentIds.add(documentId);
+    }
+    const itemId = extractItemIdFromAuditMaterial(event.material);
+    if (itemId) {
+      itemIds.add(itemId);
+    }
+  });
+
+  const documentNumberById = new Map<string, string>();
+  const indexCodeByItemId = new Map<string, string>();
+
+  const chunkSize = 400;
+  const documentIdList = [...documentIds];
+  for (let i = 0; i < documentIdList.length; i += chunkSize) {
+    const chunk = documentIdList.slice(i, i + chunkSize);
+    const { data, error } = await supabaseAdmin
+      .from('warehouse_transfer_documents')
+      .select('id, document_number')
+      .in('id', chunk);
+    if (error) throw error;
+    (data ?? []).forEach((row: any) => {
+      const id = String(row.id ?? '').trim();
+      const number = String(row.document_number ?? '').trim();
+      if (id && number) {
+        documentNumberById.set(id, number);
+      }
+    });
+  }
+
+  const itemIdList = [...itemIds];
+  for (let i = 0; i < itemIdList.length; i += chunkSize) {
+    const chunk = itemIdList.slice(i, i + chunkSize);
+    const { data, error } = await supabaseAdmin
+      .from('warehouse_transfer_document_items')
+      .select('id, index_code')
+      .in('id', chunk);
+    if (error) throw error;
+    (data ?? []).forEach((row: any) => {
+      const id = String(row.id ?? '').trim();
+      const indexCode = String(row.index_code ?? '').trim();
+      if (id && indexCode) {
+        indexCodeByItemId.set(id, indexCode);
+      }
+    });
+  }
+
+  return events.map((event) => {
+    const documentId = extractDocumentIdFromAuditLocation(event.location);
+    const itemId = extractItemIdFromAuditMaterial(event.material);
+    const location =
+      documentId && documentNumberById.has(documentId)
+        ? `Dokument ${documentNumberById.get(documentId)}`
+        : event.location;
+    const material =
+      itemId && indexCodeByItemId.has(itemId) ? indexCodeByItemId.get(itemId) : event.material;
+    return {
+      ...event,
+      location: location ?? undefined,
+      material: material ?? undefined
+    };
+  });
+};
+
 const buildEntriesByDate = (rows: any[]): EntriesByDate => {
   const result: EntriesByDate = {};
   rows.forEach((row) => {
@@ -450,6 +580,15 @@ const buildEntriesByDate = (rows: any[]): EntriesByDate => {
 const statusCodeFromError = (code: string) => {
   if (code === 'UNAUTHORIZED' || code === 'SESSION_EXPIRED') return 401;
   if (code === 'FORBIDDEN') return 403;
+  if (code === 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED') return 503;
+  if (code === 'ERP_ORIGINALS_PROXY_UNAUTHORIZED') return 403;
+  if (
+    code === 'ERP_ORIGINALS_PROXY_UNAVAILABLE' ||
+    code === 'ERP_ORIGINALS_PROXY_TIMEOUT' ||
+    code === 'ERP_ORIGINALS_PROXY_BAD_RESPONSE'
+  ) {
+    return 502;
+  }
   if (code === 'NOT_FOUND' || code === 'ENTRY_MISSING') return 404;
   if (code === 'DUPLICATE') return 409;
   if (code === 'INVALID_CREDENTIALS') return 401;
@@ -663,6 +802,9 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
         'suszarki'
       ]);
       return;
+    case 'getOriginalInventoryCatalogFromErp':
+      requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      return;
     case 'addOriginalInventory':
       requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
@@ -855,7 +997,10 @@ const ERP_AUDIT_ACTIONS = new Set<string>([
   'updateWarehouseTransferItemReceipt',
   'removeWarehouseTransferItemReceipt',
   'closeWarehouseTransferDocument',
-  'removeWarehouseTransferDocument'
+  'removeWarehouseTransferDocument',
+  'addErpTargetLocation',
+  'updateErpTargetLocation',
+  'removeErpTargetLocation'
 ]);
 
 const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
@@ -874,6 +1019,29 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   removeWarehouseTransferItemReceipt: 'Przesuniecia magazynowe: usuniecie przyjecia',
   closeWarehouseTransferDocument: 'Przesuniecia magazynowe: zamkniecie dokumentu',
   removeWarehouseTransferDocument: 'Przesuniecia magazynowe: usuniecie dokumentu',
+  addErpTargetLocation: 'Przesuniecia magazynowe: dodanie lokalizacji docelowej',
+  updateErpTargetLocation: 'Przesuniecia magazynowe: edycja lokalizacji docelowej',
+  removeErpTargetLocation: 'Przesuniecia magazynowe: usuniecie lokalizacji docelowej',
+  addWarehouse: 'Administracja: dodanie magazynu',
+  updateWarehouse: 'Administracja: edycja magazynu',
+  removeWarehouse: 'Administracja: usuniecie magazynu',
+  addLocation: 'Administracja: dodanie lokalizacji',
+  updateLocation: 'Administracja: edycja lokalizacji',
+  removeLocation: 'Administracja: usuniecie lokalizacji',
+  addCatalog: 'Kartoteki: dodanie kartoteki',
+  addMaterialCatalogBulk: 'Kartoteki: import kartotek',
+  removeCatalog: 'Kartoteki: usuniecie kartoteki',
+  addMaterialBulk: 'Kartoteki: import przemialow',
+  removeMaterial: 'Kartoteki: usuniecie przemialu',
+  updateMaterialCatalog: 'Kartoteki: przypisanie przemialu do kartoteki',
+  updateMaterial: 'Kartoteki: edycja nazwy przemialu',
+  addDryer: 'Suszarki: dodanie suszarki',
+  updateDryer: 'Suszarki: edycja suszarki',
+  removeDryer: 'Suszarki: usuniecie suszarki',
+  deleteMixedMaterial: 'Wymieszane: usuniecie pozycji',
+  addOriginalInventoryCatalog: 'Spis oryginalow: dodanie pozycji slownika',
+  addOriginalInventoryCatalogBulk: 'Spis oryginalow: import slownika',
+  removeOriginalInventoryCatalog: 'Spis oryginalow: usuniecie pozycji slownika',
   applyInventoryAdjustment: 'Inwentaryzacja: korekta stanu',
   addMixedMaterial: 'Wymieszane: dodanie',
   removeMixedMaterial: 'Wymieszane: rozchod',
@@ -923,6 +1091,21 @@ const getAuditWarehouse = (action: string, payload: any): WarehouseKey => {
   return 'PRZEMIALY';
 };
 
+const formatAuditDocumentLocationLabel = (value: unknown) => {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const normalized = text.replace(/^dokument[:\s]*/i, '').trim();
+  if (!normalized) return null;
+  const isUuid =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      normalized
+    );
+  if (isUuid) {
+    return `Dokument #${normalized.slice(0, 8)}`;
+  }
+  return `Dokument ${normalized}`;
+};
+
 const getAuditLocation = (payload: any) => {
   const directLocation =
     toAuditText(payload?.locationId) ??
@@ -936,8 +1119,15 @@ const getAuditLocation = (payload: any) => {
     return `${fromLocation ?? '-'} -> ${toLocation ?? '-'}`;
   }
 
+  const documentNumber = toAuditText(payload?.documentNumber);
+  if (documentNumber) {
+    return formatAuditDocumentLocationLabel(documentNumber);
+  }
+
   const documentId = toAuditText(payload?.documentId);
-  if (documentId) return `dokument:${documentId}`;
+  if (documentId) {
+    return formatAuditDocumentLocationLabel(documentId);
+  }
 
   const sessionId = toAuditText(payload?.sessionId);
   if (sessionId) return `sesja:${sessionId}`;
@@ -976,6 +1166,8 @@ const getAuditMaterial = (action: string, payload: any) => {
 };
 
 const getAuditQty = (action: string, payload: any, data: unknown) => {
+  const dataQty = toAuditNumber((data as { qty?: unknown } | null | undefined)?.qty);
+
   if (action === 'applyInventoryAdjustment') {
     const entry = data as InventoryAdjustment | null | undefined;
     return {
@@ -995,6 +1187,36 @@ const getAuditQty = (action: string, payload: any, data: unknown) => {
     return { prevQty, nextQty };
   }
 
+  if (
+    action === 'addWarehouseTransferItemIssue' ||
+    action === 'addWarehouseTransferItemReceipt'
+  ) {
+    return {
+      prevQty: null,
+      nextQty: dataQty ?? toAuditNumber(payload?.qty)
+    };
+  }
+
+  if (
+    action === 'updateWarehouseTransferItemIssue' ||
+    action === 'updateWarehouseTransferItemReceipt'
+  ) {
+    return {
+      prevQty: toAuditNumber(payload?.prevQty),
+      nextQty: dataQty ?? toAuditNumber(payload?.qty)
+    };
+  }
+
+  if (
+    action === 'removeWarehouseTransferItemIssue' ||
+    action === 'removeWarehouseTransferItemReceipt'
+  ) {
+    return {
+      prevQty: dataQty ?? toAuditNumber(payload?.qty),
+      nextQty: null
+    };
+  }
+
   if (action === 'setSparePartQty') {
     return { prevQty: null, nextQty: toAuditNumber(payload?.qty) };
   }
@@ -1002,13 +1224,10 @@ const getAuditQty = (action: string, payload: any, data: unknown) => {
   if (
     action === 'upsertEntry' ||
     action === 'addTransfer' ||
-    action === 'addWarehouseTransferItemIssue' ||
-    action === 'updateWarehouseTransferItemIssue' ||
-    action === 'addWarehouseTransferItemReceipt' ||
-    action === 'updateWarehouseTransferItemReceipt' ||
     action === 'addMixedMaterial' ||
     action === 'removeMixedMaterial' ||
-    action === 'addOriginalInventory'
+    action === 'addOriginalInventory' ||
+    action === 'updateOriginalInventory'
   ) {
     return { prevQty: null, nextQty: toAuditNumber(payload?.qty) };
   }
@@ -1324,6 +1543,103 @@ const fetchOriginalCatalog = async () => {
     .select('*');
   if (error) throw error;
   return (data ?? []).map(mapOriginalInventoryCatalogEntry);
+};
+
+const extractErpOriginalCatalogItems = (payload: unknown): Array<Record<string, unknown>> => {
+  if (Array.isArray(payload)) {
+    return payload.filter((item): item is Record<string, unknown> =>
+      Boolean(item && typeof item === 'object')
+    );
+  }
+  if (!payload || typeof payload !== 'object') return [];
+  const record = payload as Record<string, unknown>;
+  const keys = ['items', 'data', 'catalog', 'results', 'rows', 'materials', 'originals'];
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value.filter((item): item is Record<string, unknown> =>
+        Boolean(item && typeof item === 'object')
+      );
+    }
+  }
+  return [];
+};
+
+const fetchOriginalCatalogFromErpProxy = async (): Promise<OriginalInventoryCatalogEntry[]> => {
+  if (!ERP_ORIGINALS_PROXY_URL) throw new Error('ERP_ORIGINALS_PROXY_NOT_CONFIGURED');
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ERP_ORIGINALS_PROXY_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(ERP_ORIGINALS_PROXY_URL, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        ...(ERP_ORIGINALS_PROXY_TOKEN
+          ? {
+              Authorization: `Bearer ${ERP_ORIGINALS_PROXY_TOKEN}`,
+              'X-API-Key': ERP_ORIGINALS_PROXY_TOKEN
+            }
+          : {})
+      },
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        throw new Error('ERP_ORIGINALS_PROXY_UNAUTHORIZED');
+      }
+      throw new Error('ERP_ORIGINALS_PROXY_UNAVAILABLE');
+    }
+
+    const payload = (await response.json().catch(() => null)) as unknown;
+    if (!payload) throw new Error('ERP_ORIGINALS_PROXY_BAD_RESPONSE');
+    const rows = extractErpOriginalCatalogItems(payload);
+    if (rows.length === 0) return [];
+
+    const deduped = new Map<string, OriginalInventoryCatalogEntry>();
+    rows.forEach((row, index) => {
+      const name = firstNonEmptyText(
+        row.name,
+        row.nazwa,
+        row.materialName,
+        row.material,
+        row.label,
+        row.description,
+        row.indexName,
+        row.index
+      );
+      if (!name) return;
+      const unit = normalizeOriginalUnit(
+        row.unit ?? row.jednostka ?? row.uom ?? row.measureUnit ?? row.unitCode
+      );
+      const id = buildErpOriginalCatalogId(
+        row.id ?? row.materialId ?? row.erpId ?? row.code ?? row.indexCode,
+        name,
+        index
+      );
+      const createdAt = toIsoOrNow(
+        row.createdAt ?? row.updatedAt ?? row.timestamp ?? row.date ?? row.modifiedAt
+      );
+      const key = `${name.toLowerCase()}|${unit.toLowerCase()}`;
+      if (deduped.has(key)) return;
+      deduped.set(key, { id, name, unit, createdAt });
+    });
+
+    return [...deduped.values()].sort((a, b) =>
+      a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' })
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('ERP_ORIGINALS_PROXY_TIMEOUT');
+    }
+    if (error instanceof Error && error.message) throw error;
+    throw new Error('ERP_ORIGINALS_PROXY_UNAVAILABLE');
+  } finally {
+    clearTimeout(timeout);
+  }
 };
 
 const isWarehouseTransferItemCompleted = (plannedQty: number, receivedQty: number) => {
@@ -3141,23 +3457,13 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return mapLocation(data);
     }
     case 'getAudit': {
-      const retentionCutoff = new Date();
-      retentionCutoff.setMonth(retentionCutoff.getMonth() - 2);
-      const retentionCutoffIso = retentionCutoff.toISOString();
-
-      const { error: purgeError } = await supabaseAdmin
-        .from('audit_logs')
-        .delete()
-        .lt('at', retentionCutoffIso);
-      if (purgeError) throw purgeError;
-
       const { data, error } = await supabaseAdmin
         .from('audit_logs')
         .select('*')
-        .gte('at', retentionCutoffIso)
         .order('at', { ascending: false });
       if (error) throw error;
-      return (data ?? []).map(mapAuditEvent);
+      const mapped = (data ?? []).map(mapAuditEvent);
+      return enrichAuditEventsForDisplay(mapped);
     }
     case 'getLocations': {
       const [warehouses, locations] = await Promise.all([fetchWarehouses(), fetchLocations()]);
@@ -3278,7 +3584,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           .maybeSingle();
         if (error) throw error;
         if (!data) throw new Error('NOT_FOUND');
-        return mapErpTargetLocation(data);
+        const mapped = mapErpTargetLocation(data);
+        if (payload && typeof payload === 'object') {
+          payload.location = mapped.name;
+        }
+        return mapped;
       }
 
       const { data, error } = await supabaseAdmin
@@ -3300,7 +3610,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         throw error;
       }
       if (!data) throw new Error('NOT_FOUND');
-      return mapErpTargetLocation(data);
+      const mapped = mapErpTargetLocation(data);
+      if (payload && typeof payload === 'object') {
+        payload.location = mapped.name;
+      }
+      return mapped;
     }
     case 'updateErpTargetLocation': {
       const id = String(payload?.id ?? '').trim();
@@ -3346,6 +3660,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }
 
       if (Object.keys(updates).length === 1 && existing.isActive) {
+        if (payload && typeof payload === 'object') {
+          payload.location = existing.name;
+        }
         return existing;
       }
 
@@ -3357,7 +3674,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .maybeSingle();
       if (error) throw error;
       if (!data) throw new Error('NOT_FOUND');
-      return mapErpTargetLocation(data);
+      const mapped = mapErpTargetLocation(data);
+      if (payload && typeof payload === 'object') {
+        payload.location = mapped.name;
+      }
+      return mapped;
     }
     case 'removeErpTargetLocation': {
       const id = String(payload?.id ?? '').trim();
@@ -3379,7 +3700,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         throw error;
       }
       if (!data) throw new Error('NOT_FOUND');
-      return mapErpTargetLocation(data);
+      const mapped = mapErpTargetLocation(data);
+      if (payload && typeof payload === 'object') {
+        payload.location = mapped.name;
+      }
+      return mapped;
     }
     case 'createWarehouseTransferDocument': {
       const documentNumber = String(payload?.documentNumber ?? '').trim();
@@ -3502,6 +3827,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (existing.status === 'CLOSED') {
         throw new Error('DOCUMENT_CLOSED');
       }
+      if (payload && typeof payload === 'object') {
+        payload.documentNumber = String(existing.document_number ?? '').trim() || undefined;
+      }
 
       const { data: itemRows, error: itemsError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
@@ -3568,6 +3896,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (hasPaczkaRequestNoteTag(existingDocument.note)) {
         throw new Error('PACKAGE_ALREADY_REQUESTED');
       }
+      if (payload && typeof payload === 'object') {
+        payload.documentNumber = existingDocument.documentNumber || undefined;
+      }
 
       const requestedAtIso = new Date().toISOString();
       const requestedByName =
@@ -3606,20 +3937,26 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
 
       const { data: documentRow, error: documentError } = await supabaseAdmin
         .from('warehouse_transfer_documents')
-        .select('id, status')
+        .select('id, status, document_number')
         .eq('id', documentId)
         .maybeSingle();
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+      if (payload && typeof payload === 'object') {
+        payload.documentNumber = String(documentRow.document_number ?? '').trim() || undefined;
+      }
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
-        .select('id, document_id')
+        .select('id, document_id, index_code')
         .eq('id', itemId)
         .maybeSingle();
       if (itemError) throw itemError;
       if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+      if (payload && typeof payload === 'object') {
+        payload.indexCode = String(itemRow.index_code ?? '').trim() || undefined;
+      }
 
       const { data, error } = await supabaseAdmin
         .from('warehouse_transfer_item_issues')
@@ -3651,20 +3988,26 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
 
       const { data: documentRow, error: documentError } = await supabaseAdmin
         .from('warehouse_transfer_documents')
-        .select('id, status')
+        .select('id, status, document_number')
         .eq('id', documentId)
         .maybeSingle();
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+      if (payload && typeof payload === 'object') {
+        payload.documentNumber = String(documentRow.document_number ?? '').trim() || undefined;
+      }
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
-        .select('id, document_id')
+        .select('id, document_id, index_code')
         .eq('id', itemId)
         .maybeSingle();
       if (itemError) throw itemError;
       if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+      if (payload && typeof payload === 'object') {
+        payload.indexCode = String(itemRow.index_code ?? '').trim() || undefined;
+      }
 
       const { data: issueRow, error: issueError } = await supabaseAdmin
         .from('warehouse_transfer_item_issues')
@@ -3676,6 +4019,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         throw issueError;
       }
       if (!issueRow || issueRow.item_id !== itemId) throw new Error('NOT_FOUND');
+      if (payload && typeof payload === 'object') {
+        payload.prevQty = toNumber(issueRow.qty);
+      }
 
       const { data: issueRows, error: issueRowsError } = await supabaseAdmin
         .from('warehouse_transfer_item_issues')
@@ -3729,20 +4075,26 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
 
       const { data: documentRow, error: documentError } = await supabaseAdmin
         .from('warehouse_transfer_documents')
-        .select('id, status')
+        .select('id, status, document_number')
         .eq('id', documentId)
         .maybeSingle();
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+      if (payload && typeof payload === 'object') {
+        payload.documentNumber = String(documentRow.document_number ?? '').trim() || undefined;
+      }
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
-        .select('id, document_id')
+        .select('id, document_id, index_code')
         .eq('id', itemId)
         .maybeSingle();
       if (itemError) throw itemError;
       if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+      if (payload && typeof payload === 'object') {
+        payload.indexCode = String(itemRow.index_code ?? '').trim() || undefined;
+      }
 
       const { data: issueRow, error: issueError } = await supabaseAdmin
         .from('warehouse_transfer_item_issues')
@@ -3804,20 +4156,26 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
 
       const { data: documentRow, error: documentError } = await supabaseAdmin
         .from('warehouse_transfer_documents')
-        .select('id, status')
+        .select('id, status, document_number')
         .eq('id', documentId)
         .maybeSingle();
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+      if (payload && typeof payload === 'object') {
+        payload.documentNumber = String(documentRow.document_number ?? '').trim() || undefined;
+      }
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
-        .select('id, document_id')
+        .select('id, document_id, index_code')
         .eq('id', itemId)
         .maybeSingle();
       if (itemError) throw itemError;
       if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+      if (payload && typeof payload === 'object') {
+        payload.indexCode = String(itemRow.index_code ?? '').trim() || undefined;
+      }
 
       const { data: issueRows, error: issueRowsError } = await supabaseAdmin
         .from('warehouse_transfer_item_issues')
@@ -3869,20 +4227,26 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
 
       const { data: documentRow, error: documentError } = await supabaseAdmin
         .from('warehouse_transfer_documents')
-        .select('id, status')
+        .select('id, status, document_number')
         .eq('id', documentId)
         .maybeSingle();
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+      if (payload && typeof payload === 'object') {
+        payload.documentNumber = String(documentRow.document_number ?? '').trim() || undefined;
+      }
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
-        .select('id, document_id')
+        .select('id, document_id, index_code')
         .eq('id', itemId)
         .maybeSingle();
       if (itemError) throw itemError;
       if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+      if (payload && typeof payload === 'object') {
+        payload.indexCode = String(itemRow.index_code ?? '').trim() || undefined;
+      }
 
       const { data: receiptRow, error: receiptError } = await supabaseAdmin
         .from('warehouse_transfer_item_receipts')
@@ -3891,6 +4255,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .maybeSingle();
       if (receiptError) throw receiptError;
       if (!receiptRow || receiptRow.item_id !== itemId) throw new Error('NOT_FOUND');
+      if (payload && typeof payload === 'object') {
+        payload.prevQty = toNumber(receiptRow.qty);
+      }
 
       const actorName = getActorName(currentUser);
       const isAdmin = isWarehouseAdmin(currentUser, 'PRZESUNIECIA_ERP');
@@ -3956,20 +4323,26 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
 
       const { data: documentRow, error: documentError } = await supabaseAdmin
         .from('warehouse_transfer_documents')
-        .select('id, status')
+        .select('id, status, document_number')
         .eq('id', documentId)
         .maybeSingle();
       if (documentError) throw documentError;
       if (!documentRow) throw new Error('NOT_FOUND');
       if (documentRow.status === 'CLOSED') throw new Error('DOCUMENT_CLOSED');
+      if (payload && typeof payload === 'object') {
+        payload.documentNumber = String(documentRow.document_number ?? '').trim() || undefined;
+      }
 
       const { data: itemRow, error: itemError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
-        .select('id, document_id')
+        .select('id, document_id, index_code')
         .eq('id', itemId)
         .maybeSingle();
       if (itemError) throw itemError;
       if (!itemRow || itemRow.document_id !== documentId) throw new Error('NOT_FOUND');
+      if (payload && typeof payload === 'object') {
+        payload.indexCode = String(itemRow.index_code ?? '').trim() || undefined;
+      }
 
       const { data: receiptRow, error: receiptError } = await supabaseAdmin
         .from('warehouse_transfer_item_receipts')
@@ -4019,6 +4392,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (existing.status !== 'ISSUED') {
         throw new Error('DOCUMENT_NOT_ISSUED');
       }
+      if (payload && typeof payload === 'object') {
+        payload.documentNumber = String(existing.document_number ?? '').trim() || undefined;
+      }
 
       const updates: Record<string, unknown> = {
         status: 'CLOSED',
@@ -4045,11 +4421,14 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
 
       const { data: existing, error: existingError } = await supabaseAdmin
         .from('warehouse_transfer_documents')
-        .select('id')
+        .select('id, document_number')
         .eq('id', documentId)
         .maybeSingle();
       if (existingError) throw existingError;
       if (!existing) throw new Error('NOT_FOUND');
+      if (payload && typeof payload === 'object') {
+        payload.documentNumber = String(existing.document_number ?? '').trim() || undefined;
+      }
 
       const { data: itemRows, error: itemsError } = await supabaseAdmin
         .from('warehouse_transfer_document_items')
@@ -4579,6 +4958,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'getOriginalInventoryCatalog': {
       const catalog = await fetchOriginalCatalog();
       return [...catalog].sort((a, b) => a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' }));
+    }
+    case 'getOriginalInventoryCatalogFromErp': {
+      return fetchOriginalCatalogFromErpProxy();
     }
     case 'addOriginalInventory': {
       const warehouseId = String(payload?.warehouseId ?? '').trim();

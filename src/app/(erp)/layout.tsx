@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   canAccessErpWorkspaceItem,
@@ -38,6 +38,8 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
     erpWorkspaceTab,
     setErpWorkspaceTab
   } = useUiStore();
+  const [authBootstrapResolved, setAuthBootstrapResolved] = useState(false);
+  const authBootstrapDone = Boolean(user) || authBootstrapResolved;
   const allowed = hasErpAccess(user);
   const visibleWorkspaceItems = ERP_WORKSPACE_ITEMS.filter((item) =>
     canAccessErpWorkspaceItem(user, item.key)
@@ -45,7 +47,26 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
   const hasVisibleWorkspace = visibleWorkspaceItems.length > 0;
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || user || authBootstrapResolved) return;
+    let cancelled = false;
+    getCurrentSessionUser()
+      .then((freshUser) => {
+        if (cancelled) return;
+        setUser(freshUser);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        logout();
+        setAuthBootstrapResolved(true);
+        router.replace('/login');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authBootstrapResolved, hydrated, logout, router, setUser, user]);
+
+  useEffect(() => {
+    if (!hydrated || !authBootstrapDone) return;
     if (!user) {
       router.replace('/login');
       return;
@@ -57,7 +78,16 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
     if (activeWarehouse !== 'PRZESUNIECIA_ERP') {
       setActiveWarehouse('PRZESUNIECIA_ERP');
     }
-  }, [activeWarehouse, allowed, hasVisibleWorkspace, hydrated, router, setActiveWarehouse, user]);
+  }, [
+    activeWarehouse,
+    allowed,
+    authBootstrapDone,
+    hasVisibleWorkspace,
+    hydrated,
+    router,
+    setActiveWarehouse,
+    user
+  ]);
 
   useEffect(() => {
     if (!hydrated || !allowed || !hasVisibleWorkspace) return;
@@ -116,7 +146,7 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
     };
   }, [logout, router]);
 
-  if (!hydrated || !user || !allowed || !hasVisibleWorkspace) {
+  if (!hydrated || !authBootstrapDone || !user || !allowed || !hasVisibleWorkspace) {
     return <div className="min-h-screen bg-bg" />;
   }
 

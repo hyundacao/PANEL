@@ -122,13 +122,34 @@ export default function WarehousesPage() {
     logout
   } = useUiStore();
   const [search, setSearch] = useState('');
+  const [authBootstrapResolved, setAuthBootstrapResolved] = useState(false);
+  const authBootstrapDone = Boolean(user) || authBootstrapResolved;
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || user || authBootstrapResolved) return;
+    let cancelled = false;
+    getCurrentSessionUser()
+      .then((freshUser) => {
+        if (cancelled) return;
+        setUser(freshUser);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        logout();
+        setAuthBootstrapResolved(true);
+        router.replace('/login');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authBootstrapResolved, hydrated, logout, router, setUser, user]);
+
+  useEffect(() => {
+    if (!hydrated || !authBootstrapDone) return;
     if (!user) {
       router.replace('/login');
     }
-  }, [hydrated, router, user]);
+  }, [authBootstrapDone, hydrated, router, user]);
 
   useEffect(() => {
     if (!hydrated || !user?.id) return;
@@ -160,7 +181,7 @@ export default function WarehousesPage() {
     };
   }, [hydrated, logout, router, setUser, user, user?.id]);
 
-  if (!hydrated || !user) {
+  if (!hydrated || !authBootstrapDone || !user) {
     return <div className="min-h-screen bg-bg" />;
   }
 
