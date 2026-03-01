@@ -39,7 +39,7 @@ export default function CatalogPage() {
   const totalsByMaterial = useMemo(() => {
     const totals = new Map<string, number>();
     (currentTotals ?? []).forEach((item) => {
-      totals.set(item.label, item.total);
+      totals.set(item.materialId, item.total);
     });
     return totals;
   }, [currentTotals]);
@@ -58,7 +58,7 @@ export default function CatalogPage() {
     (data ?? []).forEach((material) => {
       const catalog = material.code.trim();
       const entry = totals.get(catalog) ?? { total: 0, count: 0 };
-      const materialTotal = totalsByMaterial.get(material.name) ?? 0;
+      const materialTotal = totalsByMaterial.get(material.id) ?? 0;
       totals.set(catalog, {
         total: entry.total + materialTotal,
         count: entry.count + 1
@@ -73,7 +73,7 @@ export default function CatalogPage() {
     const map = new Map<string, Array<{ id: string; name: string; total: number }>>();
     (data ?? []).forEach((material) => {
       const catalog = material.code.trim();
-      const total = totalsByMaterial.get(material.name) ?? 0;
+      const total = totalsByMaterial.get(material.id) ?? 0;
       const list = map.get(catalog) ?? [];
       list.push({ id: material.id, name: material.name, total });
       map.set(catalog, list);
@@ -129,7 +129,7 @@ export default function CatalogPage() {
               </div>
               {sortedCatalog.map((row) => {
                 const isExpanded = !!expanded[row.id];
-                const total = totalsByMaterial.get(row.name) ?? 0;
+                const total = totalsByMaterial.get(row.id) ?? 0;
                 const locations = materialLocations?.[row.id] ?? [];
                 return (
                   <div key={row.id} className="border-t border-border">

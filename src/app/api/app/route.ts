@@ -1276,6 +1276,19 @@ const getActiveStatsLocations = (warehouses: Warehouse[], locations: Location[])
   return locations.filter((loc) => loc.isActive && allowed.has(loc.warehouseId));
 };
 
+const getActiveCompanyLocations = (warehouses: Warehouse[], locations: Location[]) => {
+  const allowed = new Set(
+    warehouses
+      .filter(
+        (warehouse) => warehouse.isActive && isWarehouseInScope(warehouse, 'PRZEMIALY')
+      )
+      .map((item) => item.id)
+  );
+  return locations.filter(
+    (loc) => loc.isActive && isLocationInScope(loc, 'PRZEMIALY') && allowed.has(loc.warehouseId)
+  );
+};
+
 const addComment = (target: Map<string, string[]>, label: string, comment?: string) => {
   const trimmed = comment?.trim();
   if (!trimmed) return;
@@ -1900,6 +1913,46 @@ const fetchEntries = async (fromKey: string, toKey?: string) => {
   return data ?? [];
 };
 
+const fetchLatestEntriesByLocation = async (
+  locationIds: string[],
+  upToDateKey: string
+): Promise<EntryMap> => {
+  if (locationIds.length === 0) return {};
+  const result: EntryMap = {};
+  const chunkSize = 500;
+
+  for (let i = 0; i < locationIds.length; i += chunkSize) {
+    const chunk = locationIds.slice(i, i + chunkSize);
+    const { data, error } = await supabaseAdmin
+      .from('daily_entries')
+      .select('date_key, location_id, material_id, qty, confirmed, comment')
+      .in('location_id', chunk)
+      .lte('date_key', upToDateKey)
+      .order('date_key', { ascending: false });
+    if (error) throw error;
+
+    const seen = new Set<string>();
+    (data ?? []).forEach((row: any) => {
+      const locationId = String(row.location_id ?? '');
+      const materialId = String(row.material_id ?? '');
+      if (!locationId || !materialId) return;
+      const key = `${locationId}::${materialId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (!result[locationId]) {
+        result[locationId] = {};
+      }
+      result[locationId][materialId] = {
+        qty: toNumber(row.qty),
+        confirmed: row.confirmed ?? false,
+        comment: row.comment ?? undefined
+      };
+    });
+  }
+
+  return result;
+};
+
 const fetchTransfers = async (fromKey: string, toKey: string) => {
   const start = `${fromKey}T00:00:00.000Z`;
   const end = `${addDays(toKey, 1)}T00:00:00.000Z`;
@@ -2371,22 +2424,53 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         fetchWarehouses(),
         fetchLocations()
       ]);
-      const activeLocations = getActiveStatsLocations(warehouses, locations);
+      const activeLocations = getActiveCompanyLocations(warehouses, locations);
+      const activeLocationIds = new Set(activeLocations.map((loc) => loc.id));
+      const baselineKey = addDays(fromKey, -1);
+      const baselineEntries = await fetchLatestEntriesByLocation(
+        activeLocations.map((loc) => loc.id),
+        baselineKey
+      );
       const rows = await fetchEntries(fromKey, todayKey);
-      const entriesByDate = buildEntriesByDate(rows);
-      const dateKeys = buildDateKeys(fromKey, todayKey);
-      const result: InventoryTotalPoint[] = dateKeys.map((key) => {
-        const entries = entriesByDate[key] ?? {};
-        const total = activeLocations.reduce((sum, loc) => {
-          const locEntries = entries[loc.id];
-          if (!locEntries) return sum;
-          return (
-            sum +
-            Object.values(locEntries).reduce((inner, entry) => inner + (entry?.qty ?? 0), 0)
-          );
-        }, 0);
-        return { date: key, total };
+      const rowsByDate = new Map<string, any[]>();
+      rows.forEach((row) => {
+        const locationId = String(row.location_id ?? '');
+        if (!activeLocationIds.has(locationId)) return;
+        const dateKey = String(row.date_key ?? '');
+        if (!dateKey) return;
+        const list = rowsByDate.get(dateKey) ?? [];
+        list.push(row);
+        rowsByDate.set(dateKey, list);
       });
+      const dateKeys = buildDateKeys(fromKey, todayKey);
+      const currentState = new Map<string, number>();
+      let runningTotal = 0;
+
+      activeLocations.forEach((loc) => {
+        const locEntries = baselineEntries[loc.id] ?? {};
+        Object.entries(locEntries).forEach(([materialId, entry]) => {
+          const key = `${loc.id}::${materialId}`;
+          const qty = toNumber(entry?.qty);
+          currentState.set(key, qty);
+          runningTotal += qty;
+        });
+      });
+
+      const result: InventoryTotalPoint[] = dateKeys.map((key) => {
+        const dayRows = rowsByDate.get(key) ?? [];
+        dayRows.forEach((row) => {
+          const locationId = String(row.location_id ?? '');
+          const materialId = String(row.material_id ?? '');
+          if (!locationId || !materialId) return;
+          const stateKey = `${locationId}::${materialId}`;
+          const prev = currentState.get(stateKey) ?? 0;
+          const next = toNumber(row.qty);
+          currentState.set(stateKey, next);
+          runningTotal += next - prev;
+        });
+        return { date: key, total: runningTotal };
+      });
+
       return result;
     }
     case 'getMonthlyDelta': {
@@ -2688,43 +2772,45 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return { year, rows: rowsOut, totals } satisfies YearlyReport;
     }
     case 'getCurrentMaterialTotals': {
-      const scope = payload?.scope === 'all' ? 'all' : 'stats';
+      const scope =
+        payload?.scope === 'all' ? 'all' : payload?.scope === 'company' ? 'company' : 'stats';
       const [materials, warehouses, locations] = await Promise.all([
         fetchMaterials(),
         fetchWarehouses(),
         fetchLocations()
       ]);
       const todayKey = getTodayKey();
-      const yesterdayKey = addDays(todayKey, -1);
-      const [todayEntriesRows, yesterdayEntriesRows] = await Promise.all([
-        fetchEntries(todayKey),
-        fetchEntries(yesterdayKey)
-      ]);
-      const todayEntries = buildEntriesByDate(todayEntriesRows)[todayKey] ?? {};
-      const yesterdayEntries = buildEntriesByDate(yesterdayEntriesRows)[yesterdayKey] ?? {};
       const sourceLocations =
         scope === 'stats'
           ? getActiveStatsLocations(warehouses, locations)
-          : locations.filter((loc) => loc.isActive);
+          : scope === 'company'
+            ? getActiveCompanyLocations(warehouses, locations)
+            : locations.filter((loc) => loc.isActive);
+      const latestEntriesByLocation = await fetchLatestEntriesByLocation(
+        sourceLocations.map((loc) => loc.id),
+        todayKey
+      );
+      const materialNameById = new Map(materials.map((mat) => [mat.id, mat.name]));
       const totals = new Map<string, number>();
       sourceLocations.forEach((loc) => {
-        const today = todayEntries[loc.id] ?? {};
-        const yesterday = yesterdayEntries[loc.id] ?? {};
-        const source = Object.keys(today).length > 0 ? today : yesterday;
+        const source = latestEntriesByLocation[loc.id] ?? {};
         Object.entries(source).forEach(([materialId, entry]) => {
-          const label = materials.find((mat) => mat.id === materialId)?.name ?? 'Nieznany';
-          totals.set(label, (totals.get(label) ?? 0) + (entry?.qty ?? 0));
+          totals.set(materialId, (totals.get(materialId) ?? 0) + (entry?.qty ?? 0));
         });
       });
       materials
         .filter((mat) => mat.isActive)
         .forEach((mat) => {
-          if (!totals.has(mat.name)) {
-            totals.set(mat.name, 0);
+          if (!totals.has(mat.id)) {
+            totals.set(mat.id, 0);
           }
         });
       return [...totals.entries()]
-        .map(([label, total]) => ({ label, total }))
+        .map(([materialId, total]) => ({
+          materialId,
+          label: materialNameById.get(materialId) ?? 'Nieznany',
+          total
+        }))
         .sort((a, b) => b.total - a.total) satisfies MaterialTotal[];
     }
     case 'getMaterialLocations': {
@@ -2734,42 +2820,36 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         fetchWarehouses()
       ]);
       const todayKey = getTodayKey();
-      const yesterdayKey = addDays(todayKey, -1);
-      const [todayEntriesRows, yesterdayEntriesRows] = await Promise.all([
-        fetchEntries(todayKey),
-        fetchEntries(yesterdayKey)
-      ]);
-      const todayEntries = buildEntriesByDate(todayEntriesRows)[todayKey] ?? {};
-      const yesterdayEntries = buildEntriesByDate(yesterdayEntriesRows)[yesterdayKey] ?? {};
+      const activeLocations = locations.filter((loc) => loc.isActive);
+      const latestEntriesByLocation = await fetchLatestEntriesByLocation(
+        activeLocations.map((loc) => loc.id),
+        todayKey
+      );
+      const materialsById = new Map(materials.map((mat) => [mat.id, mat]));
+      const warehouseById = new Map(warehouses.map((warehouse) => [warehouse.id, warehouse.name]));
       const result: MaterialLocationsMap = {};
       materials.forEach((mat) => {
         result[mat.id] = [];
       });
-      locations
-        .filter((loc) => loc.isActive)
-        .forEach((loc) => {
-          const today = todayEntries[loc.id] ?? {};
-          const yesterday = yesterdayEntries[loc.id] ?? {};
-          const source = Object.keys(today).length > 0 ? today : yesterday;
-          Object.entries(source).forEach(([materialId, entry]) => {
-            const qty = entry?.qty ?? 0;
-            if (qty <= 0) return;
-            const material = materials.find((mat) => mat.id === materialId);
-            if (!material) return;
-            const warehouseName =
-              warehouses.find((warehouse) => warehouse.id === loc.warehouseId)?.name ??
-              'Nieznany magazyn';
-            if (!result[materialId]) {
-              result[materialId] = [];
-            }
-            result[materialId].push({
-              locationId: loc.id,
-              locationName: loc.name,
-              warehouseName,
-              qty
-            });
+      activeLocations.forEach((loc) => {
+        const source = latestEntriesByLocation[loc.id] ?? {};
+        Object.entries(source).forEach(([materialId, entry]) => {
+          const qty = entry?.qty ?? 0;
+          if (qty <= 0) return;
+          const material = materialsById.get(materialId);
+          if (!material) return;
+          const warehouseName = warehouseById.get(loc.warehouseId) ?? 'Nieznany magazyn';
+          if (!result[materialId]) {
+            result[materialId] = [];
+          }
+          result[materialId].push({
+            locationId: loc.id,
+            locationName: loc.name,
+            warehouseName,
+            qty
           });
         });
+      });
       Object.values(result).forEach((list) => {
         list.sort((a, b) => {
           const warehouseCompare = a.warehouseName.localeCompare(b.warehouseName, 'pl', {
@@ -2788,21 +2868,17 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         fetchLocations()
       ]);
       const todayKey = getTodayKey();
-      const yesterdayKey = addDays(todayKey, -1);
-      const [todayEntriesRows, yesterdayEntriesRows] = await Promise.all([
-        fetchEntries(todayKey),
-        fetchEntries(yesterdayKey)
-      ]);
-      const todayEntries = buildEntriesByDate(todayEntriesRows)[todayKey] ?? {};
-      const yesterdayEntries = buildEntriesByDate(yesterdayEntriesRows)[yesterdayKey] ?? {};
       const activeLocations = getActiveStatsLocations(warehouses, locations);
+      const latestEntriesByLocation = await fetchLatestEntriesByLocation(
+        activeLocations.map((loc) => loc.id),
+        todayKey
+      );
+      const materialsById = new Map(materials.map((mat) => [mat.id, mat]));
       const totals = new Map<string, number>();
       activeLocations.forEach((loc) => {
-        const today = todayEntries[loc.id] ?? {};
-        const yesterday = yesterdayEntries[loc.id] ?? {};
-        const source = Object.keys(today).length > 0 ? today : yesterday;
+        const source = latestEntriesByLocation[loc.id] ?? {};
         Object.entries(source).forEach(([materialId, entry]) => {
-          const material = materials.find((mat) => mat.id === materialId);
+          const material = materialsById.get(materialId);
           const catalog = material?.code ?? 'Brak kartoteki';
           totals.set(catalog, (totals.get(catalog) ?? 0) + (entry?.qty ?? 0));
         });

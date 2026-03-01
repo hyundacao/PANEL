@@ -175,7 +175,7 @@ export const getYearlyReport = async (from: string, to: string): Promise<YearlyR
   appRequest('getYearlyReport', { from, to });
 
 export const getCurrentMaterialTotals = async (
-  scope: 'stats' | 'all' = 'stats'
+  scope: 'stats' | 'all' | 'company' = 'stats'
 ): Promise<MaterialTotal[]> => appRequest('getCurrentMaterialTotals', { scope });
 
 export const getMaterialLocations = async (): Promise<MaterialLocationsMap> =>

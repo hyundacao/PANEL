@@ -57,10 +57,12 @@ export default function DashboardPage() {
     queryFn: getMonthlyMaterialBreakdown
   });
   const { data: currentTotals } = useQuery({
-    queryKey: ['material-totals', today, 'stats'],
-    queryFn: () => getCurrentMaterialTotals('stats')
+    queryKey: ['material-totals', today, 'company'],
+    queryFn: () => getCurrentMaterialTotals('company'),
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true
   });
-  const currentTotal = totalsHistory?.[totalsHistory.length - 1]?.total ?? 0;
+  const currentTotal = (currentTotals ?? []).reduce((sum, item) => sum + item.total, 0);
   const pieColors = [
     'var(--brand)',
     'var(--value-purple)',

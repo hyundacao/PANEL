@@ -267,6 +267,7 @@ export type YearlyReport = {
 };
 
 export type MaterialTotal = {
+  materialId: string;
   label: string;
   total: number;
 };

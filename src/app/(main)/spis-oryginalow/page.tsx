@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  addOriginalInventoryCatalogBulk,
   addOriginalInventory,
   getOriginalInventory,
+  getOriginalInventoryCatalog,
   getOriginalInventoryCatalogFromErp,
   getWarehouses,
   removeOriginalInventory,
@@ -23,6 +25,7 @@ import { parseQtyInput } from '@/lib/utils/format';
 const WAREHOUSE_STORAGE_KEY = 'spis-oryginalow-warehouse';
 const TAB_STORAGE_KEY = 'spis-oryginalow-tab';
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
+const exportCatalogCollator = new Intl.Collator('pl', { sensitivity: 'base', numeric: true });
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
 const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
   [
@@ -90,6 +93,48 @@ const toCsv = (rows: string[][]) =>
     )
     .join('\n');
 
+const normalizeImportCell = (value: unknown) =>
+  String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const normalizeCatalogNameKey = (value: unknown) => normalizeImportCell(value).toLowerCase();
+
+const isCatalogHeaderRow = (name: string, unit: string) => {
+  const normalizedName = name.toLowerCase();
+  const normalizedUnit = unit.toLowerCase().replace(/\./g, '');
+  const nameHeaders = new Set(['nazwa', 'material', 'tworzywo', 'kartoteka', 'name']);
+  const unitHeaders = new Set(['jedn', 'jm', 'jednostka', 'unit']);
+  return nameHeaders.has(normalizedName) && (!normalizedUnit || unitHeaders.has(normalizedUnit));
+};
+
+const parseCatalogImportFile = async (file: File): Promise<Array<{ name: string; unit?: string }>> => {
+  const XLSX = await import('xlsx');
+  const bytes = await file.arrayBuffer();
+  const workbook = XLSX.read(bytes, { type: 'array', raw: false });
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) return [];
+  const sheet = workbook.Sheets[firstSheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    blankrows: false,
+    defval: ''
+  }) as unknown[][];
+  const items: Array<{ name: string; unit?: string }> = [];
+  const seen = new Set<string>();
+  rows.forEach((row, index) => {
+    const name = normalizeImportCell(row?.[0]);
+    const unitCell = normalizeImportCell(row?.[1]);
+    if (!name) return;
+    if (index === 0 && isCatalogHeaderRow(name, unitCell)) return;
+    const key = normalizeCatalogNameKey(name);
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push({ name, unit: unitCell || 'kg' });
+  });
+  return items;
+};
+
 export default function OriginalInventoryPage() {
   const toast = useToastStore((state) => state.push);
   const { user } = useUiStore();
@@ -111,6 +156,8 @@ export default function OriginalInventoryPage() {
   const [showReportSuggestions, setShowReportSuggestions] = useState(false);
   const [spisDate, setSpisDate] = useState(getLocalDateValue());
   const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogImportFile, setCatalogImportFile] = useState<File | null>(null);
+  const [catalogImportInputKey, setCatalogImportInputKey] = useState(0);
   const [form, setForm] = useState({
     name: '',
     qty: '',
@@ -125,10 +172,27 @@ export default function OriginalInventoryPage() {
     queryKey: ['spis-oryginalow'],
     queryFn: getOriginalInventory
   });
-  const { data: catalog = [], error: catalogError } = useQuery({
+  const { data: erpCatalog = [], error: catalogError } = useQuery({
     queryKey: ['spis-oryginalow-catalog'],
     queryFn: getOriginalInventoryCatalogFromErp
   });
+  const { data: localCatalog = [] } = useQuery({
+    queryKey: ['spis-oryginalow-catalog-local'],
+    queryFn: getOriginalInventoryCatalog
+  });
+  const catalog = useMemo(() => {
+    const merged = new Map<string, (typeof erpCatalog)[number]>();
+    erpCatalog.forEach((item) => {
+      merged.set(item.name.toLowerCase(), item);
+    });
+    localCatalog.forEach((item) => {
+      const key = item.name.toLowerCase();
+      if (!merged.has(key)) {
+        merged.set(key, item);
+      }
+    });
+    return [...merged.values()].sort((a, b) => collator.compare(a.name, b.name));
+  }, [erpCatalog, localCatalog]);
   const catalogErrorCode = catalogError instanceof Error ? catalogError.message : '';
   const effectiveSelectedWarehouseId = useMemo(() => {
     if (selectedWarehouseId && warehouses.some((warehouse) => warehouse.id === selectedWarehouseId)) {
@@ -192,6 +256,47 @@ export default function OriginalInventoryPage() {
       toast({ title: messageMap[err.message] ?? 'Nie usunieto wpisu.', tone: 'error' });
     }
   });
+  const importCatalogMutation = useMutation({
+    mutationFn: addOriginalInventoryCatalogBulk,
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-local'] });
+      setCatalogImportFile(null);
+      setCatalogImportInputKey((prev) => prev + 1);
+      toast({
+        title: 'Wgrano kartoteki',
+        description: `Dodano: ${result.inserted}, pominieto: ${result.skipped}.`,
+        tone: 'success'
+      });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        EMPTY: 'Plik nie zawiera poprawnych nazw kartotek.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie wgrano kartotek.', tone: 'error' });
+    }
+  });
+  const handleCatalogImport = async () => {
+    if (!catalogImportFile) {
+      toast({ title: 'Wybierz plik CSV/XLS/XLSX.', tone: 'error' });
+      return;
+    }
+    try {
+      const items = await parseCatalogImportFile(catalogImportFile);
+      if (items.length === 0) {
+        toast({ title: 'Plik nie zawiera kartotek do importu.', tone: 'error' });
+        return;
+      }
+      const existingNames = new Set(catalog.map((item) => normalizeCatalogNameKey(item.name)));
+      const toImport = items.filter((item) => !existingNames.has(normalizeCatalogNameKey(item.name)));
+      if (toImport.length === 0) {
+        toast({ title: 'Wszystkie kartoteki z pliku juz istnieja. Nic do dodania.', tone: 'success' });
+        return;
+      }
+      importCatalogMutation.mutate({ items: toImport });
+    } catch {
+      toast({ title: 'Nie odczytano pliku. Sprawdz format CSV/XLS/XLSX.', tone: 'error' });
+    }
+  };
   const handleAdd = () => {
     const name = form.name.trim();
     const qtyValue = parseQtyInput(form.qty);
@@ -435,14 +540,23 @@ export default function OriginalInventoryPage() {
         map.set(key, { name: entry.name, unit: entry.unit, qty: entry.qty });
       }
     });
-    return [...map.values()].sort((a, b) => collator.compare(a.name, b.name));
+    return [...map.values()].sort((a, b) => {
+      const nameCompare = exportCatalogCollator.compare(a.name.trim(), b.name.trim());
+      if (nameCompare !== 0) return nameCompare;
+      return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
+    });
   }, [dailyEntries]);
 
   const handleExportDaily = () => {
     if (!spisDate) return;
+    const sortedForExport = [...dailySummary].sort((a, b) => {
+      const nameCompare = exportCatalogCollator.compare(a.name.trim(), b.name.trim());
+      if (nameCompare !== 0) return nameCompare;
+      return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
+    });
     const rows = [
       ['Dzien', 'Material', 'Ilosc', 'Jedn.'],
-      ...dailySummary.map((row) => [spisDate, row.name, String(row.qty), row.unit])
+      ...sortedForExport.map((row) => [spisDate, row.name, String(row.qty), row.unit])
     ];
     const csv = toCsv(rows);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -813,15 +927,40 @@ export default function OriginalInventoryPage() {
           <Card className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">Integracja ERP</p>
             <p className="text-sm text-dim">
-              W tym module reczne dodawanie/usuwanie kartotek i import plikow zostaly celowo
-              wylaczone. Kartoteki maja byc dostarczane z systemu ERP przez API aplikacji
-              posredniej.
+              Kartoteki sa pobierane z ERP, ale mozesz tez recznie dograc brakujace pozycje
+              z pliku CSV/XLS/XLSX.
             </p>
             {catalogErrorCode && (
               <p className="text-xs text-danger">
                 Blad zrodla ERP: {catalogErrorCode}
               </p>
             )}
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <div className="space-y-1">
+                <label className="text-xs uppercase tracking-wide text-dim">
+                  Import kartotek (kolumna A: nazwa, kolumna B: jednostka - opcjonalnie)
+                </label>
+                <Input
+                  key={catalogImportInputKey}
+                  type="file"
+                  accept=".csv,.xls,.xlsx"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    setCatalogImportFile(file);
+                  }}
+                />
+                {catalogImportFile && (
+                  <p className="text-xs text-dim">Wybrany plik: {catalogImportFile.name}</p>
+                )}
+              </div>
+              <Button
+                variant="secondary"
+                onClick={handleCatalogImport}
+                disabled={!catalogImportFile || importCatalogMutation.isPending}
+              >
+                {importCatalogMutation.isPending ? 'Wgrywanie...' : 'Wgraj kartoteki'}
+              </Button>
+            </div>
             <div className="rounded-xl border border-[rgba(255,122,26,0.35)] bg-[rgba(255,122,26,0.08)] p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                 Pole dla kolejnego programisty
@@ -834,7 +973,7 @@ export default function OriginalInventoryPage() {
 
           <Card className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              Kartoteki (tylko odczyt)
+              Kartoteki (ERP + recznie wgrane)
             </p>
             <Input
               value={catalogSearch}
