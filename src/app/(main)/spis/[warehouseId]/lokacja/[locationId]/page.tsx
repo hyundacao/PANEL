@@ -1,5 +1,6 @@
 'use client';
 
+import type { FocusEvent } from 'react';
 import { useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -70,6 +71,14 @@ export default function LocationDetailPage() {
   const [form, setForm] = useState<MaterialFormState>(initialMaterialState);
   const [catalogQuery, setCatalogQuery] = useState('');
   const glowClass = 'ring-2 ring-[rgba(255,122,26,0.45)] shadow-[0_0_0_3px_rgba(255,122,26,0.18)]';
+
+  const unlockInput = (event: FocusEvent<HTMLInputElement>) => {
+    event.currentTarget.readOnly = false;
+  };
+
+  const relockInput = (event: FocusEvent<HTMLInputElement>) => {
+    event.currentTarget.readOnly = true;
+  };
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ['location-detail', warehouseId, locationId, today],
@@ -294,6 +303,16 @@ export default function LocationDetailPage() {
                       <label className="text-xs uppercase tracking-wide text-dim">Nazwa przemiału</label>
                       <Input
                         value={catalogQuery}
+                        readOnly
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        spellCheck={false}
+                        data-lpignore="true"
+                        data-1p-ignore="true"
+                        data-form-type="other"
+                        onFocus={unlockInput}
+                        onBlur={relockInput}
                         onChange={(event) => setCatalogQuery(event.target.value)}
                         placeholder="Szukaj po nazwie lub kartotece"
                       />
@@ -331,6 +350,16 @@ export default function LocationDetailPage() {
                         <label className="text-xs uppercase tracking-wide text-dim">Nazwa przemiału</label>
                         <Input
                           value={form.manualName}
+                          readOnly
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="characters"
+                          spellCheck={false}
+                          data-lpignore="true"
+                          data-1p-ignore="true"
+                          data-form-type="other"
+                          onFocus={unlockInput}
+                          onBlur={relockInput}
                           onChange={(event) => setForm((prev) => ({ ...prev, manualName: event.target.value }))}
                           placeholder="np. Borealis HF700SA"
                         />
@@ -367,6 +396,18 @@ export default function LocationDetailPage() {
                         <label className="text-xs uppercase tracking-wide text-dim">Ilość (kg)</label>
                         <Input
                           value={form.qty}
+                          readOnly
+                          type="text"
+                          inputMode="decimal"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="off"
+                          spellCheck={false}
+                          data-lpignore="true"
+                          data-1p-ignore="true"
+                          data-form-type="other"
+                          onFocus={unlockInput}
+                          onBlur={relockInput}
                           onChange={(event) => setForm((prev) => ({ ...prev, qty: event.target.value }))}
                           placeholder="0"
                         />
@@ -375,6 +416,16 @@ export default function LocationDetailPage() {
                         <label className="text-xs uppercase tracking-wide text-dim">Komentarz</label>
                         <Input
                           value={form.comment}
+                          readOnly
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="sentences"
+                          spellCheck={false}
+                          data-lpignore="true"
+                          data-1p-ignore="true"
+                          data-form-type="other"
+                          onFocus={unlockInput}
+                          onBlur={relockInput}
                           onChange={(event) => setForm((prev) => ({ ...prev, comment: event.target.value }))}
                           placeholder="Opcjonalnie"
                         />
@@ -466,13 +517,12 @@ export default function LocationDetailPage() {
                     <p className="text-sm text-body">{item.todayQty ?? '-'} kg</p>
                   ) : (
                     <Input
-                      name={`spis-qty-mobile-${item.materialId}`}
+                      readOnly
                       defaultValue={item.todayQty ?? ''}
                       placeholder="0"
-                      type="number"
-                      step="any"
+                      type="text"
                       inputMode="decimal"
-                      autoComplete="new-password"
+                      autoComplete="off"
                       autoCorrect="off"
                       autoCapitalize="off"
                       spellCheck={false}
@@ -480,7 +530,11 @@ export default function LocationDetailPage() {
                       data-lpignore="true"
                       data-1p-ignore="true"
                       data-form-type="other"
-                      onBlur={(event) => handleSave(item.materialId, event.target.value)}
+                      onFocus={unlockInput}
+                      onBlur={(event) => {
+                        relockInput(event);
+                        handleSave(item.materialId, event.target.value);
+                      }}
                     />
                   )}
                 </div>
@@ -492,11 +546,11 @@ export default function LocationDetailPage() {
                     <p className="text-sm text-body">{item.comment ?? '-'}</p>
                   ) : (
                     <Input
-                      name={`spis-comment-mobile-${item.materialId}`}
+                      readOnly
                       defaultValue={item.comment ?? ''}
                       placeholder="Komentarz"
                       type="text"
-                      autoComplete="new-password"
+                      autoComplete="off"
                       autoCorrect="off"
                       autoCapitalize="sentences"
                       spellCheck={false}
@@ -504,14 +558,16 @@ export default function LocationDetailPage() {
                       data-lpignore="true"
                       data-1p-ignore="true"
                       data-form-type="other"
-                      onBlur={(event) =>
+                      onFocus={unlockInput}
+                      onBlur={(event) => {
+                        relockInput(event);
                         handleCommentSave(
                           item.materialId,
                           event.target.value,
                           item.todayQty,
                           item.yesterdayQty
-                        )
-                      }
+                        );
+                      }}
                     />
                   )}
                 </div>
@@ -556,13 +612,12 @@ export default function LocationDetailPage() {
                 <p className="text-sm text-body">{item.todayQty ?? '-'} kg</p>
               ) : (
                 <Input
-                  name={`spis-qty-desktop-${item.materialId}`}
+                  readOnly
                   defaultValue={item.todayQty ?? ''}
                   placeholder="0"
-                  type="number"
-                  step="any"
+                  type="text"
                   inputMode="decimal"
-                  autoComplete="new-password"
+                  autoComplete="off"
                   autoCorrect="off"
                   autoCapitalize="off"
                   spellCheck={false}
@@ -570,7 +625,11 @@ export default function LocationDetailPage() {
                   data-lpignore="true"
                   data-1p-ignore="true"
                   data-form-type="other"
-                  onBlur={(event) => handleSave(item.materialId, event.target.value)}
+                  onFocus={unlockInput}
+                  onBlur={(event) => {
+                    relockInput(event);
+                    handleSave(item.materialId, event.target.value);
+                  }}
                 />
               )}
             </div>
@@ -579,11 +638,11 @@ export default function LocationDetailPage() {
                 <p className="text-sm text-body">{item.comment ?? '-'}</p>
               ) : (
                 <Input
-                  name={`spis-comment-desktop-${item.materialId}`}
+                  readOnly
                   defaultValue={item.comment ?? ''}
                   placeholder="Komentarz"
                   type="text"
-                  autoComplete="new-password"
+                  autoComplete="off"
                   autoCorrect="off"
                   autoCapitalize="sentences"
                   spellCheck={false}
@@ -591,9 +650,11 @@ export default function LocationDetailPage() {
                   data-lpignore="true"
                   data-1p-ignore="true"
                   data-form-type="other"
-                  onBlur={(event) =>
-                    handleCommentSave(item.materialId, event.target.value, item.todayQty, item.yesterdayQty)
-                  }
+                  onFocus={unlockInput}
+                  onBlur={(event) => {
+                    relockInput(event);
+                    handleCommentSave(item.materialId, event.target.value, item.todayQty, item.yesterdayQty);
+                  }}
                 />
               )}
             </div>
