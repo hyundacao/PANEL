@@ -20,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { SelectField } from '@/components/ui/Select';
 import { useToastStore } from '@/components/ui/Toast';
 import { useUiStore } from '@/lib/store/ui';
+import { isReadOnly } from '@/lib/auth/access';
 import { parseQtyInput } from '@/lib/utils/format';
 
 const WAREHOUSE_STORAGE_KEY = 'spis-oryginalow-warehouse';
@@ -28,6 +29,7 @@ const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const exportCatalogCollator = new Intl.Collator('pl', { sensitivity: 'base', numeric: true });
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
 const ERP_ORIGINALS_PROXY_NOT_CONFIGURED = 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED';
+const CATALOG_IMPORT_BATCH_SIZE = 500;
 const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
   [
     'Source: ERP proxy API (aktywny)',
@@ -142,6 +144,7 @@ const parseCatalogImportFile = async (file: File): Promise<Array<{ name: string;
 export default function OriginalInventoryPage() {
   const toast = useToastStore((state) => state.push);
   const { user } = useUiStore();
+  const readOnly = isReadOnly(user, 'PRZEMIALY');
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'spis' | 'kartoteki' | 'raporty'>(() =>
     getInitialTabValue()
@@ -162,6 +165,10 @@ export default function OriginalInventoryPage() {
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogImportFile, setCatalogImportFile] = useState<File | null>(null);
   const [catalogImportInputKey, setCatalogImportInputKey] = useState(0);
+  const [catalogImportProgress, setCatalogImportProgress] = useState<{
+    processed: number;
+    total: number;
+  } | null>(null);
   const [form, setForm] = useState({
     name: '',
     qty: '',
@@ -281,31 +288,20 @@ export default function OriginalInventoryPage() {
     }
   });
   const importCatalogMutation = useMutation({
-    mutationFn: addOriginalInventoryCatalogBulk,
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-local'] });
-      setCatalogImportFile(null);
-      setCatalogImportInputKey((prev) => prev + 1);
-      toast({
-        title: 'Wgrano kartoteki',
-        description: `Dodano: ${result.inserted}, pominieto: ${result.skipped}.`,
-        tone: 'success'
-      });
-    },
-    onError: (err: Error) => {
-      const messageMap: Record<string, string> = {
-        EMPTY: 'Plik nie zawiera poprawnych nazw kartotek.'
-      };
-      toast({ title: messageMap[err.message] ?? 'Nie wgrano kartotek.', tone: 'error' });
-    }
+    mutationFn: addOriginalInventoryCatalogBulk
   });
-  const handleCatalogImport = async () => {
-    if (!catalogImportFile) {
+  const handleCatalogImport = async (fileOverride?: File | null) => {
+    if (readOnly) {
+      toast({ title: 'Brak uprawnien do importu kartotek.', tone: 'error' });
+      return;
+    }
+    const file = fileOverride ?? catalogImportFile;
+    if (!file) {
       toast({ title: 'Wybierz plik CSV/XLS/XLSX.', tone: 'error' });
       return;
     }
     try {
-      const items = await parseCatalogImportFile(catalogImportFile);
+      const items = await parseCatalogImportFile(file);
       if (items.length === 0) {
         toast({ title: 'Plik nie zawiera kartotek do importu.', tone: 'error' });
         return;
@@ -316,9 +312,45 @@ export default function OriginalInventoryPage() {
         toast({ title: 'Wszystkie kartoteki z pliku juz istnieja. Nic do dodania.', tone: 'success' });
         return;
       }
-      importCatalogMutation.mutate({ items: toImport });
-    } catch {
-      toast({ title: 'Nie odczytano pliku. Sprawdz format CSV/XLS/XLSX.', tone: 'error' });
+      setCatalogImportProgress({ processed: 0, total: toImport.length });
+      let inserted = 0;
+      let skipped = 0;
+      for (let i = 0; i < toImport.length; i += CATALOG_IMPORT_BATCH_SIZE) {
+        const batch = toImport.slice(i, i + CATALOG_IMPORT_BATCH_SIZE);
+        const result = await importCatalogMutation.mutateAsync({ items: batch });
+        inserted += result.inserted;
+        skipped += result.skipped;
+        setCatalogImportProgress({
+          processed: Math.min(i + batch.length, toImport.length),
+          total: toImport.length
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-local'] });
+      setCatalogImportFile(null);
+      setCatalogImportInputKey((prev) => prev + 1);
+      toast({
+        title: 'Wgrano kartoteki',
+        description: `Dodano: ${inserted}, pominieto: ${skipped}.`,
+        tone: 'success'
+      });
+    } catch (err) {
+      const messageMap: Record<string, string> = {
+        EMPTY: 'Plik nie zawiera poprawnych nazw kartotek.',
+        FORBIDDEN: 'Brak uprawnien do importu kartotek.'
+      };
+      const errorCode = err instanceof Error ? err.message : '';
+      toast({
+        title: messageMap[errorCode] ?? 'Nie wgrano kartotek.',
+        description:
+          !messageMap[errorCode] && errorCode
+            ? `Kod błędu: ${errorCode}`
+            : errorCode === ERP_ORIGINALS_PROXY_NOT_CONFIGURED
+            ? 'Import lokalny nie powinien zalezec od ERP. Jesli to widzisz, trzeba sprawdzic route API.'
+            : undefined,
+        tone: 'error'
+      });
+    } finally {
+      setCatalogImportProgress(null);
     }
   };
   const handleAdd = () => {
@@ -960,6 +992,12 @@ export default function OriginalInventoryPage() {
                 kartotek nadal dzialaja.
               </p>
             )}
+            {readOnly && (
+              <p className="text-xs text-danger">
+                To konto ma tylko podglad. Import kartotek wymaga zapisu w module
+                `spis-oryginalow`.
+              </p>
+            )}
             {catalogErrorCode && (
               <p className="text-xs text-danger">
                 Blad zrodla ERP: {catalogErrorCode}
@@ -974,19 +1012,28 @@ export default function OriginalInventoryPage() {
                   key={catalogImportInputKey}
                   type="file"
                   accept=".csv,.xls,.xlsx"
-                  onChange={(event) => {
+                  onChange={async (event) => {
                     const file = event.target.files?.[0] ?? null;
                     setCatalogImportFile(file);
+                    if (file) {
+                      await handleCatalogImport(file);
+                    }
                   }}
+                  disabled={readOnly || importCatalogMutation.isPending}
                 />
                 {catalogImportFile && (
                   <p className="text-xs text-dim">Wybrany plik: {catalogImportFile.name}</p>
+                )}
+                {catalogImportProgress && (
+                  <p className="text-xs text-dim">
+                    Import w toku: {catalogImportProgress.processed} / {catalogImportProgress.total}
+                  </p>
                 )}
               </div>
               <Button
                 variant="secondary"
                 onClick={handleCatalogImport}
-                disabled={!catalogImportFile || importCatalogMutation.isPending}
+                disabled={readOnly || !catalogImportFile || importCatalogMutation.isPending}
               >
                 {importCatalogMutation.isPending ? 'Wgrywanie...' : 'Wgraj kartoteki'}
               </Button>
