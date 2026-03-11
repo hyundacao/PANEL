@@ -466,8 +466,20 @@ export default function LocationDetailPage() {
                     <p className="text-sm text-body">{item.todayQty ?? '-'} kg</p>
                   ) : (
                     <Input
+                      name={`spis-qty-mobile-${item.materialId}`}
                       defaultValue={item.todayQty ?? ''}
                       placeholder="0"
+                      type="number"
+                      step="any"
+                      inputMode="decimal"
+                      autoComplete="new-password"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      spellCheck={false}
+                      enterKeyHint="done"
+                      data-lpignore="true"
+                      data-1p-ignore="true"
+                      data-form-type="other"
                       onBlur={(event) => handleSave(item.materialId, event.target.value)}
                     />
                   )}
@@ -480,8 +492,18 @@ export default function LocationDetailPage() {
                     <p className="text-sm text-body">{item.comment ?? '-'}</p>
                   ) : (
                     <Input
+                      name={`spis-comment-mobile-${item.materialId}`}
                       defaultValue={item.comment ?? ''}
                       placeholder="Komentarz"
+                      type="text"
+                      autoComplete="new-password"
+                      autoCorrect="off"
+                      autoCapitalize="sentences"
+                      spellCheck={false}
+                      enterKeyHint="done"
+                      data-lpignore="true"
+                      data-1p-ignore="true"
+                      data-form-type="other"
                       onBlur={(event) =>
                         handleCommentSave(
                           item.materialId,
@@ -534,8 +556,20 @@ export default function LocationDetailPage() {
                 <p className="text-sm text-body">{item.todayQty ?? '-'} kg</p>
               ) : (
                 <Input
+                  name={`spis-qty-desktop-${item.materialId}`}
                   defaultValue={item.todayQty ?? ''}
                   placeholder="0"
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  autoComplete="new-password"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  enterKeyHint="done"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-form-type="other"
                   onBlur={(event) => handleSave(item.materialId, event.target.value)}
                 />
               )}
@@ -545,8 +579,18 @@ export default function LocationDetailPage() {
                 <p className="text-sm text-body">{item.comment ?? '-'}</p>
               ) : (
                 <Input
+                  name={`spis-comment-desktop-${item.materialId}`}
                   defaultValue={item.comment ?? ''}
                   placeholder="Komentarz"
+                  type="text"
+                  autoComplete="new-password"
+                  autoCorrect="off"
+                  autoCapitalize="sentences"
+                  spellCheck={false}
+                  enterKeyHint="done"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-form-type="other"
                   onBlur={(event) =>
                     handleCommentSave(item.materialId, event.target.value, item.todayQty, item.yesterdayQty)
                   }
