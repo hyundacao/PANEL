@@ -593,6 +593,38 @@ export const addOriginalInventoryCatalogBulk = async (payload: {
 }): Promise<OriginalInventoryCatalogImportResult> =>
   appRequest('addOriginalInventoryCatalogBulk', payload);
 
+export const importOriginalInventoryCatalogFile = async (
+  file: File
+): Promise<OriginalInventoryCatalogImportResult> => {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch('/api/original-inventory-catalog/import', {
+    method: 'POST',
+    credentials: 'same-origin',
+    body: formData
+  });
+
+  if (!response.ok) {
+    let code = 'UNKNOWN';
+    try {
+      const data = await response.json();
+      if (data?.code) code = String(data.code);
+    } catch {
+      // ignore
+    }
+    if (
+      typeof window !== 'undefined' &&
+      (code === 'UNAUTHORIZED' || code === 'SESSION_EXPIRED')
+    ) {
+      window.dispatchEvent(new CustomEvent('apka:auth-expired'));
+    }
+    throw new Error(code);
+  }
+
+  return response.json() as Promise<OriginalInventoryCatalogImportResult>;
+};
+
 export const updateOriginalInventory = async (payload: {
   id: string;
   qty: number;

@@ -1550,12 +1550,29 @@ const fetchCatalogs = async () => {
   return (data ?? []).map(mapMaterialCatalog);
 };
 
+const ORIGINAL_CATALOG_PAGE_SIZE = 1000;
+
+const fetchAllOriginalCatalogRows = async () => {
+  const rows: any[] = [];
+  for (let from = 0; ; from += ORIGINAL_CATALOG_PAGE_SIZE) {
+    const to = from + ORIGINAL_CATALOG_PAGE_SIZE - 1;
+    const { data, error } = await supabaseAdmin
+      .from('original_inventory_catalog')
+      .select('*')
+      .range(from, to);
+    if (error) throw error;
+    const page = data ?? [];
+    rows.push(...page);
+    if (page.length < ORIGINAL_CATALOG_PAGE_SIZE) {
+      break;
+    }
+  }
+  return rows;
+};
+
 const fetchOriginalCatalog = async () => {
-  const { data, error } = await supabaseAdmin
-    .from('original_inventory_catalog')
-    .select('*');
-  if (error) throw error;
-  return (data ?? []).map(mapOriginalInventoryCatalogEntry);
+  const data = await fetchAllOriginalCatalogRows();
+  return data.map(mapOriginalInventoryCatalogEntry);
 };
 
 const extractErpOriginalCatalogItems = (payload: unknown): Array<Record<string, unknown>> => {

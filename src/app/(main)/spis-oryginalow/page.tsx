@@ -3,11 +3,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  addOriginalInventoryCatalogBulk,
   addOriginalInventory,
   getOriginalInventory,
   getOriginalInventoryCatalog,
   getOriginalInventoryCatalogFromErp,
+  importOriginalInventoryCatalogFile,
   getWarehouses,
   removeOriginalInventory,
   updateOriginalInventory
@@ -29,7 +29,6 @@ const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const exportCatalogCollator = new Intl.Collator('pl', { sensitivity: 'base', numeric: true });
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
 const ERP_ORIGINALS_PROXY_NOT_CONFIGURED = 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED';
-const CATALOG_IMPORT_BATCH_SIZE = 500;
 const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
   [
     'Source: ERP proxy API (aktywny)',
@@ -165,10 +164,16 @@ export default function OriginalInventoryPage() {
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogImportFile, setCatalogImportFile] = useState<File | null>(null);
   const [catalogImportInputKey, setCatalogImportInputKey] = useState(0);
-  const [catalogImportProgress, setCatalogImportProgress] = useState<{
-    processed: number;
-    total: number;
+  const [catalogImportFileName, setCatalogImportFileName] = useState('');
+  const [catalogImportItems, setCatalogImportItems] = useState<Array<{ name: string; unit?: string }>>(
+    []
+  );
+  const [catalogImportSummary, setCatalogImportSummary] = useState<{
+    parsed: number;
+    toImport: number;
+    skipped: number;
   } | null>(null);
+  const [catalogImportPreparing, setCatalogImportPreparing] = useState(false);
   const [form, setForm] = useState({
     name: '',
     qty: '',
@@ -288,18 +293,25 @@ export default function OriginalInventoryPage() {
     }
   });
   const importCatalogMutation = useMutation({
-    mutationFn: addOriginalInventoryCatalogBulk
+    mutationFn: importOriginalInventoryCatalogFile
   });
-  const handleCatalogImport = async (fileOverride?: File | null) => {
+  const resetCatalogImportState = () => {
+    setCatalogImportFile(null);
+    setCatalogImportFileName('');
+    setCatalogImportItems([]);
+    setCatalogImportSummary(null);
+    setCatalogImportInputKey((prev) => prev + 1);
+  };
+  const handleCatalogFileChange = async (file: File | null) => {
+    resetCatalogImportState();
+    if (!file) return;
     if (readOnly) {
       toast({ title: 'Brak uprawnien do importu kartotek.', tone: 'error' });
       return;
     }
-    const file = fileOverride ?? catalogImportFile;
-    if (!file) {
-      toast({ title: 'Wybierz plik CSV/XLS/XLSX.', tone: 'error' });
-      return;
-    }
+    setCatalogImportFileName(file.name);
+    setCatalogImportFile(file);
+    setCatalogImportPreparing(true);
     try {
       const items = await parseCatalogImportFile(file);
       if (items.length === 0) {
@@ -308,29 +320,38 @@ export default function OriginalInventoryPage() {
       }
       const existingNames = new Set(catalog.map((item) => normalizeCatalogNameKey(item.name)));
       const toImport = items.filter((item) => !existingNames.has(normalizeCatalogNameKey(item.name)));
+      setCatalogImportItems(toImport);
+      setCatalogImportSummary({
+        parsed: items.length,
+        toImport: toImport.length,
+        skipped: items.length - toImport.length
+      });
       if (toImport.length === 0) {
         toast({ title: 'Wszystkie kartoteki z pliku juz istnieja. Nic do dodania.', tone: 'success' });
-        return;
       }
-      setCatalogImportProgress({ processed: 0, total: toImport.length });
-      let inserted = 0;
-      let skipped = 0;
-      for (let i = 0; i < toImport.length; i += CATALOG_IMPORT_BATCH_SIZE) {
-        const batch = toImport.slice(i, i + CATALOG_IMPORT_BATCH_SIZE);
-        const result = await importCatalogMutation.mutateAsync({ items: batch });
-        inserted += result.inserted;
-        skipped += result.skipped;
-        setCatalogImportProgress({
-          processed: Math.min(i + batch.length, toImport.length),
-          total: toImport.length
-        });
-      }
+    } catch {
+      resetCatalogImportState();
+      toast({ title: 'Nie odczytano pliku. Sprawdz format CSV/XLS/XLSX.', tone: 'error' });
+    } finally {
+      setCatalogImportPreparing(false);
+    }
+  };
+  const handleCatalogImport = async () => {
+    if (readOnly) {
+      toast({ title: 'Brak uprawnien do importu kartotek.', tone: 'error' });
+      return;
+    }
+    if (catalogImportItems.length === 0) {
+      toast({ title: 'Najpierw wybierz poprawny plik z kartotekami.', tone: 'error' });
+      return;
+    }
+    try {
+      const result = await importCatalogMutation.mutateAsync(catalogImportFile);
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-local'] });
-      setCatalogImportFile(null);
-      setCatalogImportInputKey((prev) => prev + 1);
+      resetCatalogImportState();
       toast({
         title: 'Wgrano kartoteki',
-        description: `Dodano: ${inserted}, pominieto: ${skipped}.`,
+        description: `Dodano: ${result.inserted}, pominieto: ${result.skipped}.`,
         tone: 'success'
       });
     } catch (err) {
@@ -349,8 +370,6 @@ export default function OriginalInventoryPage() {
             : undefined,
         tone: 'error'
       });
-    } finally {
-      setCatalogImportProgress(null);
     }
   };
   const handleAdd = () => {
@@ -1014,26 +1033,35 @@ export default function OriginalInventoryPage() {
                   accept=".csv,.xls,.xlsx"
                   onChange={async (event) => {
                     const file = event.target.files?.[0] ?? null;
-                    setCatalogImportFile(file);
-                    if (file) {
-                      await handleCatalogImport(file);
-                    }
+                    await handleCatalogFileChange(file);
                   }}
-                  disabled={readOnly || importCatalogMutation.isPending}
+                  disabled={readOnly || catalogImportPreparing || importCatalogMutation.isPending}
                 />
-                {catalogImportFile && (
-                  <p className="text-xs text-dim">Wybrany plik: {catalogImportFile.name}</p>
+                {catalogImportFileName && (
+                  <p className="text-xs text-dim">Wybrany plik: {catalogImportFileName}</p>
                 )}
-                {catalogImportProgress && (
+                {catalogImportPreparing && (
+                  <p className="text-xs text-dim">Analiza pliku...</p>
+                )}
+                {catalogImportSummary && (
                   <p className="text-xs text-dim">
-                    Import w toku: {catalogImportProgress.processed} / {catalogImportProgress.total}
+                    W pliku: {catalogImportSummary.parsed}. Do importu: {catalogImportSummary.toImport}.
+                    Pominiete jako istniejace: {catalogImportSummary.skipped}.
                   </p>
+                )}
+                {importCatalogMutation.isPending && (
+                  <p className="text-xs text-dim">Wgrywanie pliku...</p>
                 )}
               </div>
               <Button
                 variant="secondary"
                 onClick={handleCatalogImport}
-                disabled={readOnly || !catalogImportFile || importCatalogMutation.isPending}
+                disabled={
+                  readOnly ||
+                  catalogImportPreparing ||
+                  catalogImportItems.length === 0 ||
+                  importCatalogMutation.isPending
+                }
               >
                 {importCatalogMutation.isPending ? 'Wgrywanie...' : 'Wgraj kartoteki'}
               </Button>
