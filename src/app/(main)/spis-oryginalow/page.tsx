@@ -341,12 +341,13 @@ export default function OriginalInventoryPage() {
       toast({ title: 'Brak uprawnien do importu kartotek.', tone: 'error' });
       return;
     }
-    if (catalogImportItems.length === 0) {
+    const file = catalogImportFile;
+    if (!file || catalogImportItems.length === 0) {
       toast({ title: 'Najpierw wybierz poprawny plik z kartotekami.', tone: 'error' });
       return;
     }
     try {
-      const result = await importCatalogMutation.mutateAsync(catalogImportFile);
+      const result = await importCatalogMutation.mutateAsync(file);
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-local'] });
       resetCatalogImportState();
       toast({
