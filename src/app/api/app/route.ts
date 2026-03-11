@@ -39,6 +39,7 @@ import type {
   MonthlyDelta,
   MonthlyMaterialBreakdown,
   OriginalInventoryCatalogEntry,
+  OriginalInventoryErpSnapshotEntry,
   OriginalInventoryEntry,
   PeriodReport,
   RaportZmianowyEntry,
@@ -582,6 +583,7 @@ const statusCodeFromError = (code: string) => {
   if (code === 'FORBIDDEN') return 403;
   if (code === 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED') return 503;
   if (code === 'ERP_ORIGINALS_PROXY_UNAUTHORIZED') return 403;
+  if (code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS') return 503;
   if (
     code === 'ERP_ORIGINALS_PROXY_UNAVAILABLE' ||
     code === 'ERP_ORIGINALS_PROXY_TIMEOUT' ||
@@ -805,6 +807,9 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'getOriginalInventoryCatalogFromErp':
       requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
+    case 'getOriginalInventoryErpSnapshot':
+      requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      return;
     case 'addOriginalInventory':
       requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
@@ -818,6 +823,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'updateOriginalInventory':
     case 'removeOriginalInventory':
     case 'removeOriginalInventoryCatalog':
+    case 'removeOriginalInventoryErpSnapshot':
       requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
     case 'getCatalog':
@@ -951,6 +957,7 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'addOriginalInventory',
   'addOriginalInventoryCatalog',
   'addOriginalInventoryCatalogBulk',
+  'removeOriginalInventoryErpSnapshot',
   'updateOriginalInventory',
   'removeOriginalInventory',
   'removeOriginalInventoryCatalog',
@@ -1042,6 +1049,7 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   addOriginalInventoryCatalog: 'Spis oryginalow: dodanie pozycji slownika',
   addOriginalInventoryCatalogBulk: 'Spis oryginalow: import slownika',
   removeOriginalInventoryCatalog: 'Spis oryginalow: usuniecie pozycji slownika',
+  removeOriginalInventoryErpSnapshot: 'Spis oryginalow: usuniecie snapshotu ERP',
   applyInventoryAdjustment: 'Inwentaryzacja: korekta stanu',
   addMixedMaterial: 'Wymieszane: dodanie',
   removeMixedMaterial: 'Wymieszane: rozchod',
@@ -1573,6 +1581,43 @@ const fetchAllOriginalCatalogRows = async () => {
 const fetchOriginalCatalog = async () => {
   const data = await fetchAllOriginalCatalogRows();
   return data.map(mapOriginalInventoryCatalogEntry);
+};
+
+const isMissingOriginalInventoryErpSnapshotsTableError = (error: unknown) => {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; message?: unknown; details?: unknown };
+  const code = String(candidate.code ?? '').trim();
+  if (code === '42P01') return true;
+  const text = [String(candidate.message ?? ''), String(candidate.details ?? '')]
+    .join(' ')
+    .toLowerCase();
+  return text.includes('original_inventory_erp_snapshots');
+};
+
+const mapOriginalInventoryErpSnapshotEntry = (row: any): OriginalInventoryErpSnapshotEntry => ({
+  id: String(row.id),
+  snapshotDate: String(row.snapshot_date),
+  name: String(row.name ?? '').trim(),
+  qty: toNumber(row.qty),
+  unit: String(row.unit ?? '').trim() || 'kg',
+  importedAt: row.imported_at ?? row.created_at ?? new Date().toISOString(),
+  importedBy: String(row.imported_by ?? '').trim() || 'nieznany',
+  sourceFileName: row.source_file_name ? String(row.source_file_name) : null
+});
+
+const fetchOriginalInventoryErpSnapshot = async (snapshotDate: string) => {
+  const { data, error } = await supabaseAdmin
+    .from('original_inventory_erp_snapshots')
+    .select('*')
+    .eq('snapshot_date', snapshotDate)
+    .order('name', { ascending: true });
+  if (error) {
+    if (isMissingOriginalInventoryErpSnapshotsTableError(error)) {
+      throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
+    }
+    throw error;
+  }
+  return (data ?? []).map(mapOriginalInventoryErpSnapshotEntry);
 };
 
 const extractErpOriginalCatalogItems = (payload: unknown): Array<Record<string, unknown>> => {
@@ -5055,6 +5100,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'getOriginalInventoryCatalogFromErp': {
       return fetchOriginalCatalogFromErpProxy();
     }
+    case 'getOriginalInventoryErpSnapshot': {
+      const snapshotDate = String(payload?.snapshotDate ?? '').trim();
+      if (!snapshotDate) throw new Error('DATE_REQUIRED');
+      return fetchOriginalInventoryErpSnapshot(snapshotDate);
+    }
     case 'addOriginalInventory': {
       const warehouseId = String(payload?.warehouseId ?? '').trim();
       const name = String(payload?.name ?? '').trim();
@@ -5229,6 +5279,21 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .maybeSingle();
       if (error) throw error;
       if (!data) throw new Error('ENTRY_MISSING');
+      return;
+    }
+    case 'removeOriginalInventoryErpSnapshot': {
+      const snapshotDate = String(payload?.snapshotDate ?? '').trim();
+      if (!snapshotDate) throw new Error('DATE_REQUIRED');
+      const { error } = await supabaseAdmin
+        .from('original_inventory_erp_snapshots')
+        .delete()
+        .eq('snapshot_date', snapshotDate);
+      if (error) {
+        if (isMissingOriginalInventoryErpSnapshotsTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
+        }
+        throw error;
+      }
       return;
     }
     case 'addSparePart': {

@@ -172,6 +172,24 @@ export type OriginalInventoryCatalogImportResult = {
   skipped: number;
 };
 
+export type OriginalInventoryErpSnapshotEntry = {
+  id: string;
+  snapshotDate: string;
+  name: string;
+  qty: number;
+  unit: string;
+  importedAt: string;
+  importedBy: string;
+  sourceFileName?: string | null;
+};
+
+export type OriginalInventoryErpSnapshotImportResult = {
+  total: number;
+  inserted: number;
+  replaced: number;
+  snapshotDate: string;
+};
+
 export type DashboardSummary = {
   warehouseId: string;
   warehouseName: string;

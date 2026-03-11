@@ -7,11 +7,15 @@ import {
   getOriginalInventory,
   getOriginalInventoryCatalog,
   getOriginalInventoryCatalogFromErp,
+  getOriginalInventoryErpSnapshot,
   importOriginalInventoryCatalogFile,
+  importOriginalInventoryErpSnapshotFile,
   getWarehouses,
+  removeOriginalInventoryErpSnapshot,
   removeOriginalInventory,
   updateOriginalInventory
 } from '@/lib/api';
+import type { OriginalInventoryErpSnapshotEntry } from '@/lib/api/types';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -29,6 +33,7 @@ const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const exportCatalogCollator = new Intl.Collator('pl', { sensitivity: 'base', numeric: true });
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
 const ERP_ORIGINALS_PROXY_NOT_CONFIGURED = 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED';
+const ERP_SNAPSHOT_MIGRATION_REQUIRED = 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS';
 const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
   [
     'Source: ERP proxy API (aktywny)',
@@ -42,10 +47,13 @@ const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
 const isErpOriginalsSourceError = (error: unknown) =>
   error instanceof Error && error.message === ERP_ORIGINALS_PROXY_NOT_CONFIGURED;
 
-const getInitialTabValue = (): 'spis' | 'kartoteki' | 'raporty' => {
+const isErpSnapshotMigrationError = (error: unknown) =>
+  error instanceof Error && error.message === ERP_SNAPSHOT_MIGRATION_REQUIRED;
+
+const getInitialTabValue = (): 'spis' | 'kartoteki' | 'stany-erp' | 'raporty' => {
   if (typeof window === 'undefined') return 'spis';
   const saved = window.localStorage.getItem(TAB_STORAGE_KEY);
-  if (saved === 'spis' || saved === 'kartoteki' || saved === 'raporty') {
+  if (saved === 'spis' || saved === 'kartoteki' || saved === 'stany-erp' || saved === 'raporty') {
     return saved;
   }
   return 'spis';
@@ -113,6 +121,64 @@ const isCatalogHeaderRow = (name: string, unit: string) => {
   return nameHeaders.has(normalizedName) && (!normalizedUnit || unitHeaders.has(normalizedUnit));
 };
 
+const parseSnapshotQty = (value: unknown) => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  const normalized = normalizeImportCell(value).replace(/\s+/g, '').replace(',', '.');
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const isSnapshotHeaderRow = (name: string, qty: unknown) => {
+  const normalizedName = name.toLowerCase();
+  const qtyText = normalizeImportCell(qty).toLowerCase();
+  const nameHeaders = new Set(['nazwa', 'material', 'tworzywo', 'kartoteka', 'name']);
+  const qtyHeaders = new Set(['ilosc', 'ilość', 'qty', 'quantity', 'stan']);
+  return nameHeaders.has(normalizedName) && qtyHeaders.has(qtyText);
+};
+
+const parseSnapshotImportFile = async (
+  file: File
+): Promise<Array<{ name: string; qty: number; unit: string }>> => {
+  const XLSX = await import('xlsx');
+  const bytes = await file.arrayBuffer();
+  const workbook = XLSX.read(bytes, { type: 'array', raw: false });
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) return [];
+  const sheet = workbook.Sheets[firstSheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    blankrows: false,
+    defval: ''
+  }) as unknown[][];
+  const merged = new Map<string, { name: string; qty: number; unit: string }>();
+  rows.forEach((row, index) => {
+    const name = normalizeImportCell(row?.[0]);
+    const qty = parseSnapshotQty(row?.[1]);
+    const unitCell = normalizeImportCell(row?.[2]);
+    if (!name) return;
+    if (index === 0 && isSnapshotHeaderRow(name, row?.[1])) return;
+    if (qty === null) return;
+    const key = normalizeCatalogNameKey(name);
+    const existing = merged.get(key);
+    if (existing) {
+      existing.qty += qty;
+      if (!existing.unit && unitCell) {
+        existing.unit = unitCell;
+      }
+      return;
+    }
+    merged.set(key, {
+      name,
+      qty,
+      unit: unitCell || 'kg'
+    });
+  });
+  return [...merged.values()];
+};
+
 const parseCatalogImportFile = async (file: File): Promise<Array<{ name: string; unit?: string }>> => {
   const XLSX = await import('xlsx');
   const bytes = await file.arrayBuffer();
@@ -145,7 +211,7 @@ export default function OriginalInventoryPage() {
   const { user } = useUiStore();
   const readOnly = isReadOnly(user, 'PRZEMIALY');
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'spis' | 'kartoteki' | 'raporty'>(() =>
+  const [activeTab, setActiveTab] = useState<'spis' | 'kartoteki' | 'stany-erp' | 'raporty'>(() =>
     getInitialTabValue()
   );
   const [selectedWarehouseId, setSelectedWarehouseId] = useState(() =>
@@ -174,6 +240,14 @@ export default function OriginalInventoryPage() {
     skipped: number;
   } | null>(null);
   const [catalogImportPreparing, setCatalogImportPreparing] = useState(false);
+  const [erpSnapshotImportFile, setErpSnapshotImportFile] = useState<File | null>(null);
+  const [erpSnapshotImportInputKey, setErpSnapshotImportInputKey] = useState(0);
+  const [erpSnapshotImportFileName, setErpSnapshotImportFileName] = useState('');
+  const [erpSnapshotImportSummary, setErpSnapshotImportSummary] = useState<{
+    parsed: number;
+    currentRows: number;
+  } | null>(null);
+  const [erpSnapshotImportPreparing, setErpSnapshotImportPreparing] = useState(false);
   const [form, setForm] = useState({
     name: '',
     qty: '',
@@ -212,6 +286,27 @@ export default function OriginalInventoryPage() {
     queryKey: ['spis-oryginalow-catalog-local'],
     queryFn: getOriginalInventoryCatalog
   });
+  const { data: erpSnapshotState = { items: [] as OriginalInventoryErpSnapshotEntry[], migrationRequired: false } } = useQuery({
+    queryKey: ['spis-oryginalow-erp-snapshot', spisDate],
+    queryFn: async () => {
+      try {
+        return {
+          items: await getOriginalInventoryErpSnapshot(spisDate),
+          migrationRequired: false
+        };
+      } catch (error) {
+        if (isErpSnapshotMigrationError(error)) {
+          return {
+            items: [] as OriginalInventoryErpSnapshotEntry[],
+            migrationRequired: true
+          };
+        }
+        throw error;
+      }
+    },
+    enabled: Boolean(spisDate),
+    retry: false
+  });
   const catalog = useMemo(() => {
     const merged = new Map<string, (typeof localCatalog)[number]>();
     erpCatalogState.items.forEach((item) => {
@@ -230,6 +325,15 @@ export default function OriginalInventoryPage() {
       ? catalogError.message
       : '';
   const erpSourceUnavailable = erpCatalogState.sourceUnavailable;
+  const erpSnapshotEntries = erpSnapshotState.items;
+  const erpSnapshotMigrationRequired = erpSnapshotState.migrationRequired;
+  const erpSnapshotMap = useMemo(() => {
+    const map = new Map<string, OriginalInventoryErpSnapshotEntry>();
+    erpSnapshotEntries.forEach((item) => {
+      map.set(item.name.toLowerCase(), item);
+    });
+    return map;
+  }, [erpSnapshotEntries]);
   const effectiveSelectedWarehouseId = useMemo(() => {
     if (selectedWarehouseId && warehouses.some((warehouse) => warehouse.id === selectedWarehouseId)) {
       return selectedWarehouseId;
@@ -294,6 +398,28 @@ export default function OriginalInventoryPage() {
   });
   const importCatalogMutation = useMutation({
     mutationFn: importOriginalInventoryCatalogFile
+  });
+  const importErpSnapshotMutation = useMutation({
+    mutationFn: ({ file, snapshotDate }: { file: File; snapshotDate: string }) =>
+      importOriginalInventoryErpSnapshotFile(file, snapshotDate)
+  });
+  const removeErpSnapshotMutation = useMutation({
+    mutationFn: removeOriginalInventoryErpSnapshot,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-erp-snapshot', spisDate] });
+      toast({ title: 'Usunieto stany ERP dla wybranego dnia', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        DATE_REQUIRED: 'Wybierz poprawny dzien.',
+        MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS:
+          'Brakuje migracji bazy dla stanow ERP. Uruchom migracje SQL.'
+      };
+      toast({
+        title: messageMap[err.message] ?? 'Nie usunieto stanow ERP.',
+        tone: 'error'
+      });
+    }
   });
   const resetCatalogImportState = () => {
     setCatalogImportFile(null);
@@ -369,6 +495,82 @@ export default function OriginalInventoryPage() {
             : errorCode === ERP_ORIGINALS_PROXY_NOT_CONFIGURED
             ? 'Import lokalny nie powinien zalezec od ERP. Jesli to widzisz, trzeba sprawdzic route API.'
             : undefined,
+        tone: 'error'
+      });
+    }
+  };
+  const resetErpSnapshotImportState = () => {
+    setErpSnapshotImportFile(null);
+    setErpSnapshotImportFileName('');
+    setErpSnapshotImportSummary(null);
+    setErpSnapshotImportInputKey((prev) => prev + 1);
+  };
+  const handleErpSnapshotFileChange = async (file: File | null) => {
+    resetErpSnapshotImportState();
+    if (!file) return;
+    if (readOnly) {
+      toast({ title: 'Brak uprawnien do importu stanow ERP.', tone: 'error' });
+      return;
+    }
+    setErpSnapshotImportPreparing(true);
+    setErpSnapshotImportFile(file);
+    setErpSnapshotImportFileName(file.name);
+    try {
+      const items = await parseSnapshotImportFile(file);
+      if (items.length === 0) {
+        toast({ title: 'Plik nie zawiera poprawnych stanow ERP.', tone: 'error' });
+        resetErpSnapshotImportState();
+        return;
+      }
+      setErpSnapshotImportSummary({
+        parsed: items.length,
+        currentRows: erpSnapshotEntries.length
+      });
+    } catch {
+      resetErpSnapshotImportState();
+      toast({ title: 'Nie odczytano pliku stanow ERP. Sprawdz format XLS/XLSX/CSV.', tone: 'error' });
+    } finally {
+      setErpSnapshotImportPreparing(false);
+    }
+  };
+  const handleErpSnapshotImport = async () => {
+    if (readOnly) {
+      toast({ title: 'Brak uprawnien do importu stanow ERP.', tone: 'error' });
+      return;
+    }
+    if (!spisDate) {
+      toast({ title: 'Wybierz dzien snapshotu ERP.', tone: 'error' });
+      return;
+    }
+    if (!erpSnapshotImportFile) {
+      toast({ title: 'Najpierw wybierz plik stanow ERP.', tone: 'error' });
+      return;
+    }
+    try {
+      const result = await importErpSnapshotMutation.mutateAsync({
+        file: erpSnapshotImportFile,
+        snapshotDate: spisDate
+      });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-erp-snapshot', spisDate] });
+      resetErpSnapshotImportState();
+      toast({
+        title: 'Wgrano stany ERP',
+        description: `Pozycji: ${result.inserted}. Nadpisano poprzedni snapshot z dnia: ${result.replaced}.`,
+        tone: 'success'
+      });
+    } catch (err) {
+      const messageMap: Record<string, string> = {
+        DATE_REQUIRED: 'Wybierz poprawny dzien snapshotu.',
+        FILE_REQUIRED: 'Wybierz plik do importu.',
+        EMPTY: 'Plik nie zawiera poprawnych stanow ERP.',
+        FORBIDDEN: 'Brak uprawnien do importu stanow ERP.',
+        MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS:
+          'Brakuje migracji bazy dla stanow ERP. Uruchom migracje SQL.'
+      };
+      const errorCode = err instanceof Error ? err.message : '';
+      toast({
+        title: messageMap[errorCode] ?? 'Nie wgrano stanow ERP.',
+        description: !messageMap[errorCode] && errorCode ? `Kod błędu: ${errorCode}` : undefined,
         tone: 'error'
       });
     }
@@ -496,6 +698,11 @@ export default function OriginalInventoryPage() {
     if (!needle) return null;
     return existingByName.get(needle) ?? null;
   }, [existingByName, form.name]);
+  const matchedErpSnapshot = useMemo(() => {
+    const needle = form.name.trim().toLowerCase();
+    if (!needle) return null;
+    return erpSnapshotMap.get(needle) ?? null;
+  }, [erpSnapshotMap, form.name]);
   const nameSuggestions = useMemo(() => {
     const seen = new Set<string>();
     const list: string[] = [];
@@ -622,6 +829,71 @@ export default function OriginalInventoryPage() {
       return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
     });
   }, [dailyEntries]);
+  const erpSnapshotSummary = useMemo(() => {
+    const map = new Map<string, { name: string; unit: string; qty: number }>();
+    erpSnapshotEntries.forEach((entry) => {
+      const key = entry.name.toLowerCase();
+      const current = map.get(key);
+      if (current) {
+        current.qty += entry.qty;
+      } else {
+        map.set(key, { name: entry.name, unit: entry.unit, qty: entry.qty });
+      }
+    });
+    return [...map.values()].sort((a, b) => collator.compare(a.name, b.name));
+  }, [erpSnapshotEntries]);
+  const currentErpSnapshotMeta = useMemo(() => {
+    if (erpSnapshotEntries.length === 0) return null;
+    const latest = [...erpSnapshotEntries].sort((a, b) => b.importedAt.localeCompare(a.importedAt))[0];
+    if (!latest) return null;
+    return {
+      importedAt: latest.importedAt,
+      importedBy: latest.importedBy,
+      sourceFileName: latest.sourceFileName || null
+    };
+  }, [erpSnapshotEntries]);
+  const dailyComparison = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        name: string;
+        unit: string;
+        erpQty: number;
+        spisQty: number;
+      }
+    >();
+    erpSnapshotSummary.forEach((entry) => {
+      map.set(entry.name.toLowerCase(), {
+        name: entry.name,
+        unit: entry.unit,
+        erpQty: entry.qty,
+        spisQty: 0
+      });
+    });
+    dailySummary.forEach((entry) => {
+      const key = entry.name.toLowerCase();
+      const current = map.get(key);
+      if (current) {
+        current.spisQty = entry.qty;
+        if (!current.unit && entry.unit) {
+          current.unit = entry.unit;
+        }
+      } else {
+        map.set(key, {
+          name: entry.name,
+          unit: entry.unit,
+          erpQty: 0,
+          spisQty: entry.qty
+        });
+      }
+    });
+    return [...map.values()]
+      .map((entry) => ({
+        ...entry,
+        diffQty: entry.spisQty - entry.erpQty
+      }))
+      .sort((a, b) => collator.compare(a.name, b.name));
+  }, [dailySummary, erpSnapshotSummary]);
 
   const handleExportDaily = () => {
     if (!spisDate) return;
@@ -664,12 +936,13 @@ export default function OriginalInventoryPage() {
         name: group.name,
         unit: lastEntry?.unit ?? group.unit,
         total,
+        erpQty: erpSnapshotMap.get(group.key)?.qty ?? null,
         halls,
         lastUser: lastEntry?.user ?? '-'
       };
     });
     return list.sort((a, b) => collator.compare(a.name, b.name));
-  }, [materialGroups, warehouseNameMap, warehouseOrderMap]);
+  }, [erpSnapshotMap, materialGroups, warehouseNameMap, warehouseOrderMap]);
   const selectedGroup = expandedMaterialKey ? materialGroups.get(expandedMaterialKey) ?? null : null;
   const selectedEntries = selectedGroup
     ? [...selectedGroup.entries].sort((a, b) => b.at.localeCompare(a.at))
@@ -700,6 +973,12 @@ export default function OriginalInventoryPage() {
             className="data-[state=active]:bg-[#ff6a00] data-[state=active]:text-bg"
           >
             KARTOTEKI
+          </TabsTrigger>
+          <TabsTrigger
+            value="stany-erp"
+            className="data-[state=active]:bg-[#c49102] data-[state=active]:text-bg"
+          >
+            STANY ERP
           </TabsTrigger>
           <TabsTrigger
             value="raporty"
@@ -803,6 +1082,11 @@ export default function OriginalInventoryPage() {
                     Aktualnie spisane: {matchedExisting.total} {matchedExisting.unit}
                   </p>
                 )}
+                {matchedErpSnapshot && (
+                  <p className="mt-1 text-xs text-dim">
+                    ERP na dzien {spisDate}: {matchedErpSnapshot.qty} {matchedErpSnapshot.unit}
+                  </p>
+                )}
               </div>
               <div>
                 <label className="text-xs uppercase tracking-wide text-dim">Ilosc</label>
@@ -841,7 +1125,7 @@ export default function OriginalInventoryPage() {
           ) : (
             <Card>
               <DataTable
-                columns={['Nazwa', 'Suma', 'Jedn.', 'Hale', 'Kto']}
+                columns={['Nazwa', 'Suma', 'ERP', 'Jedn.', 'Hale', 'Kto']}
                 rows={materialGroupList.map((group) => {
                   const isActive = expandedMaterialKey === group.key;
                   return [
@@ -854,6 +1138,7 @@ export default function OriginalInventoryPage() {
                       {group.name}
                     </span>,
                     group.total,
+                    group.erpQty ?? '-',
                     group.unit,
                     group.halls || '-',
                     group.lastUser
@@ -882,6 +1167,10 @@ export default function OriginalInventoryPage() {
                             Wybrany material
                           </p>
                           <p className="text-lg font-semibold text-title">{selectedGroup.name}</p>
+                          <p className="text-xs text-dim">
+                            ERP na dzien {spisDate}: {erpSnapshotMap.get(selectedGroup.key)?.qty ?? 0}{' '}
+                            {erpSnapshotMap.get(selectedGroup.key)?.unit ?? selectedGroup.unit}
+                          </p>
                           {historyLine && (
                             <p className="text-xs text-dim">Historia: {historyLine}</p>
                           )}
@@ -1097,6 +1386,143 @@ export default function OriginalInventoryPage() {
           </Card>
         </TabsContent>
 
+        <TabsContent value="stany-erp" className="space-y-4">
+          <Card className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Stany ERP</p>
+            <p className="text-sm text-dim">
+              Wgraj dzienny snapshot stanow z ERP. Snapshot jest jeden na wybrany dzien i nadpisuje
+              poprzedni import z tego samego dnia.
+            </p>
+            {erpSnapshotMigrationRequired && (
+              <p className="text-xs text-danger">
+                Brakuje migracji bazy dla stanow ERP. Uruchom SQL z `supabase/setup_full.sql`.
+              </p>
+            )}
+            {readOnly && (
+              <p className="text-xs text-danger">
+                To konto ma tylko podglad. Import stanow ERP wymaga zapisu w module
+                `spis-oryginalow`.
+              </p>
+            )}
+            <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)_auto] md:items-end">
+              <div>
+                <label className="text-xs uppercase tracking-wide text-dim">Dzien snapshotu</label>
+                <Input
+                  type="date"
+                  value={spisDate}
+                  onChange={(event) => setSpisDate(event.target.value)}
+                  className="min-h-[46px]"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs uppercase tracking-wide text-dim">
+                  Import stanow ERP (kolumna A: nazwa, kolumna B: ilosc, kolumna C: jednostka - opcjonalnie)
+                </label>
+                <Input
+                  key={erpSnapshotImportInputKey}
+                  type="file"
+                  accept=".csv,.xls,.xlsx"
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    await handleErpSnapshotFileChange(file);
+                  }}
+                  disabled={
+                    readOnly ||
+                    erpSnapshotMigrationRequired ||
+                    erpSnapshotImportPreparing ||
+                    importErpSnapshotMutation.isPending
+                  }
+                />
+                {erpSnapshotImportFileName && (
+                  <p className="text-xs text-dim">Wybrany plik: {erpSnapshotImportFileName}</p>
+                )}
+                {erpSnapshotImportPreparing && (
+                  <p className="text-xs text-dim">Analiza pliku stanow ERP...</p>
+                )}
+                {erpSnapshotImportSummary && (
+                  <p className="text-xs text-dim">
+                    W pliku: {erpSnapshotImportSummary.parsed}. Aktualnie zapisane dla dnia {spisDate}:{' '}
+                    {erpSnapshotImportSummary.currentRows}.
+                  </p>
+                )}
+                {importErpSnapshotMutation.isPending && (
+                  <p className="text-xs text-dim">Wgrywanie snapshotu ERP...</p>
+                )}
+              </div>
+              <div className="flex items-end gap-3">
+                <Button
+                  variant="secondary"
+                  onClick={handleErpSnapshotImport}
+                  disabled={
+                    readOnly ||
+                    erpSnapshotMigrationRequired ||
+                    erpSnapshotImportPreparing ||
+                    !erpSnapshotImportFile ||
+                    importErpSnapshotMutation.isPending
+                  }
+                >
+                  {importErpSnapshotMutation.isPending ? 'Wgrywanie...' : 'Wgraj stany ERP'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={resetErpSnapshotImportState}
+                  disabled={
+                    readOnly ||
+                    !erpSnapshotImportFile ||
+                    erpSnapshotImportPreparing ||
+                    importErpSnapshotMutation.isPending
+                  }
+                >
+                  Usun wybrany plik
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => removeErpSnapshotMutation.mutate(spisDate)}
+                  disabled={
+                    readOnly ||
+                    erpSnapshotMigrationRequired ||
+                    erpSnapshotEntries.length === 0 ||
+                    removeErpSnapshotMutation.isPending
+                  }
+                >
+                  Usun wgrany plik i stany dnia
+                </Button>
+              </div>
+            </div>
+            {currentErpSnapshotMeta && (
+              <div className="rounded-xl border border-border bg-surface2 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                  Aktualnie wgrany snapshot dnia
+                </p>
+                <p className="mt-2 text-sm text-body">
+                  Plik: {currentErpSnapshotMeta.sourceFileName ?? 'brak nazwy pliku'}
+                </p>
+                <p className="text-xs text-dim">
+                  Wgrano: {new Date(currentErpSnapshotMeta.importedAt).toLocaleString('pl-PL')} przez{' '}
+                  {currentErpSnapshotMeta.importedBy}
+                </p>
+              </div>
+            )}
+          </Card>
+
+          <Card className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                Snapshot ERP dla dnia {spisDate}
+              </p>
+              <span className="text-xs text-dim">{erpSnapshotSummary.length} poz.</span>
+            </div>
+            {erpSnapshotSummary.length === 0 ? (
+              <p className="text-sm text-dim">Brak wgranych stanow ERP dla wybranego dnia.</p>
+            ) : (
+              <DataTable
+                columns={['Nazwa', 'Ilosc ERP', 'Jedn.']}
+                rows={erpSnapshotSummary.map((row) => [row.name, row.qty, row.unit])}
+              />
+            )}
+          </Card>
+        </TabsContent>
+
         <TabsContent value="raporty" className="space-y-4">
           <Card className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
@@ -1198,6 +1624,29 @@ export default function OriginalInventoryPage() {
               <DataTable
                 columns={['Material', 'Ilosc', 'Jedn.']}
                 rows={dailySummary.map((row) => [row.name, row.qty, row.unit])}
+              />
+            )}
+          </Card>
+          <Card className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+              Porownanie ERP vs Spis
+            </p>
+            {erpSnapshotMigrationRequired ? (
+              <p className="text-sm text-dim">
+                Brakuje migracji bazy dla stanow ERP. Uruchom SQL z `supabase/setup_full.sql`.
+              </p>
+            ) : dailyComparison.length === 0 ? (
+              <p className="text-sm text-dim">Brak danych ERP i spisu dla wybranego dnia.</p>
+            ) : (
+              <DataTable
+                columns={['Material', 'ERP', 'Spis', 'Roznica', 'Jedn.']}
+                rows={dailyComparison.map((row) => [
+                  row.name,
+                  row.erpQty,
+                  row.spisQty,
+                  row.diffQty,
+                  row.unit
+                ])}
               />
             )}
           </Card>

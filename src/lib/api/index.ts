@@ -23,6 +23,8 @@ import type {
   MonthlyMaterialBreakdown,
   OriginalInventoryCatalogEntry,
   OriginalInventoryCatalogImportResult,
+  OriginalInventoryErpSnapshotEntry,
+  OriginalInventoryErpSnapshotImportResult,
   OriginalInventoryEntry,
   PermissionGroup,
   PeriodReport,
@@ -570,6 +572,11 @@ export const getOriginalInventoryCatalog = async (): Promise<OriginalInventoryCa
 export const getOriginalInventoryCatalogFromErp = async (): Promise<OriginalInventoryCatalogEntry[]> =>
   appRequest('getOriginalInventoryCatalogFromErp');
 
+export const getOriginalInventoryErpSnapshot = async (
+  snapshotDate: string
+): Promise<OriginalInventoryErpSnapshotEntry[]> =>
+  appRequest('getOriginalInventoryErpSnapshot', { snapshotDate });
+
 export const addOriginalInventory = async (payload: {
   warehouseId: string;
   name: string;
@@ -624,6 +631,43 @@ export const importOriginalInventoryCatalogFile = async (
 
   return response.json() as Promise<OriginalInventoryCatalogImportResult>;
 };
+
+export const importOriginalInventoryErpSnapshotFile = async (
+  file: File,
+  snapshotDate: string
+): Promise<OriginalInventoryErpSnapshotImportResult> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('snapshotDate', snapshotDate);
+
+  const response = await fetch('/api/original-inventory-erp-snapshot/import', {
+    method: 'POST',
+    credentials: 'same-origin',
+    body: formData
+  });
+
+  if (!response.ok) {
+    let code = 'UNKNOWN';
+    try {
+      const data = await response.json();
+      if (data?.code) code = String(data.code);
+    } catch {
+      // ignore
+    }
+    if (
+      typeof window !== 'undefined' &&
+      (code === 'UNAUTHORIZED' || code === 'SESSION_EXPIRED')
+    ) {
+      window.dispatchEvent(new CustomEvent('apka:auth-expired'));
+    }
+    throw new Error(code);
+  }
+
+  return response.json() as Promise<OriginalInventoryErpSnapshotImportResult>;
+};
+
+export const removeOriginalInventoryErpSnapshot = async (snapshotDate: string): Promise<void> =>
+  appRequest('removeOriginalInventoryErpSnapshot', { snapshotDate });
 
 export const updateOriginalInventory = async (payload: {
   id: string;
