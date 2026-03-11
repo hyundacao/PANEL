@@ -27,6 +27,7 @@ const TAB_STORAGE_KEY = 'spis-oryginalow-tab';
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const exportCatalogCollator = new Intl.Collator('pl', { sensitivity: 'base', numeric: true });
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
+const ERP_ORIGINALS_PROXY_NOT_CONFIGURED = 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED';
 const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
   [
     'Source: ERP proxy API (aktywny)',
@@ -36,6 +37,9 @@ const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
     'ENV: ERP_ORIGINALS_PROXY_TIMEOUT_MS (opcjonalny, domyslnie 10000 ms)',
     'Response: [] lub { items: [] }, pola: id/name/unit/createdAt'
   ].join('\n');
+
+const isErpOriginalsSourceError = (error: unknown) =>
+  error instanceof Error && error.message === ERP_ORIGINALS_PROXY_NOT_CONFIGURED;
 
 const getInitialTabValue = (): 'spis' | 'kartoteki' | 'raporty' => {
   if (typeof window === 'undefined') return 'spis';
@@ -172,17 +176,33 @@ export default function OriginalInventoryPage() {
     queryKey: ['spis-oryginalow'],
     queryFn: getOriginalInventory
   });
-  const { data: erpCatalog = [], error: catalogError } = useQuery({
+  const { data: erpCatalogState = { items: [], sourceUnavailable: false }, error: catalogError } = useQuery({
     queryKey: ['spis-oryginalow-catalog'],
-    queryFn: getOriginalInventoryCatalogFromErp
+    queryFn: async () => {
+      try {
+        return {
+          items: await getOriginalInventoryCatalogFromErp(),
+          sourceUnavailable: false
+        };
+      } catch (error) {
+        if (isErpOriginalsSourceError(error)) {
+          return {
+            items: [],
+            sourceUnavailable: true
+          };
+        }
+        throw error;
+      }
+    },
+    retry: false
   });
   const { data: localCatalog = [] } = useQuery({
     queryKey: ['spis-oryginalow-catalog-local'],
     queryFn: getOriginalInventoryCatalog
   });
   const catalog = useMemo(() => {
-    const merged = new Map<string, (typeof erpCatalog)[number]>();
-    erpCatalog.forEach((item) => {
+    const merged = new Map<string, (typeof localCatalog)[number]>();
+    erpCatalogState.items.forEach((item) => {
       merged.set(item.name.toLowerCase(), item);
     });
     localCatalog.forEach((item) => {
@@ -192,8 +212,12 @@ export default function OriginalInventoryPage() {
       }
     });
     return [...merged.values()].sort((a, b) => collator.compare(a.name, b.name));
-  }, [erpCatalog, localCatalog]);
-  const catalogErrorCode = catalogError instanceof Error ? catalogError.message : '';
+  }, [erpCatalogState.items, localCatalog]);
+  const catalogErrorCode =
+    catalogError instanceof Error && !isErpOriginalsSourceError(catalogError)
+      ? catalogError.message
+      : '';
+  const erpSourceUnavailable = erpCatalogState.sourceUnavailable;
   const effectiveSelectedWarehouseId = useMemo(() => {
     if (selectedWarehouseId && warehouses.some((warehouse) => warehouse.id === selectedWarehouseId)) {
       return selectedWarehouseId;
@@ -930,6 +954,12 @@ export default function OriginalInventoryPage() {
               Kartoteki sa pobierane z ERP, ale mozesz tez recznie dograc brakujace pozycje
               z pliku CSV/XLS/XLSX.
             </p>
+            {erpSourceUnavailable && (
+              <p className="text-xs text-dim">
+                Zrodlo ERP nie jest skonfigurowane. Import lokalny i lista recznie wgranych
+                kartotek nadal dzialaja.
+              </p>
+            )}
             {catalogErrorCode && (
               <p className="text-xs text-danger">
                 Blad zrodla ERP: {catalogErrorCode}
