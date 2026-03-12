@@ -2958,7 +2958,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         fetchLocations()
       ]);
       const todayKey = getTodayKey();
-      const activeLocations = getActiveStatsLocations(warehouses, locations);
+      const activeLocations = getActiveCompanyLocations(warehouses, locations);
       const latestEntriesByLocation = await fetchLatestEntriesByLocation(
         activeLocations.map((loc) => loc.id),
         todayKey
