@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { Cell } from 'exceljs';
 import {
   addOriginalInventory,
   getOriginalInventory,
   getOriginalInventoryCatalog,
   getOriginalInventoryCatalogFromErp,
   getOriginalInventoryErpSnapshot,
+  getOriginalInventoryErpSnapshotsByDates,
   importOriginalInventoryCatalogFile,
   importOriginalInventoryErpSnapshotFile,
   getWarehouses,
@@ -91,20 +93,63 @@ const buildEntryTimestamp = (dateKey: string) => {
 
 const getEntryDateKey = (value: string) => getLocalDateValue(new Date(value));
 
-const toCsv = (rows: string[][]) =>
-  rows
-    .map((row) =>
-      row
-        .map((cell) => {
-          const safe = String(cell ?? '');
-          if (safe.includes('"') || safe.includes(';') || safe.includes('\n')) {
-            return `"${safe.replace(/"/g, '""')}"`;
-          }
-          return safe;
-        })
-        .join(';')
-    )
-    .join('\n');
+const formatCompactDate = (dateKey: string) => {
+  if (!dateKey) return '-';
+  const [year, month, day] = dateKey.split('-').map(Number);
+  if (!year || !month || !day) return dateKey;
+  const value = new Date(year, month - 1, day);
+  return value.toLocaleDateString('pl-PL', {
+    day: '2-digit',
+    month: '2-digit'
+  });
+};
+
+const formatSignedQty = (value: number | null | undefined) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return 'brak ERP';
+  const absValue = Math.abs(value);
+  const label = Number.isInteger(absValue)
+    ? absValue.toLocaleString('pl-PL')
+    : absValue.toLocaleString('pl-PL', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 3
+      });
+  if (value === 0) return '0';
+  return `${value > 0 ? '+' : '-'}${label}`;
+};
+
+const formatQty = (value: number | null | undefined) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+  return Number.isInteger(value)
+    ? value.toLocaleString('pl-PL')
+    : value.toLocaleString('pl-PL', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 3
+      });
+};
+
+const formatExcelQty = (value: number | null | undefined) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(3).replace(/\.?0+$/, '');
+};
+
+const formatExcelSignedQty = (value: number | null | undefined) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return 'brak ERP';
+  if (value === 0) return '0';
+  return `${value > 0 ? '+' : '-'}${formatExcelQty(Math.abs(value))}`;
+};
+
+const formatDiffHistoryCell = (point?: { dateKey: string; diffQty: number | null } | null) => {
+  if (!point) return 'brak danych';
+  if (point.diffQty === null) return `${formatCompactDate(point.dateKey)}: brak danych`;
+  return `${formatCompactDate(point.dateKey)}: ${formatSignedQty(point.diffQty)}`;
+};
+
+const formatExcelDiffHistoryCell = (point?: { dateKey: string; diffQty: number | null } | null) => {
+  if (!point) return 'brak danych';
+  if (point.diffQty === null) return `${formatCompactDate(point.dateKey)}: brak danych`;
+  return `${formatCompactDate(point.dateKey)}: ${formatExcelSignedQty(point.diffQty)}`;
+};
 
 const normalizeImportCell = (value: unknown) =>
   String(value ?? '')
@@ -263,7 +308,7 @@ export default function OriginalInventoryPage() {
     queryFn: getOriginalInventory
   });
   const { data: erpCatalogState = { items: [], sourceUnavailable: false }, error: catalogError } = useQuery({
-    queryKey: ['spis-oryginalow-catalog'],
+    queryKey: ['spis-oryginalow-catalog-erp'],
     queryFn: async () => {
       try {
         return {
@@ -309,17 +354,19 @@ export default function OriginalInventoryPage() {
   });
   const catalog = useMemo(() => {
     const merged = new Map<string, (typeof localCatalog)[number]>();
-    erpCatalogState.items.forEach((item) => {
+    const erpCatalogItems = Array.isArray(erpCatalogState?.items) ? erpCatalogState.items : [];
+    const localCatalogItems = Array.isArray(localCatalog) ? localCatalog : [];
+    erpCatalogItems.forEach((item) => {
       merged.set(item.name.toLowerCase(), item);
     });
-    localCatalog.forEach((item) => {
+    localCatalogItems.forEach((item) => {
       const key = item.name.toLowerCase();
       if (!merged.has(key)) {
         merged.set(key, item);
       }
     });
     return [...merged.values()].sort((a, b) => collator.compare(a.name, b.name));
-  }, [erpCatalogState.items, localCatalog]);
+  }, [erpCatalogState, localCatalog]);
   const catalogErrorCode =
     catalogError instanceof Error && !isErpOriginalsSourceError(catalogError)
       ? catalogError.message
@@ -328,9 +375,22 @@ export default function OriginalInventoryPage() {
   const erpSnapshotEntries = erpSnapshotState.items;
   const erpSnapshotMigrationRequired = erpSnapshotState.migrationRequired;
   const erpSnapshotMap = useMemo(() => {
-    const map = new Map<string, OriginalInventoryErpSnapshotEntry>();
+    const map = new Map<string, { name: string; unit: string; qty: number }>();
     erpSnapshotEntries.forEach((item) => {
-      map.set(item.name.toLowerCase(), item);
+      const key = normalizeCatalogNameKey(item.name);
+      const current = map.get(key);
+      if (current) {
+        current.qty += item.qty;
+        if (!current.unit && item.unit) {
+          current.unit = item.unit;
+        }
+      } else {
+        map.set(key, {
+          name: item.name,
+          unit: item.unit,
+          qty: item.qty
+        });
+      }
     });
     return map;
   }, [erpSnapshotEntries]);
@@ -813,14 +873,15 @@ export default function OriginalInventoryPage() {
       });
   }, [entriesForDate, spisDate]);
   const dailySummary = useMemo(() => {
-    const map = new Map<string, { name: string; unit: string; qty: number }>();
+    const map = new Map<string, { key: string; name: string; unit: string; qty: number }>();
     dailyEntries.forEach((entry) => {
-      const key = `${entry.name.toLowerCase()}|${entry.unit.toLowerCase()}`;
+      const materialKey = normalizeCatalogNameKey(entry.name);
+      const key = `${materialKey}|${entry.unit.toLowerCase()}`;
       const current = map.get(key);
       if (current) {
         current.qty += entry.qty;
       } else {
-        map.set(key, { name: entry.name, unit: entry.unit, qty: entry.qty });
+        map.set(key, { key: materialKey, name: entry.name, unit: entry.unit, qty: entry.qty });
       }
     });
     return [...map.values()].sort((a, b) => {
@@ -829,19 +890,125 @@ export default function OriginalInventoryPage() {
       return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
     });
   }, [dailyEntries]);
+  const inventoryHistoryByMaterial = useMemo(() => {
+    if (!spisDate) return new Map<string, Array<{ dateKey: string; name: string; unit: string; qty: number }>>();
+    const grouped = new Map<
+      string,
+      Map<string, { dateKey: string; name: string; unit: string; qty: number }>
+    >();
+    entries.forEach((entry) => {
+      if (dailyReportExcludePatterns.some((pattern) => pattern.test(entry.name))) return;
+      const dateKey = getEntryDateKey(entry.at);
+      if (dateKey > spisDate) return;
+      const materialKey = normalizeCatalogNameKey(entry.name);
+      let datesMap = grouped.get(materialKey);
+      if (!datesMap) {
+        datesMap = new Map();
+        grouped.set(materialKey, datesMap);
+      }
+      const current = datesMap.get(dateKey);
+      if (current) {
+        current.qty += entry.qty;
+        if (!current.unit && entry.unit) {
+          current.unit = entry.unit;
+        }
+        return;
+      }
+      datesMap.set(dateKey, {
+        dateKey,
+        name: entry.name,
+        unit: entry.unit,
+        qty: entry.qty
+      });
+    });
+    const result = new Map<string, Array<{ dateKey: string; name: string; unit: string; qty: number }>>();
+    grouped.forEach((datesMap, materialKey) => {
+      result.set(
+        materialKey,
+        [...datesMap.values()].sort((a, b) => b.dateKey.localeCompare(a.dateKey))
+      );
+    });
+    return result;
+  }, [entries, spisDate]);
+  const reportPreviousSnapshotDates = useMemo(() => {
+    const dates = new Set<string>();
+    dailySummary.forEach((entry) => {
+      (inventoryHistoryByMaterial.get(entry.key) ?? [])
+        .slice(1, 5)
+        .forEach((point) => dates.add(point.dateKey));
+    });
+    return [...dates].sort((a, b) => b.localeCompare(a));
+  }, [dailySummary, inventoryHistoryByMaterial]);
+  const {
+    data: historicalErpSnapshotState = {
+      items: [] as OriginalInventoryErpSnapshotEntry[],
+      migrationRequired: false
+    }
+  } = useQuery({
+    queryKey: ['spis-oryginalow-erp-snapshot-history', reportPreviousSnapshotDates],
+    queryFn: async () => {
+      try {
+        return {
+          items: await getOriginalInventoryErpSnapshotsByDates(reportPreviousSnapshotDates),
+          migrationRequired: false
+        };
+      } catch (error) {
+        if (isErpSnapshotMigrationError(error)) {
+          return {
+            items: [] as OriginalInventoryErpSnapshotEntry[],
+            migrationRequired: true
+          };
+        }
+        throw error;
+      }
+    },
+    enabled: reportPreviousSnapshotDates.length > 0,
+    retry: false
+  });
   const erpSnapshotSummary = useMemo(() => {
-    const map = new Map<string, { name: string; unit: string; qty: number }>();
+    const map = new Map<string, { key: string; name: string; unit: string; qty: number }>();
     erpSnapshotEntries.forEach((entry) => {
-      const key = entry.name.toLowerCase();
+      const key = normalizeCatalogNameKey(entry.name);
       const current = map.get(key);
       if (current) {
         current.qty += entry.qty;
       } else {
-        map.set(key, { name: entry.name, unit: entry.unit, qty: entry.qty });
+        map.set(key, { key, name: entry.name, unit: entry.unit, qty: entry.qty });
       }
     });
     return [...map.values()].sort((a, b) => collator.compare(a.name, b.name));
   }, [erpSnapshotEntries]);
+  const historicalErpSnapshotEntries = historicalErpSnapshotState.items;
+  const reportErpSnapshotMigrationRequired =
+    erpSnapshotMigrationRequired || historicalErpSnapshotState.migrationRequired;
+  const erpSnapshotByDateAndMaterial = useMemo(() => {
+    const datesMap = new Map<string, Map<string, { name: string; unit: string; qty: number }>>();
+    const addEntry = (entry: OriginalInventoryErpSnapshotEntry) => {
+      const dateKey = entry.snapshotDate;
+      let materialMap = datesMap.get(dateKey);
+      if (!materialMap) {
+        materialMap = new Map();
+        datesMap.set(dateKey, materialMap);
+      }
+      const key = normalizeCatalogNameKey(entry.name);
+      const current = materialMap.get(key);
+      if (current) {
+        current.qty += entry.qty;
+        if (!current.unit && entry.unit) {
+          current.unit = entry.unit;
+        }
+      } else {
+        materialMap.set(key, {
+          name: entry.name,
+          unit: entry.unit,
+          qty: entry.qty
+        });
+      }
+    };
+    erpSnapshotEntries.forEach(addEntry);
+    historicalErpSnapshotEntries.forEach(addEntry);
+    return datesMap;
+  }, [erpSnapshotEntries, historicalErpSnapshotEntries]);
   const currentErpSnapshotMeta = useMemo(() => {
     if (erpSnapshotEntries.length === 0) return null;
     const latest = [...erpSnapshotEntries].sort((a, b) => b.importedAt.localeCompare(a.importedAt))[0];
@@ -852,68 +1019,280 @@ export default function OriginalInventoryPage() {
       sourceFileName: latest.sourceFileName || null
     };
   }, [erpSnapshotEntries]);
-  const dailyComparison = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        name: string;
-        unit: string;
-        erpQty: number;
-        spisQty: number;
-      }
-    >();
-    erpSnapshotSummary.forEach((entry) => {
-      map.set(entry.name.toLowerCase(), {
-        name: entry.name,
-        unit: entry.unit,
-        erpQty: entry.qty,
-        spisQty: 0
-      });
-    });
-    dailySummary.forEach((entry) => {
-      const key = entry.name.toLowerCase();
-      const current = map.get(key);
-      if (current) {
-        current.spisQty = entry.qty;
-        if (!current.unit && entry.unit) {
-          current.unit = entry.unit;
-        }
-      } else {
-        map.set(key, {
+  const reportRows = useMemo(() => {
+    return [...dailySummary]
+      .map((entry) => {
+        const recentComparisons = (inventoryHistoryByMaterial.get(entry.key) ?? [])
+          .slice(0, 6)
+          .map((point) => {
+            const erpPoint = erpSnapshotByDateAndMaterial.get(point.dateKey)?.get(entry.key) ?? null;
+            const erpQty = erpPoint?.qty ?? null;
+            return {
+              dateKey: point.dateKey,
+              spisQty: point.qty,
+              erpQty,
+              diffQty: erpQty === null ? null : point.qty - erpQty
+            };
+          });
+        const currentComparison = recentComparisons[0] ?? {
+          dateKey: spisDate,
+          spisQty: entry.qty,
+          erpQty: erpSnapshotMap.get(entry.key)?.qty ?? null,
+          diffQty:
+            erpSnapshotMap.get(entry.key)?.qty === undefined
+              ? null
+              : entry.qty - (erpSnapshotMap.get(entry.key)?.qty ?? 0)
+        };
+        const previousDiffs = Array.from({ length: 5 }, (_, index) => recentComparisons[index + 1] ?? null);
+        return {
+          key: entry.key,
           name: entry.name,
           unit: entry.unit,
-          erpQty: 0,
-          spisQty: entry.qty
-        });
-      }
-    });
-    return [...map.values()]
-      .map((entry) => ({
-        ...entry,
-        diffQty: entry.spisQty - entry.erpQty
-      }))
-      .sort((a, b) => collator.compare(a.name, b.name));
-  }, [dailySummary, erpSnapshotSummary]);
+          currentErpQty: currentComparison.erpQty,
+          currentSpisQty: currentComparison.spisQty,
+          currentDiffQty: currentComparison.diffQty,
+          previousDiffs
+        };
+      })
+      .sort((a, b) => {
+        const nameCompare = exportCatalogCollator.compare(a.name.trim(), b.name.trim());
+        if (nameCompare !== 0) return nameCompare;
+        return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
+      });
+  }, [dailySummary, inventoryHistoryByMaterial, erpSnapshotByDateAndMaterial, erpSnapshotMap, spisDate]);
+  const dailyComparison = useMemo(
+    () =>
+      reportRows.map((row) => ({
+        name: row.name,
+        unit: row.unit,
+        erpQty: row.currentErpQty,
+        spisQty: row.currentSpisQty,
+        diffQty: row.currentDiffQty
+      })),
+    [reportRows]
+  );
 
-  const handleExportDaily = () => {
-    if (!spisDate) return;
-    const sortedForExport = [...dailySummary].sort((a, b) => {
-      const nameCompare = exportCatalogCollator.compare(a.name.trim(), b.name.trim());
-      if (nameCompare !== 0) return nameCompare;
-      return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
-    });
-    const rows = [
-      ['Dzien', 'Material', 'Ilosc', 'Jedn.'],
-      ...sortedForExport.map((row) => [spisDate, row.name, String(row.qty), row.unit])
-    ];
-    const csv = toCsv(rows);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `spis-oryginalow-${spisDate}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+  const handleExportDaily = async () => {
+    if (!spisDate || reportRows.length === 0) return;
+    try {
+      const ExcelJSModule = await import('exceljs');
+      const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
+      const generatedAt = new Date().toLocaleString('pl-PL');
+      const fitWidth = (
+        values: string[],
+        minWidth: number,
+        maxWidth: number,
+        multiplier = 1,
+        padding = 2
+      ) => {
+        const longest = values.reduce((max, value) => Math.max(max, value.length), 0);
+        return Math.min(maxWidth, Math.max(minWidth, Math.ceil(longest * multiplier) + padding));
+      };
+      const columnWidths = {
+        name: fitWidth(
+          ['Material', ...reportRows.map((row) => row.name)],
+          34,
+          90,
+          1.18,
+          4
+        ),
+        unit: fitWidth(
+          ['Jedn.', ...reportRows.map((row) => row.unit)],
+          8,
+          12
+        ),
+        erpToday: fitWidth(
+          ['ERP dziś', ...reportRows.map((row) => formatExcelQty(row.currentErpQty))],
+          12,
+          18
+        ),
+        spisToday: fitWidth(
+          ['Spis dziś', ...reportRows.map((row) => formatExcelQty(row.currentSpisQty))],
+          12,
+          18
+        ),
+        diffToday: fitWidth(
+          ['Różnica dziś', ...reportRows.map((row) => formatExcelSignedQty(row.currentDiffQty))],
+          14,
+          20
+        ),
+        diffPrev1: fitWidth(
+          ['Różnica -1', ...reportRows.map((row) => formatExcelDiffHistoryCell(row.previousDiffs[0]))],
+          18,
+          24
+        ),
+        diffPrev2: fitWidth(
+          ['Różnica -2', ...reportRows.map((row) => formatExcelDiffHistoryCell(row.previousDiffs[1]))],
+          18,
+          24
+        ),
+        diffPrev3: fitWidth(
+          ['Różnica -3', ...reportRows.map((row) => formatExcelDiffHistoryCell(row.previousDiffs[2]))],
+          18,
+          24
+        ),
+        diffPrev4: fitWidth(
+          ['Różnica -4', ...reportRows.map((row) => formatExcelDiffHistoryCell(row.previousDiffs[3]))],
+          18,
+          24
+        ),
+        diffPrev5: fitWidth(
+          ['Różnica -5', ...reportRows.map((row) => formatExcelDiffHistoryCell(row.previousDiffs[4]))],
+          18,
+          24
+        )
+      };
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'APKA DLA KAMILA';
+      workbook.created = new Date();
+
+      const worksheet = workbook.addWorksheet('Raport', {
+        views: [{ state: 'frozen', ySplit: 4 }]
+      });
+
+      worksheet.columns = [
+        { header: 'Material', key: 'name', width: columnWidths.name },
+        { header: 'Jedn.', key: 'unit', width: columnWidths.unit },
+        { header: 'ERP dziś', key: 'erpToday', width: columnWidths.erpToday },
+        { header: 'Spis dziś', key: 'spisToday', width: columnWidths.spisToday },
+        { header: 'Różnica dziś', key: 'diffToday', width: columnWidths.diffToday },
+        { header: 'Różnica -1', key: 'diffPrev1', width: columnWidths.diffPrev1 },
+        { header: 'Różnica -2', key: 'diffPrev2', width: columnWidths.diffPrev2 },
+        { header: 'Różnica -3', key: 'diffPrev3', width: columnWidths.diffPrev3 },
+        { header: 'Różnica -4', key: 'diffPrev4', width: columnWidths.diffPrev4 },
+        { header: 'Różnica -5', key: 'diffPrev5', width: columnWidths.diffPrev5 }
+      ];
+
+      worksheet.mergeCells('A1:J1');
+      worksheet.mergeCells('A2:D2');
+      worksheet.mergeCells('E2:G2');
+      worksheet.mergeCells('H2:J2');
+      worksheet.getCell('A1').value = 'Raport kontroli rozjazdów - spis oryginałów';
+      worksheet.getCell('A2').value = `Dzień raportu: ${spisDate}`;
+      worksheet.getCell('E2').value = currentErpSnapshotMeta
+        ? `ERP wgrane: ${new Date(currentErpSnapshotMeta.importedAt).toLocaleString('pl-PL')}`
+        : 'ERP wgrane: brak';
+      worksheet.getCell('H2').value = `Wygenerowano: ${generatedAt}`;
+
+      worksheet.getRow(1).height = 26;
+      worksheet.getRow(2).height = 22;
+      worksheet.getRow(4).values = [
+        'Material',
+        'Jedn.',
+        'ERP dziś',
+        'Spis dziś',
+        'Różnica dziś',
+        'Różnica -1',
+        'Różnica -2',
+        'Różnica -3',
+        'Różnica -4',
+        'Różnica -5'
+      ];
+      worksheet.autoFilter = 'A4:J4';
+
+      const border = {
+        top: { style: 'thin', color: { argb: '33FFFFFF' } },
+        left: { style: 'thin', color: { argb: '22FFFFFF' } },
+        bottom: { style: 'thin', color: { argb: '33FFFFFF' } },
+        right: { style: 'thin', color: { argb: '22FFFFFF' } }
+      } as const;
+
+      const applyDarkCell = (cell: Cell, fillColor: string) => {
+        cell.font = { color: { argb: 'FFFFFBF7' }, size: 11, name: 'Segoe UI' };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillColor } };
+        cell.border = border;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      };
+
+      const titleCell = worksheet.getCell('A1');
+      titleCell.font = { bold: true, size: 16, color: { argb: 'FFFFF8F1' }, name: 'Segoe UI Semibold' };
+      titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF121212' } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+      ['A2', 'E2', 'H2'].forEach((cellRef) => {
+        const cell = worksheet.getCell(cellRef);
+        cell.font = { bold: true, size: 10, color: { argb: 'FFFFC58A' }, name: 'Segoe UI Semibold' };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1A1A1A' } };
+        cell.alignment = { vertical: 'middle' };
+      });
+
+      worksheet.getRow(4).eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FF111111' }, size: 11, name: 'Segoe UI Semibold' };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF8C32' } };
+        cell.border = border;
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      });
+
+      reportRows.forEach((row, rowIndex) => {
+        const excelRow = worksheet.addRow({
+          name: row.name,
+          unit: row.unit,
+          erpToday: row.currentErpQty === null ? 'brak ERP' : formatExcelQty(row.currentErpQty),
+          spisToday: formatExcelQty(row.currentSpisQty),
+          diffToday: formatExcelSignedQty(row.currentDiffQty),
+          diffPrev1: formatExcelDiffHistoryCell(row.previousDiffs[0]),
+          diffPrev2: formatExcelDiffHistoryCell(row.previousDiffs[1]),
+          diffPrev3: formatExcelDiffHistoryCell(row.previousDiffs[2]),
+          diffPrev4: formatExcelDiffHistoryCell(row.previousDiffs[3]),
+          diffPrev5: formatExcelDiffHistoryCell(row.previousDiffs[4])
+        });
+        excelRow.height = 26;
+        const baseFill = rowIndex % 2 === 0 ? 'FF111111' : 'FF1A1A1A';
+        excelRow.eachCell((cell, columnNumber) => {
+          applyDarkCell(cell, baseFill);
+          if (columnNumber === 1) {
+            cell.font = {
+              color: { argb: 'FFFFC58A' },
+              size: 11,
+              bold: true,
+              name: 'Segoe UI Semibold'
+            };
+            cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          }
+          if ([3, 4].includes(columnNumber)) {
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          }
+          if (columnNumber === 5) {
+            cell.alignment = { horizontal: 'right', vertical: 'middle' };
+          }
+          if (columnNumber >= 6 && columnNumber <= 10) {
+            cell.alignment = { wrapText: true, vertical: 'middle' };
+            cell.font = { color: { argb: 'FFF7ED' }, size: 10, name: 'Segoe UI' };
+          }
+        });
+
+        const diffTodayCell = excelRow.getCell(5);
+
+        if (row.currentDiffQty !== null && Number.isFinite(row.currentDiffQty)) {
+          diffTodayCell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: {
+              argb:
+                row.currentDiffQty === 0
+                  ? 'FF173A2A'
+                  : Math.abs(row.currentDiffQty) >= 10
+                    ? 'FF7A2600'
+                    : 'FF4E1B00'
+            }
+          };
+          diffTodayCell.font = { color: { argb: 'FFFFF4EA' }, bold: true, name: 'Segoe UI Semibold' };
+        }
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `spis-oryginalow-raport-${spisDate}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ title: 'Nie udalo sie wyeksportowac raportu XLSX.', tone: 'error' });
+    }
   };
 
   const materialGroupList = useMemo(() => {
@@ -1596,11 +1975,15 @@ export default function OriginalInventoryPage() {
           </Card>
           <Card className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              Raport dzienny
+              Raport kontroli rozjazdów
+            </p>
+            <p className="text-sm text-dim">
+              Raport obejmuje tylko pozycje spisane w wybranym dniu i pokazuje rozjazd na tle
+              5 poprzednich różnic tej samej pozycji.
             </p>
             <div className="grid gap-3 md:grid-cols-3 md:items-end">
               <div>
-                <label className="text-xs uppercase tracking-wide text-dim">Dzien</label>
+                <label className="text-xs uppercase tracking-wide text-dim">Dzień</label>
                 <Input
                   type="date"
                   value={spisDate}
@@ -1612,39 +1995,65 @@ export default function OriginalInventoryPage() {
                 <Button
                   variant="secondary"
                   onClick={handleExportDaily}
-                  disabled={dailySummary.length === 0}
+                  disabled={reportRows.length === 0}
                 >
-                  Eksportuj do Excel (CSV)
+                  Eksportuj do Excel (XLSX)
                 </Button>
               </div>
             </div>
-            {dailySummary.length === 0 ? (
-              <p className="text-sm text-dim">Brak wpisow dla wybranego dnia.</p>
+            {reportErpSnapshotMigrationRequired ? (
+              <p className="text-sm text-dim">
+                Brakuje migracji bazy dla stanów ERP. Uruchom SQL z `supabase/setup_full.sql`.
+              </p>
+            ) : reportRows.length === 0 ? (
+              <p className="text-sm text-dim">Brak wpisów dla wybranego dnia.</p>
             ) : (
               <DataTable
-                columns={['Material', 'Ilosc', 'Jedn.']}
-                rows={dailySummary.map((row) => [row.name, row.qty, row.unit])}
+                columns={[
+                  'Material',
+                  'ERP dziś',
+                  'Spis dziś',
+                  'Różnica dziś',
+                  'Różnica -1',
+                  'Różnica -2',
+                  'Różnica -3',
+                  'Różnica -4',
+                  'Różnica -5',
+                  'Jedn.'
+                ]}
+                rows={reportRows.map((row) => [
+                  row.name,
+                  formatQty(row.currentErpQty),
+                  formatQty(row.currentSpisQty),
+                  formatSignedQty(row.currentDiffQty),
+                  formatDiffHistoryCell(row.previousDiffs[0]),
+                  formatDiffHistoryCell(row.previousDiffs[1]),
+                  formatDiffHistoryCell(row.previousDiffs[2]),
+                  formatDiffHistoryCell(row.previousDiffs[3]),
+                  formatDiffHistoryCell(row.previousDiffs[4]),
+                  row.unit
+                ])}
               />
             )}
           </Card>
           <Card className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-              Porownanie ERP vs Spis
+              Porównanie bieżące ERP vs Spis
             </p>
-            {erpSnapshotMigrationRequired ? (
+            {reportErpSnapshotMigrationRequired ? (
               <p className="text-sm text-dim">
-                Brakuje migracji bazy dla stanow ERP. Uruchom SQL z `supabase/setup_full.sql`.
+                Brakuje migracji bazy dla stanów ERP. Uruchom SQL z `supabase/setup_full.sql`.
               </p>
             ) : dailyComparison.length === 0 ? (
               <p className="text-sm text-dim">Brak danych ERP i spisu dla wybranego dnia.</p>
             ) : (
               <DataTable
-                columns={['Material', 'ERP', 'Spis', 'Roznica', 'Jedn.']}
+                columns={['Material', 'ERP', 'Spis', 'Różnica', 'Jedn.']}
                 rows={dailyComparison.map((row) => [
                   row.name,
-                  row.erpQty,
-                  row.spisQty,
-                  row.diffQty,
+                  formatQty(row.erpQty),
+                  formatQty(row.spisQty),
+                  formatSignedQty(row.diffQty),
                   row.unit
                 ])}
               />

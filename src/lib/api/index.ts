@@ -577,6 +577,11 @@ export const getOriginalInventoryErpSnapshot = async (
 ): Promise<OriginalInventoryErpSnapshotEntry[]> =>
   appRequest('getOriginalInventoryErpSnapshot', { snapshotDate });
 
+export const getOriginalInventoryErpSnapshotsByDates = async (
+  snapshotDates: string[]
+): Promise<OriginalInventoryErpSnapshotEntry[]> =>
+  appRequest('getOriginalInventoryErpSnapshotsByDates', { snapshotDates });
+
 export const addOriginalInventory = async (payload: {
   warehouseId: string;
   name: string;

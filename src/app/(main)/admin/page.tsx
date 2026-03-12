@@ -405,7 +405,7 @@ export default function AdminPage() {
     queryFn: getCatalogs
   });
   const { data: originalCatalogData } = useQuery({
-    queryKey: ['spis-oryginalow-catalog'],
+    queryKey: ['spis-oryginalow-catalog-local'],
     queryFn: getOriginalInventoryCatalog
   });
   const { data: locationsData } = useQuery({

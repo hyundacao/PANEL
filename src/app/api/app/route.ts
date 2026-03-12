@@ -810,6 +810,9 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'getOriginalInventoryErpSnapshot':
       requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
+    case 'getOriginalInventoryErpSnapshotsByDates':
+      requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      return;
     case 'addOriginalInventory':
       requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
@@ -1610,6 +1613,31 @@ const fetchOriginalInventoryErpSnapshot = async (snapshotDate: string) => {
     .from('original_inventory_erp_snapshots')
     .select('*')
     .eq('snapshot_date', snapshotDate)
+    .order('name', { ascending: true });
+  if (error) {
+    if (isMissingOriginalInventoryErpSnapshotsTableError(error)) {
+      throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
+    }
+    throw error;
+  }
+  return (data ?? []).map(mapOriginalInventoryErpSnapshotEntry);
+};
+
+const fetchOriginalInventoryErpSnapshotsByDates = async (snapshotDates: string[]) => {
+  if (snapshotDates.length === 0) return [];
+  const uniqueDates = Array.from(
+    new Set(
+      snapshotDates
+        .map((value) => String(value ?? '').trim())
+        .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+    )
+  );
+  if (uniqueDates.length === 0) return [];
+  const { data, error } = await supabaseAdmin
+    .from('original_inventory_erp_snapshots')
+    .select('*')
+    .in('snapshot_date', uniqueDates)
+    .order('snapshot_date', { ascending: false })
     .order('name', { ascending: true });
   if (error) {
     if (isMissingOriginalInventoryErpSnapshotsTableError(error)) {
@@ -5104,6 +5132,10 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const snapshotDate = String(payload?.snapshotDate ?? '').trim();
       if (!snapshotDate) throw new Error('DATE_REQUIRED');
       return fetchOriginalInventoryErpSnapshot(snapshotDate);
+    }
+    case 'getOriginalInventoryErpSnapshotsByDates': {
+      const snapshotDates = Array.isArray(payload?.snapshotDates) ? payload.snapshotDates : [];
+      return fetchOriginalInventoryErpSnapshotsByDates(snapshotDates);
     }
     case 'addOriginalInventory': {
       const warehouseId = String(payload?.warehouseId ?? '').trim();

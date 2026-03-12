@@ -115,7 +115,7 @@ export default function DryersPage() {
     queryFn: getCatalog
   });
   const { data: originalCatalog = [] } = useQuery({
-    queryKey: ['spis-oryginalow-catalog'],
+    queryKey: ['spis-oryginalow-catalog-local'],
     queryFn: getOriginalInventoryCatalog
   });
 
@@ -127,15 +127,21 @@ export default function DryersPage() {
   const [appOrigin, setAppOrigin] = useState(FIXED_QR_APP_ORIGIN);
   const [expandedQrDryerId, setExpandedQrDryerId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'assign' | 'qr'>('assign');
+  const dryersList = useMemo(() => (Array.isArray(dryers) ? dryers : []), [dryers]);
+  const materialsList = useMemo(() => (Array.isArray(materials) ? materials : []), [materials]);
+  const originalsList = useMemo(
+    () => (Array.isArray(originalCatalog) ? originalCatalog : []),
+    [originalCatalog]
+  );
 
   const sortedDryers = useMemo(
-    () => [...dryers].sort(compareDryersForDisplay),
-    [dryers]
+    () => [...dryersList].sort(compareDryersForDisplay),
+    [dryersList]
   );
-  const sortedMaterials = useMemo(() => [...materials].sort(compareByName), [materials]);
+  const sortedMaterials = useMemo(() => [...materialsList].sort(compareByName), [materialsList]);
   const sortedOriginals = useMemo(
-    () => [...originalCatalog].sort((a, b) => collator.compare(a.name, b.name)),
-    [originalCatalog]
+    () => [...originalsList].sort((a, b) => collator.compare(a.name, b.name)),
+    [originalsList]
   );
   const allAssignableMaterials = useMemo<AssignableMaterial[]>(() => {
     const list: AssignableMaterial[] = [];
@@ -351,7 +357,7 @@ export default function DryersPage() {
   const addOriginalMutation = useMutation({
     mutationFn: addOriginalInventoryCatalog,
     onSuccess: (entry) => {
-      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-local'] });
       setAssignMaterialId(entry.id);
       setMaterialSearch(entry.name);
       setNewMaterialName('');
