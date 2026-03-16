@@ -176,7 +176,8 @@ export type OriginalInventoryErpSnapshotEntry = {
   id: string;
   snapshotDate: string;
   name: string;
-  qty: number;
+  realQty: number;
+  availableQty: number;
   unit: string;
   importedAt: string;
   importedBy: string;

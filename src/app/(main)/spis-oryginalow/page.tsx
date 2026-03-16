@@ -151,6 +151,24 @@ const formatExcelDiffHistoryCell = (point?: { dateKey: string; diffQty: number |
   return `${formatCompactDate(point.dateKey)}: ${formatExcelSignedQty(point.diffQty)}`;
 };
 
+const formatErpSnapshotPair = (
+  realQty: number | null | undefined,
+  availableQty: number | null | undefined,
+  formatter: (value: number | null | undefined) => string = formatQty
+) => `Rzecz: ${formatter(realQty)} | Dysp: ${formatter(availableQty)}`;
+
+const formatDiffPair = (
+  realDiffQty: number | null | undefined,
+  availableDiffQty: number | null | undefined,
+  formatter: (value: number | null | undefined) => string = formatSignedQty
+) => `Rzecz: ${formatter(realDiffQty)} | Dysp: ${formatter(availableDiffQty)}`;
+
+const formatDiffHistoryPair = (
+  realPoint?: { dateKey: string; diffQty: number | null } | null,
+  availablePoint?: { dateKey: string; diffQty: number | null } | null,
+  formatter: (point?: { dateKey: string; diffQty: number | null } | null) => string = formatDiffHistoryCell
+) => `Rzecz: ${formatter(realPoint)} | Dysp: ${formatter(availablePoint)}`;
+
 const normalizeImportCell = (value: unknown) =>
   String(value ?? '')
     .replace(/\s+/g, ' ')
@@ -176,17 +194,41 @@ const parseSnapshotQty = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const isSnapshotHeaderRow = (name: string, qty: unknown) => {
+const isSnapshotHeaderRow = (name: string, realQty: unknown, availableQty: unknown) => {
   const normalizedName = name.toLowerCase();
-  const qtyText = normalizeImportCell(qty).toLowerCase();
+  const realQtyText = normalizeImportCell(realQty).toLowerCase();
+  const availableQtyText = normalizeImportCell(availableQty).toLowerCase();
   const nameHeaders = new Set(['nazwa', 'material', 'tworzywo', 'kartoteka', 'name']);
+  const realQtyHeaders = new Set([
+    'stan rzeczywisty erp',
+    'stan rzeczywisty',
+    'ilosc',
+    'ilość',
+    'qty',
+    'quantity',
+    'stan'
+  ]);
+  const availableQtyHeaders = new Set([
+    'stan do dyspozycji erp',
+    'stan do dyspozycji',
+    'dostepne',
+    'dostępne',
+    'available',
+    'available qty',
+    'stan dostepny',
+    'stan dostępny'
+  ]);
   const qtyHeaders = new Set(['ilosc', 'ilość', 'qty', 'quantity', 'stan']);
-  return nameHeaders.has(normalizedName) && qtyHeaders.has(qtyText);
+  return (
+    nameHeaders.has(normalizedName) &&
+    (realQtyHeaders.has(realQtyText) || qtyHeaders.has(realQtyText)) &&
+    (availableQtyText === '' || availableQtyHeaders.has(availableQtyText))
+  );
 };
 
 const parseSnapshotImportFile = async (
   file: File
-): Promise<Array<{ name: string; qty: number; unit: string }>> => {
+): Promise<Array<{ name: string; realQty: number; availableQty: number; unit: string }>> => {
   const XLSX = await import('xlsx');
   const bytes = await file.arrayBuffer();
   const workbook = XLSX.read(bytes, { type: 'array', raw: false });
@@ -198,18 +240,28 @@ const parseSnapshotImportFile = async (
     blankrows: false,
     defval: ''
   }) as unknown[][];
-  const merged = new Map<string, { name: string; qty: number; unit: string }>();
+  const merged = new Map<
+    string,
+    { name: string; realQty: number; availableQty: number; unit: string }
+  >();
   rows.forEach((row, index) => {
     const name = normalizeImportCell(row?.[0]);
-    const qty = parseSnapshotQty(row?.[1]);
-    const unitCell = normalizeImportCell(row?.[2]);
+    const realQty = parseSnapshotQty(row?.[1]);
+    const thirdCell = row?.[2];
+    const thirdCellText = normalizeImportCell(thirdCell);
+    const parsedAvailableQty = parseSnapshotQty(thirdCell);
+    const fourthCellText = normalizeImportCell(row?.[3]);
+    const usesNewLayout = fourthCellText.length > 0;
+    const availableQty = usesNewLayout ? parsedAvailableQty : parsedAvailableQty ?? realQty;
+    const unitCell = usesNewLayout ? fourthCellText : thirdCellText;
     if (!name) return;
-    if (index === 0 && isSnapshotHeaderRow(name, row?.[1])) return;
-    if (qty === null) return;
+    if (index === 0 && isSnapshotHeaderRow(name, row?.[1], row?.[2])) return;
+    if (realQty === null || availableQty === null) return;
     const key = normalizeCatalogNameKey(name);
     const existing = merged.get(key);
     if (existing) {
-      existing.qty += qty;
+      existing.realQty += realQty;
+      existing.availableQty += availableQty;
       if (!existing.unit && unitCell) {
         existing.unit = unitCell;
       }
@@ -217,7 +269,8 @@ const parseSnapshotImportFile = async (
     }
     merged.set(key, {
       name,
-      qty,
+      realQty,
+      availableQty,
       unit: unitCell || 'kg'
     });
   });
@@ -375,12 +428,16 @@ export default function OriginalInventoryPage() {
   const erpSnapshotEntries = erpSnapshotState.items;
   const erpSnapshotMigrationRequired = erpSnapshotState.migrationRequired;
   const erpSnapshotMap = useMemo(() => {
-    const map = new Map<string, { name: string; unit: string; qty: number }>();
+    const map = new Map<
+      string,
+      { name: string; unit: string; realQty: number; availableQty: number }
+    >();
     erpSnapshotEntries.forEach((item) => {
       const key = normalizeCatalogNameKey(item.name);
       const current = map.get(key);
       if (current) {
-        current.qty += item.qty;
+        current.realQty += item.realQty;
+        current.availableQty += item.availableQty;
         if (!current.unit && item.unit) {
           current.unit = item.unit;
         }
@@ -388,7 +445,8 @@ export default function OriginalInventoryPage() {
         map.set(key, {
           name: item.name,
           unit: item.unit,
-          qty: item.qty
+          realQty: item.realQty,
+          availableQty: item.availableQty
         });
       }
     });
@@ -966,14 +1024,24 @@ export default function OriginalInventoryPage() {
     retry: false
   });
   const erpSnapshotSummary = useMemo(() => {
-    const map = new Map<string, { key: string; name: string; unit: string; qty: number }>();
+    const map = new Map<
+      string,
+      { key: string; name: string; unit: string; realQty: number; availableQty: number }
+    >();
     erpSnapshotEntries.forEach((entry) => {
       const key = normalizeCatalogNameKey(entry.name);
       const current = map.get(key);
       if (current) {
-        current.qty += entry.qty;
+        current.realQty += entry.realQty;
+        current.availableQty += entry.availableQty;
       } else {
-        map.set(key, { key, name: entry.name, unit: entry.unit, qty: entry.qty });
+        map.set(key, {
+          key,
+          name: entry.name,
+          unit: entry.unit,
+          realQty: entry.realQty,
+          availableQty: entry.availableQty
+        });
       }
     });
     return [...map.values()].sort((a, b) => collator.compare(a.name, b.name));
@@ -982,7 +1050,10 @@ export default function OriginalInventoryPage() {
   const reportErpSnapshotMigrationRequired =
     erpSnapshotMigrationRequired || historicalErpSnapshotState.migrationRequired;
   const erpSnapshotByDateAndMaterial = useMemo(() => {
-    const datesMap = new Map<string, Map<string, { name: string; unit: string; qty: number }>>();
+    const datesMap = new Map<
+      string,
+      Map<string, { name: string; unit: string; realQty: number; availableQty: number }>
+    >();
     const addEntry = (entry: OriginalInventoryErpSnapshotEntry) => {
       const dateKey = entry.snapshotDate;
       let materialMap = datesMap.get(dateKey);
@@ -993,7 +1064,8 @@ export default function OriginalInventoryPage() {
       const key = normalizeCatalogNameKey(entry.name);
       const current = materialMap.get(key);
       if (current) {
-        current.qty += entry.qty;
+        current.realQty += entry.realQty;
+        current.availableQty += entry.availableQty;
         if (!current.unit && entry.unit) {
           current.unit = entry.unit;
         }
@@ -1001,7 +1073,8 @@ export default function OriginalInventoryPage() {
         materialMap.set(key, {
           name: entry.name,
           unit: entry.unit,
-          qty: entry.qty
+          realQty: entry.realQty,
+          availableQty: entry.availableQty
         });
       }
     };
@@ -1026,32 +1099,56 @@ export default function OriginalInventoryPage() {
           .slice(0, 6)
           .map((point) => {
             const erpPoint = erpSnapshotByDateAndMaterial.get(point.dateKey)?.get(entry.key) ?? null;
-            const erpQty = erpPoint?.qty ?? null;
+            const realErpQty = erpPoint?.realQty ?? null;
+            const availableErpQty = erpPoint?.availableQty ?? null;
             return {
               dateKey: point.dateKey,
               spisQty: point.qty,
-              erpQty,
-              diffQty: erpQty === null ? null : point.qty - erpQty
+              realErpQty,
+              availableErpQty,
+              realDiffQty: realErpQty === null ? null : point.qty - realErpQty,
+              availableDiffQty: availableErpQty === null ? null : point.qty - availableErpQty
             };
           });
+        const currentSnapshot = erpSnapshotMap.get(entry.key);
         const currentComparison = recentComparisons[0] ?? {
           dateKey: spisDate,
           spisQty: entry.qty,
-          erpQty: erpSnapshotMap.get(entry.key)?.qty ?? null,
-          diffQty:
-            erpSnapshotMap.get(entry.key)?.qty === undefined
+          realErpQty: currentSnapshot?.realQty ?? null,
+          availableErpQty: currentSnapshot?.availableQty ?? null,
+          realDiffQty:
+            currentSnapshot?.realQty === undefined ? null : entry.qty - (currentSnapshot?.realQty ?? 0),
+          availableDiffQty:
+            currentSnapshot?.availableQty === undefined
               ? null
-              : entry.qty - (erpSnapshotMap.get(entry.key)?.qty ?? 0)
+              : entry.qty - (currentSnapshot?.availableQty ?? 0)
         };
         const previousDiffs = Array.from({ length: 5 }, (_, index) => recentComparisons[index + 1] ?? null);
         return {
           key: entry.key,
           name: entry.name,
           unit: entry.unit,
-          currentErpQty: currentComparison.erpQty,
+          currentRealErpQty: currentComparison.realErpQty,
+          currentAvailableErpQty: currentComparison.availableErpQty,
           currentSpisQty: currentComparison.spisQty,
-          currentDiffQty: currentComparison.diffQty,
-          previousDiffs
+          currentRealDiffQty: currentComparison.realDiffQty,
+          currentAvailableDiffQty: currentComparison.availableDiffQty,
+          previousRealDiffs: previousDiffs.map((point) =>
+            point
+              ? {
+                  dateKey: point.dateKey,
+                  diffQty: point.realDiffQty
+                }
+              : null
+          ),
+          previousAvailableDiffs: previousDiffs.map((point) =>
+            point
+              ? {
+                  dateKey: point.dateKey,
+                  diffQty: point.availableDiffQty
+                }
+              : null
+          )
         };
       })
       .sort((a, b) => {
@@ -1065,9 +1162,11 @@ export default function OriginalInventoryPage() {
       reportRows.map((row) => ({
         name: row.name,
         unit: row.unit,
-        erpQty: row.currentErpQty,
+        realErpQty: row.currentRealErpQty,
+        availableErpQty: row.currentAvailableErpQty,
         spisQty: row.currentSpisQty,
-        diffQty: row.currentDiffQty
+        realDiffQty: row.currentRealDiffQty,
+        availableDiffQty: row.currentAvailableDiffQty
       })),
     [reportRows]
   );
@@ -1102,7 +1201,16 @@ export default function OriginalInventoryPage() {
           12
         ),
         erpToday: fitWidth(
-          ['ERP dziś', ...reportRows.map((row) => formatExcelQty(row.currentErpQty))],
+          [
+            'ERP dziś (rzecz./dysp.)',
+            ...reportRows.map((row) =>
+              formatErpSnapshotPair(
+                row.currentRealErpQty,
+                row.currentAvailableErpQty,
+                formatExcelQty
+              )
+            )
+          ],
           12,
           18
         ),
@@ -1112,32 +1220,86 @@ export default function OriginalInventoryPage() {
           18
         ),
         diffToday: fitWidth(
-          ['Różnica dziś', ...reportRows.map((row) => formatExcelSignedQty(row.currentDiffQty))],
+          [
+            'Różnica dziś (rzecz./dysp.)',
+            ...reportRows.map((row) =>
+              formatDiffPair(
+                row.currentRealDiffQty,
+                row.currentAvailableDiffQty,
+                formatExcelSignedQty
+              )
+            )
+          ],
           14,
           20
         ),
         diffPrev1: fitWidth(
-          ['Różnica -1', ...reportRows.map((row) => formatExcelDiffHistoryCell(row.previousDiffs[0]))],
+          [
+            'Różnica -1',
+            ...reportRows.map((row) =>
+              formatDiffHistoryPair(
+                row.previousRealDiffs[0],
+                row.previousAvailableDiffs[0],
+                formatExcelDiffHistoryCell
+              )
+            )
+          ],
           18,
           24
         ),
         diffPrev2: fitWidth(
-          ['Różnica -2', ...reportRows.map((row) => formatExcelDiffHistoryCell(row.previousDiffs[1]))],
+          [
+            'Różnica -2',
+            ...reportRows.map((row) =>
+              formatDiffHistoryPair(
+                row.previousRealDiffs[1],
+                row.previousAvailableDiffs[1],
+                formatExcelDiffHistoryCell
+              )
+            )
+          ],
           18,
           24
         ),
         diffPrev3: fitWidth(
-          ['Różnica -3', ...reportRows.map((row) => formatExcelDiffHistoryCell(row.previousDiffs[2]))],
+          [
+            'Różnica -3',
+            ...reportRows.map((row) =>
+              formatDiffHistoryPair(
+                row.previousRealDiffs[2],
+                row.previousAvailableDiffs[2],
+                formatExcelDiffHistoryCell
+              )
+            )
+          ],
           18,
           24
         ),
         diffPrev4: fitWidth(
-          ['Różnica -4', ...reportRows.map((row) => formatExcelDiffHistoryCell(row.previousDiffs[3]))],
+          [
+            'Różnica -4',
+            ...reportRows.map((row) =>
+              formatDiffHistoryPair(
+                row.previousRealDiffs[3],
+                row.previousAvailableDiffs[3],
+                formatExcelDiffHistoryCell
+              )
+            )
+          ],
           18,
           24
         ),
         diffPrev5: fitWidth(
-          ['Różnica -5', ...reportRows.map((row) => formatExcelDiffHistoryCell(row.previousDiffs[4]))],
+          [
+            'Różnica -5',
+            ...reportRows.map((row) =>
+              formatDiffHistoryPair(
+                row.previousRealDiffs[4],
+                row.previousAvailableDiffs[4],
+                formatExcelDiffHistoryCell
+              )
+            )
+          ],
           18,
           24
         )
@@ -1153,9 +1315,9 @@ export default function OriginalInventoryPage() {
       worksheet.columns = [
         { header: 'Material', key: 'name', width: columnWidths.name },
         { header: 'Jedn.', key: 'unit', width: columnWidths.unit },
-        { header: 'ERP dziś', key: 'erpToday', width: columnWidths.erpToday },
+        { header: 'ERP dziś (rzecz./dysp.)', key: 'erpToday', width: columnWidths.erpToday },
         { header: 'Spis dziś', key: 'spisToday', width: columnWidths.spisToday },
-        { header: 'Różnica dziś', key: 'diffToday', width: columnWidths.diffToday },
+        { header: 'Różnica dziś (rzecz./dysp.)', key: 'diffToday', width: columnWidths.diffToday },
         { header: 'Różnica -1', key: 'diffPrev1', width: columnWidths.diffPrev1 },
         { header: 'Różnica -2', key: 'diffPrev2', width: columnWidths.diffPrev2 },
         { header: 'Różnica -3', key: 'diffPrev3', width: columnWidths.diffPrev3 },
@@ -1179,9 +1341,9 @@ export default function OriginalInventoryPage() {
       worksheet.getRow(4).values = [
         'Material',
         'Jedn.',
-        'ERP dziś',
+        'ERP dziś (rzecz./dysp.)',
         'Spis dziś',
-        'Różnica dziś',
+        'Różnica dziś (rzecz./dysp.)',
         'Różnica -1',
         'Różnica -2',
         'Różnica -3',
@@ -1227,14 +1389,42 @@ export default function OriginalInventoryPage() {
         const excelRow = worksheet.addRow({
           name: row.name,
           unit: row.unit,
-          erpToday: row.currentErpQty === null ? 'brak ERP' : formatExcelQty(row.currentErpQty),
+          erpToday: formatErpSnapshotPair(
+            row.currentRealErpQty,
+            row.currentAvailableErpQty,
+            formatExcelQty
+          ),
           spisToday: formatExcelQty(row.currentSpisQty),
-          diffToday: formatExcelSignedQty(row.currentDiffQty),
-          diffPrev1: formatExcelDiffHistoryCell(row.previousDiffs[0]),
-          diffPrev2: formatExcelDiffHistoryCell(row.previousDiffs[1]),
-          diffPrev3: formatExcelDiffHistoryCell(row.previousDiffs[2]),
-          diffPrev4: formatExcelDiffHistoryCell(row.previousDiffs[3]),
-          diffPrev5: formatExcelDiffHistoryCell(row.previousDiffs[4])
+          diffToday: formatDiffPair(
+            row.currentRealDiffQty,
+            row.currentAvailableDiffQty,
+            formatExcelSignedQty
+          ),
+          diffPrev1: formatDiffHistoryPair(
+            row.previousRealDiffs[0],
+            row.previousAvailableDiffs[0],
+            formatExcelDiffHistoryCell
+          ),
+          diffPrev2: formatDiffHistoryPair(
+            row.previousRealDiffs[1],
+            row.previousAvailableDiffs[1],
+            formatExcelDiffHistoryCell
+          ),
+          diffPrev3: formatDiffHistoryPair(
+            row.previousRealDiffs[2],
+            row.previousAvailableDiffs[2],
+            formatExcelDiffHistoryCell
+          ),
+          diffPrev4: formatDiffHistoryPair(
+            row.previousRealDiffs[3],
+            row.previousAvailableDiffs[3],
+            formatExcelDiffHistoryCell
+          ),
+          diffPrev5: formatDiffHistoryPair(
+            row.previousRealDiffs[4],
+            row.previousAvailableDiffs[4],
+            formatExcelDiffHistoryCell
+          )
         });
         excelRow.height = 26;
         const baseFill = rowIndex % 2 === 0 ? 'FF111111' : 'FF1A1A1A';
@@ -1263,15 +1453,15 @@ export default function OriginalInventoryPage() {
 
         const diffTodayCell = excelRow.getCell(5);
 
-        if (row.currentDiffQty !== null && Number.isFinite(row.currentDiffQty)) {
+        if (row.currentRealDiffQty !== null && Number.isFinite(row.currentRealDiffQty)) {
           diffTodayCell.fill = {
             type: 'pattern',
             pattern: 'solid',
             fgColor: {
               argb:
-                row.currentDiffQty === 0
+                row.currentRealDiffQty === 0
                   ? 'FF173A2A'
-                  : Math.abs(row.currentDiffQty) >= 10
+                  : Math.abs(row.currentRealDiffQty) >= 10
                     ? 'FF7A2600'
                     : 'FF4E1B00'
             }
@@ -1315,7 +1505,8 @@ export default function OriginalInventoryPage() {
         name: group.name,
         unit: lastEntry?.unit ?? group.unit,
         total,
-        erpQty: erpSnapshotMap.get(group.key)?.qty ?? null,
+        erpRealQty: erpSnapshotMap.get(group.key)?.realQty ?? null,
+        erpAvailableQty: erpSnapshotMap.get(group.key)?.availableQty ?? null,
         halls,
         lastUser: lastEntry?.user ?? '-'
       };
@@ -1463,7 +1654,9 @@ export default function OriginalInventoryPage() {
                 )}
                 {matchedErpSnapshot && (
                   <p className="mt-1 text-xs text-dim">
-                    ERP na dzien {spisDate}: {matchedErpSnapshot.qty} {matchedErpSnapshot.unit}
+                    ERP na dzien {spisDate}: stan rzeczywisty {formatQty(matchedErpSnapshot.realQty)}{' '}
+                    {matchedErpSnapshot.unit}, stan do dyspozycji{' '}
+                    {formatQty(matchedErpSnapshot.availableQty)} {matchedErpSnapshot.unit}
                   </p>
                 )}
               </div>
@@ -1504,7 +1697,7 @@ export default function OriginalInventoryPage() {
           ) : (
             <Card>
               <DataTable
-                columns={['Nazwa', 'Suma', 'ERP', 'Jedn.', 'Hale', 'Kto']}
+                columns={['Nazwa', 'Suma', 'ERP rzecz.', 'ERP dysp.', 'Jedn.', 'Hale', 'Kto']}
                 rows={materialGroupList.map((group) => {
                   const isActive = expandedMaterialKey === group.key;
                   return [
@@ -1517,7 +1710,8 @@ export default function OriginalInventoryPage() {
                       {group.name}
                     </span>,
                     group.total,
-                    group.erpQty ?? '-',
+                    group.erpRealQty ?? '-',
+                    group.erpAvailableQty ?? '-',
                     group.unit,
                     group.halls || '-',
                     group.lastUser
@@ -1547,7 +1741,11 @@ export default function OriginalInventoryPage() {
                           </p>
                           <p className="text-lg font-semibold text-title">{selectedGroup.name}</p>
                           <p className="text-xs text-dim">
-                            ERP na dzien {spisDate}: {erpSnapshotMap.get(selectedGroup.key)?.qty ?? 0}{' '}
+                            ERP na dzien {spisDate}: stan rzeczywisty{' '}
+                            {formatQty(erpSnapshotMap.get(selectedGroup.key)?.realQty ?? 0)}{' '}
+                            {erpSnapshotMap.get(selectedGroup.key)?.unit ?? selectedGroup.unit}, stan do
+                            dyspozycji{' '}
+                            {formatQty(erpSnapshotMap.get(selectedGroup.key)?.availableQty ?? 0)}{' '}
                             {erpSnapshotMap.get(selectedGroup.key)?.unit ?? selectedGroup.unit}
                           </p>
                           {historyLine && (
@@ -1795,7 +1993,8 @@ export default function OriginalInventoryPage() {
               </div>
               <div className="space-y-1">
                 <label className="text-xs uppercase tracking-wide text-dim">
-                  Import stanow ERP (kolumna A: nazwa, kolumna B: ilosc, kolumna C: jednostka - opcjonalnie)
+                  Import stanow ERP (kolumna A: nazwa, kolumna B: stan rzeczywisty ERP, kolumna C:
+                  stan do dyspozycji ERP, kolumna D: jednostka - opcjonalnie)
                 </label>
                 <Input
                   key={erpSnapshotImportInputKey}
@@ -1895,8 +2094,13 @@ export default function OriginalInventoryPage() {
               <p className="text-sm text-dim">Brak wgranych stanow ERP dla wybranego dnia.</p>
             ) : (
               <DataTable
-                columns={['Nazwa', 'Ilosc ERP', 'Jedn.']}
-                rows={erpSnapshotSummary.map((row) => [row.name, row.qty, row.unit])}
+                columns={['Nazwa', 'Stan rzeczywisty ERP', 'Stan do dyspozycji ERP', 'Jedn.']}
+                rows={erpSnapshotSummary.map((row) => [
+                  row.name,
+                  row.realQty,
+                  row.availableQty,
+                  row.unit
+                ])}
               />
             )}
           </Card>
@@ -2011,9 +2215,9 @@ export default function OriginalInventoryPage() {
               <DataTable
                 columns={[
                   'Material',
-                  'ERP dziś',
+                  'ERP dziś (rzecz./dysp.)',
                   'Spis dziś',
-                  'Różnica dziś',
+                  'Różnica dziś (rzecz./dysp.)',
                   'Różnica -1',
                   'Różnica -2',
                   'Różnica -3',
@@ -2023,14 +2227,14 @@ export default function OriginalInventoryPage() {
                 ]}
                 rows={reportRows.map((row) => [
                   row.name,
-                  formatQty(row.currentErpQty),
+                  formatErpSnapshotPair(row.currentRealErpQty, row.currentAvailableErpQty),
                   formatQty(row.currentSpisQty),
-                  formatSignedQty(row.currentDiffQty),
-                  formatDiffHistoryCell(row.previousDiffs[0]),
-                  formatDiffHistoryCell(row.previousDiffs[1]),
-                  formatDiffHistoryCell(row.previousDiffs[2]),
-                  formatDiffHistoryCell(row.previousDiffs[3]),
-                  formatDiffHistoryCell(row.previousDiffs[4]),
+                  formatDiffPair(row.currentRealDiffQty, row.currentAvailableDiffQty),
+                  formatDiffHistoryPair(row.previousRealDiffs[0], row.previousAvailableDiffs[0]),
+                  formatDiffHistoryPair(row.previousRealDiffs[1], row.previousAvailableDiffs[1]),
+                  formatDiffHistoryPair(row.previousRealDiffs[2], row.previousAvailableDiffs[2]),
+                  formatDiffHistoryPair(row.previousRealDiffs[3], row.previousAvailableDiffs[3]),
+                  formatDiffHistoryPair(row.previousRealDiffs[4], row.previousAvailableDiffs[4]),
                   row.unit
                 ])}
               />
@@ -2048,12 +2252,12 @@ export default function OriginalInventoryPage() {
               <p className="text-sm text-dim">Brak danych ERP i spisu dla wybranego dnia.</p>
             ) : (
               <DataTable
-                columns={['Material', 'ERP', 'Spis', 'Różnica', 'Jedn.']}
+                columns={['Material', 'ERP (rzecz./dysp.)', 'Spis', 'Różnica (rzecz./dysp.)', 'Jedn.']}
                 rows={dailyComparison.map((row) => [
                   row.name,
-                  formatQty(row.erpQty),
+                  formatErpSnapshotPair(row.realErpQty, row.availableErpQty),
                   formatQty(row.spisQty),
-                  formatSignedQty(row.diffQty),
+                  formatDiffPair(row.realDiffQty, row.availableDiffQty),
                   row.unit
                 ])}
               />

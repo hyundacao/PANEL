@@ -1594,14 +1594,19 @@ const isMissingOriginalInventoryErpSnapshotsTableError = (error: unknown) => {
   const text = [String(candidate.message ?? ''), String(candidate.details ?? '')]
     .join(' ')
     .toLowerCase();
-  return text.includes('original_inventory_erp_snapshots');
+  return (
+    text.includes('original_inventory_erp_snapshots') ||
+    text.includes('real_qty') ||
+    text.includes('available_qty')
+  );
 };
 
 const mapOriginalInventoryErpSnapshotEntry = (row: any): OriginalInventoryErpSnapshotEntry => ({
   id: String(row.id),
   snapshotDate: String(row.snapshot_date),
   name: String(row.name ?? '').trim(),
-  qty: toNumber(row.qty),
+  realQty: toNumber(row.real_qty ?? row.qty),
+  availableQty: toNumber(row.available_qty ?? row.qty),
   unit: String(row.unit ?? '').trim() || 'kg',
   importedAt: row.imported_at ?? row.created_at ?? new Date().toISOString(),
   importedBy: String(row.imported_by ?? '').trim() || 'nieznany',

@@ -27,12 +27,35 @@ const parseSnapshotQty = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const isSnapshotHeaderRow = (name: string, qty: unknown) => {
+const isSnapshotHeaderRow = (name: string, realQty: unknown, availableQty: unknown) => {
   const normalizedName = name.toLowerCase();
-  const qtyText = normalizeImportCell(qty).toLowerCase();
+  const realQtyText = normalizeImportCell(realQty).toLowerCase();
+  const availableQtyText = normalizeImportCell(availableQty).toLowerCase();
   const nameHeaders = new Set(['nazwa', 'material', 'tworzywo', 'kartoteka', 'name']);
-  const qtyHeaders = new Set(['ilosc', 'ilość', 'qty', 'quantity', 'stan']);
-  return nameHeaders.has(normalizedName) && qtyHeaders.has(qtyText);
+  const realQtyHeaders = new Set([
+    'stan rzeczywisty erp',
+    'stan rzeczywisty',
+    'ilosc',
+    'ilość',
+    'qty',
+    'quantity',
+    'stan'
+  ]);
+  const availableQtyHeaders = new Set([
+    'stan do dyspozycji erp',
+    'stan do dyspozycji',
+    'dostepne',
+    'dostępne',
+    'available',
+    'available qty',
+    'stan dostepny',
+    'stan dostępny'
+  ]);
+  return (
+    nameHeaders.has(normalizedName) &&
+    realQtyHeaders.has(realQtyText) &&
+    (availableQtyText === '' || availableQtyHeaders.has(availableQtyText))
+  );
 };
 
 const isMissingSnapshotsTableError = (error: unknown) => {
@@ -43,7 +66,11 @@ const isMissingSnapshotsTableError = (error: unknown) => {
   const text = [String(candidate.message ?? ''), String(candidate.details ?? '')]
     .join(' ')
     .toLowerCase();
-  return text.includes('original_inventory_erp_snapshots');
+  return (
+    text.includes('original_inventory_erp_snapshots') ||
+    text.includes('real_qty') ||
+    text.includes('available_qty')
+  );
 };
 
 const parseSnapshotImportFile = async (file: File) => {
@@ -59,26 +86,41 @@ const parseSnapshotImportFile = async (file: File) => {
     defval: ''
   }) as unknown[][];
 
-  const merged = new Map<string, { name: string; qty: number; unit: string }>();
+  const merged = new Map<
+    string,
+    { name: string; realQty: number; availableQty: number; unit: string }
+  >();
+
   rows.forEach((row, index) => {
     const name = normalizeImportCell(row?.[0]);
-    const qty = parseSnapshotQty(row?.[1]);
-    const unitCell = normalizeImportCell(row?.[2]);
+    const realQty = parseSnapshotQty(row?.[1]);
+    const thirdCell = row?.[2];
+    const thirdCellText = normalizeImportCell(thirdCell);
+    const parsedAvailableQty = parseSnapshotQty(thirdCell);
+    const fourthCellText = normalizeImportCell(row?.[3]);
+    const usesNewLayout = fourthCellText.length > 0;
+    const availableQty = usesNewLayout ? parsedAvailableQty : parsedAvailableQty ?? realQty;
+    const unitCell = usesNewLayout ? fourthCellText : thirdCellText;
+
     if (!name) return;
-    if (index === 0 && isSnapshotHeaderRow(name, row?.[1])) return;
-    if (qty === null) return;
+    if (index === 0 && isSnapshotHeaderRow(name, row?.[1], row?.[2])) return;
+    if (realQty === null || availableQty === null) return;
+
     const key = normalizeNameKey(name);
     const existing = merged.get(key);
     if (existing) {
-      existing.qty += qty;
+      existing.realQty += realQty;
+      existing.availableQty += availableQty;
       if (!existing.unit && unitCell) {
         existing.unit = unitCell;
       }
       return;
     }
+
     merged.set(key, {
       name,
-      qty,
+      realQty,
+      availableQty,
       unit: unitCell || 'kg'
     });
   });
@@ -167,7 +209,8 @@ export async function POST(request: Request) {
         id: randomUUID(),
         snapshot_date: snapshotDate,
         name: item.name,
-        qty: item.qty,
+        real_qty: item.realQty,
+        available_qty: item.availableQty,
         unit: item.unit,
         imported_at: importedAt,
         imported_by: importedBy,
@@ -192,18 +235,15 @@ export async function POST(request: Request) {
       snapshotDate
     });
   } catch (error) {
-    const code =
-      error instanceof Error && error.message
-        ? error.message
-        : 'UNKNOWN';
+    const code = error instanceof Error && error.message ? error.message : 'UNKNOWN';
     const status =
       code === 'FORBIDDEN'
         ? 403
         : code === 'FILE_REQUIRED' || code === 'DATE_REQUIRED' || code === 'EMPTY'
-        ? 400
-        : code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS'
-        ? 503
-        : 500;
+          ? 400
+          : code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS'
+            ? 503
+            : 500;
     return NextResponse.json({ code }, { status });
   }
 }
