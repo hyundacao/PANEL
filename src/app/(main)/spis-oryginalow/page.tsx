@@ -194,20 +194,11 @@ const parseSnapshotQty = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const isSnapshotHeaderRow = (name: string, realQty: unknown, availableQty: unknown) => {
+const isSnapshotHeaderRow = (name: string, availableQty: unknown, realQty: unknown) => {
   const normalizedName = name.toLowerCase();
-  const realQtyText = normalizeImportCell(realQty).toLowerCase();
   const availableQtyText = normalizeImportCell(availableQty).toLowerCase();
+  const realQtyText = normalizeImportCell(realQty).toLowerCase();
   const nameHeaders = new Set(['nazwa', 'material', 'tworzywo', 'kartoteka', 'name']);
-  const realQtyHeaders = new Set([
-    'stan rzeczywisty erp',
-    'stan rzeczywisty',
-    'ilosc',
-    'ilość',
-    'qty',
-    'quantity',
-    'stan'
-  ]);
   const availableQtyHeaders = new Set([
     'stan do dyspozycji erp',
     'stan do dyspozycji',
@@ -216,13 +207,18 @@ const isSnapshotHeaderRow = (name: string, realQty: unknown, availableQty: unkno
     'available',
     'available qty',
     'stan dostepny',
-    'stan dostępny'
+    'stan dostępny',
+    'ilosc',
+    'ilość',
+    'qty',
+    'quantity',
+    'stan'
   ]);
-  const qtyHeaders = new Set(['ilosc', 'ilość', 'qty', 'quantity', 'stan']);
+  const realQtyHeaders = new Set(['stan rzeczywisty erp', 'stan rzeczywisty']);
   return (
     nameHeaders.has(normalizedName) &&
-    (realQtyHeaders.has(realQtyText) || qtyHeaders.has(realQtyText)) &&
-    (availableQtyText === '' || availableQtyHeaders.has(availableQtyText))
+    availableQtyHeaders.has(availableQtyText) &&
+    (realQtyText === '' || realQtyHeaders.has(realQtyText))
   );
 };
 
@@ -246,13 +242,13 @@ const parseSnapshotImportFile = async (
   >();
   rows.forEach((row, index) => {
     const name = normalizeImportCell(row?.[0]);
-    const realQty = parseSnapshotQty(row?.[1]);
+    const availableQty = parseSnapshotQty(row?.[1]);
     const thirdCell = row?.[2];
     const thirdCellText = normalizeImportCell(thirdCell);
-    const parsedAvailableQty = parseSnapshotQty(thirdCell);
+    const parsedRealQty = parseSnapshotQty(thirdCell);
     const fourthCellText = normalizeImportCell(row?.[3]);
     const usesNewLayout = fourthCellText.length > 0;
-    const availableQty = usesNewLayout ? parsedAvailableQty : parsedAvailableQty ?? realQty;
+    const realQty = usesNewLayout ? parsedRealQty : parsedRealQty ?? availableQty;
     const unitCell = usesNewLayout ? fourthCellText : thirdCellText;
     if (!name) return;
     if (index === 0 && isSnapshotHeaderRow(name, row?.[1], row?.[2])) return;
@@ -1993,8 +1989,8 @@ export default function OriginalInventoryPage() {
               </div>
               <div className="space-y-1">
                 <label className="text-xs uppercase tracking-wide text-dim">
-                  Import stanow ERP (kolumna A: nazwa, kolumna B: stan rzeczywisty ERP, kolumna C:
-                  stan do dyspozycji ERP, kolumna D: jednostka - opcjonalnie)
+                  Import stanow ERP (kolumna A: nazwa, kolumna B: stan do dyspozycji ERP, kolumna C:
+                  stan rzeczywisty ERP, kolumna D: jednostka - opcjonalnie)
                 </label>
                 <Input
                   key={erpSnapshotImportInputKey}

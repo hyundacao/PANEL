@@ -53,6 +53,22 @@ alter table if exists public.original_inventory_erp_snapshots
 alter table if exists public.original_inventory_erp_snapshots
   alter column available_qty set not null;
 
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'original_inventory_erp_snapshots'
+      and column_name = 'qty'
+  ) then
+    execute $compat$
+      alter table public.original_inventory_erp_snapshots
+        alter column qty drop not null
+    $compat$;
+  end if;
+end $$;
+
 create index if not exists original_inventory_erp_snapshots_date_idx
   on public.original_inventory_erp_snapshots (snapshot_date);
 
