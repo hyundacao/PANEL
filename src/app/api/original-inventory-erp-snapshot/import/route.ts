@@ -4,6 +4,10 @@ import * as XLSX from 'xlsx';
 import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import {
+  isOriginalInventoryErpSnapshotPdfFile,
+  parseOriginalInventoryErpSnapshotPdfFile
+} from '@/lib/utils/originalInventoryErpPdf';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,6 +75,9 @@ const isMissingSnapshotsTableError = (error: unknown) => {
 };
 
 const parseSnapshotImportFile = async (file: File) => {
+  if (isOriginalInventoryErpSnapshotPdfFile(file)) {
+    return parseOriginalInventoryErpSnapshotPdfFile(file);
+  }
   const bytes = await file.arrayBuffer();
   const workbook = XLSX.read(bytes, { type: 'array', raw: false });
   const firstSheetName = workbook.SheetNames[0];

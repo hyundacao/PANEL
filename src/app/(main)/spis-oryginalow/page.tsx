@@ -24,10 +24,15 @@ import { Button } from '@/components/ui/Button';
 import { DataTable } from '@/components/ui/DataTable';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { SelectField } from '@/components/ui/Select';
+import { Toggle } from '@/components/ui/Toggle';
 import { useToastStore } from '@/components/ui/Toast';
 import { useUiStore } from '@/lib/store/ui';
 import { isReadOnly } from '@/lib/auth/access';
 import { parseQtyInput } from '@/lib/utils/format';
+import {
+  isOriginalInventoryErpSnapshotPdfFile,
+  parseOriginalInventoryErpSnapshotPdfFile
+} from '@/lib/utils/originalInventoryErpPdf';
 
 const WAREHOUSE_STORAGE_KEY = 'spis-oryginalow-warehouse';
 const TAB_STORAGE_KEY = 'spis-oryginalow-tab';
@@ -169,6 +174,39 @@ const formatDiffHistoryPair = (
   formatter: (point?: { dateKey: string; diffQty: number | null } | null) => string = formatDiffHistoryCell
 ) => `Rzecz: ${formatter(realPoint)} | Dysp: ${formatter(availablePoint)}`;
 
+const getReportVisibilitySuffix = (showRealQty: boolean, showAvailableQty: boolean) => {
+  const labels: string[] = [];
+  if (showRealQty) labels.push('rzecz.');
+  if (showAvailableQty) labels.push('dysp.');
+  return labels.length > 0 ? ` (${labels.join('/')})` : '';
+};
+
+const formatVisibleReportPair = (
+  showRealQty: boolean,
+  showAvailableQty: boolean,
+  realQty: number | null | undefined,
+  availableQty: number | null | undefined,
+  formatter: (value: number | null | undefined) => string = formatQty
+) => {
+  const parts: string[] = [];
+  if (showRealQty) parts.push(`Rzecz: ${formatter(realQty)}`);
+  if (showAvailableQty) parts.push(`Dysp: ${formatter(availableQty)}`);
+  return parts.join(' | ');
+};
+
+const formatVisibleReportHistoryPair = (
+  showRealQty: boolean,
+  showAvailableQty: boolean,
+  realPoint?: { dateKey: string; diffQty: number | null } | null,
+  availablePoint?: { dateKey: string; diffQty: number | null } | null,
+  formatter: (point?: { dateKey: string; diffQty: number | null } | null) => string = formatDiffHistoryCell
+) => {
+  const parts: string[] = [];
+  if (showRealQty) parts.push(`Rzecz: ${formatter(realPoint)}`);
+  if (showAvailableQty) parts.push(`Dysp: ${formatter(availablePoint)}`);
+  return parts.join(' | ');
+};
+
 const normalizeImportCell = (value: unknown) =>
   String(value ?? '')
     .replace(/\s+/g, ' ')
@@ -225,6 +263,9 @@ const isSnapshotHeaderRow = (name: string, availableQty: unknown, realQty: unkno
 const parseSnapshotImportFile = async (
   file: File
 ): Promise<Array<{ name: string; realQty: number; availableQty: number; unit: string }>> => {
+  if (isOriginalInventoryErpSnapshotPdfFile(file)) {
+    return parseOriginalInventoryErpSnapshotPdfFile(file);
+  }
   const XLSX = await import('xlsx');
   const bytes = await file.arrayBuffer();
   const workbook = XLSX.read(bytes, { type: 'array', raw: false });
@@ -320,6 +361,8 @@ export default function OriginalInventoryPage() {
   const [showNameSuggestions, setShowNameSuggestions] = useState(false);
   const [reportQuery, setReportQuery] = useState('');
   const [showReportSuggestions, setShowReportSuggestions] = useState(false);
+  const [showReportRealQty, setShowReportRealQty] = useState(true);
+  const [showReportAvailableQty, setShowReportAvailableQty] = useState(true);
   const [spisDate, setSpisDate] = useState(getLocalDateValue());
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogImportFile, setCatalogImportFile] = useState<File | null>(null);
@@ -642,7 +685,10 @@ export default function OriginalInventoryPage() {
       });
     } catch {
       resetErpSnapshotImportState();
-      toast({ title: 'Nie odczytano pliku stanow ERP. Sprawdz format XLS/XLSX/CSV.', tone: 'error' });
+      toast({
+        title: 'Nie odczytano pliku stanow ERP. Sprawdz format XLS/XLSX/CSV/PDF.',
+        tone: 'error'
+      });
     } finally {
       setErpSnapshotImportPreparing(false);
     }
@@ -891,13 +937,10 @@ export default function OriginalInventoryPage() {
     return [...map.values()].sort((a, b) => collator.compare(a.name, b.name));
   }, [entries]);
   const selectedReportMaterialKey = useMemo(() => {
-    if (reportOptions.length === 0) return '';
     const query = reportQuery.trim().toLowerCase();
-    if (query) {
-      const exactMatch = reportOptions.find((option) => option.name.toLowerCase() === query);
-      if (exactMatch) return exactMatch.key;
-    }
-    return reportOptions[0].key;
+    if (!query || reportOptions.length === 0) return '';
+    const exactMatch = reportOptions.find((option) => option.name.toLowerCase() === query);
+    return exactMatch?.key ?? '';
   }, [reportOptions, reportQuery]);
   const reportEntries = useMemo(() => {
     if (!selectedReportMaterialKey) return [];
@@ -1167,7 +1210,7 @@ export default function OriginalInventoryPage() {
     [reportRows]
   );
 
-  const handleExportDaily = async () => {
+  const handleExportDailyLegacy = async () => {
     if (!spisDate || reportRows.length === 0) return;
     try {
       const ExcelJSModule = await import('exceljs');
@@ -1481,6 +1524,337 @@ export default function OriginalInventoryPage() {
     }
   };
 
+  void handleExportDailyLegacy;
+
+  const handleExportDaily = async () => {
+    if (!spisDate || reportRows.length === 0) return;
+    try {
+      const ExcelJSModule = await import('exceljs');
+      const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
+      const generatedAt = new Date().toLocaleString('pl-PL');
+      const toExcelWrappedText = (value: string) => value.split(' | ').join('\n');
+      const fitWidth = (
+        values: string[],
+        minWidth: number,
+        maxWidth: number,
+        multiplier = 1,
+        padding = 2
+      ) => {
+        const longest = values.reduce((max, value) => {
+          const lineMax = String(value)
+            .split('\n')
+            .reduce((innerMax, line) => Math.max(innerMax, line.length), 0);
+          return Math.max(max, lineMax);
+        }, 0);
+        return Math.min(maxWidth, Math.max(minWidth, Math.ceil(longest * multiplier) + padding));
+      };
+      const getExcelColumnLetter = (index: number) => {
+        let value = index;
+        let result = '';
+        while (value > 0) {
+          const remainder = (value - 1) % 26;
+          result = String.fromCharCode(65 + remainder) + result;
+          value = Math.floor((value - 1) / 26);
+        }
+        return result;
+      };
+      const exportColumns = [
+        {
+          key: 'name',
+          header: 'Material',
+          wrap: true,
+          align: 'left' as const,
+          minWidth: 34,
+          maxWidth: 80,
+          multiplier: 1.12,
+          padding: 4,
+          getValue: (row: (typeof reportRows)[number]) => row.name
+        },
+        {
+          key: 'unit',
+          header: 'Jedn.',
+          wrap: false,
+          align: 'center' as const,
+          minWidth: 8,
+          maxWidth: 12,
+          getValue: (row: (typeof reportRows)[number]) => row.unit
+        },
+        {
+          key: 'erpToday',
+          header: 'ERP dzis (rzecz./dysp.)',
+          wrap: true,
+          align: 'center' as const,
+          minWidth: 16,
+          maxWidth: 26,
+          getValue: (row: (typeof reportRows)[number]) =>
+            toExcelWrappedText(
+              formatErpSnapshotPair(row.currentRealErpQty, row.currentAvailableErpQty, formatExcelQty)
+            )
+        },
+        {
+          key: 'spisToday',
+          header: 'Spis dzis',
+          wrap: false,
+          align: 'center' as const,
+          minWidth: 12,
+          maxWidth: 18,
+          getValue: (row: (typeof reportRows)[number]) => formatExcelQty(row.currentSpisQty)
+        },
+        {
+          key: 'diffToday',
+          header: 'Roznica dzis (rzecz./dysp.)',
+          wrap: true,
+          align: 'right' as const,
+          minWidth: 16,
+          maxWidth: 26,
+          getValue: (row: (typeof reportRows)[number]) =>
+            toExcelWrappedText(
+              formatDiffPair(
+                row.currentRealDiffQty,
+                row.currentAvailableDiffQty,
+                formatExcelSignedQty
+              )
+            )
+        },
+        {
+          key: 'diffPrev1',
+          header: 'Roznica -1',
+          wrap: true,
+          align: 'left' as const,
+          minWidth: 18,
+          maxWidth: 30,
+          getValue: (row: (typeof reportRows)[number]) =>
+            toExcelWrappedText(
+              formatDiffHistoryPair(
+                row.previousRealDiffs[0],
+                row.previousAvailableDiffs[0],
+                formatExcelDiffHistoryCell
+              )
+            )
+        },
+        {
+          key: 'diffPrev2',
+          header: 'Roznica -2',
+          wrap: true,
+          align: 'left' as const,
+          minWidth: 18,
+          maxWidth: 30,
+          getValue: (row: (typeof reportRows)[number]) =>
+            toExcelWrappedText(
+              formatDiffHistoryPair(
+                row.previousRealDiffs[1],
+                row.previousAvailableDiffs[1],
+                formatExcelDiffHistoryCell
+              )
+            )
+        },
+        {
+          key: 'diffPrev3',
+          header: 'Roznica -3',
+          wrap: true,
+          align: 'left' as const,
+          minWidth: 18,
+          maxWidth: 30,
+          getValue: (row: (typeof reportRows)[number]) =>
+            toExcelWrappedText(
+              formatDiffHistoryPair(
+                row.previousRealDiffs[2],
+                row.previousAvailableDiffs[2],
+                formatExcelDiffHistoryCell
+              )
+            )
+        },
+        {
+          key: 'diffPrev4',
+          header: 'Roznica -4',
+          wrap: true,
+          align: 'left' as const,
+          minWidth: 18,
+          maxWidth: 30,
+          getValue: (row: (typeof reportRows)[number]) =>
+            toExcelWrappedText(
+              formatDiffHistoryPair(
+                row.previousRealDiffs[3],
+                row.previousAvailableDiffs[3],
+                formatExcelDiffHistoryCell
+              )
+            )
+        },
+        {
+          key: 'diffPrev5',
+          header: 'Roznica -5',
+          wrap: true,
+          align: 'left' as const,
+          minWidth: 18,
+          maxWidth: 30,
+          getValue: (row: (typeof reportRows)[number]) =>
+            toExcelWrappedText(
+              formatDiffHistoryPair(
+                row.previousRealDiffs[4],
+                row.previousAvailableDiffs[4],
+                formatExcelDiffHistoryCell
+              )
+            )
+        }
+      ];
+      const columnWidths = Object.fromEntries(
+        exportColumns.map((column) => [
+          column.key,
+          fitWidth(
+            [column.header, ...reportRows.map((row) => column.getValue(row))],
+            column.minWidth,
+            column.maxWidth,
+            column.multiplier,
+            column.padding
+          )
+        ])
+      ) as Record<string, number>;
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'APKA DLA KAMILA';
+      workbook.created = new Date();
+
+      const worksheet = workbook.addWorksheet('Raport', {
+        views: [{ state: 'frozen', ySplit: 4 }]
+      });
+
+      worksheet.columns = exportColumns.map((column) => ({
+        header: column.header,
+        key: column.key,
+        width: columnWidths[column.key]
+      }));
+
+      const lastColumnLetter = getExcelColumnLetter(exportColumns.length);
+      worksheet.mergeCells(`A1:${lastColumnLetter}1`);
+      worksheet.mergeCells(`A2:${lastColumnLetter}2`);
+      worksheet.mergeCells(`A3:${lastColumnLetter}3`);
+      worksheet.getCell('A1').value = 'Raport kontroli rozjazdow - spis oryginalow';
+      worksheet.getCell('A2').value = currentErpSnapshotMeta
+        ? `Dzien raportu: ${spisDate} | ERP wgrane: ${new Date(currentErpSnapshotMeta.importedAt).toLocaleString('pl-PL')}`
+        : `Dzien raportu: ${spisDate} | ERP wgrane: brak`;
+      worksheet.getCell('A3').value =
+        `Wygenerowano: ${generatedAt} | Dane ERP: stan rzeczywisty, stan do dyspozycji | ` +
+        'Kolumny XLSX: pelny raport';
+
+      worksheet.getRow(1).height = 26;
+      worksheet.getRow(2).height = 22;
+      worksheet.getRow(3).height = 38;
+      worksheet.getRow(4).values = exportColumns.map((column) => column.header);
+      worksheet.autoFilter = `A4:${lastColumnLetter}4`;
+
+      const border = {
+        top: { style: 'thin', color: { argb: '33FFFFFF' } },
+        left: { style: 'thin', color: { argb: '22FFFFFF' } },
+        bottom: { style: 'thin', color: { argb: '33FFFFFF' } },
+        right: { style: 'thin', color: { argb: '22FFFFFF' } }
+      } as const;
+
+      const applyDarkCell = (cell: Cell, fillColor: string) => {
+        cell.font = { color: { argb: 'FFFFFBF7' }, size: 11, name: 'Segoe UI' };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillColor } };
+        cell.border = border;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      };
+
+      const titleCell = worksheet.getCell('A1');
+      titleCell.font = { bold: true, size: 16, color: { argb: 'FFFFF8F1' }, name: 'Segoe UI Semibold' };
+      titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF121212' } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+      ['A2', 'A3'].forEach((cellRef) => {
+        const cell = worksheet.getCell(cellRef);
+        cell.font = { bold: true, size: 10, color: { argb: 'FFFFC58A' }, name: 'Segoe UI Semibold' };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1A1A1A' } };
+        cell.alignment = { vertical: 'middle', wrapText: true };
+      });
+
+      worksheet.getRow(4).eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FF111111' }, size: 11, name: 'Segoe UI Semibold' };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF8C32' } };
+        cell.border = border;
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      });
+
+      reportRows.forEach((row, rowIndex) => {
+        const excelRow = worksheet.addRow(
+          exportColumns.reduce<Record<string, string>>((accumulator, column) => {
+            accumulator[column.key] = column.getValue(row);
+            return accumulator;
+          }, {})
+        );
+        excelRow.height = exportColumns.some((column) => column.wrap) ? 42 : 26;
+        const baseFill = rowIndex % 2 === 0 ? 'FF111111' : 'FF1A1A1A';
+        excelRow.eachCell((cell, columnNumber) => {
+          applyDarkCell(cell, baseFill);
+          const column = exportColumns[columnNumber - 1];
+          if (!column) return;
+          if (column.key === 'name') {
+            cell.font = {
+              color: { argb: 'FFFFC58A' },
+              size: 11,
+              bold: true,
+              name: 'Segoe UI Semibold'
+            };
+          }
+          if (column.wrap) {
+            cell.font = {
+              color: { argb: column.key === 'name' ? 'FFFFC58A' : 'FFF7ED' },
+              size: column.key === 'name' ? 11 : 10,
+              bold: column.key === 'name',
+              name: column.key === 'name' ? 'Segoe UI Semibold' : 'Segoe UI'
+            };
+          }
+          cell.alignment = {
+            horizontal: column.align,
+            vertical: 'middle',
+            wrapText: column.wrap
+          };
+        });
+
+        const diffTodayColumnIndex = exportColumns.findIndex((column) => column.key === 'diffToday') + 1;
+        const diffHighlightCandidates = [
+          row.currentRealDiffQty,
+          row.currentAvailableDiffQty
+        ].filter((value): value is number => value !== null && Number.isFinite(value));
+        const diffHighlightValue =
+          diffHighlightCandidates.length === 0
+            ? null
+            : diffHighlightCandidates.reduce((currentMax, value) =>
+                Math.abs(value) > Math.abs(currentMax) ? value : currentMax
+              );
+
+        if (diffTodayColumnIndex > 0 && diffHighlightValue !== null) {
+          const diffTodayCell = excelRow.getCell(diffTodayColumnIndex);
+          diffTodayCell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: {
+              argb:
+                diffHighlightValue === 0
+                  ? 'FF173A2A'
+                  : Math.abs(diffHighlightValue) >= 10
+                    ? 'FF7A2600'
+                    : 'FF4E1B00'
+            }
+          };
+          diffTodayCell.font = { color: { argb: 'FFFFF4EA' }, bold: true, name: 'Segoe UI Semibold' };
+        }
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `spis-oryginalow-raport-${spisDate}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ title: 'Nie udalo sie wyeksportowac raportu XLSX.', tone: 'error' });
+    }
+  };
+
   const materialGroupList = useMemo(() => {
     const list = [...materialGroups.values()].map((group) => {
       const total = group.entries.reduce((sum, entry) => sum + entry.qty, 0);
@@ -1522,6 +1896,107 @@ export default function OriginalInventoryPage() {
         })
         .join(' + ')
     : '';
+  const reportVisibilitySuffix = getReportVisibilitySuffix(showReportRealQty, showReportAvailableQty);
+  const reportValuesVisible = showReportRealQty || showReportAvailableQty;
+  const reportColumns = [
+    'Material',
+    ...(reportValuesVisible ? [`ERP dzis${reportVisibilitySuffix}`] : []),
+    'Spis dzis',
+    ...(reportValuesVisible ? [`Roznica dzis${reportVisibilitySuffix}`] : []),
+    ...(reportValuesVisible
+      ? ['Roznica -1', 'Roznica -2', 'Roznica -3', 'Roznica -4', 'Roznica -5']
+      : []),
+    'Jedn.'
+  ];
+  const reportTableRows = reportRows.map((row) => [
+    row.name,
+    ...(reportValuesVisible
+      ? [
+          formatVisibleReportPair(
+            showReportRealQty,
+            showReportAvailableQty,
+            row.currentRealErpQty,
+            row.currentAvailableErpQty
+          )
+        ]
+      : []),
+    formatQty(row.currentSpisQty),
+    ...(reportValuesVisible
+      ? [
+          formatVisibleReportPair(
+            showReportRealQty,
+            showReportAvailableQty,
+            row.currentRealDiffQty,
+            row.currentAvailableDiffQty,
+            formatSignedQty
+          ),
+          formatVisibleReportHistoryPair(
+            showReportRealQty,
+            showReportAvailableQty,
+            row.previousRealDiffs[0],
+            row.previousAvailableDiffs[0]
+          ),
+          formatVisibleReportHistoryPair(
+            showReportRealQty,
+            showReportAvailableQty,
+            row.previousRealDiffs[1],
+            row.previousAvailableDiffs[1]
+          ),
+          formatVisibleReportHistoryPair(
+            showReportRealQty,
+            showReportAvailableQty,
+            row.previousRealDiffs[2],
+            row.previousAvailableDiffs[2]
+          ),
+          formatVisibleReportHistoryPair(
+            showReportRealQty,
+            showReportAvailableQty,
+            row.previousRealDiffs[3],
+            row.previousAvailableDiffs[3]
+          ),
+          formatVisibleReportHistoryPair(
+            showReportRealQty,
+            showReportAvailableQty,
+            row.previousRealDiffs[4],
+            row.previousAvailableDiffs[4]
+          )
+        ]
+      : []),
+    row.unit
+  ]);
+  const dailyComparisonColumns = [
+    'Material',
+    ...(reportValuesVisible ? [`ERP${reportVisibilitySuffix}`] : []),
+    'Spis',
+    ...(reportValuesVisible ? [`Roznica${reportVisibilitySuffix}`] : []),
+    'Jedn.'
+  ];
+  const dailyComparisonRows = dailyComparison.map((row) => [
+    row.name,
+    ...(reportValuesVisible
+      ? [
+          formatVisibleReportPair(
+            showReportRealQty,
+            showReportAvailableQty,
+            row.realErpQty,
+            row.availableErpQty
+          )
+        ]
+      : []),
+    formatQty(row.spisQty),
+    ...(reportValuesVisible
+      ? [
+          formatVisibleReportPair(
+            showReportRealQty,
+            showReportAvailableQty,
+            row.realDiffQty,
+            row.availableDiffQty,
+            formatSignedQty
+          )
+        ]
+      : []),
+    row.unit
+  ]);
 
 
   return (
@@ -1990,12 +2465,13 @@ export default function OriginalInventoryPage() {
               <div className="space-y-1">
                 <label className="text-xs uppercase tracking-wide text-dim">
                   Import stanow ERP (kolumna A: nazwa, kolumna B: stan do dyspozycji ERP, kolumna C:
-                  stan rzeczywisty ERP, kolumna D: jednostka - opcjonalnie)
+                  stan rzeczywisty ERP, kolumna D: jednostka - opcjonalnie; PDF: nazwa + stan
+                  rzeczywisty + stan do dyspozycji)
                 </label>
                 <Input
                   key={erpSnapshotImportInputKey}
                   type="file"
-                  accept=".csv,.xls,.xlsx"
+                  accept=".csv,.xls,.xlsx,.pdf"
                   onChange={async (event) => {
                     const file = event.target.files?.[0] ?? null;
                     await handleErpSnapshotFileChange(file);
@@ -2181,6 +2657,18 @@ export default function OriginalInventoryPage() {
               Raport obejmuje tylko pozycje spisane w wybranym dniu i pokazuje rozjazd na tle
               5 poprzednich różnic tej samej pozycji.
             </p>
+            <div className="flex flex-wrap items-center gap-4">
+              <Toggle
+                checked={showReportRealQty}
+                onCheckedChange={setShowReportRealQty}
+                label="Pokaz stan rzeczywisty"
+              />
+              <Toggle
+                checked={showReportAvailableQty}
+                onCheckedChange={setShowReportAvailableQty}
+                label="Pokaz stan do dyspozycji"
+              />
+            </div>
             <div className="grid gap-3 md:grid-cols-3 md:items-end">
               <div>
                 <label className="text-xs uppercase tracking-wide text-dim">Dzień</label>
@@ -2208,7 +2696,9 @@ export default function OriginalInventoryPage() {
             ) : reportRows.length === 0 ? (
               <p className="text-sm text-dim">Brak wpisów dla wybranego dnia.</p>
             ) : (
-              <DataTable
+              <>
+                {false && (
+                  <DataTable
                 columns={[
                   'Material',
                   'ERP dziś (rzecz./dysp.)',
@@ -2233,7 +2723,10 @@ export default function OriginalInventoryPage() {
                   formatDiffHistoryPair(row.previousRealDiffs[4], row.previousAvailableDiffs[4]),
                   row.unit
                 ])}
-              />
+                  />
+                )}
+                <DataTable columns={reportColumns} rows={reportTableRows} />
+              </>
             )}
           </Card>
           <Card className="space-y-3">
@@ -2247,7 +2740,10 @@ export default function OriginalInventoryPage() {
             ) : dailyComparison.length === 0 ? (
               <p className="text-sm text-dim">Brak danych ERP i spisu dla wybranego dnia.</p>
             ) : (
-              <DataTable
+              <>
+                <DataTable columns={dailyComparisonColumns} rows={dailyComparisonRows} />
+                {false && (
+                  <DataTable
                 columns={['Material', 'ERP (rzecz./dysp.)', 'Spis', 'Różnica (rzecz./dysp.)', 'Jedn.']}
                 rows={dailyComparison.map((row) => [
                   row.name,
@@ -2256,7 +2752,9 @@ export default function OriginalInventoryPage() {
                   formatDiffPair(row.realDiffQty, row.availableDiffQty),
                   row.unit
                 ])}
-              />
+                  />
+                )}
+              </>
             )}
           </Card>
         </TabsContent>
