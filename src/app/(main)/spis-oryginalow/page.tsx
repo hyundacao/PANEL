@@ -146,14 +146,14 @@ const formatExcelSignedQty = (value: number | null | undefined) => {
 
 const formatDiffHistoryCell = (point?: { dateKey: string; diffQty: number | null } | null) => {
   if (!point) return 'brak danych';
-  if (point.diffQty === null) return `${formatCompactDate(point.dateKey)}: brak danych`;
-  return `${formatCompactDate(point.dateKey)}: ${formatSignedQty(point.diffQty)}`;
+  if (point.diffQty === null) return 'brak danych';
+  return formatSignedQty(point.diffQty);
 };
 
 const formatExcelDiffHistoryCell = (point?: { dateKey: string; diffQty: number | null } | null) => {
   if (!point) return 'brak danych';
-  if (point.diffQty === null) return `${formatCompactDate(point.dateKey)}: brak danych`;
-  return `${formatCompactDate(point.dateKey)}: ${formatExcelSignedQty(point.diffQty)}`;
+  if (point.diffQty === null) return 'brak danych';
+  return formatExcelSignedQty(point.diffQty);
 };
 
 const formatErpSnapshotPair = (
@@ -174,38 +174,22 @@ const formatDiffHistoryPair = (
   formatter: (point?: { dateKey: string; diffQty: number | null } | null) => string = formatDiffHistoryCell
 ) => `Rzecz: ${formatter(realPoint)} | Dysp: ${formatter(availablePoint)}`;
 
-const getReportVisibilitySuffix = (showRealQty: boolean, showAvailableQty: boolean) => {
-  const labels: string[] = [];
-  if (showRealQty) labels.push('rzecz.');
-  if (showAvailableQty) labels.push('dysp.');
-  return labels.length > 0 ? ` (${labels.join('/')})` : '';
-};
+const getReportVisibilitySuffix = (showAvailableQty: boolean) =>
+  showAvailableQty ? ' (dysp.)' : ' (rzecz.)';
 
 const formatVisibleReportPair = (
-  showRealQty: boolean,
   showAvailableQty: boolean,
   realQty: number | null | undefined,
   availableQty: number | null | undefined,
   formatter: (value: number | null | undefined) => string = formatQty
-) => {
-  const parts: string[] = [];
-  if (showRealQty) parts.push(`Rzecz: ${formatter(realQty)}`);
-  if (showAvailableQty) parts.push(`Dysp: ${formatter(availableQty)}`);
-  return parts.join(' | ');
-};
+) => formatter(showAvailableQty ? availableQty : realQty);
 
 const formatVisibleReportHistoryPair = (
-  showRealQty: boolean,
   showAvailableQty: boolean,
   realPoint?: { dateKey: string; diffQty: number | null } | null,
   availablePoint?: { dateKey: string; diffQty: number | null } | null,
   formatter: (point?: { dateKey: string; diffQty: number | null } | null) => string = formatDiffHistoryCell
-) => {
-  const parts: string[] = [];
-  if (showRealQty) parts.push(`Rzecz: ${formatter(realPoint)}`);
-  if (showAvailableQty) parts.push(`Dysp: ${formatter(availablePoint)}`);
-  return parts.join(' | ');
-};
+) => formatter(showAvailableQty ? availablePoint : realPoint);
 
 const normalizeImportCell = (value: unknown) =>
   String(value ?? '')
@@ -361,8 +345,8 @@ export default function OriginalInventoryPage() {
   const [showNameSuggestions, setShowNameSuggestions] = useState(false);
   const [reportQuery, setReportQuery] = useState('');
   const [showReportSuggestions, setShowReportSuggestions] = useState(false);
-  const [showReportRealQty, setShowReportRealQty] = useState(true);
-  const [showReportAvailableQty, setShowReportAvailableQty] = useState(true);
+  const [showReportAvailableQty, setShowReportAvailableQty] = useState(false);
+  const [showReportUncountedItems, setShowReportUncountedItems] = useState(false);
   const [spisDate, setSpisDate] = useState(getLocalDateValue());
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogImportFile, setCatalogImportFile] = useState<File | null>(null);
@@ -987,6 +971,28 @@ export default function OriginalInventoryPage() {
       return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
     });
   }, [dailyEntries]);
+  const reportSourceEntries = useMemo(() => {
+    const rows = [...dailySummary];
+    if (!showReportUncountedItems) return rows;
+
+    const countedMaterialKeys = new Set(dailySummary.map((entry) => entry.key));
+    erpSnapshotMap.forEach((entry, key) => {
+      if (countedMaterialKeys.has(key)) return;
+      if (dailyReportExcludePatterns.some((pattern) => pattern.test(entry.name))) return;
+      rows.push({
+        key,
+        name: entry.name,
+        unit: entry.unit,
+        qty: 0
+      });
+    });
+
+    return rows.sort((a, b) => {
+      const nameCompare = exportCatalogCollator.compare(a.name.trim(), b.name.trim());
+      if (nameCompare !== 0) return nameCompare;
+      return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
+    });
+  }, [dailySummary, erpSnapshotMap, showReportUncountedItems]);
   const inventoryHistoryByMaterial = useMemo(() => {
     if (!spisDate) return new Map<string, Array<{ dateKey: string; name: string; unit: string; qty: number }>>();
     const grouped = new Map<
@@ -1029,24 +1035,26 @@ export default function OriginalInventoryPage() {
   }, [entries, spisDate]);
   const reportPreviousSnapshotDates = useMemo(() => {
     const dates = new Set<string>();
-    dailySummary.forEach((entry) => {
+    reportSourceEntries.forEach((entry) => {
       (inventoryHistoryByMaterial.get(entry.key) ?? [])
-        .slice(1, 5)
+        .filter((point) => point.dateKey < spisDate)
+        .slice(0, 5)
         .forEach((point) => dates.add(point.dateKey));
     });
     return [...dates].sort((a, b) => b.localeCompare(a));
-  }, [dailySummary, inventoryHistoryByMaterial]);
+  }, [inventoryHistoryByMaterial, reportSourceEntries, spisDate]);
+  const reportHistoryDates = useMemo(() => reportPreviousSnapshotDates.slice(0, 5), [reportPreviousSnapshotDates]);
   const {
     data: historicalErpSnapshotState = {
       items: [] as OriginalInventoryErpSnapshotEntry[],
       migrationRequired: false
     }
   } = useQuery({
-    queryKey: ['spis-oryginalow-erp-snapshot-history', reportPreviousSnapshotDates],
+    queryKey: ['spis-oryginalow-erp-snapshot-history', reportHistoryDates],
     queryFn: async () => {
       try {
         return {
-          items: await getOriginalInventoryErpSnapshotsByDates(reportPreviousSnapshotDates),
+          items: await getOriginalInventoryErpSnapshotsByDates(reportHistoryDates),
           migrationRequired: false
         };
       } catch (error) {
@@ -1059,7 +1067,7 @@ export default function OriginalInventoryPage() {
         throw error;
       }
     },
-    enabled: reportPreviousSnapshotDates.length > 0,
+    enabled: reportHistoryDates.length > 0,
     retry: false
   });
   const erpSnapshotSummary = useMemo(() => {
@@ -1132,11 +1140,14 @@ export default function OriginalInventoryPage() {
     };
   }, [erpSnapshotEntries]);
   const reportRows = useMemo(() => {
-    return [...dailySummary]
+    return [...reportSourceEntries]
       .map((entry) => {
-        const recentComparisons = (inventoryHistoryByMaterial.get(entry.key) ?? [])
-          .slice(0, 6)
-          .map((point) => {
+        const historyByDate = new Map(
+          (inventoryHistoryByMaterial.get(entry.key) ?? []).map((point) => [point.dateKey, point])
+        );
+        const previousComparisons = reportHistoryDates.map((dateKey) => {
+          const point = historyByDate.get(dateKey);
+          if (!point) return null;
             const erpPoint = erpSnapshotByDateAndMaterial.get(point.dateKey)?.get(entry.key) ?? null;
             const realErpQty = erpPoint?.realQty ?? null;
             const availableErpQty = erpPoint?.availableQty ?? null;
@@ -1150,7 +1161,7 @@ export default function OriginalInventoryPage() {
             };
           });
         const currentSnapshot = erpSnapshotMap.get(entry.key);
-        const currentComparison = recentComparisons[0] ?? {
+        const currentComparison = {
           dateKey: spisDate,
           spisQty: entry.qty,
           realErpQty: currentSnapshot?.realQty ?? null,
@@ -1162,7 +1173,6 @@ export default function OriginalInventoryPage() {
               ? null
               : entry.qty - (currentSnapshot?.availableQty ?? 0)
         };
-        const previousDiffs = Array.from({ length: 5 }, (_, index) => recentComparisons[index + 1] ?? null);
         return {
           key: entry.key,
           name: entry.name,
@@ -1172,7 +1182,7 @@ export default function OriginalInventoryPage() {
           currentSpisQty: currentComparison.spisQty,
           currentRealDiffQty: currentComparison.realDiffQty,
           currentAvailableDiffQty: currentComparison.availableDiffQty,
-          previousRealDiffs: previousDiffs.map((point) =>
+          previousRealDiffs: previousComparisons.map((point) =>
             point
               ? {
                   dateKey: point.dateKey,
@@ -1180,7 +1190,7 @@ export default function OriginalInventoryPage() {
                 }
               : null
           ),
-          previousAvailableDiffs: previousDiffs.map((point) =>
+          previousAvailableDiffs: previousComparisons.map((point) =>
             point
               ? {
                   dateKey: point.dateKey,
@@ -1195,7 +1205,7 @@ export default function OriginalInventoryPage() {
         if (nameCompare !== 0) return nameCompare;
         return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
       });
-  }, [dailySummary, inventoryHistoryByMaterial, erpSnapshotByDateAndMaterial, erpSnapshotMap, spisDate]);
+  }, [erpSnapshotByDateAndMaterial, erpSnapshotMap, inventoryHistoryByMaterial, reportHistoryDates, reportSourceEntries, spisDate]);
   const dailyComparison = useMemo(
     () =>
       reportRows.map((row) => ({
@@ -1896,105 +1906,81 @@ export default function OriginalInventoryPage() {
         })
         .join(' + ')
     : '';
-  const reportVisibilitySuffix = getReportVisibilitySuffix(showReportRealQty, showReportAvailableQty);
-  const reportValuesVisible = showReportRealQty || showReportAvailableQty;
+  const reportVisibilitySuffix = getReportVisibilitySuffix(showReportAvailableQty);
+  const currentReportDateLabel = formatCompactDate(spisDate);
+  const reportHistoryDateLabels = Array.from({ length: 5 }, (_, index) =>
+    reportHistoryDates[index] ? formatCompactDate(reportHistoryDates[index]) : '-'
+  );
   const reportColumns = [
     'Material',
-    ...(reportValuesVisible ? [`ERP dzis${reportVisibilitySuffix}`] : []),
-    'Spis dzis',
-    ...(reportValuesVisible ? [`Roznica dzis${reportVisibilitySuffix}`] : []),
-    ...(reportValuesVisible
-      ? ['Roznica -1', 'Roznica -2', 'Roznica -3', 'Roznica -4', 'Roznica -5']
-      : []),
+    `ERP ${currentReportDateLabel}${reportVisibilitySuffix}`,
+    `Spis ${currentReportDateLabel}`,
+    `Roznica ${currentReportDateLabel}${reportVisibilitySuffix}`,
+    `Roznica ${reportHistoryDateLabels[0]}`,
+    `Roznica ${reportHistoryDateLabels[1]}`,
+    `Roznica ${reportHistoryDateLabels[2]}`,
+    `Roznica ${reportHistoryDateLabels[3]}`,
+    `Roznica ${reportHistoryDateLabels[4]}`,
     'Jedn.'
   ];
   const reportTableRows = reportRows.map((row) => [
     row.name,
-    ...(reportValuesVisible
-      ? [
-          formatVisibleReportPair(
-            showReportRealQty,
-            showReportAvailableQty,
-            row.currentRealErpQty,
-            row.currentAvailableErpQty
-          )
-        ]
-      : []),
+    formatVisibleReportPair(
+      showReportAvailableQty,
+      row.currentRealErpQty,
+      row.currentAvailableErpQty
+    ),
     formatQty(row.currentSpisQty),
-    ...(reportValuesVisible
-      ? [
-          formatVisibleReportPair(
-            showReportRealQty,
-            showReportAvailableQty,
-            row.currentRealDiffQty,
-            row.currentAvailableDiffQty,
-            formatSignedQty
-          ),
-          formatVisibleReportHistoryPair(
-            showReportRealQty,
-            showReportAvailableQty,
-            row.previousRealDiffs[0],
-            row.previousAvailableDiffs[0]
-          ),
-          formatVisibleReportHistoryPair(
-            showReportRealQty,
-            showReportAvailableQty,
-            row.previousRealDiffs[1],
-            row.previousAvailableDiffs[1]
-          ),
-          formatVisibleReportHistoryPair(
-            showReportRealQty,
-            showReportAvailableQty,
-            row.previousRealDiffs[2],
-            row.previousAvailableDiffs[2]
-          ),
-          formatVisibleReportHistoryPair(
-            showReportRealQty,
-            showReportAvailableQty,
-            row.previousRealDiffs[3],
-            row.previousAvailableDiffs[3]
-          ),
-          formatVisibleReportHistoryPair(
-            showReportRealQty,
-            showReportAvailableQty,
-            row.previousRealDiffs[4],
-            row.previousAvailableDiffs[4]
-          )
-        ]
-      : []),
+    formatVisibleReportPair(
+      showReportAvailableQty,
+      row.currentRealDiffQty,
+      row.currentAvailableDiffQty,
+      formatSignedQty
+    ),
+    formatVisibleReportHistoryPair(
+      showReportAvailableQty,
+      row.previousRealDiffs[0],
+      row.previousAvailableDiffs[0]
+    ),
+    formatVisibleReportHistoryPair(
+      showReportAvailableQty,
+      row.previousRealDiffs[1],
+      row.previousAvailableDiffs[1]
+    ),
+    formatVisibleReportHistoryPair(
+      showReportAvailableQty,
+      row.previousRealDiffs[2],
+      row.previousAvailableDiffs[2]
+    ),
+    formatVisibleReportHistoryPair(
+      showReportAvailableQty,
+      row.previousRealDiffs[3],
+      row.previousAvailableDiffs[3]
+    ),
+    formatVisibleReportHistoryPair(
+      showReportAvailableQty,
+      row.previousRealDiffs[4],
+      row.previousAvailableDiffs[4]
+    ),
     row.unit
   ]);
   const dailyComparisonColumns = [
     'Material',
-    ...(reportValuesVisible ? [`ERP${reportVisibilitySuffix}`] : []),
-    'Spis',
-    ...(reportValuesVisible ? [`Roznica${reportVisibilitySuffix}`] : []),
+    `ERP ${currentReportDateLabel}${reportVisibilitySuffix}`,
+    `Spis ${currentReportDateLabel}`,
+    `Roznica ${currentReportDateLabel}${reportVisibilitySuffix}`,
     'Jedn.'
   ];
   const dailyComparisonRows = dailyComparison.map((row) => [
     row.name,
-    ...(reportValuesVisible
-      ? [
-          formatVisibleReportPair(
-            showReportRealQty,
-            showReportAvailableQty,
-            row.realErpQty,
-            row.availableErpQty
-          )
-        ]
-      : []),
+    formatVisibleReportPair(showReportAvailableQty, row.realErpQty, row.availableErpQty),
     formatQty(row.spisQty),
-    ...(reportValuesVisible
-      ? [
-          formatVisibleReportPair(
-            showReportRealQty,
-            showReportAvailableQty,
-            row.realDiffQty,
-            row.availableDiffQty,
-            formatSignedQty
-          )
-        ]
-      : []),
+    formatVisibleReportPair(
+      showReportAvailableQty,
+      row.realDiffQty,
+      row.availableDiffQty,
+      formatSignedQty
+    ),
     row.unit
   ]);
 
@@ -2659,14 +2645,18 @@ export default function OriginalInventoryPage() {
             </p>
             <div className="flex flex-wrap items-center gap-4">
               <Toggle
-                checked={showReportRealQty}
-                onCheckedChange={setShowReportRealQty}
-                label="Pokaz stan rzeczywisty"
-              />
-              <Toggle
                 checked={showReportAvailableQty}
                 onCheckedChange={setShowReportAvailableQty}
-                label="Pokaz stan do dyspozycji"
+                label={
+                  showReportAvailableQty
+                    ? 'Tryb raportu: stan do dyspozycji'
+                    : 'Tryb raportu: stan rzeczywisty'
+                }
+              />
+              <Toggle
+                checked={showReportUncountedItems}
+                onCheckedChange={setShowReportUncountedItems}
+                label="Pokaz pozycje nie spisane"
               />
             </div>
             <div className="grid gap-3 md:grid-cols-3 md:items-end">
@@ -2725,7 +2715,12 @@ export default function OriginalInventoryPage() {
                 ])}
                   />
                 )}
-                <DataTable columns={reportColumns} rows={reportTableRows} />
+                <DataTable
+                  columns={reportColumns}
+                  rows={reportTableRows}
+                  stickyHeader
+                  desktopMaxHeightClassName="max-h-[82vh]"
+                />
               </>
             )}
           </Card>
@@ -2741,7 +2736,12 @@ export default function OriginalInventoryPage() {
               <p className="text-sm text-dim">Brak danych ERP i spisu dla wybranego dnia.</p>
             ) : (
               <>
-                <DataTable columns={dailyComparisonColumns} rows={dailyComparisonRows} />
+                <DataTable
+                  columns={dailyComparisonColumns}
+                  rows={dailyComparisonRows}
+                  stickyHeader
+                  desktopMaxHeightClassName="max-h-[82vh]"
+                />
                 {false && (
                   <DataTable
                 columns={['Material', 'ERP (rzecz./dysp.)', 'Spis', 'Różnica (rzecz./dysp.)', 'Jedn.']}

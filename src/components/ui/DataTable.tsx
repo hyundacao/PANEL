@@ -7,13 +7,17 @@ export const DataTable = ({
   rows,
   onRowClick,
   renderRowDetails,
-  getRowClassName
+  getRowClassName,
+  stickyHeader = false,
+  desktopMaxHeightClassName
 }: {
   columns: Array<React.ReactNode>;
   rows: Array<Array<React.ReactNode>>;
   onRowClick?: (rowIndex: number) => void;
   renderRowDetails?: (rowIndex: number) => React.ReactNode | null;
   getRowClassName?: (rowIndex: number) => string;
+  stickyHeader?: boolean;
+  desktopMaxHeightClassName?: string;
 }) => (
   <div className="overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(0,0,0,0.55))] shadow-[0_18px_40px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]">
     <div className="space-y-3 p-3 md:hidden">
@@ -58,13 +62,23 @@ export const DataTable = ({
       })}
     </div>
 
-    <table className="hidden w-full text-sm md:table">
-      <thead className="bg-[linear-gradient(90deg,rgba(255,122,26,0.18),rgba(255,255,255,0.03))] text-title">
+    <div className={cn('hidden md:block', desktopMaxHeightClassName && cn('overflow-auto', desktopMaxHeightClassName))}>
+      <table className="w-full text-sm">
+      <thead
+        className={cn(
+          'bg-[linear-gradient(90deg,rgba(255,122,26,0.18),rgba(255,255,255,0.03))] text-title',
+          stickyHeader && 'sticky top-0 z-10'
+        )}
+      >
         <tr>
           {columns.map((col, idx) => (
             <th
               key={`col-${idx}`}
-              className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-title"
+              className={cn(
+                'px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-title',
+                stickyHeader &&
+                  'bg-[linear-gradient(90deg,rgba(32,18,8,0.98),rgba(18,18,18,0.98))] backdrop-blur'
+              )}
             >
               {col}
             </th>
@@ -118,5 +132,6 @@ export const DataTable = ({
         })}
       </tbody>
     </table>
+    </div>
   </div>
 );
