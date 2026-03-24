@@ -5,6 +5,10 @@ import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import {
+  normalizeOriginalInventoryName,
+  normalizeOriginalInventoryNameKey
+} from '@/lib/utils/originalInventoryName';
+import {
   isOriginalInventoryErpSnapshotPdfFile,
   parseOriginalInventoryErpSnapshotPdfFile
 } from '@/lib/utils/originalInventoryErpPdf';
@@ -19,7 +23,7 @@ const normalizeImportCell = (value: unknown) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-const normalizeNameKey = (value: unknown) => normalizeImportCell(value).toLowerCase();
+const normalizeNameKey = (value: unknown) => normalizeOriginalInventoryNameKey(value);
 
 const parseSnapshotQty = (value: unknown) => {
   if (typeof value === 'number') {
@@ -96,7 +100,7 @@ const parseSnapshotImportFile = async (file: File) => {
   >();
 
   rows.forEach((row, index) => {
-    const name = normalizeImportCell(row?.[0]);
+    const name = normalizeOriginalInventoryName(row?.[0]);
     const availableQty = parseSnapshotQty(row?.[1]);
     const thirdCell = row?.[2];
     const thirdCellText = normalizeImportCell(thirdCell);

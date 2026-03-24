@@ -1,3 +1,8 @@
+import {
+  normalizeOriginalInventoryName,
+  normalizeOriginalInventoryNameKey
+} from '@/lib/utils/originalInventoryName';
+
 export type OriginalInventoryErpPdfItem = {
   name: string;
   realQty: number;
@@ -40,13 +45,13 @@ const normalizeImportCell = (value: unknown) =>
     .trim();
 
 const sanitizePdfName = (value: string) =>
-  normalizeImportCell(
+  normalizeOriginalInventoryName(
     value
       .replace(/\s+Objętość:.*$/i, '')
       .replace(/\s+Graffiti\.ERP.*$/i, '')
   );
 
-const normalizeNameKey = (value: unknown) => normalizeImportCell(value).toLowerCase();
+const normalizeNameKey = (value: unknown) => normalizeOriginalInventoryNameKey(value);
 
 const parseSnapshotQty = (value: unknown) => {
   if (typeof value === 'number') {

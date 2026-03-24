@@ -4,6 +4,10 @@ import * as XLSX from 'xlsx';
 import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import {
+  normalizeOriginalInventoryName,
+  normalizeOriginalInventoryNameKey
+} from '@/lib/utils/originalInventoryName';
 
 export const dynamic = 'force-dynamic';
 const ORIGINAL_CATALOG_PAGE_SIZE = 1000;
@@ -13,7 +17,7 @@ const normalizeImportCell = (value: unknown) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-const normalizeCatalogNameKey = (value: unknown) => normalizeImportCell(value).toLowerCase();
+const normalizeCatalogNameKey = (value: unknown) => normalizeOriginalInventoryNameKey(value);
 
 const isCatalogHeaderRow = (name: string, unit: string) => {
   const normalizedName = name.toLowerCase();
@@ -39,7 +43,7 @@ const parseCatalogImportFile = async (file: File): Promise<Array<{ name: string;
   const items: Array<{ name: string; unit: string }> = [];
   const seen = new Set<string>();
   rows.forEach((row, index) => {
-    const name = normalizeImportCell(row?.[0]);
+    const name = normalizeOriginalInventoryName(row?.[0]);
     const unitCell = normalizeImportCell(row?.[1]);
     if (!name) return;
     if (index === 0 && isCatalogHeaderRow(name, unitCell)) return;

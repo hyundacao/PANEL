@@ -58,6 +58,7 @@ import { Toggle } from '@/components/ui/Toggle';
 import { SelectField } from '@/components/ui/Select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { DataTable } from '@/components/ui/DataTable';
+import { SearchInput } from '@/components/ui/SearchInput';
 import { useUiStore } from '@/lib/store/ui';
 import { useToastStore } from '@/components/ui/Toast';
 import { cn } from '@/lib/utils/cn';
@@ -264,6 +265,7 @@ const formatAuditElementLabel = (element?: string) => {
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const compareByName = (a: { name: string }, b: { name: string }) =>
   collator.compare(a.name, b.name);
+const normalizeSearchText = (value: string) => value.trim().toLowerCase();
 const PRZEMIALY_TAB_STORAGE_KEY = 'admin-przemialy-tab';
 const roleOptionsSorted = [...roleOptions].sort((a, b) => collator.compare(a.label, b.label));
 const cloneAccess = (access: UserAccess): UserAccess => ({
@@ -551,6 +553,14 @@ export default function AdminPage() {
     qty: '',
     note: ''
   });
+  const [inventoryMaterialSearch, setInventoryMaterialSearch] = useState('');
+  const [showInventoryMaterialSuggestions, setShowInventoryMaterialSuggestions] = useState(false);
+  const [inventoryNewMaterialForm, setInventoryNewMaterialForm] = useState({
+    name: '',
+    catalogId: '',
+    catalogSearch: ''
+  });
+  const [showInventoryCatalogSuggestions, setShowInventoryCatalogSuggestions] = useState(false);
   const [inventoryDrafts, setInventoryDrafts] = useState<Record<string, string>>({});
   const [inventoryFilters, setInventoryFilters] = useState({
     dateFrom: '',
@@ -579,6 +589,29 @@ export default function AdminPage() {
     inserted: number;
     skipped: number;
   } | null>(null);
+  const selectedInventoryMaterial = useMemo(
+    () => materialOptions.find((item) => item.id === inventoryForm.materialId) ?? null,
+    [inventoryForm.materialId, materialOptions]
+  );
+  const inventoryMaterialSuggestions = useMemo(() => {
+    const needle = normalizeSearchText(inventoryMaterialSearch);
+    if (needle.length < 2) return [];
+    const source = materialOptions.filter((item) => {
+      const haystack = [item.name, item.code].join(' ').toLowerCase();
+      return haystack.includes(needle);
+    });
+    return source.slice(0, 12);
+  }, [inventoryMaterialSearch, materialOptions]);
+  const selectedInventoryNewMaterialCatalog = useMemo(
+    () => erpCatalogOptions.find((item) => item.id === inventoryNewMaterialForm.catalogId) ?? null,
+    [erpCatalogOptions, inventoryNewMaterialForm.catalogId]
+  );
+  const inventoryCatalogSuggestions = useMemo(() => {
+    const needle = normalizeSearchText(inventoryNewMaterialForm.catalogSearch);
+    if (needle.length < 2) return [];
+    const source = erpCatalogOptions.filter((item) => item.name.toLowerCase().includes(needle));
+    return source.slice(0, 8);
+  }, [erpCatalogOptions, inventoryNewMaterialForm.catalogSearch]);
   const [materialImporting, setMaterialImporting] = useState(false);
   const [materialImportSummary, setMaterialImportSummary] = useState<{
     total: number;
@@ -2146,6 +2179,32 @@ export default function AdminPage() {
       qty: qtyValue
     });
   };
+  const handleSelectInventoryMaterial = (material: (typeof materialOptions)[number]) => {
+    setInventoryForm((prev) => ({ ...prev, materialId: material.id }));
+    setInventoryMaterialSearch(`${material.name} (${material.code.trim()})`);
+    setShowInventoryMaterialSuggestions(false);
+  };
+  const handleAddInventoryMaterial = async () => {
+    const name = inventoryNewMaterialForm.name.trim();
+    const catalogId = inventoryNewMaterialForm.catalogId.trim();
+    if (!catalogId) {
+      toast({ title: 'Wybierz kartoteke ERP', tone: 'error' });
+      return;
+    }
+    if (!name) {
+      toast({ title: 'Podaj nazwe przemialu', tone: 'error' });
+      return;
+    }
+    try {
+      const material = await addMaterialMutation.mutateAsync({ name, catalogId });
+      handleSelectInventoryMaterial(material);
+      setInventoryNewMaterialForm({ name: '', catalogId: '', catalogSearch: '' });
+      setShowInventoryCatalogSuggestions(false);
+      toast({ title: 'Dodano przemial i ustawiono go w inwentaryzacji', tone: 'success' });
+    } catch {
+      return;
+    }
+  };
 
   const handleAddSparePart = () => {
     const code = sparePartForm.code.trim();
@@ -3351,26 +3410,175 @@ export default function AdminPage() {
                   </div>
                   <div>
                     <label className="text-xs uppercase tracking-wide text-dim">Przemial</label>
-                    <SelectField
-                      value={inventoryForm.materialId}
-                      onChange={(event) =>
-                        setInventoryForm((prev) => ({
-                          ...prev,
-                          materialId: event.target.value
-                        }))
-                      }
-                    >
-                      <option value="">Wybierz przemial</option>
-                      {materialGroups.map((group) => (
-                        <optgroup key={`catalog-${group}`} label={group}>
-                          {(materialOptionsByGroup.get(group) ?? []).map((mat) => (
-                            <option key={mat.id} value={mat.id}>
-                              {mat.name}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </SelectField>
+                    <div className="relative space-y-2">
+                      <SearchInput
+                        value={inventoryMaterialSearch}
+                        onChange={(event) => {
+                          const nextValue = event.target.value;
+                          setInventoryMaterialSearch(nextValue);
+                          setInventoryForm((prev) => ({ ...prev, materialId: '' }));
+                          setShowInventoryMaterialSuggestions(true);
+                        }}
+                        onFocus={() => setShowInventoryMaterialSuggestions(true)}
+                        onBlur={() => {
+                          setTimeout(() => setShowInventoryMaterialSuggestions(false), 120);
+                        }}
+                        placeholder="Wpisz kilka liter przemialu albo kartoteki ERP"
+                        clearable
+                        onClear={() => {
+                          setInventoryMaterialSearch('');
+                          setInventoryForm((prev) => ({ ...prev, materialId: '' }));
+                          setShowInventoryMaterialSuggestions(false);
+                        }}
+                      />
+                      {selectedInventoryMaterial && (
+                        <p className="text-xs text-dim">
+                          Wybrany: {selectedInventoryMaterial.name} | Kartoteka ERP:{' '}
+                          {selectedInventoryMaterial.code || 'Brak'}
+                        </p>
+                      )}
+                      {showInventoryMaterialSuggestions &&
+                        normalizeSearchText(inventoryMaterialSearch).length >= 2 && (
+                          <div className="absolute z-20 mt-2 w-full max-h-72 overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+                            {inventoryMaterialSuggestions.length === 0 ? (
+                              <p className="px-3 py-2 text-sm text-dim">Brak przemialow dla podanej frazy.</p>
+                            ) : (
+                              inventoryMaterialSuggestions.map((mat) => {
+                                const active = inventoryForm.materialId === mat.id;
+                                return (
+                                  <button
+                                    key={mat.id}
+                                    type="button"
+                                    onMouseDown={(event) => {
+                                      event.preventDefault();
+                                      handleSelectInventoryMaterial(mat);
+                                    }}
+                                    className={cn(
+                                      'flex w-full items-start justify-between gap-3 px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]',
+                                      active && 'bg-[rgba(255,122,26,0.16)] text-title'
+                                    )}
+                                  >
+                                    <span className="font-semibold">{mat.name}</span>
+                                    <span className="text-xs text-dim">{mat.code || 'Brak kartoteki ERP'}</span>
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-[rgba(255,122,26,0.16)] bg-[rgba(255,255,255,0.03)] p-4">
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                        Dodaj nowy przemial
+                      </p>
+                      <p className="text-sm text-dim">
+                        Jesli nie ma go jeszcze na liscie, dodaj przemial tutaj i od razu przypisz
+                        kartoteke ERP.
+                      </p>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div>
+                        <label className="text-xs uppercase tracking-wide text-dim">Nazwa przemialu</label>
+                        <Input
+                          value={inventoryNewMaterialForm.name}
+                          onChange={(event) =>
+                            setInventoryNewMaterialForm((prev) => ({
+                              ...prev,
+                              name: event.target.value
+                            }))
+                          }
+                          placeholder="np. ABS 9203"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs uppercase tracking-wide text-dim">
+                          Kartoteka ERP ze stanow magazynowych
+                        </label>
+                        <div className="relative space-y-2">
+                          <SearchInput
+                            value={inventoryNewMaterialForm.catalogSearch}
+                            onChange={(event) => {
+                              setInventoryNewMaterialForm((prev) => ({
+                                ...prev,
+                                catalogSearch: event.target.value,
+                                catalogId: ''
+                              }));
+                              setShowInventoryCatalogSuggestions(true);
+                            }}
+                            onFocus={() => setShowInventoryCatalogSuggestions(true)}
+                            onBlur={() => {
+                              setTimeout(() => setShowInventoryCatalogSuggestions(false), 120);
+                            }}
+                            placeholder="Wpisz kilka liter kartoteki ERP"
+                            clearable
+                            onClear={() => {
+                              setInventoryNewMaterialForm((prev) => ({
+                                ...prev,
+                                catalogSearch: '',
+                                catalogId: ''
+                              }));
+                              setShowInventoryCatalogSuggestions(false);
+                            }}
+                          />
+                          {selectedInventoryNewMaterialCatalog && (
+                            <p className="text-xs text-dim">
+                              Wybrana kartoteka: {selectedInventoryNewMaterialCatalog.name}
+                            </p>
+                          )}
+                          {showInventoryCatalogSuggestions &&
+                            normalizeSearchText(inventoryNewMaterialForm.catalogSearch).length >= 2 && (
+                              <div className="absolute z-20 mt-2 w-full max-h-72 overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+                                {inventoryCatalogSuggestions.length === 0 ? (
+                                  <p className="px-3 py-2 text-sm text-dim">Brak kartotek dla podanej frazy.</p>
+                                ) : (
+                                  inventoryCatalogSuggestions.map((item) => {
+                                    const active = inventoryNewMaterialForm.catalogId === item.id;
+                                    return (
+                                      <button
+                                        key={item.id}
+                                        type="button"
+                                        onMouseDown={(event) => {
+                                          event.preventDefault();
+                                          setInventoryNewMaterialForm((prev) => ({
+                                            ...prev,
+                                            catalogId: item.id,
+                                            catalogSearch: item.name
+                                          }));
+                                          setShowInventoryCatalogSuggestions(false);
+                                        }}
+                                        className={cn(
+                                          'flex w-full items-start justify-between gap-3 px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]',
+                                          active && 'bg-[rgba(255,122,26,0.16)] text-title'
+                                        )}
+                                      >
+                                        <span>{item.name}</span>
+                                      </button>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-3">
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          setInventoryNewMaterialForm({ name: '', catalogId: '', catalogSearch: '' })
+                        }
+                      >
+                        Wyczysc nowy przemial
+                      </Button>
+                      <Button onClick={handleAddInventoryMaterial} disabled={addMaterialMutation.isPending}>
+                        Dodaj przemial i wybierz
+                      </Button>
+                    </div>
                   </div>
                 </div>
 
