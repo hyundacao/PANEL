@@ -1539,7 +1539,18 @@ export default function OriginalInventoryPage() {
         }
         return result;
       };
-      const exportColumns = [
+      type ExportColumn = {
+        key: string;
+        header: string;
+        wrap: boolean;
+        align: 'left' | 'center' | 'right';
+        minWidth: number;
+        maxWidth: number;
+        multiplier?: number;
+        padding?: number;
+        getValue: (row: (typeof reportRows)[number]) => string;
+      };
+      const exportColumns: ExportColumn[] = [
         {
           key: 'name',
           header: 'Material',
@@ -1613,8 +1624,8 @@ export default function OriginalInventoryPage() {
             [column.header, ...reportRows.map((row) => column.getValue(row))],
             column.minWidth,
             column.maxWidth,
-            column.multiplier,
-            column.padding
+            column.multiplier ?? 1,
+            column.padding ?? 2
           )
         ])
       ) as Record<string, number>;
