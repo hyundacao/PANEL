@@ -597,11 +597,18 @@ export const addOriginalInventory = async (payload: {
 export const addOriginalInventoryCatalog = async (payload: {
   name: string;
   unit: string;
+  indexCode?: string | null;
+  warehouseCode?: string | null;
 }): Promise<OriginalInventoryCatalogEntry> =>
   appRequest('addOriginalInventoryCatalog', payload);
 
 export const addOriginalInventoryCatalogBulk = async (payload: {
-  items: Array<{ name: string; unit?: string }>;
+  items: Array<{
+    name: string;
+    unit?: string;
+    indexCode?: string | null;
+    warehouseCode?: string | null;
+  }>;
 }): Promise<OriginalInventoryCatalogImportResult> =>
   appRequest('addOriginalInventoryCatalogBulk', payload);
 

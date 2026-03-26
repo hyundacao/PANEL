@@ -8,6 +8,8 @@ export type OriginalInventoryErpPdfItem = {
   realQty: number;
   availableQty: number;
   unit: string;
+  indexCode?: string | null;
+  warehouseCode?: string | null;
 };
 
 type PdfObject = {
@@ -29,6 +31,8 @@ type PdfTextSegment = {
 const PDF_EXTENSION = '.pdf';
 const PDF_ROW_MIN_Y = 175;
 const PDF_ROW_CODE_MAX_X = 60;
+const PDF_INDEX_MIN_X = 60;
+const PDF_INDEX_MAX_X = 170;
 const PDF_NAME_MIN_X = 170;
 const PDF_NAME_MAX_X = 440;
 const PDF_UNIT_MIN_X = 440;
@@ -52,6 +56,14 @@ const sanitizePdfName = (value: string) =>
   );
 
 const normalizeNameKey = (value: unknown) => normalizeOriginalInventoryNameKey(value);
+
+const extractWarehouseCode = (value: unknown) => {
+  const text = normalizeImportCell(value);
+  if (!text) return null;
+  const match = text.match(/M[-\s]?\d+/i);
+  if (!match) return null;
+  return match[0].replace(/\s+/g, '-').toUpperCase();
+};
 
 const parseSnapshotQty = (value: unknown) => {
   if (typeof value === 'number') {
@@ -338,6 +350,12 @@ const buildPdfSnapshotRows = (segments: PdfTextSegment[]) => {
         .map((segment) => segment.text)
         .join(' ')
     );
+    const indexCode = normalizeImportCell(
+      rowSegments
+        .filter((segment) => segment.x >= PDF_INDEX_MIN_X && segment.x < PDF_INDEX_MAX_X)
+        .map((segment) => segment.text)
+        .join(' ')
+    );
     const unit =
       normalizeImportCell(
         rowSegments.find(
@@ -366,6 +384,8 @@ const buildPdfSnapshotRows = (segments: PdfTextSegment[]) => {
     return {
       name,
       unit,
+      indexCode: indexCode || null,
+      warehouseCode: extractWarehouseCode(indexCode),
       realQty,
       availableQty
     };
@@ -382,13 +402,19 @@ export const parseOriginalInventoryErpSnapshotPdfFile = async (
 
   rows.forEach((row) => {
     if (!row.name || row.realQty === null || row.availableQty === null) return;
-    const key = normalizeNameKey(row.name);
+    const key = `${normalizeNameKey(row.name)}|${normalizeImportCell(row.indexCode)}`;
     const existing = merged.get(key);
     if (existing) {
       existing.realQty += row.realQty;
       existing.availableQty += row.availableQty;
       if (!existing.unit && row.unit) {
         existing.unit = row.unit;
+      }
+      if (!existing.indexCode && row.indexCode) {
+        existing.indexCode = row.indexCode;
+      }
+      if (!existing.warehouseCode && row.warehouseCode) {
+        existing.warehouseCode = row.warehouseCode;
       }
       return;
     }
@@ -397,7 +423,9 @@ export const parseOriginalInventoryErpSnapshotPdfFile = async (
       name: row.name,
       realQty: row.realQty,
       availableQty: row.availableQty,
-      unit: row.unit || 'kg'
+      unit: row.unit || 'kg',
+      indexCode: row.indexCode ?? null,
+      warehouseCode: row.warehouseCode ?? null
     });
   });
 

@@ -164,6 +164,8 @@ export type OriginalInventoryCatalogEntry = {
   name: string;
   unit: string;
   createdAt: string;
+  indexCode?: string | null;
+  warehouseCode?: string | null;
 };
 
 export type OriginalInventoryCatalogImportResult = {
@@ -179,6 +181,8 @@ export type OriginalInventoryErpSnapshotEntry = {
   realQty: number;
   availableQty: number;
   unit: string;
+  indexCode?: string | null;
+  warehouseCode?: string | null;
   importedAt: string;
   importedBy: string;
   sourceFileName?: string | null;

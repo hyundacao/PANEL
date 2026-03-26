@@ -11,6 +11,7 @@ import {
   isWarehouseAdmin
 } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
+import { normalizeOriginalInventoryCatalogIdentityKey } from '@/lib/utils/originalInventoryCatalog';
 import {
   sendWarehouseTransferDocumentCreatedPush,
   sendWarehouseTransferDocumentIssuedPush,
@@ -424,7 +425,9 @@ const mapOriginalInventoryCatalogEntry = (row: any): OriginalInventoryCatalogEnt
   id: row.id,
   name: row.name,
   unit: row.unit,
-  createdAt: row.created_at
+  createdAt: row.created_at,
+  indexCode: row.index_code ? String(row.index_code).trim() : null,
+  warehouseCode: row.warehouse_code ? String(row.warehouse_code).trim() : null
 });
 
 const mapRaportZmianowySession = (row: any): RaportZmianowySession => ({
@@ -1608,6 +1611,8 @@ const mapOriginalInventoryErpSnapshotEntry = (row: any): OriginalInventoryErpSna
   realQty: toNumber(row.real_qty ?? row.qty),
   availableQty: toNumber(row.available_qty ?? row.qty),
   unit: String(row.unit ?? '').trim() || 'kg',
+  indexCode: row.index_code ? String(row.index_code).trim() : null,
+  warehouseCode: row.warehouse_code ? String(row.warehouse_code).trim() : null,
   importedAt: row.imported_at ?? row.created_at ?? new Date().toISOString(),
   importedBy: String(row.imported_by ?? '').trim() || 'nieznany',
   sourceFileName: row.source_file_name ? String(row.source_file_name) : null
@@ -1673,6 +1678,14 @@ const extractErpOriginalCatalogItems = (payload: unknown): Array<Record<string, 
   return [];
 };
 
+const extractOriginalInventoryWarehouseCode = (value: unknown) => {
+  const text = firstNonEmptyText(value);
+  if (!text) return null;
+  const match = text.match(/M[-\s]?\d+/i);
+  if (!match) return null;
+  return match[0].replace(/\s+/g, '-').toUpperCase();
+};
+
 const fetchOriginalCatalogFromErpProxy = async (): Promise<OriginalInventoryCatalogEntry[]> => {
   if (!ERP_ORIGINALS_PROXY_URL) throw new Error('ERP_ORIGINALS_PROXY_NOT_CONFIGURED');
 
@@ -1723,17 +1736,32 @@ const fetchOriginalCatalogFromErpProxy = async (): Promise<OriginalInventoryCata
       const unit = normalizeOriginalUnit(
         row.unit ?? row.jednostka ?? row.uom ?? row.measureUnit ?? row.unitCode
       );
+      const indexCode = firstNonEmptyText(
+        row.indexCode,
+        row.index_code,
+        row.indeks,
+        row.index,
+        row.symbol
+      );
+      const warehouseCode = extractOriginalInventoryWarehouseCode(indexCode);
       const id = buildErpOriginalCatalogId(
-        row.id ?? row.materialId ?? row.erpId ?? row.code ?? row.indexCode,
+        row.id ?? row.materialId ?? row.erpId ?? row.code ?? row.indexCode ?? indexCode,
         name,
         index
       );
       const createdAt = toIsoOrNow(
         row.createdAt ?? row.updatedAt ?? row.timestamp ?? row.date ?? row.modifiedAt
       );
-      const key = `${name.toLowerCase()}|${unit.toLowerCase()}`;
+      const key = `${name.toLowerCase()}|${unit.toLowerCase()}|${indexCode?.toLowerCase() ?? ''}`;
       if (deduped.has(key)) return;
-      deduped.set(key, { id, name, unit, createdAt });
+      deduped.set(key, {
+        id,
+        name,
+        unit,
+        createdAt,
+        indexCode: indexCode ?? null,
+        warehouseCode: warehouseCode ?? null
+      });
     });
 
     return [...deduped.values()].sort((a, b) =>
@@ -5199,19 +5227,31 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'addOriginalInventoryCatalog': {
       const name = String(payload?.name ?? '').trim();
       const unit = String(payload?.unit ?? '').trim() || 'kg';
+      const indexCode = String(payload?.indexCode ?? '').trim() || null;
+      const warehouseCode =
+        String(payload?.warehouseCode ?? '').trim().toUpperCase() || extractOriginalInventoryWarehouseCode(indexCode);
       if (!name) throw new Error('NAME_REQUIRED');
       const { data: existing, error } = await supabaseAdmin
         .from('original_inventory_catalog')
-        .select('id')
-        .ilike('name', name);
+        .select('id, name, index_code');
       if (error) throw error;
-      if (existing && existing.length > 0) throw new Error('DUPLICATE');
+      if (
+        (existing ?? []).some(
+          (row: any) =>
+            normalizeOriginalInventoryCatalogIdentityKey(row.name ?? '', row.index_code ?? '') ===
+            normalizeOriginalInventoryCatalogIdentityKey(name, indexCode)
+        )
+      ) {
+        throw new Error('DUPLICATE');
+      }
       const { data, error: insertError } = await supabaseAdmin
         .from('original_inventory_catalog')
         .insert({
           id: randomUUID(),
           name,
           unit,
+          index_code: indexCode,
+          warehouse_code: warehouseCode,
           created_at: new Date().toISOString()
         })
         .select('*')
@@ -5220,33 +5260,52 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return mapOriginalInventoryCatalogEntry(data);
     }
     case 'addOriginalInventoryCatalogBulk': {
-      const items: Array<{ name?: string; unit?: string }> =
+      const items: Array<{
+        name?: string;
+        unit?: string;
+        indexCode?: string | null;
+        warehouseCode?: string | null;
+      }> =
         Array.isArray(payload?.items) ? payload.items : [];
       if (items.length === 0) throw new Error('EMPTY');
 
-      const normalized: Array<{ name: string; unit: string }> = [];
+      const normalized: Array<{
+        name: string;
+        unit: string;
+        indexCode: string | null;
+        warehouseCode: string | null;
+      }> = [];
       const seen = new Set<string>();
-      items.forEach((item: { name?: string; unit?: string }) => {
+      items.forEach((item) => {
         const name = String(item?.name ?? '').trim();
         if (!name) return;
-        const key = name.toLowerCase();
+        const indexCode = String(item?.indexCode ?? '').trim() || null;
+        const key = normalizeOriginalInventoryCatalogIdentityKey(name, indexCode);
         if (seen.has(key)) return;
         seen.add(key);
         const unit = String(item?.unit ?? '').trim() || 'kg';
-        normalized.push({ name, unit });
+        normalized.push({
+          name,
+          unit,
+          indexCode,
+          warehouseCode:
+            String(item?.warehouseCode ?? '').trim().toUpperCase() || extractOriginalInventoryWarehouseCode(indexCode)
+        });
       });
 
       if (normalized.length === 0) throw new Error('EMPTY');
 
       const { data: existingRows, error: existingError } = await supabaseAdmin
         .from('original_inventory_catalog')
-        .select('name');
+        .select('name, index_code');
       if (existingError) throw existingError;
       const existingSet = new Set(
-        (existingRows ?? []).map((row: any) => String(row.name ?? '').trim().toLowerCase())
+        (existingRows ?? []).map((row: any) =>
+          normalizeOriginalInventoryCatalogIdentityKey(row.name ?? '', row.index_code ?? '')
+        )
       );
       const toInsert = normalized.filter(
-        (item: { name: string }) => !existingSet.has(item.name.toLowerCase())
+        (item) => !existingSet.has(normalizeOriginalInventoryCatalogIdentityKey(item.name, item.indexCode))
       );
       if (toInsert.length === 0) {
         return { total: normalized.length, inserted: 0, skipped: normalized.length };
@@ -5256,10 +5315,12 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       let inserted = 0;
       const chunkSize = 500;
       for (let i = 0; i < toInsert.length; i += chunkSize) {
-        const chunk = toInsert.slice(i, i + chunkSize).map((item: { name: string; unit: string }) => ({
+        const chunk = toInsert.slice(i, i + chunkSize).map((item) => ({
           id: randomUUID(),
           name: item.name,
           unit: item.unit,
+          index_code: item.indexCode,
+          warehouse_code: item.warehouseCode,
           created_at: now
         }));
         const { error: insertError } = await supabaseAdmin

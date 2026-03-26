@@ -547,11 +547,16 @@ create table if not exists public.original_inventory_catalog (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   unit text not null,
+  index_code text,
+  warehouse_code text,
   created_at timestamptz not null default now()
 );
 
-create unique index if not exists original_inventory_catalog_name_idx
-  on public.original_inventory_catalog (lower(name));
+create unique index if not exists original_inventory_catalog_name_index_idx
+  on public.original_inventory_catalog (
+    lower(name),
+    coalesce(lower(index_code), '')
+  );
 
 create table if not exists public.original_inventory_erp_snapshots (
   id uuid primary key default gen_random_uuid(),
@@ -560,6 +565,8 @@ create table if not exists public.original_inventory_erp_snapshots (
   real_qty numeric not null default 0,
   available_qty numeric not null default 0,
   unit text not null,
+  index_code text,
+  warehouse_code text,
   imported_at timestamptz not null default now(),
   imported_by text not null,
   source_file_name text
@@ -568,8 +575,12 @@ create table if not exists public.original_inventory_erp_snapshots (
 create index if not exists original_inventory_erp_snapshots_date_idx
   on public.original_inventory_erp_snapshots (snapshot_date);
 
-create unique index if not exists original_inventory_erp_snapshots_date_name_idx
-  on public.original_inventory_erp_snapshots (snapshot_date, lower(name));
+create unique index if not exists original_inventory_erp_snapshots_date_name_index_idx
+  on public.original_inventory_erp_snapshots (
+    snapshot_date,
+    lower(name),
+    coalesce(lower(index_code), '')
+  );
 
 do $$
 begin

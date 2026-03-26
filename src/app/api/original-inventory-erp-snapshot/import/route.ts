@@ -25,6 +25,16 @@ const normalizeImportCell = (value: unknown) =>
 
 const normalizeNameKey = (value: unknown) => normalizeOriginalInventoryNameKey(value);
 
+const normalizeSnapshotIndexCode = (value: unknown) => normalizeImportCell(value) || null;
+
+const extractSnapshotWarehouseCode = (value: unknown) => {
+  const text = normalizeImportCell(value);
+  if (!text) return null;
+  const match = text.match(/M[-\s]?\d+/i);
+  if (!match) return null;
+  return match[0].replace(/\s+/g, '-').toUpperCase();
+};
+
 const parseSnapshotQty = (value: unknown) => {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
@@ -74,7 +84,9 @@ const isMissingSnapshotsTableError = (error: unknown) => {
   return (
     text.includes('original_inventory_erp_snapshots') ||
     text.includes('real_qty') ||
-    text.includes('available_qty')
+    text.includes('available_qty') ||
+    text.includes('index_code') ||
+    text.includes('warehouse_code')
   );
 };
 
@@ -96,7 +108,14 @@ const parseSnapshotImportFile = async (file: File) => {
 
   const merged = new Map<
     string,
-    { name: string; realQty: number; availableQty: number; unit: string }
+    {
+      name: string;
+      realQty: number;
+      availableQty: number;
+      unit: string;
+      indexCode: string | null;
+      warehouseCode: string | null;
+    }
   >();
 
   rows.forEach((row, index) => {
@@ -114,13 +133,21 @@ const parseSnapshotImportFile = async (file: File) => {
     if (index === 0 && isSnapshotHeaderRow(name, row?.[1], row?.[2])) return;
     if (realQty === null || availableQty === null) return;
 
-    const key = normalizeNameKey(name);
+    const indexCode = normalizeSnapshotIndexCode(row?.[4]);
+    const warehouseCode = extractSnapshotWarehouseCode(indexCode);
+    const key = `${normalizeNameKey(name)}|${indexCode ?? ''}`;
     const existing = merged.get(key);
     if (existing) {
       existing.realQty += realQty;
       existing.availableQty += availableQty;
       if (!existing.unit && unitCell) {
         existing.unit = unitCell;
+      }
+      if (!existing.indexCode && indexCode) {
+        existing.indexCode = indexCode;
+      }
+      if (!existing.warehouseCode && warehouseCode) {
+        existing.warehouseCode = warehouseCode;
       }
       return;
     }
@@ -129,7 +156,9 @@ const parseSnapshotImportFile = async (file: File) => {
       name,
       realQty,
       availableQty,
-      unit: unitCell || 'kg'
+      unit: unitCell || 'kg',
+      indexCode,
+      warehouseCode
     });
   });
 
@@ -221,6 +250,8 @@ export async function POST(request: Request) {
         real_qty: item.realQty,
         available_qty: item.availableQty,
         unit: item.unit,
+        index_code: normalizeSnapshotIndexCode(item.indexCode),
+        warehouse_code: item.warehouseCode ?? extractSnapshotWarehouseCode(item.indexCode),
         imported_at: importedAt,
         imported_by: importedBy,
         source_file_name: sourceFileName

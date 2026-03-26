@@ -5,10 +5,18 @@ create table if not exists public.original_inventory_erp_snapshots (
   real_qty numeric not null default 0,
   available_qty numeric not null default 0,
   unit text not null,
+  index_code text,
+  warehouse_code text,
   imported_at timestamptz not null default now(),
   imported_by text not null,
   source_file_name text
 );
+
+alter table if exists public.original_inventory_erp_snapshots
+  add column if not exists index_code text;
+
+alter table if exists public.original_inventory_erp_snapshots
+  add column if not exists warehouse_code text;
 
 alter table if exists public.original_inventory_erp_snapshots
   add column if not exists real_qty numeric;
@@ -72,7 +80,13 @@ end $$;
 create index if not exists original_inventory_erp_snapshots_date_idx
   on public.original_inventory_erp_snapshots (snapshot_date);
 
-create unique index if not exists original_inventory_erp_snapshots_date_name_idx
-  on public.original_inventory_erp_snapshots (snapshot_date, lower(name));
+drop index if exists original_inventory_erp_snapshots_date_name_idx;
+
+create unique index if not exists original_inventory_erp_snapshots_date_name_index_idx
+  on public.original_inventory_erp_snapshots (
+    snapshot_date,
+    lower(name),
+    coalesce(lower(index_code), '')
+  );
 
 alter table if exists public.original_inventory_erp_snapshots enable row level security;

@@ -29,6 +29,11 @@ import { useToastStore } from '@/components/ui/Toast';
 import { useUiStore } from '@/lib/store/ui';
 import { isReadOnly } from '@/lib/auth/access';
 import { parseQtyInput } from '@/lib/utils/format';
+import { cn } from '@/lib/utils/cn';
+import {
+  normalizeOriginalInventoryCatalogIdentityKey,
+  parseOriginalInventoryCatalogRows
+} from '@/lib/utils/originalInventoryCatalog';
 import {
   normalizeOriginalInventoryName,
   normalizeOriginalInventoryNameKey
@@ -53,7 +58,7 @@ const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
     'ENV: ERP_ORIGINALS_PROXY_URL',
     'ENV: ERP_ORIGINALS_PROXY_TOKEN (opcjonalny)',
     'ENV: ERP_ORIGINALS_PROXY_TIMEOUT_MS (opcjonalny, domyslnie 10000 ms)',
-    'Response: [] lub { items: [] }, pola: id/name/unit/createdAt'
+    'Response: [] lub { items: [] }, pola: id/name/unit/createdAt/indexCode?/warehouseCode?'
   ].join('\n');
 
 const isErpOriginalsSourceError = (error: unknown) =>
@@ -186,14 +191,6 @@ const normalizeImportCell = (value: unknown) =>
 
 const normalizeCatalogNameKey = (value: unknown) => normalizeOriginalInventoryNameKey(value);
 
-const isCatalogHeaderRow = (name: string, unit: string) => {
-  const normalizedName = name.toLowerCase();
-  const normalizedUnit = unit.toLowerCase().replace(/\./g, '');
-  const nameHeaders = new Set(['nazwa', 'material', 'tworzywo', 'kartoteka', 'name']);
-  const unitHeaders = new Set(['jedn', 'jm', 'jednostka', 'unit']);
-  return nameHeaders.has(normalizedName) && (!normalizedUnit || unitHeaders.has(normalizedUnit));
-};
-
 const parseSnapshotQty = (value: unknown) => {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
@@ -286,7 +283,9 @@ const parseSnapshotImportFile = async (
   return [...merged.values()];
 };
 
-const parseCatalogImportFile = async (file: File): Promise<Array<{ name: string; unit?: string }>> => {
+const parseCatalogImportFile = async (
+  file: File
+): Promise<Array<{ name: string; unit: string; indexCode: string | null; warehouseCode: string | null }>> => {
   const XLSX = await import('xlsx');
   const bytes = await file.arrayBuffer();
   const workbook = XLSX.read(bytes, { type: 'array', raw: false });
@@ -298,19 +297,7 @@ const parseCatalogImportFile = async (file: File): Promise<Array<{ name: string;
     blankrows: false,
     defval: ''
   }) as unknown[][];
-  const items: Array<{ name: string; unit?: string }> = [];
-  const seen = new Set<string>();
-  rows.forEach((row, index) => {
-    const name = normalizeOriginalInventoryName(row?.[0]);
-    const unitCell = normalizeImportCell(row?.[1]);
-    if (!name) return;
-    if (index === 0 && isCatalogHeaderRow(name, unitCell)) return;
-    const key = normalizeCatalogNameKey(name);
-    if (seen.has(key)) return;
-    seen.add(key);
-    items.push({ name, unit: unitCell || 'kg' });
-  });
-  return items;
+  return parseOriginalInventoryCatalogRows(rows);
 };
 
 export default function OriginalInventoryPage() {
@@ -341,7 +328,9 @@ export default function OriginalInventoryPage() {
   const [catalogImportFile, setCatalogImportFile] = useState<File | null>(null);
   const [catalogImportInputKey, setCatalogImportInputKey] = useState(0);
   const [catalogImportFileName, setCatalogImportFileName] = useState('');
-  const [catalogImportItems, setCatalogImportItems] = useState<Array<{ name: string; unit?: string }>>(
+  const [catalogImportItems, setCatalogImportItems] = useState<
+    Array<{ name: string; unit: string; indexCode: string | null; warehouseCode: string | null }>
+  >(
     []
   );
   const [catalogImportSummary, setCatalogImportSummary] = useState<{
@@ -396,6 +385,10 @@ export default function OriginalInventoryPage() {
     queryKey: ['spis-oryginalow-catalog-local'],
     queryFn: getOriginalInventoryCatalog
   });
+  const erpCatalogItems = useMemo(
+    () => (Array.isArray(erpCatalogState?.items) ? erpCatalogState.items : []),
+    [erpCatalogState]
+  );
   const { data: erpSnapshotState = { items: [] as OriginalInventoryErpSnapshotEntry[], migrationRequired: false } } = useQuery({
     queryKey: ['spis-oryginalow-erp-snapshot', spisDate],
     queryFn: async () => {
@@ -419,19 +412,18 @@ export default function OriginalInventoryPage() {
   });
   const catalog = useMemo(() => {
     const merged = new Map<string, (typeof localCatalog)[number]>();
-    const erpCatalogItems = Array.isArray(erpCatalogState?.items) ? erpCatalogState.items : [];
     const localCatalogItems = Array.isArray(localCatalog) ? localCatalog : [];
     erpCatalogItems.forEach((item) => {
-      merged.set(normalizeCatalogNameKey(item.name), item);
+      merged.set(normalizeOriginalInventoryCatalogIdentityKey(item.name, item.indexCode), item);
     });
     localCatalogItems.forEach((item) => {
-      const key = normalizeCatalogNameKey(item.name);
+      const key = normalizeOriginalInventoryCatalogIdentityKey(item.name, item.indexCode);
       if (!merged.has(key)) {
         merged.set(key, item);
       }
     });
     return [...merged.values()].sort((a, b) => collator.compare(a.name, b.name));
-  }, [erpCatalogState, localCatalog]);
+  }, [erpCatalogItems, localCatalog]);
   const catalogErrorCode =
     catalogError instanceof Error && !isErpOriginalsSourceError(catalogError)
       ? catalogError.message
@@ -574,8 +566,12 @@ export default function OriginalInventoryPage() {
         toast({ title: 'Plik nie zawiera kartotek do importu.', tone: 'error' });
         return;
       }
-      const existingNames = new Set(catalog.map((item) => normalizeCatalogNameKey(item.name)));
-      const toImport = items.filter((item) => !existingNames.has(normalizeCatalogNameKey(item.name)));
+      const existingNames = new Set(
+        catalog.map((item) => normalizeOriginalInventoryCatalogIdentityKey(item.name, item.indexCode))
+      );
+      const toImport = items.filter(
+        (item) => !existingNames.has(normalizeOriginalInventoryCatalogIdentityKey(item.name, item.indexCode))
+      );
       setCatalogImportItems(toImport);
       setCatalogImportSummary({
         parsed: items.length,
@@ -838,32 +834,109 @@ export default function OriginalInventoryPage() {
   }, [erpSnapshotMap, form.name]);
   const nameSuggestions = useMemo(() => {
     const seen = new Set<string>();
-    const list: string[] = [];
-    existingList.forEach((item) => {
-      const key = normalizeCatalogNameKey(item.name);
+    const erpSnapshotNameKeys = new Set<string>();
+    const erpCatalogNameKeys = new Set<string>();
+    const list: Array<{
+      name: string;
+      unit: string;
+      warehouseCode: string | null;
+      indexCode: string | null;
+      isMag55: boolean;
+    }> = [];
+    erpSnapshotEntries.forEach((item) => {
+      const nameKey = normalizeCatalogNameKey(item.name);
+      const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
+      const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
+      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
-      list.push(item.name);
+      erpSnapshotNameKeys.add(nameKey);
+      list.push({
+        name: item.name,
+        unit: item.unit,
+        warehouseCode,
+        indexCode,
+        isMag55: warehouseCode === 'M-55'
+      });
+    });
+    erpCatalogItems.forEach((item) => {
+      const nameKey = normalizeCatalogNameKey(item.name);
+      if (erpSnapshotNameKeys.has(nameKey)) return;
+      const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
+      const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
+      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode ?? ''}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      erpCatalogNameKeys.add(nameKey);
+      list.push({
+        name: item.name,
+        unit: item.unit,
+        warehouseCode,
+        indexCode,
+        isMag55: warehouseCode === 'M-55'
+      });
+    });
+    existingList.forEach((item) => {
+      const nameKey = normalizeCatalogNameKey(item.name);
+      if (erpSnapshotNameKeys.has(nameKey) || erpCatalogNameKeys.has(nameKey)) return;
+      const key = `${nameKey}|||`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      list.push({
+        name: item.name,
+        unit: item.unit,
+        warehouseCode: null,
+        indexCode: null,
+        isMag55: false
+      });
     });
     catalog.forEach((item) => {
-      const key = normalizeCatalogNameKey(item.name);
+      const nameKey = normalizeCatalogNameKey(item.name);
+      if (erpSnapshotNameKeys.has(nameKey) || erpCatalogNameKeys.has(nameKey)) return;
+      const key = `${nameKey}|||`;
       if (seen.has(key)) return;
       seen.add(key);
-      list.push(item.name);
+      list.push({
+        name: item.name,
+        unit: item.unit,
+        warehouseCode: item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null,
+        indexCode: item.indexCode ? String(item.indexCode).trim() : null,
+        isMag55: String(item.warehouseCode ?? '').trim().toUpperCase() === 'M-55'
+      });
     });
     return list;
-  }, [catalog, existingList]);
+  }, [catalog, erpCatalogItems, erpSnapshotEntries, existingList]);
   const filteredNameSuggestions = useMemo(() => {
     const needle = normalizeCatalogNameKey(form.name);
     if (!needle) return [];
     return nameSuggestions
-      .filter((item) => normalizeCatalogNameKey(item).includes(needle))
+      .filter((item) => normalizeCatalogNameKey(item.name).includes(needle))
+      .sort((a, b) => {
+        if (a.isMag55 !== b.isMag55) return a.isMag55 ? -1 : 1;
+        if (Boolean(a.warehouseCode) !== Boolean(b.warehouseCode)) return a.warehouseCode ? -1 : 1;
+        const nameCompare = collator.compare(a.name, b.name);
+        if (nameCompare !== 0) return nameCompare;
+        return collator.compare(a.warehouseCode ?? '', b.warehouseCode ?? '');
+      })
       .slice(0, 8);
   }, [form.name, nameSuggestions]);
   const filteredCatalog = useMemo(() => {
     const needle = normalizeCatalogNameKey(catalogSearch);
     if (!needle) return catalog;
-    return catalog.filter((item) => normalizeCatalogNameKey(item.name).includes(needle));
+    return catalog.filter((item) => {
+      const indexNeedle = catalogSearch.trim().toLowerCase();
+      return (
+        normalizeCatalogNameKey(item.name).includes(needle) ||
+        String(item.indexCode ?? '')
+          .trim()
+          .toLowerCase()
+          .includes(indexNeedle) ||
+        String(item.warehouseCode ?? '')
+          .trim()
+          .toLowerCase()
+          .includes(indexNeedle)
+      );
+    });
   }, [catalog, catalogSearch]);
   const applyNameToForm = (rawName: string) => {
     const needle = normalizeCatalogNameKey(rawName);
@@ -880,6 +953,13 @@ export default function OriginalInventoryPage() {
       return;
     }
     setForm((prev) => ({ ...prev, name: rawName }));
+  };
+  const applyNameSuggestionToForm = (suggestion: (typeof nameSuggestions)[number]) => {
+    setForm((prev) => ({
+      ...prev,
+      name: suggestion.name,
+      unit: suggestion.unit || prev.unit
+    }));
   };
 
   const materialGroups = useMemo(() => {
@@ -1996,18 +2076,33 @@ export default function OriginalInventoryPage() {
 
                   {showNameSuggestions && filteredNameSuggestions.length > 0 && (
                     <div className="absolute z-20 mt-2 w-full rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
-                      {filteredNameSuggestions.map((name) => (
+                      {filteredNameSuggestions.map((suggestion) => (
                         <button
-                          key={name}
+                          key={`${suggestion.name}|${suggestion.warehouseCode ?? ''}|${suggestion.indexCode ?? ''}`}
                           type="button"
                           onMouseDown={(event) => {
                             event.preventDefault();
-                            applyNameToForm(name);
+                            applyNameSuggestionToForm(suggestion);
                             setShowNameSuggestions(false);
                           }}
-                          className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]"
+                          className={cn(
+                            'flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]',
+                            suggestion.isMag55 && 'bg-[rgba(244,114,182,0.10)] hover:bg-[rgba(244,114,182,0.16)]'
+                          )}
                         >
-                          <span>{name}</span>
+                          <span>{suggestion.name}</span>
+                          {suggestion.warehouseCode && (
+                            <span
+                              className={cn(
+                                'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                                suggestion.isMag55
+                                  ? 'border-[rgba(244,114,182,0.45)] bg-[rgba(244,114,182,0.16)] text-[rgb(251,207,232)]'
+                                  : 'border-border bg-surface2 text-dim'
+                              )}
+                            >
+                              {suggestion.warehouseCode}
+                            </span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -2258,8 +2353,11 @@ export default function OriginalInventoryPage() {
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
               <div className="space-y-1">
                 <label className="text-xs uppercase tracking-wide text-dim">
-                  Import kartotek (kolumna A: nazwa, kolumna B: jednostka - opcjonalnie)
+                  Import kartotek
                 </label>
+                <p className="text-xs text-dim">
+                  Obslugiwane uklady: `Nazwa | Jedn. | Indeks` albo ERP `Kod | Indeks | Nazwa | Jm`.
+                </p>
                 <Input
                   key={catalogImportInputKey}
                   type="file"
@@ -2316,12 +2414,14 @@ export default function OriginalInventoryPage() {
             <Input
               value={catalogSearch}
               onChange={(event) => setCatalogSearch(event.target.value)}
-              placeholder="Szukaj po nazwie"
+              placeholder="Szukaj po nazwie lub indeksie"
             />
             <DataTable
-              columns={['Nazwa', 'Jedn.', 'Utworzono']}
+              columns={['Nazwa', 'Indeks', 'Mag.', 'Jedn.', 'Utworzono']}
               rows={filteredCatalog.map((item) => [
                 item.name,
+                item.indexCode ?? '-',
+                item.warehouseCode ?? '-',
                 item.unit,
                 new Date(item.createdAt).toLocaleString('pl-PL')
               ])}
