@@ -86,7 +86,9 @@ const isMissingSnapshotsTableError = (error: unknown) => {
     text.includes('real_qty') ||
     text.includes('available_qty') ||
     text.includes('index_code') ||
-    text.includes('warehouse_code')
+    text.includes('warehouse_code') ||
+    text.includes('original_inventory_erp_snapshots_date_name_idx') ||
+    text.includes('duplicate key value violates unique constraint')
   );
 };
 
