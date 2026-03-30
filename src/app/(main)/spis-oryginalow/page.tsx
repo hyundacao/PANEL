@@ -343,7 +343,7 @@ export default function OriginalInventoryPage() {
   const [erpSnapshotImportInputKey, setErpSnapshotImportInputKey] = useState(0);
   const [erpSnapshotImportFileName, setErpSnapshotImportFileName] = useState('');
   const [erpSnapshotImportSummary, setErpSnapshotImportSummary] = useState<{
-    parsed: number;
+    parsed: number | null;
     currentRows: number;
   } | null>(null);
   const [erpSnapshotImportPreparing, setErpSnapshotImportPreparing] = useState(false);
@@ -642,6 +642,13 @@ export default function OriginalInventoryPage() {
     setErpSnapshotImportFile(file);
     setErpSnapshotImportFileName(file.name);
     try {
+      if (isOriginalInventoryErpSnapshotPdfFile(file)) {
+        setErpSnapshotImportSummary({
+          parsed: null,
+          currentRows: erpSnapshotEntries.length
+        });
+        return;
+      }
       const items = await parseSnapshotImportFile(file);
       if (items.length === 0) {
         toast({ title: 'Plik nie zawiera poprawnych stanow ERP.', tone: 'error' });
@@ -2486,8 +2493,9 @@ export default function OriginalInventoryPage() {
                 )}
                 {erpSnapshotImportSummary && (
                   <p className="text-xs text-dim">
-                    W pliku: {erpSnapshotImportSummary.parsed}. Aktualnie zapisane dla dnia {spisDate}:{' '}
-                    {erpSnapshotImportSummary.currentRows}.
+                    {erpSnapshotImportSummary.parsed === null
+                      ? `PDF gotowy do importu. Aktualnie zapisane dla dnia ${spisDate}: ${erpSnapshotImportSummary.currentRows}.`
+                      : `W pliku: ${erpSnapshotImportSummary.parsed}. Aktualnie zapisane dla dnia ${spisDate}: ${erpSnapshotImportSummary.currentRows}.`}
                   </p>
                 )}
                 {importErpSnapshotMutation.isPending && (
