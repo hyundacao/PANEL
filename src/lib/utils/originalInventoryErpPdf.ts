@@ -83,6 +83,10 @@ export const isOriginalInventoryErpSnapshotPdfFile = (file: File) =>
   file.type === 'application/pdf' || getPdfFileName(file).endsWith(PDF_EXTENSION);
 
 const inflatePdfStream = async (bytes: Uint8Array) => {
+  if (typeof window === 'undefined') {
+    const { inflateSync } = await import('node:zlib');
+    return new Uint8Array(inflateSync(bytes));
+  }
   const chunk = bytes.buffer.slice(
     bytes.byteOffset,
     bytes.byteOffset + bytes.byteLength
@@ -92,35 +96,72 @@ const inflatePdfStream = async (bytes: Uint8Array) => {
   return new Uint8Array(buffer);
 };
 
+const findPdfStreamTokenIndex = (body: string) => {
+  const dictionaryEndIndex = body.indexOf('>>');
+  const searchStart = dictionaryEndIndex >= 0 ? dictionaryEndIndex : 0;
+  return body.indexOf('stream', searchStart);
+};
+
+const getPdfStreamByteRange = (text: string, bytes: Uint8Array, objectStart: number, body: string) => {
+  const streamTokenIndex = findPdfStreamTokenIndex(body);
+  if (streamTokenIndex < 0) return null;
+
+  let streamStart = objectStart + streamTokenIndex + 'stream'.length;
+  if (text[streamStart] === '\r' && text[streamStart + 1] === '\n') {
+    streamStart += 2;
+  } else if (text[streamStart] === '\n') {
+    streamStart += 1;
+  }
+
+  const directLengthMatch = body.match(/\/Length\s+(\d+)(?!\s+\d+\s+R)/);
+  if (directLengthMatch) {
+    const declaredLength = Number(directLengthMatch[1]);
+    if (Number.isFinite(declaredLength) && declaredLength > 0) {
+      return bytes.slice(streamStart, streamStart + declaredLength);
+    }
+  }
+
+  const endstreamIndex = text.indexOf('endstream', streamStart);
+  if (endstreamIndex < 0) return null;
+  let rawStream = bytes.slice(streamStart, endstreamIndex);
+  while (
+    rawStream.length > 0 &&
+    (rawStream[rawStream.length - 1] === 0x0a || rawStream[rawStream.length - 1] === 0x0d)
+  ) {
+    rawStream = rawStream.slice(0, rawStream.length - 1);
+  }
+  return rawStream;
+};
+
 const parsePdfObjects = async (bytes: Uint8Array) => {
   const text = new TextDecoder('latin1').decode(bytes);
   const objects = new Map<number, PdfObject>();
-  const objectRegex = /(\d+)\s+\d+\s+obj([\s\S]*?)endobj/g;
+  const objectRegex = /(\d+)\s+\d+\s+obj/g;
   let match: RegExpExecArray | null;
 
   while ((match = objectRegex.exec(text))) {
     const objectId = Number(match[1]);
-    const fullText = match[0];
-    const body = match[2];
     const objectStart = match.index;
-    const streamMarker = fullText.indexOf('stream');
+    const bodyStart = objectStart + match[0].length;
+    const firstEndobjIndex = text.indexOf('endobj', bodyStart);
+    if (firstEndobjIndex < 0) continue;
+    const provisionalBody = text.slice(bodyStart, firstEndobjIndex);
+    const streamTokenIndex = findPdfStreamTokenIndex(provisionalBody);
+    const actualStreamIndex = streamTokenIndex >= 0 ? bodyStart + streamTokenIndex : -1;
+    const endstreamIndex =
+      actualStreamIndex >= 0 ? text.indexOf('endstream', actualStreamIndex) : -1;
+    const objectEnd =
+      actualStreamIndex >= 0 && endstreamIndex >= 0
+        ? text.indexOf('endobj', endstreamIndex + 'endstream'.length)
+        : firstEndobjIndex;
+    if (objectEnd < 0) continue;
+
+    const body = text.slice(bodyStart, objectEnd);
 
     let stream: Uint8Array | undefined;
-    if (streamMarker >= 0) {
-      let streamStart = objectStart + streamMarker + 'stream'.length;
-      if (text[streamStart] === '\r' && text[streamStart + 1] === '\n') {
-        streamStart += 2;
-      } else if (text[streamStart] === '\n') {
-        streamStart += 1;
-      }
-      const streamEnd = objectStart + fullText.lastIndexOf('endstream');
-      let rawStream = bytes.slice(streamStart, streamEnd);
-      while (
-        rawStream.length > 0 &&
-        (rawStream[rawStream.length - 1] === 0x0a || rawStream[rawStream.length - 1] === 0x0d)
-      ) {
-        rawStream = rawStream.slice(0, rawStream.length - 1);
-      }
+    if (body.includes('stream')) {
+      const rawStream = getPdfStreamByteRange(text, bytes, objectStart, body);
+      if (!rawStream) continue;
       stream = body.includes('/FlateDecode') ? await inflatePdfStream(rawStream) : rawStream;
     }
 
