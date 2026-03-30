@@ -893,6 +893,38 @@ export default function OriginalInventoryPage() {
       indexCode: string | null;
       isMag55: boolean;
     }> = [];
+    const registerIndexedName = (
+      name: string,
+      warehouseCode: string | null | undefined,
+      indexCode: string | null | undefined
+    ) => {
+      if (warehouseCode || indexCode) {
+        namesWithIndexedSuggestions.add(normalizeCatalogNameKey(name));
+      }
+    };
+
+    erpSnapshotEntries.forEach((item) =>
+      registerIndexedName(
+        item.name,
+        item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null,
+        item.indexCode ? String(item.indexCode).trim() : null
+      )
+    );
+    erpCatalogItems.forEach((item) =>
+      registerIndexedName(
+        item.name,
+        item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null,
+        item.indexCode ? String(item.indexCode).trim() : null
+      )
+    );
+    catalog.forEach((item) =>
+      registerIndexedName(
+        item.name,
+        item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null,
+        item.indexCode ? String(item.indexCode).trim() : null
+      )
+    );
+
     erpSnapshotEntries.forEach((item) => {
       const nameKey = normalizeCatalogNameKey(item.name);
       const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
@@ -900,9 +932,6 @@ export default function OriginalInventoryPage() {
       const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
-      if (warehouseCode || indexCode) {
-        namesWithIndexedSuggestions.add(nameKey);
-      }
       list.push({
         name: item.name,
         unit: item.unit,
@@ -918,9 +947,6 @@ export default function OriginalInventoryPage() {
       const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
-      if (warehouseCode || indexCode) {
-        namesWithIndexedSuggestions.add(nameKey);
-      }
       list.push({
         name: item.name,
         unit: item.unit,
@@ -951,9 +977,6 @@ export default function OriginalInventoryPage() {
       const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
-      if (warehouseCode || indexCode) {
-        namesWithIndexedSuggestions.add(nameKey);
-      }
       list.push({
         name: item.name,
         unit: item.unit,
@@ -969,6 +992,7 @@ export default function OriginalInventoryPage() {
     return nameSuggestions
       .filter((item) => matchesCatalogSearch(form.name, item.name, item.indexCode, item.warehouseCode))
       .sort((a, b) => {
+        if (a.isMag55 !== b.isMag55) return a.isMag55 ? 1 : -1;
         if (Boolean(a.warehouseCode) !== Boolean(b.warehouseCode)) return a.warehouseCode ? -1 : 1;
         const nameCompare = collator.compare(a.name, b.name);
         if (nameCompare !== 0) return nameCompare;
