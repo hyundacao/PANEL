@@ -102,11 +102,11 @@ const findPdfStreamTokenIndex = (body: string) => {
   return body.indexOf('stream', searchStart);
 };
 
-const getPdfStreamByteRange = (text: string, bytes: Uint8Array, objectStart: number, body: string) => {
+const getPdfStreamByteRange = (text: string, bytes: Uint8Array, bodyStart: number, body: string) => {
   const streamTokenIndex = findPdfStreamTokenIndex(body);
   if (streamTokenIndex < 0) return null;
 
-  let streamStart = objectStart + streamTokenIndex + 'stream'.length;
+  let streamStart = bodyStart + streamTokenIndex + 'stream'.length;
   if (text[streamStart] === '\r' && text[streamStart + 1] === '\n') {
     streamStart += 2;
   } else if (text[streamStart] === '\n') {
@@ -160,7 +160,7 @@ const parsePdfObjects = async (bytes: Uint8Array) => {
 
     let stream: Uint8Array | undefined;
     if (body.includes('stream')) {
-      const rawStream = getPdfStreamByteRange(text, bytes, objectStart, body);
+      const rawStream = getPdfStreamByteRange(text, bytes, bodyStart, body);
       if (!rawStream) continue;
       stream = body.includes('/FlateDecode') ? await inflatePdfStream(rawStream) : rawStream;
     }

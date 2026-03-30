@@ -191,6 +191,50 @@ const normalizeImportCell = (value: unknown) =>
 
 const normalizeCatalogNameKey = (value: unknown) => normalizeOriginalInventoryNameKey(value);
 
+const tokenizeCatalogSearch = (value: unknown) =>
+  normalizeCatalogNameKey(value)
+    .split(' ')
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+const matchesCatalogSearch = (
+  query: unknown,
+  name: unknown,
+  indexCode?: unknown,
+  warehouseCode?: unknown
+) => {
+  const normalizedQuery = normalizeCatalogNameKey(query);
+  if (!normalizedQuery) return true;
+
+  const normalizedName = normalizeCatalogNameKey(name);
+  const normalizedIndex = String(indexCode ?? '')
+    .trim()
+    .toLowerCase();
+  const normalizedWarehouse = String(warehouseCode ?? '')
+    .trim()
+    .toLowerCase();
+
+  if (
+    normalizedName.includes(normalizedQuery) ||
+    normalizedIndex.includes(normalizedQuery) ||
+    normalizedWarehouse.includes(normalizedQuery)
+  ) {
+    return true;
+  }
+
+  const haystackTokens = [
+    ...tokenizeCatalogSearch(name),
+    ...normalizedIndex.split(/[^a-z0-9]+/).filter(Boolean),
+    ...normalizedWarehouse.split(/[^a-z0-9]+/).filter(Boolean)
+  ];
+  const queryTokens = tokenizeCatalogSearch(query);
+  if (queryTokens.length === 0) return false;
+
+  return queryTokens.every((queryToken) =>
+    haystackTokens.some((haystackToken) => haystackToken.includes(queryToken))
+  );
+};
+
 const parseSnapshotQty = (value: unknown) => {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
@@ -841,8 +885,7 @@ export default function OriginalInventoryPage() {
   }, [erpSnapshotMap, form.name]);
   const nameSuggestions = useMemo(() => {
     const seen = new Set<string>();
-    const erpSnapshotNameKeys = new Set<string>();
-    const erpCatalogNameKeys = new Set<string>();
+    const namesWithIndexedSuggestions = new Set<string>();
     const list: Array<{
       name: string;
       unit: string;
@@ -857,7 +900,9 @@ export default function OriginalInventoryPage() {
       const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
-      erpSnapshotNameKeys.add(nameKey);
+      if (warehouseCode || indexCode) {
+        namesWithIndexedSuggestions.add(nameKey);
+      }
       list.push({
         name: item.name,
         unit: item.unit,
@@ -868,13 +913,14 @@ export default function OriginalInventoryPage() {
     });
     erpCatalogItems.forEach((item) => {
       const nameKey = normalizeCatalogNameKey(item.name);
-      if (erpSnapshotNameKeys.has(nameKey)) return;
       const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
       const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
       const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
-      erpCatalogNameKeys.add(nameKey);
+      if (warehouseCode || indexCode) {
+        namesWithIndexedSuggestions.add(nameKey);
+      }
       list.push({
         name: item.name,
         unit: item.unit,
@@ -885,7 +931,7 @@ export default function OriginalInventoryPage() {
     });
     existingList.forEach((item) => {
       const nameKey = normalizeCatalogNameKey(item.name);
-      if (erpSnapshotNameKeys.has(nameKey) || erpCatalogNameKeys.has(nameKey)) return;
+      if (namesWithIndexedSuggestions.has(nameKey)) return;
       const key = `${nameKey}|||`;
       if (seen.has(key)) return;
       seen.add(key);
@@ -899,27 +945,30 @@ export default function OriginalInventoryPage() {
     });
     catalog.forEach((item) => {
       const nameKey = normalizeCatalogNameKey(item.name);
-      if (erpSnapshotNameKeys.has(nameKey) || erpCatalogNameKeys.has(nameKey)) return;
-      const key = `${nameKey}|||`;
+      const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
+      const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
+      if (!warehouseCode && !indexCode && namesWithIndexedSuggestions.has(nameKey)) return;
+      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
+      if (warehouseCode || indexCode) {
+        namesWithIndexedSuggestions.add(nameKey);
+      }
       list.push({
         name: item.name,
         unit: item.unit,
-        warehouseCode: item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null,
-        indexCode: item.indexCode ? String(item.indexCode).trim() : null,
-        isMag55: String(item.warehouseCode ?? '').trim().toUpperCase() === 'M-55'
+        warehouseCode,
+        indexCode,
+        isMag55: warehouseCode === 'M-55'
       });
     });
     return list;
   }, [catalog, erpCatalogItems, erpSnapshotEntries, existingList]);
   const filteredNameSuggestions = useMemo(() => {
-    const needle = normalizeCatalogNameKey(form.name);
-    if (!needle) return [];
+    if (!normalizeCatalogNameKey(form.name)) return [];
     return nameSuggestions
-      .filter((item) => normalizeCatalogNameKey(item.name).includes(needle))
+      .filter((item) => matchesCatalogSearch(form.name, item.name, item.indexCode, item.warehouseCode))
       .sort((a, b) => {
-        if (a.isMag55 !== b.isMag55) return a.isMag55 ? -1 : 1;
         if (Boolean(a.warehouseCode) !== Boolean(b.warehouseCode)) return a.warehouseCode ? -1 : 1;
         const nameCompare = collator.compare(a.name, b.name);
         if (nameCompare !== 0) return nameCompare;
@@ -928,22 +977,10 @@ export default function OriginalInventoryPage() {
       .slice(0, 8);
   }, [form.name, nameSuggestions]);
   const filteredCatalog = useMemo(() => {
-    const needle = normalizeCatalogNameKey(catalogSearch);
-    if (!needle) return catalog;
-    return catalog.filter((item) => {
-      const indexNeedle = catalogSearch.trim().toLowerCase();
-      return (
-        normalizeCatalogNameKey(item.name).includes(needle) ||
-        String(item.indexCode ?? '')
-          .trim()
-          .toLowerCase()
-          .includes(indexNeedle) ||
-        String(item.warehouseCode ?? '')
-          .trim()
-          .toLowerCase()
-          .includes(indexNeedle)
-      );
-    });
+    if (!normalizeCatalogNameKey(catalogSearch)) return catalog;
+    return catalog.filter((item) =>
+      matchesCatalogSearch(catalogSearch, item.name, item.indexCode, item.warehouseCode)
+    );
   }, [catalog, catalogSearch]);
   const applyNameToForm = (rawName: string) => {
     const needle = normalizeCatalogNameKey(rawName);

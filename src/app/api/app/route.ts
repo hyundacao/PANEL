@@ -1586,7 +1586,9 @@ const fetchAllOriginalCatalogRows = async () => {
 
 const fetchOriginalCatalog = async () => {
   const data = await fetchAllOriginalCatalogRows();
-  return data.map(mapOriginalInventoryCatalogEntry);
+  return data
+    .filter((row) => String(row.index_code ?? '').trim().length > 0)
+    .map(mapOriginalInventoryCatalogEntry);
 };
 
 const isMissingOriginalInventoryErpSnapshotsTableError = (error: unknown) => {
@@ -5231,6 +5233,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const warehouseCode =
         String(payload?.warehouseCode ?? '').trim().toUpperCase() || extractOriginalInventoryWarehouseCode(indexCode);
       if (!name) throw new Error('NAME_REQUIRED');
+      if (!indexCode) throw new Error('INDEX_REQUIRED');
       const { data: existing, error } = await supabaseAdmin
         .from('original_inventory_catalog')
         .select('id, name, index_code');
@@ -5280,6 +5283,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         const name = String(item?.name ?? '').trim();
         if (!name) return;
         const indexCode = String(item?.indexCode ?? '').trim() || null;
+        if (!indexCode) return;
         const key = normalizeOriginalInventoryCatalogIdentityKey(name, indexCode);
         if (seen.has(key)) return;
         seen.add(key);

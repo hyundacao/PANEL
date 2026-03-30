@@ -98,6 +98,7 @@ export const parseOriginalInventoryCatalogRows = (rows: unknown[][]) => {
 
     if (!parsed.name) return;
     if (headerLayout && index === 0) return;
+    if (!parsed.indexCode) return;
 
     const key = normalizeOriginalInventoryCatalogIdentityKey(parsed.name, parsed.indexCode);
     if (seen.has(key)) return;

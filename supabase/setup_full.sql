@@ -552,6 +552,39 @@ create table if not exists public.original_inventory_catalog (
   created_at timestamptz not null default now()
 );
 
+alter table if exists public.original_inventory_catalog
+  add column if not exists index_code text;
+
+alter table if exists public.original_inventory_catalog
+  add column if not exists warehouse_code text;
+
+delete from public.original_inventory_catalog
+where coalesce(trim(index_code), '') = '';
+
+update public.original_inventory_catalog
+set warehouse_code =
+  upper(regexp_replace(substring(index_code from '(?i)M[- ]?\d+'), '\s+', '-', 'g'))
+where coalesce(trim(warehouse_code), '') = ''
+  and coalesce(trim(index_code), '') <> ''
+  and substring(index_code from '(?i)M[- ]?\d+') is not null;
+
+delete from public.original_inventory_catalog
+where id in (
+  select id
+  from (
+    select
+      id,
+      row_number() over (
+        partition by lower(name), coalesce(lower(index_code), '')
+        order by created_at asc, id asc
+      ) as row_no
+    from public.original_inventory_catalog
+  ) duplicates
+  where row_no > 1
+);
+
+drop index if exists original_inventory_catalog_name_idx;
+
 create unique index if not exists original_inventory_catalog_name_index_idx
   on public.original_inventory_catalog (
     lower(name),
@@ -572,15 +605,17 @@ create table if not exists public.original_inventory_erp_snapshots (
   source_file_name text
 );
 
-create index if not exists original_inventory_erp_snapshots_date_idx
-  on public.original_inventory_erp_snapshots (snapshot_date);
+alter table if exists public.original_inventory_erp_snapshots
+  add column if not exists index_code text;
 
-create unique index if not exists original_inventory_erp_snapshots_date_name_index_idx
-  on public.original_inventory_erp_snapshots (
-    snapshot_date,
-    lower(name),
-    coalesce(lower(index_code), '')
-  );
+alter table if exists public.original_inventory_erp_snapshots
+  add column if not exists warehouse_code text;
+
+alter table if exists public.original_inventory_erp_snapshots
+  add column if not exists real_qty numeric;
+
+alter table if exists public.original_inventory_erp_snapshots
+  add column if not exists available_qty numeric;
 
 do $$
 begin
@@ -591,12 +626,52 @@ begin
       and table_name = 'original_inventory_erp_snapshots'
       and column_name = 'qty'
   ) then
-    execute $compat$
-      alter table public.original_inventory_erp_snapshots
-        alter column qty drop not null
-    $compat$;
+    execute $update$
+      update public.original_inventory_erp_snapshots
+      set
+        real_qty = coalesce(real_qty, qty, 0),
+        available_qty = coalesce(available_qty, qty, 0)
+      where real_qty is null or available_qty is null
+    $update$;
+  else
+    update public.original_inventory_erp_snapshots
+    set
+      real_qty = coalesce(real_qty, 0),
+      available_qty = coalesce(available_qty, 0)
+    where real_qty is null or available_qty is null;
   end if;
 end $$;
+
+alter table if exists public.original_inventory_erp_snapshots
+  alter column real_qty set default 0;
+
+alter table if exists public.original_inventory_erp_snapshots
+  alter column available_qty set default 0;
+
+alter table if exists public.original_inventory_erp_snapshots
+  alter column real_qty set not null;
+
+alter table if exists public.original_inventory_erp_snapshots
+  alter column available_qty set not null;
+
+update public.original_inventory_erp_snapshots
+set warehouse_code =
+  upper(regexp_replace(substring(index_code from '(?i)M[- ]?\d+'), '\s+', '-', 'g'))
+where coalesce(trim(warehouse_code), '') = ''
+  and coalesce(trim(index_code), '') <> ''
+  and substring(index_code from '(?i)M[- ]?\d+') is not null;
+
+create index if not exists original_inventory_erp_snapshots_date_idx
+  on public.original_inventory_erp_snapshots (snapshot_date);
+
+drop index if exists original_inventory_erp_snapshots_date_name_idx;
+
+create unique index if not exists original_inventory_erp_snapshots_date_name_index_idx
+  on public.original_inventory_erp_snapshots (
+    snapshot_date,
+    lower(name),
+    coalesce(lower(index_code), '')
+  );
 
 -- =========================
 -- RAPORT ZMIANOWY
