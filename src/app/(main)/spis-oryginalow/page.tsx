@@ -985,13 +985,46 @@ export default function OriginalInventoryPage() {
         isMag55: warehouseCode === 'M-55'
       });
     });
-    return list;
+    const deduped = new Map<string, (typeof list)[number]>();
+    list.forEach((item) => {
+      const key = `${normalizeCatalogNameKey(item.name)}|${item.warehouseCode ?? ''}`;
+      const current = deduped.get(key);
+      if (!current) {
+        deduped.set(key, item);
+        return;
+      }
+      const currentScore =
+        (current.warehouseCode ? 4 : 0) + (current.indexCode ? 2 : 0) + (current.unit ? 1 : 0);
+      const nextScore = (item.warehouseCode ? 4 : 0) + (item.indexCode ? 2 : 0) + (item.unit ? 1 : 0);
+      if (nextScore > currentScore) {
+        deduped.set(key, item);
+      }
+    });
+    return [...deduped.values()];
   }, [catalog, erpCatalogItems, erpSnapshotEntries, existingList]);
   const filteredNameSuggestions = useMemo(() => {
     if (!normalizeCatalogNameKey(form.name)) return [];
-    return nameSuggestions
+    const filtered = nameSuggestions
       .filter((item) => matchesCatalogSearch(form.name, item.name, item.indexCode, item.warehouseCode))
+    const deduped = new Map<string, (typeof filtered)[number]>();
+    filtered.forEach((item) => {
+      const key = `${normalizeCatalogNameKey(item.name)}|${item.warehouseCode ?? ''}`;
+      const current = deduped.get(key);
+      if (!current) {
+        deduped.set(key, item);
+        return;
+      }
+      const currentScore = (current.indexCode ? 1 : 0) + (current.warehouseCode ? 2 : 0);
+      const nextScore = (item.indexCode ? 1 : 0) + (item.warehouseCode ? 2 : 0);
+      if (nextScore > currentScore) {
+        deduped.set(key, item);
+      }
+    });
+    return [...deduped.values()]
       .sort((a, b) => {
+        const aExistsInSpis = existingByName.has(normalizeCatalogNameKey(a.name));
+        const bExistsInSpis = existingByName.has(normalizeCatalogNameKey(b.name));
+        if (aExistsInSpis !== bExistsInSpis) return aExistsInSpis ? -1 : 1;
         if (a.isMag55 !== b.isMag55) return a.isMag55 ? 1 : -1;
         if (Boolean(a.warehouseCode) !== Boolean(b.warehouseCode)) return a.warehouseCode ? -1 : 1;
         const nameCompare = collator.compare(a.name, b.name);
@@ -999,7 +1032,7 @@ export default function OriginalInventoryPage() {
         return collator.compare(a.warehouseCode ?? '', b.warehouseCode ?? '');
       })
       .slice(0, 8);
-  }, [form.name, nameSuggestions]);
+  }, [existingByName, form.name, nameSuggestions]);
   const filteredCatalog = useMemo(() => {
     if (!normalizeCatalogNameKey(catalogSearch)) return catalog;
     return catalog.filter((item) =>
