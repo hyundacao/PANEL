@@ -1,17 +1,17 @@
-const ORIGINAL_INVENTORY_NAME_LETTERS =
-  'A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż';
+const ORIGINAL_INVENTORY_NAME_CHARS =
+  'A-Za-z0-9膭膯臉艁艃脫艢殴呕膮膰臋艂艅贸艣藕偶';
 
-const collapseLetterSeparatedHyphens = (value: string) =>
+const collapseNameSeparatedHyphens = (value: string) =>
   value.replace(
     new RegExp(
-      `([${ORIGINAL_INVENTORY_NAME_LETTERS}])\\s*-\\s*([${ORIGINAL_INVENTORY_NAME_LETTERS}])`,
+      `([${ORIGINAL_INVENTORY_NAME_CHARS}])\\s*-\\s*([${ORIGINAL_INVENTORY_NAME_CHARS}])`,
       'g'
     ),
     '$1-$2'
   );
 
 export const normalizeOriginalInventoryName = (value: unknown) =>
-  collapseLetterSeparatedHyphens(
+  collapseNameSeparatedHyphens(
     String(value ?? '')
       .replace(/\s+/g, ' ')
       .trim()
