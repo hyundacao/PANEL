@@ -19,16 +19,20 @@ export const DataTable = ({
   stickyHeader?: boolean;
   desktopMaxHeightClassName?: string;
 }) => (
-  <div className="overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(0,0,0,0.55))] shadow-[0_18px_40px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]">
-    <div className="space-y-3 p-3 md:hidden">
+  <div className="md:overflow-hidden md:rounded-2xl md:border md:border-[rgba(255,255,255,0.12)] md:bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(0,0,0,0.55))] md:shadow-[0_18px_40px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]">
+    <div className="space-y-2 md:hidden">
       {rows.map((row, rowIndex) => {
         const details = renderRowDetails?.(rowIndex) ?? null;
+        const rowClassName = getRowClassName?.(rowIndex);
+        const primaryCell = row[0];
+        const secondaryCells = row.slice(1);
         return (
           <div
             key={`row-card-${rowIndex}`}
             className={cn(
-              'rounded-xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(0,0,0,0.5))] p-3 shadow-[0_10px_24px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-[rgba(255,122,26,0.55)]',
-              onRowClick && 'cursor-pointer'
+              'rounded-xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(0,0,0,0.48))] p-3 shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-[rgba(255,122,26,0.55)]',
+              onRowClick && 'cursor-pointer',
+              rowClassName
             )}
             onClick={onRowClick ? () => onRowClick(rowIndex) : undefined}
             onKeyDown={
@@ -44,13 +48,26 @@ export const DataTable = ({
             role={onRowClick ? 'button' : undefined}
             tabIndex={onRowClick ? 0 : undefined}
           >
-            <div className="space-y-3">
-              {row.map((cell, cellIndex) => (
-                <div key={`cell-card-${rowIndex}-${cellIndex}`} className="space-y-1">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
-                    {columns[cellIndex]}
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
+                {columns[0]}
+              </p>
+              <div className="mt-1 break-words text-sm font-semibold leading-snug text-brand">
+                {primaryCell}
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-[rgba(255,255,255,0.08)] pt-3">
+              {secondaryCells.map((cell, cellIndex) => (
+                <div
+                  key={`cell-card-${rowIndex}-${cellIndex + 1}`}
+                  className="min-w-0"
+                >
+                  <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-dim">
+                    {columns[cellIndex + 1]}
                   </p>
-                  <div className="break-words text-sm text-body">{cell}</div>
+                  <div className="mt-1 min-w-0 break-words text-[13px] font-semibold leading-snug text-body">
+                    {cell}
+                  </div>
                 </div>
               ))}
             </div>

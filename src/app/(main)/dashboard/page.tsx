@@ -1,7 +1,7 @@
 'use client';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
 import {
   getCurrentMaterialTotals,
   getDashboard,
@@ -12,7 +12,6 @@ import {
   getTotalsHistory
 } from '@/lib/api';
 import { Card } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { MetricPill } from '@/components/ui/MetricPill';
@@ -21,8 +20,6 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
-  Bar,
-  BarChart,
   Pie,
   PieChart,
   Cell,
@@ -32,10 +29,23 @@ import {
   YAxis
 } from 'recharts';
 
+const rangeOptions = [
+  { days: 30, label: '1 miesiac' },
+  { days: 90, label: '3 miesiace' },
+  { days: 365, label: 'Rok' }
+];
+
+const formatCompactKg = (value: number) => {
+  const absValue = Math.abs(value);
+  if (absValue >= 1000000) return `${(value / 1000000).toFixed(1).replace('.', ',')} mln`;
+  if (absValue >= 1000) return `${Math.round(value / 1000).toLocaleString('pl-PL')} tys.`;
+  return Math.round(value).toLocaleString('pl-PL');
+};
+
 export default function DashboardPage() {
   const today = getTodayKey();
-  const queryClient = useQueryClient();
   const [rangeDays, setRangeDays] = useState(30);
+  const [activeCompositionIndex, setActiveCompositionIndex] = useState(0);
   const { data: dashboard, isLoading } = useQuery({
     queryKey: ['dashboard', today],
     queryFn: () => getDashboard(today)
@@ -63,97 +73,131 @@ export default function DashboardPage() {
     refetchIntervalInBackground: true
   });
   const currentTotal = (currentTotals ?? []).reduce((sum, item) => sum + item.total, 0);
+  const currentComposition = useMemo(() => {
+    const positive = [...(currentTotals ?? [])]
+      .filter((item) => item.total > 0)
+      .sort((a, b) => b.total - a.total);
+    const visible = positive.slice(0, 10);
+    const remaining = positive.slice(10).reduce((sum, item) => sum + item.total, 0);
+    return remaining > 0
+      ? [...visible, { materialId: 'other', label: 'Pozostale', total: remaining }]
+      : visible;
+  }, [currentTotals]);
+  const compositionTotal = currentComposition.reduce((sum, item) => sum + item.total, 0);
+  const activeComposition = currentComposition[activeCompositionIndex] ?? currentComposition[0] ?? null;
+  const activeCompositionPercent =
+    activeComposition && compositionTotal > 0 ? (activeComposition.total / compositionTotal) * 100 : 0;
   const pieColors = [
     'var(--brand)',
     'var(--value-purple)',
     'var(--success)',
     'var(--warning)',
     'var(--danger)',
-    'var(--t-muted)'
+    '#38bdf8',
+    '#f472b6',
+    '#a3e635',
+    '#f97316',
+    '#94a3b8',
+    '#22d3ee'
   ];
-  const glowClass = 'ring-2 ring-[rgba(255,122,26,0.45)] shadow-[0_0_0_3px_rgba(255,122,26,0.18)]';
-
   return (
     <div className="space-y-6">
       <PageHeader
         title="Pulpit"
         subtitle={`Dzi\u015b: ${today}`}
-        actions={
-          <Button
-            variant="secondary"
-            onClick={() => queryClient.invalidateQueries()}
-            className={glowClass}
-          >
-            {'Od\u015bwie\u017c'}
-          </Button>
-        }
       />
 
       <Card>
-        <div className="grid gap-8 lg:grid-cols-[1.2fr_2fr]">
-          <div>
+        <div className="grid gap-6 lg:grid-cols-[1.2fr_2fr] lg:gap-8">
+          <div className="min-w-0">
             <div>
-            <p className="text-lg font-semibold uppercase tracking-wide" style={{ color: 'var(--brand)' }}>
-              {'Aktualna ilo\u015b\u0107 przemia\u0142\u00f3w'}
-            </p>
-            <p className="mt-3 text-7xl font-semibold tabular-nums" style={{ color: 'var(--value-purple)' }}>
-              {formatKg(currentTotal)}
-            </p>
+              <p className="text-lg font-semibold uppercase tracking-wide" style={{ color: 'var(--brand)' }}>
+                {'Aktualna ilo\u015b\u0107 przemia\u0142\u00f3w'}
+              </p>
+              <p
+                className="mt-3 break-words text-5xl font-semibold tabular-nums sm:text-6xl xl:text-7xl"
+                style={{ color: 'var(--value-purple)' }}
+              >
+                {formatKg(currentTotal)}
+              </p>
               <p className="text-lg">{'Suma stan\u00f3w z ca\u0142ej firmy.'}</p>
             </div>
           </div>
-          <div className="grid gap-4 sm:grid-cols-[1.4fr_auto] sm:items-center">
-            <div className="h-56 pr-10">
+          <div className="space-y-3">
+            <div className="flex justify-start sm:justify-end">
+              <div className="inline-flex w-full rounded-md border border-border bg-[rgba(255,255,255,0.025)] p-1 sm:w-auto">
+                {rangeOptions.map((option) => (
+                  <button
+                    key={option.days}
+                    type="button"
+                    onClick={() => setRangeDays(option.days)}
+                    className={`flex-1 rounded px-3 py-2 text-sm font-semibold transition sm:flex-none ${
+                      rangeDays === option.days
+                        ? 'bg-[rgba(255,122,26,0.16)] text-title shadow-[inset_0_0_0_1px_rgba(255,122,26,0.55)]'
+                        : 'text-dim hover:text-title'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="h-64 pl-1 pr-2 sm:h-[280px] sm:pr-4">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={totalsHistory ?? []} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                  <CartesianGrid stroke="var(--border)" />
+                <AreaChart data={totalsHistory ?? []} margin={{ top: 18, right: 12, left: 8, bottom: 2 }}>
+                  <defs>
+                    <linearGradient id="totalHistoryFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--brand)" stopOpacity={0.34} />
+                      <stop offset="70%" stopColor="var(--brand)" stopOpacity={0.08} />
+                      <stop offset="100%" stopColor="var(--brand)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="var(--border)" strokeDasharray="3 8" vertical={false} />
                   <XAxis
                     dataKey="date"
                     stroke="var(--t-dim)"
                     tickFormatter={(value) => String(value).slice(5)}
+                    tickLine={false}
+                    axisLine={false}
+                    minTickGap={22}
                   />
-                  <YAxis stroke="var(--t-dim)" tickFormatter={(value) => `${value}`} />
+                  <YAxis
+                    stroke="var(--t-dim)"
+                    tickFormatter={(value) => formatCompactKg(typeof value === 'number' ? value : 0)}
+                    tickLine={false}
+                    axisLine={false}
+                    width={54}
+                  />
                   <Tooltip
                     contentStyle={{
-                      background: 'var(--surface-1)',
+                      background: 'var(--surface-2)',
                       border: '1px solid var(--border)',
-                      color: 'var(--t-body)'
+                      borderRadius: 8,
+                      color: 'var(--t-title)',
+                      boxShadow: '0 18px 45px rgba(0,0,0,0.32)'
                     }}
                     labelStyle={{ color: 'var(--t-muted)' }}
+                    itemStyle={{ color: 'var(--t-title)' }}
                     formatter={(value) => formatKg(typeof value === 'number' ? value : 0)}
+                    cursor={{ stroke: 'var(--brand)', strokeWidth: 1, strokeDasharray: '4 4' }}
                   />
                   <Area
                     type="monotone"
                     dataKey="total"
                     stroke="var(--brand)"
-                    fill="var(--brand-soft)"
-                    strokeWidth={2}
+                    fill="url(#totalHistoryFill)"
+                    strokeWidth={3}
+                    dot={false}
+                    activeDot={{
+                      r: 5,
+                      stroke: 'var(--t-title)',
+                      strokeWidth: 2,
+                      fill: 'var(--brand)'
+                    }}
+                    isAnimationActive={false}
                   />
                 </AreaChart>
               </ResponsiveContainer>
-            </div>
-            <div className="flex flex-col gap-2 sm:items-end">
-              <Button
-                variant={rangeDays === 30 ? 'secondary' : 'outline'}
-                onClick={() => setRangeDays(30)}
-                className={`${rangeDays === 30 ? glowClass : ''} w-36 justify-center`}
-              >
-                1 miesiac
-              </Button>
-              <Button
-                variant={rangeDays === 90 ? 'secondary' : 'outline'}
-                onClick={() => setRangeDays(90)}
-                className={`${rangeDays === 90 ? glowClass : ''} w-36 justify-center`}
-              >
-                3 miesiace
-              </Button>
-              <Button
-                variant={rangeDays === 365 ? 'secondary' : 'outline'}
-                onClick={() => setRangeDays(365)}
-                className={`${rangeDays === 365 ? glowClass : ''} w-36 justify-center`}
-              >
-                Ostatni rok
-              </Button>
             </div>
           </div>
         </div>
@@ -313,39 +357,123 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <Card>
-        <p className="text-xl font-semibold" style={{ color: 'var(--brand)' }}>
-          {'Przemia\u0142y - stan aktualny'}
-        </p>
-        <div className="mt-4 h-72">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={currentTotals ?? []} margin={{ top: 10, right: 20, left: 0, bottom: 40 }}>
-              <CartesianGrid stroke="var(--border)" />
-              <XAxis
-                dataKey="label"
-                stroke="var(--t-dim)"
-                interval={0}
-                angle={-20}
-                textAnchor="end"
-                height={60}
-              />
-              <YAxis stroke="var(--t-dim)" tickFormatter={(value) => `${value}`} />
-              <Tooltip
-                contentStyle={{
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--t-title)'
-                }}
-                labelStyle={{ color: 'var(--t-muted)' }}
-                itemStyle={{ color: 'var(--t-title)' }}
-                formatter={(value) => formatKg(typeof value === 'number' ? value : 0)}
-                cursor={false}
-              />
-              <Bar dataKey="total" fill="var(--value-purple)" radius={[4, 4, 0, 0]} barSize={10} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
+      <div className="space-y-6">
+        <Card className="overflow-hidden">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xl font-semibold" style={{ color: 'var(--brand)' }}>
+                {'Przemia\u0142y - udzia\u0142 w stanie aktualnym'}
+              </p>
+              <p className="mt-1 text-sm text-dim">
+                {'Najwi\u0119ksze pozycje w aktualnym stanie, udzia\u0142 liczony z ca\u0142ej firmy.'}
+              </p>
+            </div>
+            <span className="rounded-[10px] border border-border bg-[rgba(255,255,255,0.03)] px-3 py-1 text-sm font-semibold tabular-nums text-title">
+              {formatKg(compositionTotal)}
+            </span>
+          </div>
+          <div className="mt-5 grid min-w-0 gap-5 xl:grid-cols-[minmax(360px,0.95fr)_1.4fr] xl:items-center">
+            <div className="relative h-[260px] min-w-0 overflow-hidden sm:h-[340px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart onMouseLeave={() => setActiveCompositionIndex(0)}>
+                  <Pie
+                    data={currentComposition}
+                    dataKey="total"
+                    nameKey="label"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={58}
+                    outerRadius={98}
+                    paddingAngle={3}
+                    cornerRadius={8}
+                    startAngle={90}
+                    endAngle={-270}
+                    stroke="var(--surface-1)"
+                    strokeWidth={2}
+                    onMouseEnter={(_, index) => setActiveCompositionIndex(index)}
+                  >
+                    {currentComposition.map((entry, idx) => (
+                      <Cell
+                        key={`current-${entry.materialId}`}
+                        fill={pieColors[idx % pieColors.length]}
+                        opacity={!activeComposition || activeCompositionIndex === idx ? 1 : 0.42}
+                        stroke={activeCompositionIndex === idx ? 'var(--t-title)' : 'var(--surface-1)'}
+                        strokeWidth={activeCompositionIndex === idx ? 3 : 2}
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      background: 'var(--surface-2)',
+                      border: '1px solid var(--border)',
+                      color: 'var(--t-title)'
+                    }}
+                    labelStyle={{ color: 'var(--t-muted)' }}
+                    itemStyle={{ color: 'var(--t-title)' }}
+                    formatter={(value) => formatKg(typeof value === 'number' ? value : 0)}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="max-w-[118px] text-center sm:max-w-[160px]">
+                  <p className="truncate text-xs font-semibold uppercase tracking-wide text-dim">
+                    {activeComposition?.label ?? 'Brak danych'}
+                  </p>
+                  <p className="mt-2 text-xl font-semibold tabular-nums text-title sm:text-3xl">
+                    {formatKg(activeComposition?.total ?? 0)}
+                  </p>
+                  <p className="mt-1 text-sm font-semibold tabular-nums" style={{ color: 'var(--brand)' }}>
+                    {activeComposition ? `${activeCompositionPercent.toFixed(1).replace('.', ',')}%` : '0%'}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+              {currentComposition.map((entry, idx) => (
+                <button
+                  key={`legend-${entry.materialId}`}
+                  type="button"
+                  onMouseEnter={() => setActiveCompositionIndex(idx)}
+                  onFocus={() => setActiveCompositionIndex(idx)}
+                  className={`min-w-0 rounded-md border p-3 text-left transition ${
+                    activeCompositionIndex === idx
+                      ? 'border-[var(--brand)] bg-[rgba(255,122,26,0.08)]'
+                      : 'border-border bg-[rgba(255,255,255,0.02)] hover:border-borderStrong'
+                  }`}
+                >
+                  <span className="flex min-w-0 items-center justify-between gap-3">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span
+                        className="h-3 w-3 shrink-0 rounded-full"
+                        style={{ background: pieColors[idx % pieColors.length] }}
+                      />
+                      <span className="truncate text-sm font-semibold text-body">{entry.label}</span>
+                    </span>
+                    <span className="shrink-0 text-xs font-semibold tabular-nums text-dim">
+                      {compositionTotal > 0
+                        ? `${((entry.total / compositionTotal) * 100).toFixed(1).replace('.', ',')}%`
+                        : '0%'}
+                    </span>
+                  </span>
+                  <span className="mt-2 block text-sm tabular-nums text-title">{formatKg(entry.total)}</span>
+                  <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-[rgba(255,255,255,0.08)]">
+                    <span
+                      className="block h-full rounded-full"
+                      style={{
+                        width: `${compositionTotal > 0 ? Math.max((entry.total / compositionTotal) * 100, 2) : 0}%`,
+                        background: pieColors[idx % pieColors.length]
+                      }}
+                    />
+                  </span>
+                </button>
+              ))}
+              {currentComposition.length === 0 && (
+                <p className="text-sm text-dim">Brak dodatnich stanow.</p>
+              )}
+            </div>
+          </div>
+        </Card>
+      </div>
 
     </div>
   );

@@ -16,6 +16,7 @@ import {
 
 export type UiFilters = {
   onlyPending: boolean;
+  onlyWithStock: boolean;
   search: string;
 };
 
@@ -142,7 +143,7 @@ export const useUiStore = create<UiState>()(
         }
         set({ rememberMe: value });
       },
-      filters: { onlyPending: false, search: '' },
+      filters: { onlyPending: false, onlyWithStock: false, search: '' },
       setFilters: (filters) => set((state) => ({ filters: { ...state.filters, ...filters } })),
       erpWorkspaceTab: 'issuer',
       setErpWorkspaceTab: (value) => set({ erpWorkspaceTab: normalizeErpWorkspaceTab(value) }),

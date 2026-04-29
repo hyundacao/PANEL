@@ -89,6 +89,23 @@ const navItemsRaport: MobileNavItem[] = [
   { label: 'Raport zmianowy', href: '/raport-zmianowy', tab: 'raport-zmianowy' }
 ];
 
+const getModuleNavItems = (warehouse: WarehouseKey | null) => {
+  if (warehouse === 'CZESCI') return navItemsCzesci;
+  if (warehouse === 'RAPORT_ZMIANOWY') return navItemsRaport;
+  return navItemsPrzemialy;
+};
+
+const getFirstAccessibleModuleHref = (
+  user: Parameters<typeof canSeeTab>[0],
+  warehouse: WarehouseKey
+) => {
+  const item = getModuleNavItems(warehouse).find((navItem) => {
+    if (!navItem.tab) return true;
+    return canSeeTab(user, warehouse, navItem.tab);
+  });
+  return item?.href ?? null;
+};
+
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -207,7 +224,8 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       setActiveWarehouse(warehouseFromPath);
     }
     if (tabFromPath && !canSeeTab(user, warehouseFromPath, tabFromPath)) {
-      router.replace('/magazyny');
+      const fallbackHref = getFirstAccessibleModuleHref(user, warehouseFromPath);
+      router.replace(fallbackHref ?? '/magazyny');
     }
   }, [
     activeWarehouse,
@@ -294,12 +312,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     return pathname.startsWith(href);
   };
   const mobileItems =
-    (activeWarehouse === 'CZESCI'
-      ? navItemsCzesci
-      : activeWarehouse === 'RAPORT_ZMIANOWY'
-        ? navItemsRaport
-        : navItemsPrzemialy
-    ).filter((item) => {
+    getModuleNavItems(activeWarehouse).filter((item) => {
       if (!activeWarehouse) return false;
       if (!item.tab) return true;
       return canSeeTab(user, activeWarehouse, item.tab);
@@ -330,7 +343,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           <ContentScrim className="min-h-full">
             {showMobileNav && (
               <div className="mb-4 md:hidden">
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-2.5">
                   {mobileItems.map((item) => {
                     const active = isActivePath(item.href);
                     return (
@@ -338,12 +351,12 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                         key={item.href}
                         href={item.href}
                         className={cn(
-                          'rounded-xl border border-border bg-surface2 px-3 py-3 text-center text-sm font-semibold text-title shadow-[inset_0_1px_0_var(--inner-highlight)] transition hover:border-[rgba(255,122,26,0.7)] hover:text-title',
+                          'flex min-h-[56px] items-center justify-center rounded-xl border border-border bg-[rgba(255,255,255,0.025)] px-3 py-3 text-center text-[13px] font-semibold leading-snug text-title shadow-[inset_0_1px_0_var(--inner-highlight)] transition hover:border-[rgba(255,122,26,0.65)] hover:bg-[rgba(255,255,255,0.045)] hover:text-title',
                           active &&
-                            'border-[rgba(255,122,26,0.9)] bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(0,0,0,0.5))] shadow-[0_0_0_2px_rgba(255,122,26,0.25)]'
+                            'border-[rgba(255,122,26,0.85)] bg-[linear-gradient(180deg,rgba(255,122,26,0.13),rgba(255,122,26,0.035))] shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]'
                         )}
                       >
-                        {item.label}
+                        <span className="block max-w-full text-balance">{item.label}</span>
                       </Link>
                     );
                   })}

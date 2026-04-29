@@ -78,6 +78,7 @@ type TransferAdjustmentsByDate = Record<string, Record<string, TransferAdjustmen
 type TransferAdjustmentsByWarehouse = Record<string, Record<string, TransferAdjustment>>;
 type TransferCommentsByDate = Record<string, Record<string, string[]>>;
 type TransferDeltasByDate = Record<string, Record<string, Record<string, number>>>;
+type InventoryDeltasByDate = Record<string, Record<string, Record<string, number>>>;
 type WarehouseAdminScope = 'PRZEMIALY' | 'ERP';
 type WarehouseTransferDocumentItemBase = Omit<
   WarehouseTransferDocumentItem,
@@ -580,6 +581,14 @@ const buildEntriesByDate = (rows: any[]): EntriesByDate => {
   });
   return result;
 };
+
+const mergeEntryBuckets = (
+  base: Record<string, { qty: number; confirmed: boolean; comment?: string }>,
+  override: Record<string, { qty: number; confirmed: boolean; comment?: string }>
+) => ({
+  ...base,
+  ...override
+});
 
 const statusCodeFromError = (code: string) => {
   if (code === 'UNAUTHORIZED' || code === 'SESSION_EXPIRED') return 401;
@@ -1468,12 +1477,50 @@ const buildExternalOutCommentsByDate = (
   return result;
 };
 
+const fetchInventoryAdjustmentsForStats = async (fromKey: string, toKey: string) => {
+  const start = `${fromKey}T00:00:00.000Z`;
+  const end = `${addDays(toKey, 1)}T00:00:00.000Z`;
+  const { data, error } = await supabaseAdmin
+    .from('inventory_adjustments')
+    .select('at, location_id, material_id, prev_qty, next_qty')
+    .gte('at', start)
+    .lt('at', end);
+  if (error) throw error;
+  return data ?? [];
+};
+
+const buildInventoryDeltasByDate = (
+  rows: Array<{
+    at: string;
+    location_id: string;
+    material_id: string;
+    prev_qty: number | null;
+    next_qty: number | null;
+  }>
+): InventoryDeltasByDate => {
+  const result: InventoryDeltasByDate = {};
+  rows.forEach((row) => {
+    const locationId = String(row.location_id ?? '');
+    const materialId = String(row.material_id ?? '');
+    if (!locationId || !materialId) return;
+    const correctionDateKey = addDays(formatDate(new Date(row.at)), -1);
+    const delta = toNumber(row.next_qty) - toNumber(row.prev_qty);
+    if (!delta) return;
+    if (!result[correctionDateKey]) result[correctionDateKey] = {};
+    if (!result[correctionDateKey][locationId]) result[correctionDateKey][locationId] = {};
+    result[correctionDateKey][locationId][materialId] =
+      (result[correctionDateKey][locationId][materialId] ?? 0) + delta;
+  });
+  return result;
+};
+
 const collectConfirmedDiffs = (
   dateKey: string,
   entriesByDate: EntriesByDate,
   materialMap: Map<string, Material>,
   activeLocations: Location[],
-  transferDeltasByDate?: TransferDeltasByDate
+  transferDeltasByDate?: TransferDeltasByDate,
+  inventoryDeltasByDate?: InventoryDeltasByDate
 ) => {
   const addedTotals = new Map<string, number>();
   const removedTotals = new Map<string, number>();
@@ -1483,6 +1530,7 @@ const collectConfirmedDiffs = (
   const todayEntries = entriesByDate[dateKey] ?? {};
   const yesterdayEntries = entriesByDate[yesterdayKey] ?? {};
   const dayDeltas = transferDeltasByDate?.[dateKey] ?? {};
+  const inventoryDeltas = inventoryDeltasByDate?.[dateKey] ?? {};
 
   activeLocations.forEach((loc) => {
     const today = todayEntries[loc.id] ?? {};
@@ -1494,7 +1542,8 @@ const collectConfirmedDiffs = (
       const label = materialMap.get(materialId)?.name ?? 'Nieznany';
       const todayQty = todayEntry.qty ?? 0;
       const delta = dayDeltas[loc.id]?.[materialId] ?? 0;
-      const adjustedTodayQty = todayQty - delta;
+      const inventoryDelta = inventoryDeltas[loc.id]?.[materialId] ?? 0;
+      const adjustedTodayQty = todayQty - delta - inventoryDelta;
       const yesterdayQty = yesterday[materialId]?.qty ?? 0;
       const diff = adjustedTodayQty - yesterdayQty;
       if (diff > 0) {
@@ -2135,15 +2184,8 @@ const upsertTransferEntry = async (
   let comment = todayEntry?.comment ?? null;
   if (baseQty === null) {
     const yesterdayKey = addDays(dateKey, -1);
-    const { data: yesterdayEntry, error: yesterdayError } = await supabaseAdmin
-      .from('daily_entries')
-      .select('qty')
-      .eq('date_key', yesterdayKey)
-      .eq('location_id', locationId)
-      .eq('material_id', materialId)
-      .maybeSingle();
-    if (yesterdayError) throw yesterdayError;
-    baseQty = toNumber(yesterdayEntry?.qty);
+    const latestPreviousEntries = await fetchLatestEntriesByLocation([locationId], yesterdayKey);
+    baseQty = latestPreviousEntries[locationId]?.[materialId]?.qty ?? 0;
     confirmed = false;
     comment = null;
   }
@@ -2180,13 +2222,20 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       ]);
       const activeStatsLocations = getActiveStatsLocations(warehouses, locations);
       const yesterdayKey = addDays(dateKey, -1);
-      const [todayEntriesRows, yesterdayEntriesRows, todayStatusRows, yesterdayStatusRows, transferRows] =
-        await Promise.all([
+      const [
+        todayEntriesRows,
+        yesterdayEntriesRows,
+        todayStatusRows,
+        yesterdayStatusRows,
+        transferRows,
+        inventoryRows
+      ] = await Promise.all([
           fetchEntries(dateKey),
           fetchEntries(yesterdayKey),
           fetchLocationStatus(dateKey),
           fetchLocationStatus(yesterdayKey),
-          fetchTransfers(dateKey, dateKey)
+          fetchTransfers(dateKey, dateKey),
+          fetchInventoryAdjustmentsForStats(dateKey, addDays(dateKey, 1))
         ]);
       const todayEntriesByDate = buildEntriesByDate(todayEntriesRows);
       const todayEntries = todayEntriesByDate[dateKey] ?? {};
@@ -2201,6 +2250,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       );
       const externalTotalsForDay = externalTotalsByWarehouse[dateKey] ?? {};
       const dayDeltas = transferDeltasByDate[dateKey] ?? {};
+      const inventoryDeltas = buildInventoryDeltasByDate(inventoryRows)[dateKey] ?? {};
       return warehouses
         .filter((warehouse) => warehouse.isActive && warehouse.includeInStats)
         .map((warehouse) => {
@@ -2228,7 +2278,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
             union.forEach((materialId) => {
               const todayQty = today[materialId]?.qty ?? 0;
               const delta = dayDeltas[loc.id]?.[materialId] ?? 0;
-              const adjustedTodayQty = todayQty - delta;
+              const inventoryDelta = inventoryDeltas[loc.id]?.[materialId] ?? 0;
+              const adjustedTodayQty = todayQty - delta - inventoryDelta;
               const yesterdayQty = yesterday[materialId]?.qty ?? 0;
               const diff = adjustedTodayQty - yesterdayQty;
               if (diff > 0) added += diff;
@@ -2261,13 +2312,20 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         (loc) => loc.warehouseId === warehouseId && loc.isActive
       );
       const yesterdayKey = addDays(dateKey, -1);
-      const [todayEntriesRows, yesterdayEntriesRows, todayStatusRows, yesterdayStatusRows] =
-        await Promise.all([
-          fetchEntries(dateKey),
-          fetchEntries(yesterdayKey),
-          fetchLocationStatus(dateKey),
-          fetchLocationStatus(yesterdayKey)
-        ]);
+      const locationIds = activeLocations.map((loc) => loc.id);
+      const [
+        todayEntriesRows,
+        yesterdayEntriesRows,
+        latestPreviousEntries,
+        todayStatusRows,
+        yesterdayStatusRows
+      ] = await Promise.all([
+        fetchEntries(dateKey),
+        fetchEntries(yesterdayKey),
+        fetchLatestEntriesByLocation(locationIds, yesterdayKey),
+        fetchLocationStatus(dateKey),
+        fetchLocationStatus(yesterdayKey)
+      ]);
       const todayEntries = buildEntriesByDate(todayEntriesRows)[dateKey] ?? {};
       const yesterdayEntries = buildEntriesByDate(yesterdayEntriesRows)[yesterdayKey] ?? {};
       const emptyConfirmedToday = new Set(todayStatusRows.map((row) => row.location_id));
@@ -2278,14 +2336,15 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .sort((a, b) => a.orderNo - b.orderNo)
         .map((loc) => {
           const today = todayEntries[loc.id] ?? {};
-          const yesterday = yesterdayEntries[loc.id] ?? {};
-          const union = new Set([...Object.keys(today), ...Object.keys(yesterday)]);
+          const latestPrevious = latestPreviousEntries[loc.id] ?? yesterdayEntries[loc.id] ?? {};
+          const mergedCurrent = mergeEntryBuckets(latestPrevious, today);
+          const union = new Set([...Object.keys(today), ...Object.keys(latestPrevious)]);
           const confirmed = emptyConfirmedToday.has(loc.id)
             ? true
             : union.size > 0 && [...union].every((id) => today[id]?.confirmed);
           const source = confirmed || Object.keys(today).length > 0 ? 'TODAY' : 'LAST';
           const hasTodayEntries = Object.keys(today).length > 0;
-          const previewSource = source === 'TODAY' ? today : yesterday;
+          const previewSource = source === 'TODAY' ? mergedCurrent : latestPrevious;
           const preview = Object.entries(previewSource)
             .filter(([, entry]) => (entry?.qty ?? 0) > 0)
             .slice(0, 2)
@@ -2293,14 +2352,14 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
               label: materialMap.get(id)?.name ?? 'Nieznany',
               qty: entry?.qty ?? 0
             }));
-          const lastTotal = Object.values(yesterday).reduce((sum, entry) => sum + (entry?.qty ?? 0), 0);
-          const lastItems = Object.entries(yesterday)
+          const lastTotal = Object.values(latestPrevious).reduce((sum, entry) => sum + (entry?.qty ?? 0), 0);
+          const lastItems = Object.entries(latestPrevious)
             .filter(([, entry]) => (entry?.qty ?? 0) > 0)
             .map(([id, entry]) => ({
               label: materialMap.get(id)?.name ?? 'Nieznany',
               qty: entry?.qty ?? 0
             }));
-          const currentSource = hasTodayEntries ? today : yesterday;
+          const currentSource = hasTodayEntries ? mergedCurrent : latestPrevious;
           const currentItems = Object.entries(currentSource)
             .filter(([, entry]) => (entry?.qty ?? 0) > 0)
             .map(([id, entry]) => ({
@@ -2335,23 +2394,23 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const locationId = String(payload?.locationId ?? '');
       const dateKey = String(payload?.date ?? getTodayKey());
       if (!locationId) throw new Error('NOT_FOUND');
-      const [materials, todayEntriesRows, yesterdayEntriesRows] = await Promise.all([
+      const yesterdayKey = addDays(dateKey, -1);
+      const [materials, todayEntriesRows, latestPreviousEntries] = await Promise.all([
         fetchMaterials(),
         fetchEntries(dateKey),
-        fetchEntries(addDays(dateKey, -1))
+        fetchLatestEntriesByLocation([locationId], yesterdayKey)
       ]);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const todayEntries = buildEntriesByDate(todayEntriesRows)[dateKey]?.[locationId] ?? {};
-      const yesterdayEntries =
-        buildEntriesByDate(yesterdayEntriesRows)[addDays(dateKey, -1)]?.[locationId] ?? {};
-      const union = new Set([...Object.keys(todayEntries), ...Object.keys(yesterdayEntries)]);
+      const previousEntries = latestPreviousEntries[locationId] ?? {};
+      const union = new Set([...Object.keys(todayEntries), ...Object.keys(previousEntries)]);
       return [...union].map((materialId) => {
         const material = materialMap.get(materialId);
         return {
           materialId,
           code: material?.code ?? 'Brak kartoteki',
           name: material?.name ?? 'Nieznany przemial',
-          yesterdayQty: yesterdayEntries[materialId]?.qty ?? 0,
+          yesterdayQty: previousEntries[materialId]?.qty ?? 0,
           todayQty: todayEntries[materialId]?.qty ?? null,
           confirmed: todayEntries[materialId]?.confirmed ?? false,
           comment: todayEntries[materialId]?.comment
@@ -2504,6 +2563,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(fromKey, dateKey);
+      const inventoryDeltasByDate = buildInventoryDeltasByDate(
+        await fetchInventoryAdjustmentsForStats(fromKey, addDays(dateKey, 1))
+      );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
       const externalTotalsByDate = buildExternalTotalsByDate(
         transferRows,
@@ -2514,7 +2576,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         entriesByDate,
         materialMap,
         activeLocations,
-        transferDeltasByDate
+        transferDeltasByDate,
+        inventoryDeltasByDate
       );
       applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[dateKey], materialMap);
       const result: ReportRow[] = activeMaterials.map((mat) => {
@@ -2613,6 +2676,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(fromKey, todayKey);
+      const inventoryDeltasByDate = buildInventoryDeltasByDate(
+        await fetchInventoryAdjustmentsForStats(fromKey, addDays(todayKey, 1))
+      );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
       const externalTotalsByDate = buildExternalTotalsByDate(
         transferRows,
@@ -2627,7 +2693,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           entriesByDate,
           materialMap,
           activeLocations,
-          transferDeltasByDate
+          transferDeltasByDate,
+          inventoryDeltasByDate
         );
         applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         diffs.addedTotals.forEach((value, label) => {
@@ -2656,6 +2723,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(fromKey, todayKey);
+      const inventoryDeltasByDate = buildInventoryDeltasByDate(
+        await fetchInventoryAdjustmentsForStats(fromKey, addDays(todayKey, 1))
+      );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
       const externalTotalsByDate = buildExternalTotalsByDate(
         transferRows,
@@ -2670,7 +2740,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           entriesByDate,
           materialMap,
           activeLocations,
-          transferDeltasByDate
+          transferDeltasByDate,
+          inventoryDeltasByDate
         );
         applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         diffs.addedTotals.forEach((value, label) => {
@@ -2714,6 +2785,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(fromKey, todayKey);
+      const inventoryDeltasByDate = buildInventoryDeltasByDate(
+        await fetchInventoryAdjustmentsForStats(fromKey, addDays(todayKey, 1))
+      );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
       const externalTotalsByDate = buildExternalTotalsByDate(
         transferRows,
@@ -2725,7 +2799,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           entriesByDate,
           materialMap,
           activeLocations,
-          transferDeltasByDate
+          transferDeltasByDate,
+          inventoryDeltasByDate
         );
         applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         const added = [...diffs.addedTotals.values()].reduce((sum, value) => sum + value, 0);
@@ -2756,6 +2831,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(range.from, range.to);
       const activeLocationIds = new Set(activeLocations.map((loc) => loc.id));
+      const inventoryDeltasByDate = buildInventoryDeltasByDate(
+        await fetchInventoryAdjustmentsForStats(range.from, addDays(range.to, 1))
+      );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
       const externalTotalsByDate = buildExternalTotalsByDate(transferRows, activeLocationIds);
       const transferExternalOutCommentsByDate = buildExternalOutCommentsByDate(
@@ -2773,7 +2851,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           entriesByDate,
           materialMap,
           activeLocations,
-          transferDeltasByDate
+          transferDeltasByDate,
+          inventoryDeltasByDate
         );
         applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         diffs.addedTotals.forEach((value, label) => {
@@ -2853,6 +2932,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(range.from, range.to);
+      const inventoryDeltasByDate = buildInventoryDeltasByDate(
+        await fetchInventoryAdjustmentsForStats(range.from, addDays(range.to, 1))
+      );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
       const externalTotalsByDate = buildExternalTotalsByDate(
         transferRows,
@@ -2866,7 +2948,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           entriesByDate,
           materialMap,
           activeLocations,
-          transferDeltasByDate
+          transferDeltasByDate,
+          inventoryDeltasByDate
         );
         applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         const month = key.slice(0, 7);
@@ -4699,26 +4782,21 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if ((kind === 'INTERNAL' || kind === 'EXTERNAL_OUT') && fromLocationId) {
         const todayKey = getTodayKey();
         const yesterdayKey = addDays(todayKey, -1);
-        const { data: todayEntry, error: todayError } = await supabaseAdmin
+        const [todayResult, latestPreviousEntries] = await Promise.all([
+          supabaseAdmin
           .from('daily_entries')
           .select('qty')
           .eq('date_key', todayKey)
           .eq('location_id', fromLocationId)
           .eq('material_id', materialId)
-          .maybeSingle();
+            .maybeSingle(),
+          fetchLatestEntriesByLocation([fromLocationId], yesterdayKey)
+        ]);
+        const { data: todayEntry, error: todayError } = todayResult;
         if (todayError) throw todayError;
-        let availableQty = todayEntry ? toNumber(todayEntry.qty) : null;
-        if (availableQty === null) {
-          const { data: yesterdayEntry, error: yesterdayError } = await supabaseAdmin
-            .from('daily_entries')
-            .select('qty')
-            .eq('date_key', yesterdayKey)
-            .eq('location_id', fromLocationId)
-            .eq('material_id', materialId)
-            .maybeSingle();
-          if (yesterdayError) throw yesterdayError;
-          availableQty = toNumber(yesterdayEntry?.qty);
-        }
+        const availableQty = todayEntry
+          ? toNumber(todayEntry.qty)
+          : latestPreviousEntries[fromLocationId]?.[materialId]?.qty ?? 0;
         if (qty > availableQty) throw new Error('INSUFFICIENT_STOCK');
       }
       const transfer = {

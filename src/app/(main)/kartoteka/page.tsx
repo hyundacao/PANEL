@@ -6,11 +6,13 @@ import { ChevronDown } from 'lucide-react';
 import { getCatalog, getCurrentMaterialTotals, getMaterialLocations, getTodayKey } from '@/lib/api';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
+import { SearchInput } from '@/components/ui/SearchInput';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { formatKg } from '@/lib/utils/format';
 
 type ViewMode = 'materials' | 'catalogs';
 const KARTOTEKA_TAB_STORAGE_KEY = 'kartoteka-tab';
+const normalizeSearch = (value: string) => value.trim().toLowerCase();
 
 export default function CatalogPage() {
   const today = getTodayKey();
@@ -28,8 +30,10 @@ export default function CatalogPage() {
     const saved = window.localStorage.getItem(KARTOTEKA_TAB_STORAGE_KEY);
     return saved === 'materials' || saved === 'catalogs' ? saved : 'materials';
   });
+  const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [expandedCatalogs, setExpandedCatalogs] = useState<Record<string, boolean>>({});
+  const searchQuery = normalizeSearch(search);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -51,6 +55,15 @@ export default function CatalogPage() {
       ),
     [data]
   );
+
+  const filteredCatalog = useMemo(() => {
+    if (!searchQuery) return sortedCatalog;
+    return sortedCatalog.filter((material) => {
+      const name = normalizeSearch(material.name);
+      const code = normalizeSearch(material.code);
+      return name.includes(searchQuery) || code.includes(searchQuery);
+    });
+  }, [searchQuery, sortedCatalog]);
 
 
   const catalogTotals = useMemo(() => {
@@ -84,6 +97,21 @@ export default function CatalogPage() {
     });
     return map;
   }, [data, totalsByMaterial]);
+
+  const filteredCatalogTotals = useMemo(() => {
+    if (!searchQuery) return catalogTotals;
+    return catalogTotals.filter((row) => {
+      if (normalizeSearch(row.catalog).includes(searchQuery)) return true;
+      const items = materialsByCatalog.get(row.catalog) ?? [];
+      return items.some((item) => normalizeSearch(item.name).includes(searchQuery));
+    });
+  }, [catalogTotals, materialsByCatalog, searchQuery]);
+
+  const getVisibleCatalogItems = (catalog: string) => {
+    const items = materialsByCatalog.get(catalog) ?? [];
+    if (!searchQuery || normalizeSearch(catalog).includes(searchQuery)) return items;
+    return items.filter((item) => normalizeSearch(item.name).includes(searchQuery));
+  };
 
 
 
@@ -119,6 +147,15 @@ export default function CatalogPage() {
                 Kartoteki
               </TabsTrigger>
             </TabsList>
+            <div className="w-full sm:max-w-sm">
+              <SearchInput
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                clearable
+                onClear={() => setSearch('')}
+                placeholder="Szukaj po nazwie lub kartotece"
+              />
+            </div>
           </div>
 
           <TabsContent value="materials" className="mt-4">
@@ -127,7 +164,7 @@ export default function CatalogPage() {
                 <span>Przemiał</span>
                 <span className="text-right">Stan ogólny</span>
               </div>
-              {sortedCatalog.map((row) => {
+              {filteredCatalog.map((row) => {
                 const isExpanded = !!expanded[row.id];
                 const total = totalsByMaterial.get(row.id) ?? 0;
                 const locations = materialLocations?.[row.id] ?? [];
@@ -192,6 +229,11 @@ export default function CatalogPage() {
                   </div>
                 );
               })}
+              {filteredCatalog.length === 0 && (
+                <p className="border-t border-border px-4 py-4 text-sm text-dim">
+                  Brak wynikow dla podanej frazy.
+                </p>
+              )}
             </div>
           </TabsContent>
 
@@ -201,9 +243,9 @@ export default function CatalogPage() {
                 <span>Kartoteka</span>
                 <span className="text-right">Suma (kg)</span>
               </div>
-              {catalogTotals.map((row) => {
+              {filteredCatalogTotals.map((row) => {
                 const isExpanded = !!expandedCatalogs[row.catalog];
-                const items = materialsByCatalog.get(row.catalog) ?? [];
+                const items = getVisibleCatalogItems(row.catalog);
                 return (
                   <div key={row.catalog} className="border-t border-border">
                     <button
@@ -263,6 +305,11 @@ export default function CatalogPage() {
                   </div>
                 );
               })}
+              {filteredCatalogTotals.length === 0 && (
+                <p className="border-t border-border px-4 py-4 text-sm text-dim">
+                  Brak wynikow dla podanej frazy.
+                </p>
+              )}
             </div>
           </TabsContent>
         </Tabs>

@@ -1080,37 +1080,6 @@ export default function OriginalInventoryPage() {
     return map;
   }, [entriesForDate]);
 
-  const reportOptions = useMemo(() => {
-    const map = new Map<string, { key: string; name: string }>();
-    entries.forEach((entry) => {
-      const key = normalizeCatalogNameKey(entry.name);
-      if (!map.has(key)) {
-        map.set(key, { key, name: entry.name });
-      }
-    });
-    return [...map.values()].sort((a, b) => collator.compare(a.name, b.name));
-  }, [entries]);
-  const selectedReportMaterialKey = useMemo(() => {
-    const query = normalizeCatalogNameKey(reportQuery);
-    if (!query || reportOptions.length === 0) return '';
-    const exactMatch = reportOptions.find((option) => normalizeCatalogNameKey(option.name) === query);
-    return exactMatch?.key ?? '';
-  }, [reportOptions, reportQuery]);
-  const reportEntries = useMemo(() => {
-    if (!selectedReportMaterialKey) return [];
-    return entries
-      .filter((entry) => normalizeCatalogNameKey(entry.name) === selectedReportMaterialKey)
-      .sort((a, b) => b.at.localeCompare(a.at));
-  }, [entries, selectedReportMaterialKey]);
-  const reportSuggestions = useMemo(() => {
-    const needle = normalizeCatalogNameKey(reportQuery);
-    if (!needle) return [];
-    return reportOptions
-      .map((option) => option.name)
-      .filter((name) => normalizeCatalogNameKey(name).includes(needle))
-      .slice(0, 8);
-  }, [reportOptions, reportQuery]);
-
   const dailyEntries = useMemo(() => {
     if (!spisDate) return [];
     return entriesForDate
@@ -1392,6 +1361,119 @@ export default function OriginalInventoryPage() {
       })),
     [reportRows]
   );
+  const reportOptions = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        key: string;
+        name: string;
+        unit: string;
+        indexCodes: Set<string>;
+        warehouseCodes: Set<string>;
+        inReport: boolean;
+        hasHistory: boolean;
+      }
+    >();
+
+    const ensureOption = (name: string, unit?: string) => {
+      const key = normalizeCatalogNameKey(name);
+      if (!key) return null;
+      const current = map.get(key);
+      if (current) {
+        if (!current.unit && unit) {
+          current.unit = unit;
+        }
+        return current;
+      }
+      const next = {
+        key,
+        name,
+        unit: unit ?? '',
+        indexCodes: new Set<string>(),
+        warehouseCodes: new Set<string>(),
+        inReport: false,
+        hasHistory: false
+      };
+      map.set(key, next);
+      return next;
+    };
+
+    const addCatalogMeta = (
+      name: string,
+      unit?: string,
+      indexCode?: string | null,
+      warehouseCode?: string | null
+    ) => {
+      const option = ensureOption(name, unit);
+      if (!option) return;
+      const normalizedIndex = String(indexCode ?? '').trim();
+      const normalizedWarehouse = String(warehouseCode ?? '').trim().toUpperCase();
+      if (normalizedIndex) option.indexCodes.add(normalizedIndex);
+      if (normalizedWarehouse) option.warehouseCodes.add(normalizedWarehouse);
+    };
+
+    reportRows.forEach((row) => {
+      const option = ensureOption(row.name, row.unit);
+      if (option) option.inReport = true;
+    });
+    entries.forEach((entry) => {
+      const option = ensureOption(entry.name, entry.unit);
+      if (option) option.hasHistory = true;
+    });
+    erpSnapshotEntries.forEach((item) =>
+      addCatalogMeta(item.name, item.unit, item.indexCode ?? null, item.warehouseCode ?? null)
+    );
+    erpCatalogItems.forEach((item) =>
+      addCatalogMeta(item.name, item.unit, item.indexCode ?? null, item.warehouseCode ?? null)
+    );
+    catalog.forEach((item) =>
+      addCatalogMeta(item.name, item.unit, item.indexCode ?? null, item.warehouseCode ?? null)
+    );
+
+    return [...map.values()]
+      .map((option) => ({
+        ...option,
+        indexCodes: [...option.indexCodes].sort((a, b) => collator.compare(a, b)),
+        warehouseCodes: [...option.warehouseCodes].sort((a, b) => collator.compare(a, b))
+      }))
+      .sort((a, b) => {
+        if (a.inReport !== b.inReport) return a.inReport ? -1 : 1;
+        if (a.hasHistory !== b.hasHistory) return a.hasHistory ? -1 : 1;
+        return collator.compare(a.name, b.name);
+      });
+  }, [catalog, entries, erpCatalogItems, erpSnapshotEntries, reportRows]);
+  const selectedReportOption = useMemo(() => {
+    const normalizedQuery = normalizeCatalogNameKey(reportQuery);
+    const rawQuery = reportQuery.trim().toLowerCase();
+    if (!normalizedQuery || reportOptions.length === 0) return null;
+    return (
+      reportOptions.find(
+        (option) =>
+          option.key === normalizedQuery ||
+          normalizeCatalogNameKey(option.name) === normalizedQuery ||
+          option.indexCodes.some((code) => code.toLowerCase() === rawQuery) ||
+          option.warehouseCodes.some((code) => code.toLowerCase() === rawQuery)
+      ) ?? null
+    );
+  }, [reportOptions, reportQuery]);
+  const selectedReportMaterialKey = selectedReportOption?.key ?? '';
+  const selectedReportRows = useMemo(() => {
+    if (!selectedReportMaterialKey) return [];
+    return reportRows.filter((row) => row.key === selectedReportMaterialKey);
+  }, [reportRows, selectedReportMaterialKey]);
+  const reportSuggestions = useMemo(() => {
+    if (!normalizeCatalogNameKey(reportQuery)) return [];
+    return reportOptions
+      .filter((option) =>
+        matchesCatalogSearch(
+          reportQuery,
+          option.name,
+          option.indexCodes.join(' '),
+          option.warehouseCodes.join(' ')
+        )
+      )
+      .slice(0, 8);
+  }, [reportOptions, reportQuery]);
 
   const handleExportDailyLegacy = async () => {
     if (!spisDate || reportRows.length === 0) return;
@@ -2055,6 +2137,24 @@ export default function OriginalInventoryPage() {
     ).flat(),
     row.unit
   ]);
+  const selectedReportTableRows = selectedReportRows.map((row) => [
+    row.name,
+    ...visibleReportModes.map((mode) =>
+      formatQty(mode.key === 'real' ? row.currentRealErpQty : row.currentAvailableErpQty)
+    ),
+    formatQty(row.currentSpisQty),
+    ...visibleReportModes.map((mode) =>
+      formatSignedQty(mode.key === 'real' ? row.currentRealDiffQty : row.currentAvailableDiffQty)
+    ),
+    ...Array.from({ length: REPORT_HISTORY_DAYS }, (_, index) =>
+      visibleReportModes.map((mode) =>
+        formatDiffHistoryCell(
+          mode.key === 'real' ? row.previousRealDiffs[index] : row.previousAvailableDiffs[index]
+        )
+      )
+    ).flat(),
+    row.unit
+  ]);
   const dailyComparisonColumns = [
     'Material',
     ...visibleReportModes.map((mode) => `ERP ${currentReportDateLabel} (${mode.shortLabel})`),
@@ -2078,28 +2178,28 @@ export default function OriginalInventoryPage() {
   return (
     <div className="space-y-4">
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="space-y-4">
-        <TabsList>
+        <TabsList className="grid grid-cols-2 gap-2 p-1.5 sm:flex sm:flex-wrap">
           <TabsTrigger
             value="spis"
-            className="data-[state=active]:bg-[var(--brand)] data-[state=active]:text-bg"
+            className="flex min-h-[42px] items-center justify-center px-2 text-center text-xs leading-tight sm:min-h-0 sm:px-3 sm:text-sm data-[state=active]:bg-[var(--brand)] data-[state=active]:text-bg"
           >
             SPIS
           </TabsTrigger>
           <TabsTrigger
             value="kartoteki"
-            className="data-[state=active]:bg-[#ff6a00] data-[state=active]:text-bg"
+            className="flex min-h-[42px] items-center justify-center px-2 text-center text-xs leading-tight sm:min-h-0 sm:px-3 sm:text-sm data-[state=active]:bg-[#ff6a00] data-[state=active]:text-bg"
           >
             KARTOTEKI
           </TabsTrigger>
           <TabsTrigger
             value="stany-erp"
-            className="data-[state=active]:bg-[#c49102] data-[state=active]:text-bg"
+            className="flex min-h-[42px] items-center justify-center px-2 text-center text-xs leading-tight sm:min-h-0 sm:px-3 sm:text-sm data-[state=active]:bg-[#c49102] data-[state=active]:text-bg"
           >
             STANY ERP
           </TabsTrigger>
           <TabsTrigger
             value="raporty"
-            className="data-[state=active]:bg-[var(--value-purple)] data-[state=active]:text-bg"
+            className="flex min-h-[42px] items-center justify-center px-2 text-center text-xs leading-tight sm:min-h-0 sm:px-3 sm:text-sm data-[state=active]:bg-[var(--value-purple)] data-[state=active]:text-bg"
           >
             RAPORTY
           </TabsTrigger>
@@ -2261,13 +2361,11 @@ export default function OriginalInventoryPage() {
               <DataTable
                 columns={['Nazwa', 'Suma', 'ERP rzecz.', 'ERP dysp.', 'Jedn.', 'Hale', 'Kto']}
                 rows={materialGroupList.map((group) => {
-                  const isActive = expandedMaterialKey === group.key;
                   return [
                     <span
                       key={`${group.key}-name`}
-                      className={`text-sm font-semibold transition ${
-                        isActive ? 'text-brand' : 'text-title'
-                      }`}
+                      className="text-sm font-semibold transition"
+                      style={{ color: 'var(--brand)' }}
                     >
                       {group.name}
                     </span>,
@@ -2714,18 +2812,23 @@ export default function OriginalInventoryPage() {
 
                   {showReportSuggestions && reportSuggestions.length > 0 && (
                     <div className="absolute z-20 mt-2 w-full rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
-                      {reportSuggestions.map((name) => (
+                      {reportSuggestions.map((option) => (
                         <button
-                          key={name}
+                          key={option.key}
                           type="button"
                           onMouseDown={(event) => {
                             event.preventDefault();
-                            setReportQuery(name);
+                            setReportQuery(option.name);
                             setShowReportSuggestions(false);
                           }}
-                          className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]"
+                          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]"
                         >
-                          <span>{name}</span>
+                          <span>{option.name}</span>
+                          {(option.indexCodes.length > 0 || option.warehouseCodes.length > 0) && (
+                            <span className="shrink-0 text-xs text-dim">
+                              {[...option.indexCodes.slice(0, 2), ...option.warehouseCodes.slice(0, 2)].join(' / ')}
+                            </span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -2734,16 +2837,14 @@ export default function OriginalInventoryPage() {
               </div>
             </div>
             {selectedReportMaterialKey && (
-              <DataTable
-                columns={['Kiedy', 'Ilosc', 'Jedn.', 'Hala', 'Kto']}
-                rows={reportEntries.map((entry) => [
-                  new Date(entry.at).toLocaleString('pl-PL'),
-                  entry.qty,
-                  entry.unit,
-                  warehouseNameMap.get(entry.warehouseId) ?? '-',
-                  entry.user
-                ])}
-              />
+              selectedReportTableRows.length > 0 ? (
+                <DataTable
+                  columns={reportColumns}
+                  rows={selectedReportTableRows}
+                />
+              ) : (
+                <p className="text-sm text-dim">Brak tej pozycji w raporcie dla wybranego dnia.</p>
+              )
             )}
           </Card>
           <Card className="space-y-3">

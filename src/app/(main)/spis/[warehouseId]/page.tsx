@@ -62,6 +62,7 @@ export default function SpisWarehousePage() {
 
   const filtered = (data ?? []).filter((loc) => {
     if (filters.onlyPending && loc.status === 'DONE') return false;
+    if (filters.onlyWithStock && loc.currentItems.length === 0) return false;
     return true;
   });
 
@@ -235,6 +236,11 @@ export default function SpisWarehousePage() {
               checked={filters.onlyPending}
               onCheckedChange={(value) => setFilters({ onlyPending: value })}
               label="Tylko niezatwierdzone"
+            />
+            <Toggle
+              checked={filters.onlyWithStock}
+              onCheckedChange={(value) => setFilters({ onlyWithStock: value })}
+              label="Tylko gdzie stoi przemial"
             />
           </div>
         </Card>
