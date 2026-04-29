@@ -415,14 +415,8 @@ export default function DashboardPage() {
                 </PieChart>
               </ResponsiveContainer>
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div className="max-w-[118px] text-center sm:max-w-[160px]">
-                  <p className="truncate text-xs font-semibold uppercase tracking-wide text-dim">
-                    {activeComposition?.label ?? 'Brak danych'}
-                  </p>
-                  <p className="mt-2 text-xl font-semibold tabular-nums text-title sm:text-3xl">
-                    {formatKg(activeComposition?.total ?? 0)}
-                  </p>
-                  <p className="mt-1 text-sm font-semibold tabular-nums" style={{ color: 'var(--brand)' }}>
+                <div className="text-center">
+                  <p className="text-lg font-semibold tabular-nums sm:mt-1 sm:text-sm" style={{ color: 'var(--brand)' }}>
                     {activeComposition ? `${activeCompositionPercent.toFixed(1).replace('.', ',')}%` : '0%'}
                   </p>
                 </div>
