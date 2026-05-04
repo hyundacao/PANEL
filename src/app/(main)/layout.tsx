@@ -317,6 +317,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       if (!item.tab) return true;
       return canSeeTab(user, activeWarehouse, item.tab);
     });
+  const isDashboardPath = pathname.startsWith('/dashboard');
 
   return (
     <div className="min-h-screen bg-bg text-body">
@@ -338,10 +339,42 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           sidebarCollapsed ? 'pl-0 md:pl-20' : 'pl-0 md:pl-64'
         )}
       >
-        <Topbar title={title} breadcrumb={breadcrumb} />
-        <main className="content-area flex-1 px-4 py-4 md:px-6 md:py-6">
-          <ContentScrim className="min-h-full">
-            {showMobileNav && (
+        {!isDashboardPath && <Topbar title={title} breadcrumb={breadcrumb} />}
+        <main
+          className={cn(
+            'content-area flex-1',
+            isDashboardPath ? 'px-2 py-2 md:px-2.5 md:py-2.5' : 'px-4 py-4 md:px-6 md:py-6'
+          )}
+        >
+          {isDashboardPath ? (
+            <>
+              {showMobileNav && (
+                <div className="mb-3 md:hidden">
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {mobileItems.map((item) => {
+                      const active = isActivePath(item.href);
+                      return (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          className={cn(
+                            'flex min-h-[56px] items-center justify-center rounded-xl border border-border bg-[rgba(255,255,255,0.025)] px-3 py-3 text-center text-[13px] font-semibold leading-snug text-title shadow-[inset_0_1px_0_var(--inner-highlight)] transition hover:border-[rgba(255,122,26,0.65)] hover:bg-[rgba(255,255,255,0.045)] hover:text-title',
+                            active &&
+                              'border-[rgba(255,122,26,0.85)] bg-[linear-gradient(180deg,rgba(255,122,26,0.13),rgba(255,122,26,0.035))] shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]'
+                          )}
+                        >
+                          <span className="block max-w-full text-balance">{item.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {children}
+            </>
+          ) : (
+            <ContentScrim className="min-h-full">
+              {showMobileNav && (
               <div className="mb-4 md:hidden">
                 <div className="grid grid-cols-2 gap-2.5">
                   {mobileItems.map((item) => {
@@ -362,9 +395,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                   })}
                 </div>
               </div>
-            )}
-            {children}
-          </ContentScrim>
+              )}
+              {children}
+            </ContentScrim>
+          )}
         </main>
       </div>
     </div>

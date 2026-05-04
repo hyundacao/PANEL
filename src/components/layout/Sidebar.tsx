@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils/cn';
 import { useUiStore } from '@/lib/store/ui';
 import {
   canSeeTab,
+  getAccessibleWarehouses,
   getRoleLabel,
   getWarehouseLabel,
   isWarehouseAdmin
@@ -68,7 +69,7 @@ const navItemsRaport: NavItem[] = [
 
 export const Sidebar = () => {
   const pathname = usePathname();
-  const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse } = useUiStore();
+  const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse, clearActiveWarehouse } = useUiStore();
   const warehouse = activeWarehouse as WarehouseKey | null;
   const isAdminRoute = pathname.startsWith('/admin');
   const roleLabel = getRoleLabel(user, warehouse);
@@ -87,6 +88,7 @@ export const Sidebar = () => {
     if (!item.tab) return true;
     return canSeeTab(user, warehouse, item.tab);
   });
+  const canSwitchModule = getAccessibleWarehouses(user).length > 1;
   const warehouseLabel = getWarehouseLabel(warehouse);
   const isPrzemialyModuleManagementRoute = isAdminRoute && warehouse === 'PRZEMIALY';
   const isActivePath = (href: string) => {
@@ -186,6 +188,20 @@ export const Sidebar = () => {
               </Link>
             );
           })}
+          {canSwitchModule && (
+            <Link
+              href="/magazyny"
+              onClick={() => {
+                clearActiveWarehouse();
+                closeOnMobile();
+              }}
+              className="flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[rgba(255,255,255,0.04)] hover:text-brandHover"
+            >
+              <span className="h-8 w-[2px] rounded-full bg-transparent" />
+              <ArrowLeftRight className="h-4 w-4" style={{ color: 'var(--brand)' }} />
+              {!sidebarCollapsed && <span style={{ color: 'var(--brand)' }}>Zmień moduł</span>}
+            </Link>
+          )}
         </nav>
 
         <div className="rounded-xl border border-border bg-surface2 p-3 shadow-[inset_0_1px_0_var(--inner-highlight)]">

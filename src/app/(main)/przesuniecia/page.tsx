@@ -109,6 +109,8 @@ export default function TransfersPage() {
       queryClient.invalidateQueries({ queryKey: ['transfers'] });
       queryClient.invalidateQueries({ queryKey: ['material-locations'] });
       queryClient.invalidateQueries({ queryKey: ['material-totals'] });
+      queryClient.invalidateQueries({ queryKey: ['locations'] });
+      queryClient.invalidateQueries({ queryKey: ['location-detail'] });
       setForm(initialForm);
       toast({ title: 'Zapisano przesunięcie.', tone: 'success' });
     },

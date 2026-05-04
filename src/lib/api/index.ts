@@ -3,6 +3,7 @@ import type {
   AppUser,
   CatalogTotal,
   DailyTotals,
+  DashboardMonthStats,
   DashboardSummary,
   Dryer,
   ErpTargetLocation,
@@ -164,6 +165,9 @@ export const getTotalsHistory = async (days = 30): Promise<InventoryTotalPoint[]
 
 export const getMonthlyDelta = async (): Promise<MonthlyDelta> =>
   appRequest('getMonthlyDelta');
+
+export const getDashboardMonthStats = async (from: string, to: string): Promise<DashboardMonthStats> =>
+  appRequest('getDashboardMonthStats', { from, to });
 
 export const getMonthlyMaterialBreakdown = async (): Promise<MonthlyMaterialBreakdown> =>
   appRequest('getMonthlyMaterialBreakdown');

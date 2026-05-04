@@ -45,6 +45,11 @@ const initialMaterialState: MaterialFormState = {
   manualCatalog: '',
   manualName: ''
 };
+
+type EntryDraft = {
+  qty: string;
+  comment: string;
+};
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 
 export default function LocationDetailPage() {
@@ -70,6 +75,7 @@ export default function LocationDetailPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<MaterialFormState>(initialMaterialState);
   const [catalogQuery, setCatalogQuery] = useState('');
+  const [drafts, setDrafts] = useState<Record<string, EntryDraft>>({});
   const glowClass = 'ring-2 ring-[rgba(255,122,26,0.45)] shadow-[0_0_0_3px_rgba(255,122,26,0.18)]';
 
   const unlockInput = (event: FocusEvent<HTMLInputElement>) => {
@@ -161,25 +167,50 @@ export default function LocationDetailPage() {
   const visibleItems = useMemo(() => {
     const items = detail ?? [];
     if (showZero) return items;
-    return items.filter((item) => !(item.confirmed && item.todayQty === 0));
+    return items.filter((item) => (item.todayQty ?? item.yesterdayQty) !== 0);
   }, [detail, showZero]);
 
-  const handleSave = (materialId: string, value: string) => {
-    const qty = parseQtyInput(value);
-    if (qty === null) return;
-    mutation.mutate({ locationId, materialId, qty });
+  const getOriginalDraft = (item: { todayQty: number | null; comment?: string }): EntryDraft => ({
+    qty: item.todayQty === null ? '' : String(item.todayQty),
+    comment: item.comment ?? ''
+  });
+
+  const getDraft = (item: { materialId: string; todayQty: number | null; comment?: string }) =>
+    drafts[item.materialId] ?? getOriginalDraft(item);
+
+  const updateDraft = (
+    item: { materialId: string; todayQty: number | null; comment?: string },
+    patch: Partial<EntryDraft>
+  ) => {
+    setDrafts((prev) => ({
+      ...prev,
+      [item.materialId]: {
+        ...(prev[item.materialId] ?? getOriginalDraft(item)),
+        ...patch
+      }
+    }));
   };
 
-  const handleCommentSave = (
-    materialId: string,
-    comment: string,
-    todayQty: number | null,
-    fallbackQty: number
-  ) => {
-    const qtyValue = typeof todayQty === 'number' ? todayQty : fallbackQty;
-    const qty = parseQtyInput(String(qtyValue));
-    if (qty === null) return;
-    mutation.mutate({ locationId, materialId, qty, comment });
+  const isDraftChanged = (item: { materialId: string; todayQty: number | null; comment?: string }) => {
+    const draft = getDraft(item);
+    const originalQty = item.todayQty === null ? '' : String(item.todayQty);
+    const originalComment = item.comment ?? '';
+    return draft.qty !== originalQty || draft.comment !== originalComment;
+  };
+
+  const handleSaveDraft = async (item: { materialId: string; todayQty: number | null; comment?: string }) => {
+    const draft = getDraft(item);
+    const qty = parseQtyInput(draft.qty);
+    if (qty === null) {
+      toast({ title: 'Nieprawidłowa ilość', description: 'Wpisz poprawną ilość w kg.', tone: 'error' });
+      return;
+    }
+    await mutation.mutateAsync({ locationId, materialId: item.materialId, qty, comment: draft.comment });
+    setDrafts((prev) => {
+      const next = { ...prev };
+      delete next[item.materialId];
+      return next;
+    });
   };
 
   const handleNoChange = async (materialId: string) => {
@@ -481,11 +512,11 @@ export default function LocationDetailPage() {
 
       <Card className="space-y-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-dim">Pozycje w lokacji</p>
-        <div className="hidden grid-cols-8 gap-3 text-xs font-semibold text-dim md:grid">
-          <span className="col-span-2">Przemiał</span>
+        <div className="hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_130px_240px] gap-3 text-xs font-semibold text-dim md:grid">
+          <span>Przemiał</span>
           <span>Wczoraj</span>
           <span>Dziś</span>
-          <span className="col-span-2">Komentarz</span>
+          <span>Komentarz</span>
           <span>Status</span>
           <span>Akcje</span>
         </div>
@@ -518,7 +549,7 @@ export default function LocationDetailPage() {
                   ) : (
                     <Input
                       readOnly
-                      defaultValue={item.todayQty ?? ''}
+                      value={getDraft(item).qty}
                       placeholder="0"
                       type="text"
                       inputMode="decimal"
@@ -531,9 +562,9 @@ export default function LocationDetailPage() {
                       data-1p-ignore="true"
                       data-form-type="other"
                       onFocus={unlockInput}
+                      onChange={(event) => updateDraft(item, { qty: event.target.value })}
                       onBlur={(event) => {
                         relockInput(event);
-                        handleSave(item.materialId, event.target.value);
                       }}
                     />
                   )}
@@ -547,7 +578,7 @@ export default function LocationDetailPage() {
                   ) : (
                     <Input
                       readOnly
-                      defaultValue={item.comment ?? ''}
+                      value={getDraft(item).comment}
                       placeholder="Komentarz"
                       type="text"
                       autoComplete="off"
@@ -559,14 +590,9 @@ export default function LocationDetailPage() {
                       data-1p-ignore="true"
                       data-form-type="other"
                       onFocus={unlockInput}
+                      onChange={(event) => updateDraft(item, { comment: event.target.value })}
                       onBlur={(event) => {
                         relockInput(event);
-                        handleCommentSave(
-                          item.materialId,
-                          event.target.value,
-                          item.todayQty,
-                          item.yesterdayQty
-                        );
                       }}
                     />
                   )}
@@ -583,13 +609,24 @@ export default function LocationDetailPage() {
                   </Badge>
                 </div>
                 {canEdit && (
-                  <Button
-                    variant="secondary"
-                    onClick={() => handleNoChange(item.materialId)}
-                    className={`${glowClass} w-full sm:w-auto`}
-                  >
-                    Bez zmian
-                  </Button>
+                  <>
+                    <div className="grid w-full grid-cols-2 gap-2">
+                      <Button
+                        onClick={() => handleSaveDraft(item)}
+                        disabled={!isDraftChanged(item) || mutation.isPending}
+                        className={`${glowClass} h-12 min-h-12 w-full rounded-lg px-3`}
+                      >
+                        Zapisz
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => handleNoChange(item.materialId)}
+                        className={`${glowClass} h-12 min-h-12 w-full rounded-lg px-3`}
+                      >
+                        Bez zmian
+                      </Button>
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -598,9 +635,9 @@ export default function LocationDetailPage() {
         {visibleItems.map((item) => (
           <div
             key={item.materialId}
-            className="hidden grid-cols-8 gap-3 rounded-xl border border-border bg-surface2 p-3 md:grid"
+            className="hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_130px_240px] items-center gap-3 rounded-xl border border-border bg-surface2 p-3 md:grid"
           >
-            <div className="col-span-2">
+            <div>
               <p className="text-sm font-semibold" style={{ color: 'var(--value-purple)' }}>
                 {item.name}
               </p>
@@ -613,7 +650,7 @@ export default function LocationDetailPage() {
               ) : (
                 <Input
                   readOnly
-                  defaultValue={item.todayQty ?? ''}
+                  value={getDraft(item).qty}
                   placeholder="0"
                   type="text"
                   inputMode="decimal"
@@ -626,20 +663,20 @@ export default function LocationDetailPage() {
                   data-1p-ignore="true"
                   data-form-type="other"
                   onFocus={unlockInput}
+                  onChange={(event) => updateDraft(item, { qty: event.target.value })}
                   onBlur={(event) => {
                     relockInput(event);
-                    handleSave(item.materialId, event.target.value);
                   }}
                 />
               )}
             </div>
-            <div className="col-span-2">
+            <div>
               {!canEdit ? (
                 <p className="text-sm text-body">{item.comment ?? '-'}</p>
               ) : (
                 <Input
                   readOnly
-                  defaultValue={item.comment ?? ''}
+                  value={getDraft(item).comment}
                   placeholder="Komentarz"
                   type="text"
                   autoComplete="off"
@@ -651,9 +688,9 @@ export default function LocationDetailPage() {
                   data-1p-ignore="true"
                   data-form-type="other"
                   onFocus={unlockInput}
+                  onChange={(event) => updateDraft(item, { comment: event.target.value })}
                   onBlur={(event) => {
                     relockInput(event);
-                    handleCommentSave(item.materialId, event.target.value, item.todayQty, item.yesterdayQty);
                   }}
                 />
               )}
@@ -665,9 +702,22 @@ export default function LocationDetailPage() {
             </div>
             <div>
               {canEdit && (
-                <Button variant="secondary" onClick={() => handleNoChange(item.materialId)} className={glowClass}>
-                  Bez zmian
-                </Button>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    onClick={() => handleSaveDraft(item)}
+                    disabled={!isDraftChanged(item) || mutation.isPending}
+                    className={`${glowClass} h-12 min-h-12 w-full rounded-lg px-3 text-sm`}
+                  >
+                    Zapisz
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => handleNoChange(item.materialId)}
+                    className={`${glowClass} h-12 min-h-12 w-full rounded-lg px-3 text-sm`}
+                  >
+                    Bez zmian
+                  </Button>
+                </div>
               )}
             </div>
           </div>

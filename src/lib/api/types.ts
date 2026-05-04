@@ -240,6 +240,20 @@ export type MonthlyDelta = {
   removed: number;
 };
 
+export type DashboardMonthStats = {
+  from: string;
+  to: string;
+  added: number;
+  removed: number;
+  net: number;
+  daily: Array<{
+    date: string;
+    added: number;
+    removed: number;
+    net: number;
+  }>;
+};
+
 export type MonthlyMaterialBreakdown = {
   added: Array<{ label: string; total: number }>;
   removed: Array<{ label: string; total: number }>;

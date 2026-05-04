@@ -22,6 +22,7 @@ import type {
   AppUser,
   CatalogTotal,
   DailyTotals,
+  DashboardMonthStats,
   DashboardSummary,
   Dryer,
   ErpTargetLocation,
@@ -713,6 +714,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'getDashboard':
     case 'getTotalsHistory':
     case 'getMonthlyDelta':
+    case 'getDashboardMonthStats':
     case 'getMonthlyMaterialBreakdown':
     case 'getTopCatalogTotal':
       requireAnyTabAccess(user, 'PRZEMIALY', ['dashboard']);
@@ -1520,15 +1522,20 @@ const collectConfirmedDiffs = (
   materialMap: Map<string, Material>,
   activeLocations: Location[],
   transferDeltasByDate?: TransferDeltasByDate,
-  inventoryDeltasByDate?: InventoryDeltasByDate
+  inventoryDeltasByDate?: InventoryDeltasByDate,
+  baselineEntries?: EntryMap
 ) => {
   const addedTotals = new Map<string, number>();
   const removedTotals = new Map<string, number>();
   const addedComments = new Map<string, string[]>();
   const removedComments = new Map<string, string[]>();
-  const yesterdayKey = addDays(dateKey, -1);
   const todayEntries = entriesByDate[dateKey] ?? {};
-  const yesterdayEntries = entriesByDate[yesterdayKey] ?? {};
+  const yesterdayEntries = buildPreviousEntriesForStats(
+    dateKey,
+    entriesByDate,
+    activeLocations,
+    baselineEntries
+  );
   const dayDeltas = transferDeltasByDate?.[dateKey] ?? {};
   const inventoryDeltas = inventoryDeltasByDate?.[dateKey] ?? {};
 
@@ -1558,6 +1565,42 @@ const collectConfirmedDiffs = (
   });
 
   return { addedTotals, removedTotals, addedComments, removedComments };
+};
+
+const cloneEntryBucket = (
+  bucket: Record<string, { qty: number; confirmed: boolean; comment?: string }> = {}
+) =>
+  Object.fromEntries(
+    Object.entries(bucket).map(([materialId, entry]) => [materialId, { ...entry }])
+  );
+
+const buildPreviousEntriesForStats = (
+  dateKey: string,
+  entriesByDate: EntriesByDate,
+  activeLocations: Location[],
+  baselineEntries?: EntryMap
+) => {
+  const result: EntryMap = {};
+  activeLocations.forEach((loc) => {
+    result[loc.id] = cloneEntryBucket(baselineEntries?.[loc.id]);
+  });
+
+  Object.keys(entriesByDate)
+    .filter((key) => key < dateKey)
+    .sort()
+    .forEach((key) => {
+      const day = entriesByDate[key] ?? {};
+      activeLocations.forEach((loc) => {
+        const entries = day[loc.id];
+        if (!entries) return;
+        result[loc.id] = {
+          ...(result[loc.id] ?? {}),
+          ...cloneEntryBucket(entries)
+        };
+      });
+    });
+
+  return result;
 };
 
 const fetchWarehouses = async () => {
@@ -2228,18 +2271,32 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         todayStatusRows,
         yesterdayStatusRows,
         transferRows,
-        inventoryRows
+        inventoryRows,
+        latestPreviousEntries
       ] = await Promise.all([
           fetchEntries(dateKey),
           fetchEntries(yesterdayKey),
           fetchLocationStatus(dateKey),
           fetchLocationStatus(yesterdayKey),
           fetchTransfers(dateKey, dateKey),
-          fetchInventoryAdjustmentsForStats(dateKey, addDays(dateKey, 1))
+          fetchInventoryAdjustmentsForStats(dateKey, addDays(dateKey, 1)),
+          fetchLatestEntriesByLocation(
+            activeStatsLocations.map((loc) => loc.id),
+            yesterdayKey
+          )
         ]);
       const todayEntriesByDate = buildEntriesByDate(todayEntriesRows);
       const todayEntries = todayEntriesByDate[dateKey] ?? {};
-      const yesterdayEntries = buildEntriesByDate(yesterdayEntriesRows)[yesterdayKey] ?? {};
+      const entriesByDate = {
+        ...buildEntriesByDate(yesterdayEntriesRows),
+        ...todayEntriesByDate
+      };
+      const previousEntries = buildPreviousEntriesForStats(
+        dateKey,
+        entriesByDate,
+        activeStatsLocations,
+        latestPreviousEntries
+      );
       const emptyConfirmedToday = new Set(todayStatusRows.map((row) => row.location_id));
       const emptyConfirmedYesterday = new Set(yesterdayStatusRows.map((row) => row.location_id));
       const locationWarehouseMap = new Map(activeStatsLocations.map((loc) => [loc.id, loc.warehouseId]));
@@ -2261,7 +2318,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
 
           locs.forEach((loc) => {
             const today = todayEntries[loc.id] ?? {};
-            const yesterday = yesterdayEntries[loc.id] ?? {};
+            const yesterday = previousEntries[loc.id] ?? {};
             const union = new Set([...Object.keys(yesterday), ...Object.keys(today)]);
             const allConfirmed =
               union.size > 0 && [...union].every((id) => today[id]?.confirmed);
@@ -2402,7 +2459,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       ]);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const todayEntries = buildEntriesByDate(todayEntriesRows)[dateKey]?.[locationId] ?? {};
-      const previousEntries = latestPreviousEntries[locationId] ?? {};
+      const previousEntries = Object.fromEntries(
+        Object.entries(latestPreviousEntries[locationId] ?? {}).filter(([, entry]) => (entry?.qty ?? 0) > 0)
+      );
       const union = new Set([...Object.keys(todayEntries), ...Object.keys(previousEntries)]);
       return [...union].map((materialId) => {
         const material = materialMap.get(materialId);
@@ -2464,14 +2523,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!locationId || !materialId) throw new Error('NOT_FOUND');
       const dateKey = getTodayKey();
       const yesterdayKey = addDays(dateKey, -1);
-      const { data: yesterdayEntry, error: yesterdayError } = await supabaseAdmin
-        .from('daily_entries')
-        .select('qty')
-        .eq('date_key', yesterdayKey)
-        .eq('location_id', locationId)
-        .eq('material_id', materialId)
-        .maybeSingle();
-      if (yesterdayError) throw yesterdayError;
+      const latestPreviousEntries = await fetchLatestEntriesByLocation([locationId], yesterdayKey);
+      const previousEntry = latestPreviousEntries[locationId]?.[materialId] ?? null;
       const { data: existing, error: existingError } = await supabaseAdmin
         .from('daily_entries')
         .select('comment')
@@ -2487,7 +2540,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
             date_key: dateKey,
             location_id: locationId,
             material_id: materialId,
-            qty: toNumber(yesterdayEntry?.qty),
+            qty: previousEntry?.qty ?? 0,
             confirmed: true,
             comment: existing?.comment ?? null,
             updated_at: new Date().toISOString()
@@ -2502,13 +2555,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!locationId) throw new Error('NOT_FOUND');
       const dateKey = getTodayKey();
       const yesterdayKey = addDays(dateKey, -1);
-      const { data: yesterdayEntries, error: yesterdayError } = await supabaseAdmin
-        .from('daily_entries')
-        .select('*')
-        .eq('date_key', yesterdayKey)
-        .eq('location_id', locationId);
-      if (yesterdayError) throw yesterdayError;
-      if (!yesterdayEntries || yesterdayEntries.length === 0) {
+      const latestPreviousEntries = await fetchLatestEntriesByLocation([locationId], yesterdayKey);
+      const previousEntries = latestPreviousEntries[locationId] ?? {};
+      if (Object.keys(previousEntries).length === 0) {
         const { error } = await supabaseAdmin
           .from('daily_location_status')
           .upsert(
@@ -2528,11 +2577,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .eq('date_key', dateKey)
         .eq('location_id', locationId);
       const { error: insertError } = await supabaseAdmin.from('daily_entries').insert(
-        yesterdayEntries.map((entry) => ({
+        Object.entries(previousEntries).map(([materialId, entry]) => ({
           date_key: dateKey,
           location_id: locationId,
-          material_id: entry.material_id,
-          qty: toNumber(entry.qty),
+          material_id: materialId,
+          qty: entry?.qty ?? 0,
           confirmed: true,
           comment: null,
           updated_at: new Date().toISOString()
@@ -2561,6 +2610,10 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const fromKey = addDays(dateKey, -1);
       const rows = await fetchEntries(fromKey, dateKey);
       const entriesByDate = buildEntriesByDate(rows);
+      const baselineEntries = await fetchLatestEntriesByLocation(
+        activeLocations.map((loc) => loc.id),
+        addDays(dateKey, -1)
+      );
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(fromKey, dateKey);
       const inventoryDeltasByDate = buildInventoryDeltasByDate(
@@ -2577,7 +2630,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         materialMap,
         activeLocations,
         transferDeltasByDate,
-        inventoryDeltasByDate
+        inventoryDeltasByDate,
+        baselineEntries
       );
       applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[dateKey], materialMap);
       const result: ReportRow[] = activeMaterials.map((mat) => {
@@ -2672,7 +2726,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         fetchLocations()
       ]);
       const activeLocations = getActiveStatsLocations(warehouses, locations);
-      const rows = await fetchEntries(addDays(fromKey, -1), todayKey);
+      const baselineEntries = await fetchLatestEntriesByLocation(
+        activeLocations.map((loc) => loc.id),
+        addDays(fromKey, -1)
+      );
+      const rows = await fetchEntries(fromKey, todayKey);
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(fromKey, todayKey);
@@ -2694,7 +2752,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           materialMap,
           activeLocations,
           transferDeltasByDate,
-          inventoryDeltasByDate
+          inventoryDeltasByDate,
+          baselineEntries
         );
         applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         diffs.addedTotals.forEach((value, label) => {
@@ -2708,6 +2767,61 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const removed = [...removedTotals.values()].reduce((sum, value) => sum + value, 0);
       return { added, removed } satisfies MonthlyDelta;
     }
+    case 'getDashboardMonthStats': {
+      const todayKey = getTodayKey();
+      const date = parseDateKey(todayKey);
+      const defaultFrom = formatDate(new Date(date.getFullYear(), date.getMonth(), 1));
+      const defaultTo = formatDate(new Date(date.getFullYear(), date.getMonth() + 1, 0));
+      const rawFrom = String(payload?.from ?? defaultFrom);
+      const rawTo = String(payload?.to ?? defaultTo);
+      const range = rawFrom <= rawTo ? { from: rawFrom, to: rawTo } : { from: rawTo, to: rawFrom };
+      const [materials, warehouses, locations] = await Promise.all([
+        fetchMaterials(),
+        fetchWarehouses(),
+        fetchLocations()
+      ]);
+      const activeLocations = getActiveStatsLocations(warehouses, locations);
+      const baselineEntries = await fetchLatestEntriesByLocation(
+        activeLocations.map((loc) => loc.id),
+        addDays(range.from, -1)
+      );
+      const rows = await fetchEntries(range.from, range.to);
+      const entriesByDate = buildEntriesByDate(rows);
+      const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
+      const transferRows = await fetchTransfers(range.from, range.to);
+      const activeLocationIds = new Set(activeLocations.map((loc) => loc.id));
+      const inventoryDeltasByDate = buildInventoryDeltasByDate(
+        await fetchInventoryAdjustmentsForStats(range.from, addDays(range.to, 1))
+      );
+      const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
+      const externalTotalsByDate = buildExternalTotalsByDate(transferRows, activeLocationIds);
+      const dateKeys = buildDateKeys(range.from, range.to);
+      const daily = dateKeys.map((key) => {
+        const diffs = collectConfirmedDiffs(
+          key,
+          entriesByDate,
+          materialMap,
+          activeLocations,
+          transferDeltasByDate,
+          inventoryDeltasByDate,
+          baselineEntries
+        );
+        applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
+        const added = [...diffs.addedTotals.values()].reduce((sum, value) => sum + value, 0);
+        const removed = [...diffs.removedTotals.values()].reduce((sum, value) => sum + value, 0);
+        return { date: key, added, removed, net: added - removed };
+      });
+      const added = daily.reduce((sum, row) => sum + row.added, 0);
+      const removed = daily.reduce((sum, row) => sum + row.removed, 0);
+      return {
+        from: range.from,
+        to: range.to,
+        added,
+        removed,
+        net: added - removed,
+        daily
+      } satisfies DashboardMonthStats;
+    }
     case 'getMonthlyMaterialBreakdown': {
       const todayKey = getTodayKey();
       const date = parseDateKey(todayKey);
@@ -2719,7 +2833,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         fetchLocations()
       ]);
       const activeLocations = getActiveStatsLocations(warehouses, locations);
-      const rows = await fetchEntries(addDays(fromKey, -1), todayKey);
+      const baselineEntries = await fetchLatestEntriesByLocation(
+        activeLocations.map((loc) => loc.id),
+        addDays(fromKey, -1)
+      );
+      const rows = await fetchEntries(fromKey, todayKey);
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(fromKey, todayKey);
@@ -2741,7 +2859,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           materialMap,
           activeLocations,
           transferDeltasByDate,
-          inventoryDeltasByDate
+          inventoryDeltasByDate,
+          baselineEntries
         );
         applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         diffs.addedTotals.forEach((value, label) => {
@@ -2781,7 +2900,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         (a, b) => b.localeCompare(a)
       );
       if (dateKeys.length === 0) return [] satisfies DailyTotals[];
-      const rows = await fetchEntries(addDays(fromKey, -1), todayKey);
+      const baselineEntries = await fetchLatestEntriesByLocation(
+        activeLocations.map((loc) => loc.id),
+        addDays(fromKey, -1)
+      );
+      const rows = await fetchEntries(fromKey, todayKey);
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(fromKey, todayKey);
@@ -2800,7 +2923,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           materialMap,
           activeLocations,
           transferDeltasByDate,
-          inventoryDeltasByDate
+          inventoryDeltasByDate,
+          baselineEntries
         );
         applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         const added = [...diffs.addedTotals.values()].reduce((sum, value) => sum + value, 0);
@@ -2826,7 +2950,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         fetchLocations()
       ]);
       const activeLocations = getActiveStatsLocations(warehouses, locations);
-      const rows = await fetchEntries(addDays(range.from, -1), range.to);
+      const baselineEntries = await fetchLatestEntriesByLocation(
+        activeLocations.map((loc) => loc.id),
+        addDays(range.from, -1)
+      );
+      const rows = await fetchEntries(range.from, range.to);
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(range.from, range.to);
@@ -2852,7 +2980,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           materialMap,
           activeLocations,
           transferDeltasByDate,
-          inventoryDeltasByDate
+          inventoryDeltasByDate,
+          baselineEntries
         );
         applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         diffs.addedTotals.forEach((value, label) => {
@@ -2928,7 +3057,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         fetchLocations()
       ]);
       const activeLocations = getActiveStatsLocations(warehouses, locations);
-      const rows = await fetchEntries(addDays(range.from, -1), range.to);
+      const baselineEntries = await fetchLatestEntriesByLocation(
+        activeLocations.map((loc) => loc.id),
+        addDays(range.from, -1)
+      );
+      const rows = await fetchEntries(range.from, range.to);
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(range.from, range.to);
@@ -2949,7 +3082,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           materialMap,
           activeLocations,
           transferDeltasByDate,
-          inventoryDeltasByDate
+          inventoryDeltasByDate,
+          baselineEntries
         );
         applyExternalTransferTotalsToDiffs(diffs, externalTotalsByDate[key], materialMap);
         const month = key.slice(0, 7);
