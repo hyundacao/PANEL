@@ -18,7 +18,6 @@ import {
 } from '@/lib/api';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
-import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Toggle } from '@/components/ui/Toggle';
 import { Input } from '@/components/ui/Input';
@@ -500,24 +499,19 @@ export default function LocationDetailPage() {
         </Card>
       )}
 
-      <Card className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-sm text-muted">Status</p>
-          <p className="text-lg font-semibold text-title">W trakcie</p>
-        </div>
+      <div className="flex justify-end">
         <Toggle checked={showZero} onCheckedChange={setShowZero} label="Pokaż wyzerowane" />
-      </Card>
+      </div>
 
       {isLoading && <Card>Ładowanie danych...</Card>}
 
       <Card className="space-y-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-dim">Pozycje w lokacji</p>
-        <div className="hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_130px_240px] gap-3 text-xs font-semibold text-dim md:grid">
+        <div className="hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_240px] gap-3 text-xs font-semibold text-dim md:grid">
           <span>Przemiał</span>
           <span>Wczoraj</span>
           <span>Dziś</span>
           <span>Komentarz</span>
-          <span>Status</span>
           <span>Akcje</span>
         </div>
         <div className="space-y-3 md:hidden">
@@ -600,14 +594,6 @@ export default function LocationDetailPage() {
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
-                    Status
-                  </p>
-                  <Badge tone={item.confirmed ? 'success' : 'warning'}>
-                    {item.confirmed ? 'Zatwierdzone' : 'Do wpisania'}
-                  </Badge>
-                </div>
                 {canEdit && (
                   <>
                     <div className="grid w-full grid-cols-2 gap-2">
@@ -635,7 +621,7 @@ export default function LocationDetailPage() {
         {visibleItems.map((item) => (
           <div
             key={item.materialId}
-            className="hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_130px_240px] items-center gap-3 rounded-xl border border-border bg-surface2 p-3 md:grid"
+            className="hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_240px] items-center gap-3 rounded-xl border border-border bg-surface2 p-3 md:grid"
           >
             <div>
               <p className="text-sm font-semibold" style={{ color: 'var(--value-purple)' }}>
@@ -694,11 +680,6 @@ export default function LocationDetailPage() {
                   }}
                 />
               )}
-            </div>
-            <div>
-              <Badge tone={item.confirmed ? 'success' : 'warning'}>
-                {item.confirmed ? 'Zatwierdzone' : 'Do wpisania'}
-              </Badge>
             </div>
             <div>
               {canEdit && (
