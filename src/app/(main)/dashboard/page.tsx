@@ -223,13 +223,11 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-2.5 xl:grid-cols-[minmax(360px,0.8fr)_minmax(0,1fr)] xl:items-stretch">
-        <GlowPanel className="xl:h-[280px] 2xl:h-[310px]">
+        <GlowPanel className="min-h-[320px] xl:h-[280px] 2xl:h-[310px]">
           <div className="flex h-full flex-col p-3 md:p-3.5">
             <PanelTitle icon={<Cuboid size={19} />} title="Stan aktualny" />
-            <div className="relative mt-2 flex min-h-0 flex-1 flex-col justify-center overflow-hidden rounded-lg border border-[rgba(45,108,223,0.62)] bg-[radial-gradient(circle_at_50%_42%,rgba(255,106,0,0.18),transparent_38%),linear-gradient(145deg,rgba(15,25,45,0.82),rgba(4,8,16,0.9))] px-4 py-4 shadow-[inset_0_0_48px_rgba(45,108,223,0.18),0_0_42px_-18px_rgba(255,106,0,1)] md:px-7">
-              <div className="pointer-events-none absolute inset-x-10 bottom-0 h-[2px] bg-[linear-gradient(90deg,transparent,#ff6a00,transparent)] shadow-[0_0_18px_#ff6a00]" />
-              <div className="pointer-events-none absolute left-0 top-0 h-14 w-14 border-l-2 border-t-2 border-[rgba(255,106,0,0.85)]" />
-              <div className="pointer-events-none absolute right-0 top-0 h-14 w-14 border-r-2 border-t-2 border-[rgba(45,108,223,0.72)]" />
+            <div className="relative mt-2 flex min-h-0 flex-1 flex-col justify-center overflow-hidden bg-[radial-gradient(circle_at_50%_42%,rgba(255,106,0,0.15),transparent_42%)] px-2 py-4 md:px-7">
+              <div className="pointer-events-none absolute inset-x-16 bottom-2 h-[2px] bg-[linear-gradient(90deg,transparent,#ff6a00,transparent)] shadow-[0_0_16px_#ff6a00]" />
               <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,transparent_0,rgba(255,106,0,0.06)_48%,transparent_52%)]" />
               <p
                 className="text-center text-6xl font-semibold leading-[1.08] tracking-wide tabular-nums text-[var(--brand)] sm:text-7xl xl:text-[82px] 2xl:text-[104px]"
@@ -272,7 +270,7 @@ export default function DashboardPage() {
                 ))}
               </div>
             </div>
-            <div className="mt-2 min-h-0 flex-1">
+            <div className="mt-3 h-[190px] min-h-0 xl:flex-1">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={totalsHistory ?? []} margin={{ top: 12, right: 8, left: 0, bottom: 0 }}>
                   <defs>
@@ -390,9 +388,14 @@ export default function DashboardPage() {
             </div>
 
             <div className="mt-4 grid w-full gap-2.5 md:grid-cols-3">
-              <KpiPanel label="Przybyło" value={formatKg(monthlyAdded)} color="#7c5cff" trend="up" />
-              <KpiPanel label="Wyrobiono" value={formatKg(monthlyRemoved)} color="#ff6a00" trend="down" />
-              <KpiPanel label="Bilans" value={`${monthlyNet >= 0 ? '+' : '-'}${formatKg(Math.abs(monthlyNet))}`} color="#22c55e" trend="up" />
+              <KpiPanel label="Przybyło" value={formatKg(monthlyAdded)} color="#ef4444" trend="up" />
+              <KpiPanel label="Wyrobiono" value={formatKg(monthlyRemoved)} color="#22c55e" trend="down" />
+              <KpiPanel
+                label="Bilans"
+                value={`${monthlyNet >= 0 ? '+' : '-'}${formatKg(Math.abs(monthlyNet))}`}
+                color={monthlyNet <= 0 ? '#22c55e' : '#ef4444'}
+                trend={monthlyNet <= 0 ? 'down' : 'up'}
+              />
             </div>
           </div>
         </GlowPanel>
@@ -403,9 +406,10 @@ export default function DashboardPage() {
           <PanelTitle icon={<Layers3 size={18} />} title="Struktura materiałów" subtitle="aktualny stan" />
           <div className="mt-3 min-h-0 flex-1">
             <div className="min-h-0 overflow-hidden rounded-lg border border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.025)]">
-              <div className="grid grid-cols-[minmax(260px,1.35fr)_minmax(180px,0.95fr)_120px_90px] gap-4 border-b border-border px-4 py-2.5 text-[11px] font-semibold text-dim 2xl:text-xs">
+              <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-3 border-b border-border px-3 py-2.5 text-[11px] font-semibold text-dim md:grid-cols-[minmax(260px,1.35fr)_minmax(180px,0.95fr)_120px_90px] md:gap-4 md:px-4 2xl:text-xs">
                 <span>Materiał</span>
-                <span></span>
+                <span className="text-right md:hidden">Kg</span>
+                <span className="hidden md:block"></span>
                 <span className="text-right">Ilość</span>
                 <span className="text-right">Udział</span>
               </div>
@@ -419,19 +423,24 @@ export default function DashboardPage() {
                       type="button"
                       onMouseEnter={() => setActiveCompositionIndex(index)}
                       onFocus={() => setActiveCompositionIndex(index)}
-                      className={`grid w-full grid-cols-[minmax(260px,1.35fr)_minmax(180px,0.95fr)_120px_90px] items-center gap-4 px-4 py-2.5 text-left transition ${
+                      className={`grid w-full grid-cols-[minmax(0,1fr)_96px] items-center gap-3 px-3 py-2.5 text-left transition md:grid-cols-[minmax(260px,1.35fr)_minmax(180px,0.95fr)_120px_90px] md:gap-4 md:px-4 ${
                         activeCompositionIndex === index ? 'bg-[rgba(255,106,0,0.08)]' : 'hover:bg-[rgba(255,255,255,0.035)]'
                       }`}
                     >
-                      <span className="flex min-w-0 items-center gap-2">
-                        <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: color, boxShadow: `0 0 12px ${color}` }} />
-                        <span className="truncate text-sm font-semibold text-body">{entry.label}</span>
+                      <span className="min-w-0">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: color, boxShadow: `0 0 12px ${color}` }} />
+                          <span className="truncate text-sm font-semibold text-body">{entry.label}</span>
+                        </span>
+                        <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-[rgba(255,255,255,0.08)] md:hidden">
+                          <span className="block h-full rounded-full" style={{ width: `${percentWidth(entry.total, maxMaterialTotal)}%`, background: color, boxShadow: `0 0 14px ${color}` }} />
+                        </span>
                       </span>
-                      <span className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.08)]">
+                      <span className="hidden h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.08)] md:block">
                         <span className="block h-full rounded-full" style={{ width: `${percentWidth(entry.total, maxMaterialTotal)}%`, background: color, boxShadow: `0 0 14px ${color}` }} />
                       </span>
                       <span className="text-right text-sm font-semibold tabular-nums text-title">{entry.total.toLocaleString('pl-PL')} kg</span>
-                      <span className="text-right text-sm font-semibold tabular-nums text-title">{formatPercent(percent)}</span>
+                      <span className="hidden text-right text-sm font-semibold tabular-nums text-title md:block">{formatPercent(percent)}</span>
                     </button>
                   );
                 })}

@@ -10,11 +10,14 @@ import {
   getOriginalInventoryCatalogFromErp,
   getOriginalInventoryErpSnapshot,
   getOriginalInventoryErpSnapshotsByDates,
+  getOriginalInventorySiloEntries,
+  getOriginalInventorySilosConfig,
   importOriginalInventoryCatalogFile,
   importOriginalInventoryErpSnapshotFile,
   getWarehouses,
   removeOriginalInventoryErpSnapshot,
   removeOriginalInventory,
+  saveOriginalInventorySiloEntry,
   updateOriginalInventory
 } from '@/lib/api';
 import type { OriginalInventoryErpSnapshotEntry } from '@/lib/api/types';
@@ -22,6 +25,7 @@ import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { DataTable } from '@/components/ui/DataTable';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { SelectField } from '@/components/ui/Select';
 import { Toggle } from '@/components/ui/Toggle';
@@ -45,6 +49,17 @@ import {
 
 const WAREHOUSE_STORAGE_KEY = 'spis-oryginalow-warehouse';
 const TAB_STORAGE_KEY = 'spis-oryginalow-tab';
+const SILOS_SELECT_VALUE = '__silos__';
+const normalizeWarehouseOptionName = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[łŁ]/g, 'l')
+    .toLowerCase();
+const isOriginalInventoryWarehouseVisible = (name: string) => {
+  const normalized = normalizeWarehouseOptionName(name);
+  return !normalized.includes('mlynem pp') && !normalized.includes('mlyn pp');
+};
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const exportCatalogCollator = new Intl.Collator('pl', { sensitivity: 'base', numeric: true });
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
@@ -67,10 +82,17 @@ const isErpOriginalsSourceError = (error: unknown) =>
 const isErpSnapshotMigrationError = (error: unknown) =>
   error instanceof Error && error.message === ERP_SNAPSHOT_MIGRATION_REQUIRED;
 
-const getInitialTabValue = (): 'spis' | 'kartoteki' | 'stany-erp' | 'raporty' => {
+type OriginalInventoryTab = 'spis' | 'kartoteki' | 'stany-erp' | 'raporty';
+
+const getInitialTabValue = (): OriginalInventoryTab => {
   if (typeof window === 'undefined') return 'spis';
   const saved = window.localStorage.getItem(TAB_STORAGE_KEY);
-  if (saved === 'spis' || saved === 'kartoteki' || saved === 'stany-erp' || saved === 'raporty') {
+  if (
+    saved === 'spis' ||
+    saved === 'kartoteki' ||
+    saved === 'stany-erp' ||
+    saved === 'raporty'
+  ) {
     return saved;
   }
   return 'spis';
@@ -349,9 +371,7 @@ export default function OriginalInventoryPage() {
   const { user } = useUiStore();
   const readOnly = isReadOnly(user, 'PRZEMIALY');
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'spis' | 'kartoteki' | 'stany-erp' | 'raporty'>(() =>
-    getInitialTabValue()
-  );
+  const [activeTab, setActiveTab] = useState<OriginalInventoryTab>(() => getInitialTabValue());
   const [selectedWarehouseId, setSelectedWarehouseId] = useState(() =>
     getInitialWarehouseValue()
   );
@@ -360,6 +380,9 @@ export default function OriginalInventoryPage() {
   const [quickWarehouseId, setQuickWarehouseId] = useState('');
   const [editDrafts, setEditDrafts] = useState<
     Record<string, { qty: string; warehouseId: string }>
+  >({});
+  const [siloDrafts, setSiloDrafts] = useState<
+    Record<string, { percent: string; hopperPresent: boolean }>
   >({});
   const [showNameSuggestions, setShowNameSuggestions] = useState(false);
   const [reportQuery, setReportQuery] = useState('');
@@ -401,6 +424,10 @@ export default function OriginalInventoryPage() {
     queryKey: ['warehouses'],
     queryFn: getWarehouses
   });
+  const visibleWarehouses = useMemo(
+    () => warehouses.filter((warehouse) => isOriginalInventoryWarehouseVisible(warehouse.name)),
+    [warehouses]
+  );
   const { data: entries = [], isLoading } = useQuery({
     queryKey: ['spis-oryginalow'],
     queryFn: getOriginalInventory
@@ -428,6 +455,15 @@ export default function OriginalInventoryPage() {
   const { data: localCatalog = [] } = useQuery({
     queryKey: ['spis-oryginalow-catalog-local'],
     queryFn: getOriginalInventoryCatalog
+  });
+  const { data: siloConfigs = [] } = useQuery({
+    queryKey: ['original-inventory-silos-config'],
+    queryFn: getOriginalInventorySilosConfig
+  });
+  const { data: siloEntries = [] } = useQuery({
+    queryKey: ['original-inventory-silo-entries', spisDate],
+    queryFn: () => getOriginalInventorySiloEntries(spisDate),
+    enabled: Boolean(spisDate)
   });
   const erpCatalogItems = useMemo(
     () => (Array.isArray(erpCatalogState?.items) ? erpCatalogState.items : []),
@@ -500,12 +536,31 @@ export default function OriginalInventoryPage() {
     });
     return map;
   }, [erpSnapshotEntries]);
+  const activeSiloConfigs = useMemo(() => {
+    const list = siloConfigs.filter((item) => item.isActive);
+    list.sort((a, b) => {
+      const order = a.orderNo - b.orderNo;
+      if (order !== 0) return order;
+      const name = collator.compare(a.name, b.name);
+      if (name !== 0) return name;
+      return collator.compare(a.chamber, b.chamber);
+    });
+    return list;
+  }, [siloConfigs]);
+  const siloEntryMap = useMemo(
+    () => new Map(siloEntries.map((entry) => [entry.configId, entry])),
+    [siloEntries]
+  );
   const effectiveSelectedWarehouseId = useMemo(() => {
-    if (selectedWarehouseId && warehouses.some((warehouse) => warehouse.id === selectedWarehouseId)) {
+    if (selectedWarehouseId === SILOS_SELECT_VALUE) {
+      return SILOS_SELECT_VALUE;
+    }
+    if (selectedWarehouseId && visibleWarehouses.some((warehouse) => warehouse.id === selectedWarehouseId)) {
       return selectedWarehouseId;
     }
-    return warehouses[0]?.id ?? '';
-  }, [selectedWarehouseId, warehouses]);
+    return visibleWarehouses[0]?.id ?? '';
+  }, [selectedWarehouseId, visibleWarehouses]);
+  const isSilosSelected = effectiveSelectedWarehouseId === SILOS_SELECT_VALUE;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -585,6 +640,22 @@ export default function OriginalInventoryPage() {
         title: messageMap[err.message] ?? 'Nie usunieto stanow ERP.',
         tone: 'error'
       });
+    }
+  });
+  const saveSiloMutation = useMutation({
+    mutationFn: saveOriginalInventorySiloEntry,
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-silo-entries', variables.dateKey] });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] });
+      toast({ title: 'Zapisano spis silosa', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        PERCENT_REQUIRED: 'Wpisz procent od 0 do 100.',
+        NOT_FOUND: 'Nie znaleziono konfiguracji silosa.',
+        DATE_REQUIRED: 'Wybierz dzien spisu.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie zapisano silosa.', tone: 'error' });
     }
   });
   const resetCatalogImportState = () => {
@@ -762,6 +833,10 @@ export default function OriginalInventoryPage() {
       toast({ title: 'Wybierz hale do spisu.', tone: 'error' });
       return;
     }
+    if (isSilosSelected) {
+      toast({ title: 'Dla silosow zapisz komore w sekcji silosow.', tone: 'error' });
+      return;
+    }
     if (!name) {
       toast({ title: 'Podaj pełną nazwę tworzywa lub półproduktu.', tone: 'error' });
       return;
@@ -777,6 +852,53 @@ export default function OriginalInventoryPage() {
       unit: form.unit.trim() || 'kg',
       at: buildEntryTimestamp(spisDate),
       user: user?.username ?? user?.name ?? 'nieznany'
+    });
+  };
+  const getSiloDraft = (configId: string) => {
+    const existing = siloEntryMap.get(configId);
+    return (
+      siloDrafts[configId] ?? {
+        percent: existing ? String(existing.percent) : '',
+        hopperPresent: existing?.hopperPresent ?? false
+      }
+    );
+  };
+  const updateSiloDraft = (
+    configId: string,
+    patch: Partial<{ percent: string; hopperPresent: boolean }>
+  ) => {
+    const current = getSiloDraft(configId);
+    const next = { ...current, ...patch };
+    if (patch.percent !== undefined) {
+      const nextPercent = parseQtyInput(patch.percent);
+      if (nextPercent !== null && nextPercent > 100) {
+        next.percent = '100';
+      }
+      if (nextPercent !== null && nextPercent > 0) {
+        next.hopperPresent = true;
+      }
+    }
+    setSiloDrafts((prev) => ({
+      ...prev,
+      [configId]: next
+    }));
+  };
+  const handleSaveSilo = (configId: string) => {
+    if (readOnly) {
+      toast({ title: 'Brak uprawnien do zapisu spisu.', tone: 'error' });
+      return;
+    }
+    const draft = getSiloDraft(configId);
+    const percent = draft.percent.trim() === '' && draft.hopperPresent ? 0 : parseQtyInput(draft.percent);
+    if (percent === null || percent < 0 || percent > 100) {
+      toast({ title: 'Wpisz procent od 0 do 100.', tone: 'error' });
+      return;
+    }
+    saveSiloMutation.mutate({
+      configId,
+      dateKey: spisDate,
+      percent,
+      hopperPresent: draft.hopperPresent
     });
   };
   const handleQuickAdd = () => {
@@ -2041,7 +2163,9 @@ export default function OriginalInventoryPage() {
     const list = [...materialGroups.values()].map((group) => {
       const total = group.entries.reduce((sum, entry) => sum + entry.qty, 0);
       const lastEntry = [...group.entries].sort((a, b) => b.at.localeCompare(a.at))[0];
-      const hallIds = Array.from(new Set(group.entries.map((entry) => entry.warehouseId)));
+      const hallIds = Array.from(
+        new Set(group.entries.filter((entry) => entry.sourceType !== 'SILO').map((entry) => entry.warehouseId))
+      );
       hallIds.sort((a, b) => {
         const orderA = warehouseOrderMap.get(a) ?? 0;
         const orderB = warehouseOrderMap.get(b) ?? 0;
@@ -2073,6 +2197,9 @@ export default function OriginalInventoryPage() {
     ? [...selectedGroup.entries]
         .sort((a, b) => a.at.localeCompare(b.at))
         .map((entry) => {
+          if (entry.sourceType === 'SILO') {
+            return `${entry.qty} (Silos)`;
+          }
           const warehouseLabel = warehouseNameMap.get(entry.warehouseId);
           return warehouseLabel ? `${entry.qty} (${warehouseLabel})` : String(entry.qty);
         })
@@ -2232,16 +2359,19 @@ export default function OriginalInventoryPage() {
                 <SelectField
                   value={effectiveSelectedWarehouseId}
                   onChange={(event) => setSelectedWarehouseId(event.target.value)}
-                  disabled={warehouses.length === 0}
+                  disabled={visibleWarehouses.length === 0 && activeSiloConfigs.length === 0}
                 >
                   {!effectiveSelectedWarehouseId && <option value="">Wybierz hale</option>}
-                  {warehouses.map((warehouse) => (
+                  {visibleWarehouses.map((warehouse) => (
                     <option key={warehouse.id} value={warehouse.id}>
                       {warehouse.name}
                     </option>
                   ))}
+                  <option value={SILOS_SELECT_VALUE}>Silosy</option>
                 </SelectField>
               </div>
+              {!isSilosSelected && (
+              <>
               <div className="lg:col-span-2">
                 <label className="text-xs uppercase tracking-wide text-dim">
                   Wyszukiwarka / nazwa
@@ -2351,10 +2481,113 @@ export default function OriginalInventoryPage() {
                   {matchedExisting ? 'Dodaj ilosc' : 'Dodaj wpis'}
                 </Button>
               </div>
+              </>
+              )}
             </form>
           </Card>
 
-          {isLoading ? (
+          {isSilosSelected ? (
+            activeSiloConfigs.length === 0 ? (
+              <EmptyState
+                title="Brak aktywnych silosow"
+                description="Admin musi najpierw dodac komory silosow w zarzadzaniu modulem."
+              />
+            ) : (
+              <div className="grid gap-3 lg:grid-cols-2">
+                {activeSiloConfigs.map((config) => {
+                  const draft = getSiloDraft(config.id);
+                  const percent = parseQtyInput(draft.percent);
+                  const calculatedQty =
+                    percent === null && !draft.hopperPresent
+                      ? siloEntryMap.get(config.id)?.calculatedQty ?? 0
+                      : Math.round(
+                          ((percent ?? 0) * config.percentKg + (draft.hopperPresent ? config.hopperKg : 0)) * 1000
+                        ) / 1000;
+                  const fillPercent = Math.max(0, Math.min(100, percent ?? 0));
+                  return (
+                    <Card key={config.id} className="space-y-3 p-3 sm:p-4">
+                      <div className="grid gap-3 border-b border-border pb-3 min-[430px]:grid-cols-[minmax(0,1fr)_70px] min-[430px]:items-center">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">Komora</p>
+                          <h3 className="mt-0.5 text-xl font-semibold leading-tight text-title">
+                            {config.chamber}
+                          </h3>
+                          <p className="mt-1 break-words text-sm font-semibold leading-snug text-[var(--brand)]">
+                            {config.materialName}
+                          </p>
+                        </div>
+                        <div className="mx-auto flex w-[66px] flex-col items-center gap-1">
+                          <div className="relative h-[96px] w-[54px]">
+                            <div className="absolute left-1/2 top-0 h-[66px] w-[46px] -translate-x-1/2 overflow-hidden rounded-t-md border border-[rgba(180,190,205,0.42)] bg-[linear-gradient(90deg,rgba(210,218,230,0.20),rgba(210,218,230,0.055),rgba(210,218,230,0.16))] shadow-[inset_0_0_12px_rgba(0,0,0,0.42)]">
+                              <div
+                                className="absolute inset-x-0 bottom-0 bg-[linear-gradient(180deg,#ffbd73,#ff7a1a)] shadow-[0_0_12px_rgba(255,106,0,0.35)] transition-[height] duration-300"
+                                style={{ height: `${fillPercent}%` }}
+                              />
+                              <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.12),transparent_34%,transparent_70%,rgba(0,0,0,0.18))]" />
+                              <div className="absolute inset-y-0 left-[12px] w-px bg-[rgba(255,255,255,0.08)]" />
+                              <div className="absolute inset-y-0 right-[12px] w-px bg-[rgba(0,0,0,0.20)]" />
+                            </div>
+                            <div className="absolute left-1/2 top-[65px] h-[27px] w-[46px] -translate-x-1/2 overflow-hidden [clip-path:polygon(0_0,100%_0,60%_100%,40%_100%)] border-x border-t border-[rgba(180,190,205,0.42)] bg-[linear-gradient(90deg,rgba(210,218,230,0.18),rgba(210,218,230,0.045),rgba(210,218,230,0.14))] shadow-[inset_0_0_9px_rgba(0,0,0,0.42)]">
+                              <div
+                                className="absolute inset-x-0 bottom-0 bg-[linear-gradient(180deg,#ffbd73,#ff7a1a)] shadow-[0_0_12px_rgba(255,106,0,0.34)] transition-[height] duration-300"
+                                style={{ height: draft.hopperPresent ? '100%' : '0%' }}
+                              />
+                              <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.10),transparent_38%,rgba(0,0,0,0.20))]" />
+                            </div>
+                            <div className="absolute bottom-[1px] left-1/2 h-2 w-4 -translate-x-1/2 rounded-b-sm border border-[rgba(180,190,205,0.42)] bg-[rgba(210,218,230,0.08)]" />
+                          </div>
+                          <span className="text-[11px] font-black tabular-nums text-[var(--brand)]">
+                            {Math.round(fillPercent)}%
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-2">
+                        <div>
+                          <label className="text-[11px] uppercase tracking-wide text-dim">
+                            Procent w komorze
+                          </label>
+                          <Input
+                            value={draft.percent}
+                            onChange={(event) => updateSiloDraft(config.id, { percent: event.target.value })}
+                            placeholder="np. 80"
+                            inputMode="decimal"
+                            max={100}
+                            disabled={readOnly}
+                            className="min-h-[42px]"
+                          />
+                        </div>
+                        <div className="grid grid-cols-[minmax(76px,0.85fr)_minmax(118px,1fr)_minmax(86px,0.85fr)] gap-2">
+                          <div className="flex min-h-[44px] flex-col justify-center rounded-lg border border-[rgba(255,122,26,0.26)] bg-[rgba(255,122,26,0.07)] px-2 py-1.5 text-center">
+                            <p className="text-[9px] font-semibold uppercase tracking-wide text-dim">
+                              Wychodzi
+                            </p>
+                            <p className="mt-0.5 text-base font-black leading-none text-[var(--brand)]">
+                              {formatQty(calculatedQty)}
+                            </p>
+                          </div>
+                          <div className="flex min-h-[44px] items-center justify-center rounded-lg border border-border bg-[rgba(255,255,255,0.025)] px-2">
+                            <Toggle
+                              checked={draft.hopperPresent}
+                              onCheckedChange={(value) => updateSiloDraft(config.id, { hopperPresent: value })}
+                              label="Lejek jest"
+                            />
+                          </div>
+                          <Button
+                            onClick={() => handleSaveSilo(config.id)}
+                            disabled={readOnly || saveSiloMutation.isPending}
+                            className="min-h-[44px] w-full px-2"
+                          >
+                            Zapisz
+                          </Button>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )
+          ) : isLoading ? (
             <p className="text-sm text-dim">Wczytywanie...</p>
           ) : (
             <Card>
@@ -2384,7 +2617,7 @@ export default function OriginalInventoryPage() {
                   setExpandedMaterialKey(nextKey);
                   if (nextKey) {
                     setQuickQty('');
-                    setQuickWarehouseId(effectiveSelectedWarehouseId || warehouses[0]?.id || '');
+                    setQuickWarehouseId(effectiveSelectedWarehouseId || visibleWarehouses[0]?.id || '');
                   }
                 }}
                 renderRowDetails={(rowIndex) => {
@@ -2441,25 +2674,21 @@ export default function OriginalInventoryPage() {
                           <SelectField
                             value={quickWarehouseId || effectiveSelectedWarehouseId}
                             onChange={(event) => setQuickWarehouseId(event.target.value)}
-                            disabled={warehouses.length === 0}
+                            disabled={visibleWarehouses.length === 0}
                           >
                             {!quickWarehouseId && !effectiveSelectedWarehouseId && (
                               <option value="">Wybierz hale</option>
                             )}
-                            {warehouses.map((warehouse) => (
+                            {visibleWarehouses.map((warehouse) => (
                               <option key={warehouse.id} value={warehouse.id}>
                                 {warehouse.name}
                               </option>
                             ))}
                           </SelectField>
                         </div>
-                        <div className="flex items-end justify-end">
-                          <Button
-                            type="submit"
-                            disabled={addMutation.isPending}
-                            className="w-full"
-                          >
-                            Dodaj ilosc
+                        <div className="flex items-end">
+                          <Button type="submit" disabled={addMutation.isPending} className="w-full">
+                            Dopisz do materialu
                           </Button>
                         </div>
                       </form>
@@ -2490,7 +2719,7 @@ export default function OriginalInventoryPage() {
                                 updateEditDraft(entry.id, { warehouseId: event.target.value })
                               }
                             >
-                              {warehouses.map((warehouse) => (
+                              {visibleWarehouses.map((warehouse) => (
                                 <option key={warehouse.id} value={warehouse.id}>
                                   {warehouse.name}
                                 </option>
@@ -2523,6 +2752,79 @@ export default function OriginalInventoryPage() {
               />
             </Card>
           )}
+        </TabsContent>
+
+        <TabsContent value="kartoteki" className="hidden">
+          <Card className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Integracja ERP</p>
+            <p className="text-sm text-dim">
+              Kartoteki sa pobierane z ERP, ale mozesz tez recznie dograc brakujace pozycje
+              z pliku CSV/XLS/XLSX.
+            </p>
+            {erpSourceUnavailable && (
+              <p className="text-xs text-dim">
+                Zrodlo ERP nie jest skonfigurowane. Import lokalny i lista recznie wgranych
+                kartotek nadal dzialaja.
+              </p>
+            )}
+            {readOnly && (
+              <p className="text-xs text-danger">
+                To konto ma tylko podglad. Import kartotek wymaga zapisu w module
+                `spis-oryginalow`.
+              </p>
+            )}
+            {catalogErrorCode && (
+              <p className="text-xs text-danger">
+                Blad zrodla ERP: {catalogErrorCode}
+              </p>
+            )}
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <div className="space-y-1">
+                <label className="text-xs uppercase tracking-wide text-dim">
+                  Import kartotek
+                </label>
+                <p className="text-xs text-dim">
+                  Obslugiwane uklady: `Nazwa | Jedn. | Indeks` albo ERP `Kod | Indeks | Nazwa | Jm`.
+                </p>
+                <Input
+                  key={catalogImportInputKey}
+                  type="file"
+                  accept=".csv,.xlsx,.xls"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    void handleCatalogFileChange(file);
+                  }}
+                  disabled={readOnly || catalogImportPreparing || importCatalogMutation.isPending}
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={handleCatalogImport}
+                  disabled={
+                    readOnly ||
+                    catalogImportPreparing ||
+                    importCatalogMutation.isPending ||
+                    catalogImportItems.length === 0
+                  }
+                >
+                  Wgraj kartoteki
+                </Button>
+                {catalogImportFileName && (
+                  <Button variant="outline" onClick={resetCatalogImportState}>
+                    Wyczyść
+                  </Button>
+                )}
+              </div>
+            </div>
+            {catalogImportSummary && (
+              <div className="rounded-lg border border-border bg-surface2 p-3 text-sm text-body">
+                Plik: <span className="font-semibold">{catalogImportFileName}</span> | odczytano:{' '}
+                {catalogImportSummary.parsed} | do dodania: {catalogImportSummary.toImport} |
+                pominiete jako juz istniejace: {catalogImportSummary.skipped}
+              </div>
+            )}
+          </Card>
         </TabsContent>
 
         <TabsContent value="kartoteki" className="space-y-4">

@@ -25,6 +25,7 @@ import {
   getLocationsAdmin,
   getLocationDetail,
   getOriginalInventoryCatalog,
+  getOriginalInventorySilosConfig,
   getUsers,
   getSparePartHistory,
   getSpareParts,
@@ -36,9 +37,11 @@ import {
   removeMaterial,
   removeSparePart,
   removeDryer,
+  removeOriginalInventorySiloConfig,
   removePermissionGroup,
   removeUser,
   removeWarehouse,
+  upsertOriginalInventorySiloConfig,
   updateMaterial,
   updateDryer,
   setSparePartQty,
@@ -69,7 +72,8 @@ import type {
   UserAccess,
   WarehouseKey,
   WarehouseRole,
-  WarehouseTab
+  WarehouseTab,
+  OriginalInventorySiloConfig
 } from '@/lib/api/types';
 import { getRolePreset, isHeadAdmin, isWarehouseAdmin } from '@/lib/auth/access';
 import { DEFAULT_RESET_PASSWORD } from '@/lib/auth/password';
@@ -121,12 +125,23 @@ type DryerDraft = {
   isActive: boolean;
 };
 
+type SiloConfigDraft = {
+  name: string;
+  chamber: string;
+  materialName: string;
+  percentKg: string;
+  hopperKg: string;
+  orderNo: string;
+  isActive: boolean;
+};
+
 type PrzemialyAdminTab =
   | 'warehouses'
   | 'locations'
   | 'inventory'
   | 'audit'
   | 'positions'
+  | 'silos'
   | 'dryers';
 
 type AccountsAdminTab = 'users' | 'add-user' | 'groups';
@@ -325,6 +340,25 @@ const isLocationDraftEqual = (left: LocationDraft, right: LocationDraft) =>
 const isDryerDraftEqual = (left: DryerDraft, right: DryerDraft) =>
   left.name === right.name && left.orderNo === right.orderNo && left.isActive === right.isActive;
 
+const isSiloConfigDraftEqual = (left: SiloConfigDraft, right: SiloConfigDraft) =>
+  left.name === right.name &&
+  left.chamber === right.chamber &&
+  left.materialName === right.materialName &&
+  left.percentKg === right.percentKg &&
+  left.hopperKg === right.hopperKg &&
+  left.orderNo === right.orderNo &&
+  left.isActive === right.isActive;
+
+const siloConfigToDraft = (config: OriginalInventorySiloConfig): SiloConfigDraft => ({
+  name: config.name || 'Silos',
+  chamber: config.chamber,
+  materialName: config.materialName,
+  percentKg: String(config.percentKg),
+  hopperKg: String(config.hopperKg),
+  orderNo: String(config.orderNo),
+  isActive: config.isActive
+});
+
 const isSparePartDraftEqual = (left: SparePartDraft, right: SparePartDraft) =>
   left.code === right.code &&
   left.name === right.name &&
@@ -410,6 +444,10 @@ export default function AdminPage() {
     queryKey: ['spis-oryginalow-catalog-local'],
     queryFn: getOriginalInventoryCatalog
   });
+  const { data: siloConfigsData, isLoading: siloConfigsLoading } = useQuery({
+    queryKey: ['original-inventory-silos-config'],
+    queryFn: getOriginalInventorySilosConfig
+  });
   const { data: locationsData } = useQuery({
     queryKey: ['locations-admin'],
     queryFn: () => getLocationsAdmin()
@@ -453,6 +491,7 @@ export default function AdminPage() {
   const catalog = useMemo(() => catalogData ?? [], [catalogData]);
   const catalogs = useMemo(() => catalogsData ?? [], [catalogsData]);
   const originalCatalog = useMemo(() => originalCatalogData ?? [], [originalCatalogData]);
+  const siloConfigs = useMemo(() => siloConfigsData ?? [], [siloConfigsData]);
   const locations = useMemo(() => locationsData ?? [], [locationsData]);
   const inventoryAdjustments = useMemo(
     () => inventoryAdjustmentsData ?? [],
@@ -521,6 +560,21 @@ export default function AdminPage() {
     });
     return list;
   }, [dryers]);
+  const sortedSiloConfigs = useMemo(() => {
+    const list = [...siloConfigs];
+    list.sort((a, b) => {
+      const order = a.orderNo - b.orderNo;
+      if (order !== 0) return order;
+      const name = collator.compare(a.name, b.name);
+      if (name !== 0) return name;
+      return collator.compare(a.chamber, b.chamber);
+    });
+    return list;
+  }, [siloConfigs]);
+  const originalCatalogOptions = useMemo(
+    () => [...originalCatalog].sort((a, b) => collator.compare(a.name, b.name)),
+    [originalCatalog]
+  );
 
   const [warehouseForm, setWarehouseForm] = useState<{
     name: string;
@@ -620,6 +674,8 @@ export default function AdminPage() {
   } | null>(null);
   const [materialEdits, setMaterialEdits] = useState<Record<string, MaterialEditDraft>>({});
   const [dryerDrafts, setDryerDrafts] = useState<Record<string, DryerDraft>>({});
+  const [siloConfigDrafts, setSiloConfigDrafts] = useState<Record<string, SiloConfigDraft>>({});
+  const [activeSiloMaterialSearch, setActiveSiloMaterialSearch] = useState<string | null>(null);
   const [sparePartForm, setSparePartForm] = useState({
     code: '',
     name: '',
@@ -665,6 +721,15 @@ export default function AdminPage() {
     orderNo: '',
     isActive: true
   });
+  const [siloForm, setSiloForm] = useState<SiloConfigDraft>({
+    name: '',
+    chamber: 'Komora A',
+    materialName: '',
+    percentKg: '',
+    hopperKg: '',
+    orderNo: '',
+    isActive: true
+  });
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -678,6 +743,7 @@ export default function AdminPage() {
       candidate === 'inventory' ||
       candidate === 'audit' ||
       candidate === 'positions' ||
+      candidate === 'silos' ||
       candidate === 'dryers'
     ) {
       setPrzemialyTab(candidate);
@@ -1417,6 +1483,50 @@ export default function AdminPage() {
     }
   });
 
+  const upsertSiloConfigMutation = useMutation({
+    mutationFn: upsertOriginalInventorySiloConfig,
+    onSuccess: (_data, variables) => {
+      if (variables.id) {
+        setSiloConfigDrafts((prev) => {
+          const next = { ...prev };
+          delete next[variables.id as string];
+          return next;
+        });
+      } else {
+        setSiloForm({
+          name: '',
+          chamber: 'Komora A',
+          materialName: '',
+          percentKg: '',
+          hopperKg: '',
+          orderNo: '',
+          isActive: true
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-silos-config'] });
+      toast({ title: 'Zapisano konfiguracje silosa', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        NAME_REQUIRED: 'Podaj nazwe silosa i komore.',
+        MATERIAL_REQUIRED: 'Wybierz tworzywo w silosie.',
+        CONVERTER_REQUIRED: 'Podaj poprawny przelicznik kg dla 1%.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie zapisano konfiguracji silosa.', tone: 'error' });
+    }
+  });
+
+  const removeSiloConfigMutation = useMutation({
+    mutationFn: removeOriginalInventorySiloConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-silos-config'] });
+      toast({ title: 'Wylaczono silos', tone: 'success' });
+    },
+    onError: () => {
+      toast({ title: 'Nie wylaczono silosa.', tone: 'error' });
+    }
+  });
+
   const addPermissionGroupMutation = useMutation({
     mutationFn: addPermissionGroup,
     onSuccess: () => {
@@ -2028,6 +2138,106 @@ export default function AdminPage() {
       name,
       catalogId: catalogId ? catalogId : null
     });
+  };
+
+  const buildSiloPayload = (draft: SiloConfigDraft, id?: string) => ({
+    id,
+    name: draft.name.trim() || 'Silos',
+    chamber: draft.chamber.trim(),
+    materialName: draft.materialName.trim(),
+    percentKg: parseQtyInput(draft.percentKg) ?? Number.NaN,
+    hopperKg: parseQtyInput(draft.hopperKg || '0') ?? 0,
+    orderNo: parseOrderNo(draft.orderNo) ?? 0,
+    isActive: draft.isActive
+  });
+
+  const handleAddSiloConfig = () => {
+    upsertSiloConfigMutation.mutate(buildSiloPayload(siloForm));
+  };
+
+  const getSiloMaterialSuggestions = (value: string) => {
+    const needle = normalizeSearchText(value);
+    if (needle.length < 2) return [];
+    return originalCatalogOptions
+      .filter((item) => {
+        const haystack = [item.name, item.indexCode ?? '', item.warehouseCode ?? '']
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(needle);
+      })
+      .slice(0, 12);
+  };
+
+  const renderSiloMaterialSearch = ({
+    searchId,
+    value,
+    onChange,
+    placeholder = 'np. TATREN 5046'
+  }: {
+    searchId: string;
+    value: string;
+    onChange: (nextValue: string) => void;
+    placeholder?: string;
+  }) => {
+    const isActiveSearch = activeSiloMaterialSearch === searchId;
+    const suggestions = isActiveSearch ? getSiloMaterialSuggestions(value) : [];
+    const isOpen = isActiveSearch && suggestions.length > 0;
+    return (
+      <div className="relative">
+        <Input
+          value={value}
+          onChange={(event) => {
+            onChange(event.target.value);
+            setActiveSiloMaterialSearch(searchId);
+          }}
+          placeholder={placeholder}
+          className={value ? 'min-h-[46px] pr-10' : 'min-h-[46px]'}
+          onFocus={() => setActiveSiloMaterialSearch(searchId)}
+          onBlur={() => {
+            setTimeout(() => {
+              setActiveSiloMaterialSearch((current) => (current === searchId ? null : current));
+            }, 120);
+          }}
+        />
+        {value && (
+          <button
+            type="button"
+            aria-label="Wyczysc tworzywo"
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              onChange('');
+              setActiveSiloMaterialSearch(null);
+            }}
+          >
+            X
+          </button>
+        )}
+        {isOpen && (
+          <div className="absolute z-30 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_16px_34px_rgba(0,0,0,0.45)]">
+            {suggestions.map((suggestion) => (
+              <button
+                key={`${searchId}-${suggestion.name}-${suggestion.indexCode ?? suggestion.id}`}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  onChange(suggestion.name);
+                  setActiveSiloMaterialSearch(null);
+                }}
+                className="flex w-full flex-col gap-0.5 px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]"
+              >
+                <span className="font-semibold text-title">{suggestion.name}</span>
+                {(suggestion.indexCode || suggestion.warehouseCode) && (
+                  <span className="text-[11px] text-dim">
+                    {[suggestion.indexCode, suggestion.warehouseCode].filter(Boolean).join(' | ')}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const normalizeGroupIds = (groupIds: string[]) =>
@@ -3048,6 +3258,7 @@ export default function AdminPage() {
               <TabsTrigger value="inventory">Inwentaryzacja magazynu przemiałów</TabsTrigger>
               <TabsTrigger value="audit">Rejestr działań</TabsTrigger>
               <TabsTrigger value="positions">Kartoteki/nazwy przemiałów</TabsTrigger>
+              <TabsTrigger value="silos">Silosy</TabsTrigger>
               <TabsTrigger value="dryers">Suszarki</TabsTrigger>
             </TabsList>
 
@@ -4294,6 +4505,198 @@ export default function AdminPage() {
               />
             )}
           </Card>
+        </TabsContent>
+
+        <TabsContent value="silos" className="mt-6">
+          <div className="space-y-4">
+            <Card className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                Konfiguracja silosa
+              </p>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-dim">Komora</label>
+                  <Input
+                    value={siloForm.chamber}
+                    onChange={(event) =>
+                      setSiloForm((prev) => ({ ...prev, chamber: event.target.value }))
+                    }
+                    placeholder="Komora A"
+                  />
+                </div>
+                <div className="xl:col-span-2">
+                  <label className="text-xs uppercase tracking-wide text-dim">Tworzywo</label>
+                  {renderSiloMaterialSearch({
+                    searchId: 'new',
+                    value: siloForm.materialName,
+                    onChange: (materialName) => setSiloForm((prev) => ({ ...prev, materialName }))
+                  })}
+                </div>
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-dim">1% = kg</label>
+                  <Input
+                    value={siloForm.percentKg}
+                    onChange={(event) =>
+                      setSiloForm((prev) => ({ ...prev, percentKg: event.target.value }))
+                    }
+                    placeholder="np. 250"
+                    inputMode="decimal"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-dim">Lejek kg</label>
+                  <Input
+                    value={siloForm.hopperKg}
+                    onChange={(event) =>
+                      setSiloForm((prev) => ({ ...prev, hopperKg: event.target.value }))
+                    }
+                    placeholder="np. 1200"
+                    inputMode="decimal"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-dim">Kolejnosc</label>
+                  <Input
+                    value={siloForm.orderNo}
+                    onChange={(event) =>
+                      setSiloForm((prev) => ({ ...prev, orderNo: event.target.value }))
+                    }
+                    placeholder="np. 1"
+                    inputMode="numeric"
+                  />
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <Toggle
+                  checked={siloForm.isActive}
+                  onCheckedChange={(value) =>
+                    setSiloForm((prev) => ({ ...prev, isActive: value }))
+                  }
+                  label="Aktywny"
+                />
+                <Button onClick={handleAddSiloConfig} disabled={upsertSiloConfigMutation.isPending}>
+                  Dodaj konfiguracje
+                </Button>
+              </div>
+            </Card>
+
+            {siloConfigsLoading ? (
+              <p className="text-sm text-dim">Wczytywanie...</p>
+            ) : sortedSiloConfigs.length === 0 ? (
+              <EmptyState
+                title="Brak konfiguracji silosow"
+                description="Dodaj komore silosa, aby pojawila sie w spisie oryginalow."
+              />
+            ) : (
+              <div className="grid gap-3">
+                {sortedSiloConfigs.map((config) => {
+                  const baseDraft = siloConfigToDraft(config);
+                  const draft = siloConfigDrafts[config.id] ?? baseDraft;
+                  const isDirty = !isSiloConfigDraftEqual(draft, baseDraft);
+                  return (
+                    <Card key={config.id} className="space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-title">{config.chamber}</p>
+                          <p className="text-xs text-dim">
+                            {config.materialName} | doliczane do glownego spisu
+                          </p>
+                        </div>
+                        <Badge tone={config.isActive ? 'success' : 'default'}>
+                          {config.isActive ? 'Aktywny' : 'Wylaczony'}
+                        </Badge>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <Input
+                          value={draft.chamber}
+                          onChange={(event) =>
+                            setSiloConfigDrafts((prev) => ({
+                              ...prev,
+                              [config.id]: { ...draft, chamber: event.target.value }
+                            }))
+                          }
+                          placeholder="Komora"
+                        />
+                        {renderSiloMaterialSearch({
+                          searchId: config.id,
+                          value: draft.materialName,
+                          onChange: (materialName) =>
+                            setSiloConfigDrafts((prev) => ({
+                              ...prev,
+                              [config.id]: { ...draft, materialName }
+                            }))
+                        })}
+                        <Input
+                          value={draft.percentKg}
+                          onChange={(event) =>
+                            setSiloConfigDrafts((prev) => ({
+                              ...prev,
+                              [config.id]: { ...draft, percentKg: event.target.value }
+                            }))
+                          }
+                          inputMode="decimal"
+                          placeholder="1% = kg"
+                        />
+                        <Input
+                          value={draft.hopperKg}
+                          onChange={(event) =>
+                            setSiloConfigDrafts((prev) => ({
+                              ...prev,
+                              [config.id]: { ...draft, hopperKg: event.target.value }
+                            }))
+                          }
+                          inputMode="decimal"
+                          placeholder="Lejek kg"
+                        />
+                        <Input
+                          value={draft.orderNo}
+                          onChange={(event) =>
+                            setSiloConfigDrafts((prev) => ({
+                              ...prev,
+                              [config.id]: { ...draft, orderNo: event.target.value }
+                            }))
+                          }
+                          inputMode="numeric"
+                          placeholder="Kolejnosc"
+                        />
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Toggle
+                            checked={draft.isActive}
+                            onCheckedChange={(value) =>
+                              setSiloConfigDrafts((prev) => ({
+                                ...prev,
+                                [config.id]: { ...draft, isActive: value }
+                              }))
+                            }
+                            label={draft.isActive ? 'Aktywny' : 'Wylaczony'}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button
+                          variant="secondary"
+                          onClick={() =>
+                            upsertSiloConfigMutation.mutate(buildSiloPayload(draft, config.id))
+                          }
+                          disabled={!isDirty || upsertSiloConfigMutation.isPending}
+                        >
+                          Zapisz
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => removeSiloConfigMutation.mutate(config.id)}
+                          disabled={removeSiloConfigMutation.isPending || !config.isActive}
+                          className="border-[rgba(170,24,24,0.45)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
+                        >
+                          Wylacz
+                        </Button>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="dryers" className="mt-6">

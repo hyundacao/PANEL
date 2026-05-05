@@ -156,6 +156,8 @@ export type OriginalInventoryEntry = {
   unit: string;
   location?: string;
   note?: string;
+  sourceType?: string | null;
+  sourceId?: string | null;
   user: string;
 };
 
@@ -166,6 +168,31 @@ export type OriginalInventoryCatalogEntry = {
   createdAt: string;
   indexCode?: string | null;
   warehouseCode?: string | null;
+};
+
+export type OriginalInventorySiloConfig = {
+  id: string;
+  name: string;
+  chamber: string;
+  materialName: string;
+  warehouseId?: string | null;
+  percentKg: number;
+  hopperKg: number;
+  isActive: boolean;
+  orderNo: number;
+  updatedAt: string;
+};
+
+export type OriginalInventorySiloEntry = {
+  id: string;
+  configId: string;
+  dateKey: string;
+  percent: number;
+  hopperPresent: boolean;
+  calculatedQty: number;
+  generatedEntryId?: string | null;
+  user: string;
+  updatedAt: string;
 };
 
 export type OriginalInventoryCatalogImportResult = {

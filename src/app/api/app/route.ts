@@ -43,6 +43,8 @@ import type {
   OriginalInventoryCatalogEntry,
   OriginalInventoryErpSnapshotEntry,
   OriginalInventoryEntry,
+  OriginalInventorySiloConfig,
+  OriginalInventorySiloEntry,
   PeriodReport,
   RaportZmianowyEntry,
   RaportZmianowyEntryLog,
@@ -420,6 +422,8 @@ const mapOriginalInventoryEntry = (row: any): OriginalInventoryEntry => ({
   unit: row.unit,
   location: row.location ?? undefined,
   note: row.note ?? undefined,
+  sourceType: row.source_type ?? null,
+  sourceId: row.source_id ?? null,
   user: row.user_name
 });
 
@@ -430,6 +434,31 @@ const mapOriginalInventoryCatalogEntry = (row: any): OriginalInventoryCatalogEnt
   createdAt: row.created_at,
   indexCode: row.index_code ? String(row.index_code).trim() : null,
   warehouseCode: row.warehouse_code ? String(row.warehouse_code).trim() : null
+});
+
+const mapOriginalInventorySiloConfig = (row: any): OriginalInventorySiloConfig => ({
+  id: row.id,
+  name: row.name,
+  chamber: row.chamber,
+  materialName: row.material_name,
+  warehouseId: row.warehouse_id ?? null,
+  percentKg: toNumber(row.percent_kg),
+  hopperKg: toNumber(row.hopper_kg),
+  isActive: Boolean(row.is_active),
+  orderNo: Number(row.order_no ?? 0),
+  updatedAt: row.updated_at
+});
+
+const mapOriginalInventorySiloEntry = (row: any): OriginalInventorySiloEntry => ({
+  id: row.id,
+  configId: row.config_id,
+  dateKey: row.date_key,
+  percent: toNumber(row.percent),
+  hopperPresent: Boolean(row.hopper_present),
+  calculatedQty: toNumber(row.calculated_qty),
+  generatedEntryId: row.generated_entry_id ?? null,
+  user: row.user_name ?? 'nieznany',
+  updatedAt: row.updated_at
 });
 
 const mapRaportZmianowySession = (row: any): RaportZmianowySession => ({
@@ -813,6 +842,8 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
     case 'getOriginalInventoryCatalog':
+    case 'getOriginalInventorySilosConfig':
+    case 'getOriginalInventorySiloEntries':
       requireAnyTabAccess(user, 'PRZEMIALY', [
         'spis-oryginalow',
         'suszarki'
@@ -828,6 +859,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
     case 'addOriginalInventory':
+    case 'saveOriginalInventorySiloEntry':
       requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
     case 'addOriginalInventoryCatalog':
@@ -872,6 +904,8 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       return;
     }
     case 'getAudit':
+    case 'upsertOriginalInventorySiloConfig':
+    case 'removeOriginalInventorySiloConfig':
     case 'addCatalog':
     case 'addMaterialCatalogBulk':
     case 'getCatalogs':
@@ -972,8 +1006,11 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'removeDryer',
   'setDryerMaterial',
   'addOriginalInventory',
+  'saveOriginalInventorySiloEntry',
   'addOriginalInventoryCatalog',
   'addOriginalInventoryCatalogBulk',
+  'upsertOriginalInventorySiloConfig',
+  'removeOriginalInventorySiloConfig',
   'removeOriginalInventoryErpSnapshot',
   'updateOriginalInventory',
   'removeOriginalInventory',
@@ -1065,6 +1102,8 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   deleteMixedMaterial: 'Wymieszane: usuniecie pozycji',
   addOriginalInventoryCatalog: 'Spis oryginalow: dodanie pozycji slownika',
   addOriginalInventoryCatalogBulk: 'Spis oryginalow: import slownika',
+  upsertOriginalInventorySiloConfig: 'Spis oryginalow: konfiguracja silosa',
+  removeOriginalInventorySiloConfig: 'Spis oryginalow: usuniecie konfiguracji silosa',
   removeOriginalInventoryCatalog: 'Spis oryginalow: usuniecie pozycji slownika',
   removeOriginalInventoryErpSnapshot: 'Spis oryginalow: usuniecie snapshotu ERP',
   applyInventoryAdjustment: 'Inwentaryzacja: korekta stanu',
@@ -1073,6 +1112,7 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   transferMixedMaterial: 'Wymieszane: transfer',
   setDryerMaterial: 'Suszarki: przypisanie tworzywa',
   addOriginalInventory: 'Spis oryginalow: dodanie wpisu',
+  saveOriginalInventorySiloEntry: 'Spis oryginalow: zapis silosa',
   updateOriginalInventory: 'Spis oryginalow: aktualizacja wpisu',
   removeOriginalInventory: 'Spis oryginalow: usuniecie wpisu',
   addSparePart: 'Czesci: dodanie pozycji',
@@ -1696,6 +1736,30 @@ const isMissingOriginalInventoryErpSnapshotsTableError = (error: unknown) => {
     text.includes('real_qty') ||
     text.includes('available_qty')
   );
+};
+
+const isMissingOriginalInventorySilosTableError = (error: unknown) => {
+  const text =
+    error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error ?? '');
+  return text.includes('original_inventory_silos') || text.includes('original_inventory_silo_entries');
+};
+
+const isWarehouseIdNotNullError = (error: unknown) => {
+  const text =
+    error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error ?? '');
+  return text.includes('warehouse_id') && (text.includes('null value') || text.includes('not-null'));
+};
+
+const getOriginalInventoryFallbackWarehouseId = async () => {
+  const { data, error } = await supabaseAdmin
+    .from('warehouses')
+    .select('id')
+    .eq('is_active', true)
+    .order('order_no', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.id ? String(data.id) : null;
 };
 
 const mapOriginalInventoryErpSnapshotEntry = (row: any): OriginalInventoryErpSnapshotEntry => ({
@@ -5372,6 +5436,85 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const catalog = await fetchOriginalCatalog();
       return [...catalog].sort((a, b) => a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' }));
     }
+    case 'getOriginalInventorySilosConfig': {
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_silos')
+        .select('*')
+        .order('order_no', { ascending: true })
+        .order('name', { ascending: true });
+      if (error) {
+        if (isMissingOriginalInventorySilosTableError(error)) return [];
+        throw error;
+      }
+      return (data ?? []).map(mapOriginalInventorySiloConfig);
+    }
+    case 'upsertOriginalInventorySiloConfig': {
+      const id = String(payload?.id ?? '').trim() || randomUUID();
+      const name = String(payload?.name ?? '').trim();
+      const chamber = String(payload?.chamber ?? '').trim();
+      const materialName = String(payload?.materialName ?? '').trim();
+      const warehouseId = String(payload?.warehouseId ?? '').trim() || null;
+      const percentKg = toNumber(payload?.percentKg);
+      const hopperKg = Math.max(0, toNumber(payload?.hopperKg ?? 0));
+      const orderNo = Number(payload?.orderNo ?? 0);
+      const isActive = payload?.isActive === undefined ? true : Boolean(payload.isActive);
+      if (!name || !chamber) throw new Error('NAME_REQUIRED');
+      if (!materialName) throw new Error('MATERIAL_REQUIRED');
+      if (!Number.isFinite(percentKg) || percentKg <= 0) throw new Error('CONVERTER_REQUIRED');
+      const buildRow = (rowWarehouseId: string | null) => ({
+        id,
+        name,
+        chamber,
+        material_name: materialName,
+        warehouse_id: rowWarehouseId,
+        percent_kg: percentKg,
+        hopper_kg: hopperKg,
+        is_active: isActive,
+        order_no: Number.isFinite(orderNo) ? orderNo : 0,
+        updated_at: new Date().toISOString()
+      });
+      let { data, error } = await supabaseAdmin
+        .from('original_inventory_silos')
+        .upsert(buildRow(warehouseId), { onConflict: 'id' })
+        .select('*')
+        .maybeSingle();
+      if (error && isWarehouseIdNotNullError(error)) {
+        const fallbackWarehouseId = await getOriginalInventoryFallbackWarehouseId();
+        if (!fallbackWarehouseId) throw error;
+        const retry = await supabaseAdmin
+          .from('original_inventory_silos')
+          .upsert(buildRow(fallbackWarehouseId), { onConflict: 'id' })
+          .select('*')
+          .maybeSingle();
+        data = retry.data;
+        error = retry.error;
+      }
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapOriginalInventorySiloConfig(data);
+    }
+    case 'removeOriginalInventorySiloConfig': {
+      const id = String(payload?.id ?? '').trim();
+      if (!id) throw new Error('NOT_FOUND');
+      const { error } = await supabaseAdmin
+        .from('original_inventory_silos')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error) throw error;
+      return;
+    }
+    case 'getOriginalInventorySiloEntries': {
+      const dateKey = String(payload?.dateKey ?? getTodayKey()).trim();
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_silo_entries')
+        .select('*')
+        .eq('date_key', dateKey);
+      if (error) {
+        if (isMissingOriginalInventorySilosTableError(error)) return [];
+        throw error;
+      }
+      return (data ?? []).map(mapOriginalInventorySiloEntry);
+    }
     case 'getOriginalInventoryCatalogFromErp': {
       return fetchOriginalCatalogFromErpProxy();
     }
@@ -5431,12 +5574,113 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           unit,
           location: payload?.location ? String(payload.location).trim() || null : null,
           note: payload?.note ? String(payload.note).trim() || null : null,
+          source_type: payload?.sourceType ? String(payload.sourceType).trim() || null : null,
+          source_id: payload?.sourceId ? String(payload.sourceId).trim() || null : null,
           user_name: getActorName(currentUser)
         })
         .select('*')
         .maybeSingle();
       if (error) throw error;
       return mapOriginalInventoryEntry(data);
+    }
+    case 'saveOriginalInventorySiloEntry': {
+      const configId = String(payload?.configId ?? '').trim();
+      const dateKey = String(payload?.dateKey ?? getTodayKey()).trim();
+      const percent = toNumber(payload?.percent);
+      const hopperPresent = Boolean(payload?.hopperPresent);
+      if (!configId) throw new Error('NOT_FOUND');
+      if (!dateKey) throw new Error('DATE_REQUIRED');
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) throw new Error('PERCENT_REQUIRED');
+      const { data: configRow, error: configError } = await supabaseAdmin
+        .from('original_inventory_silos')
+        .select('*')
+        .eq('id', configId)
+        .maybeSingle();
+      if (configError) throw configError;
+      if (!configRow) throw new Error('NOT_FOUND');
+      const config = mapOriginalInventorySiloConfig(configRow);
+      const calculatedQty = Math.round((percent * config.percentKg + (hopperPresent ? config.hopperKg : 0)) * 1000) / 1000;
+      const sourceId = `silo:${configId}:${dateKey}`;
+      let generatedEntryId: string | null = null;
+      const { data: existingEntry, error: existingError } = await supabaseAdmin
+        .from('original_inventory_entries')
+        .select('id')
+        .eq('source_type', 'SILO')
+        .eq('source_id', sourceId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (calculatedQty > 0) {
+        const [year, month, day] = dateKey.split('-').map(Number);
+        const now = new Date();
+        const at =
+          year && month && day
+            ? new Date(year, month - 1, day, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds()).toISOString()
+            : now.toISOString();
+        const originalInventoryPayload = {
+          id: existingEntry?.id ?? randomUUID(),
+          at,
+          warehouse_id: null as string | null,
+          name: config.materialName,
+          qty: calculatedQty,
+          unit: 'kg',
+          location: `${config.name} - ${config.chamber}`,
+          note: `Silos: ${percent}% | lejek: ${hopperPresent ? 'tak' : 'nie'}`,
+          source_type: 'SILO',
+          source_id: sourceId,
+          user_name: getActorName(currentUser)
+        };
+        let { data: generated, error: generatedError } = await supabaseAdmin
+          .from('original_inventory_entries')
+          .upsert(originalInventoryPayload, { onConflict: 'id' })
+          .select('id')
+          .maybeSingle();
+        if (generatedError && isWarehouseIdNotNullError(generatedError)) {
+          const fallbackWarehouseId = await getOriginalInventoryFallbackWarehouseId();
+          if (!fallbackWarehouseId) throw generatedError;
+          const retry = await supabaseAdmin
+            .from('original_inventory_entries')
+            .upsert(
+              {
+                ...originalInventoryPayload,
+                warehouse_id: fallbackWarehouseId
+              },
+              { onConflict: 'id' }
+            )
+            .select('id')
+            .maybeSingle();
+          generated = retry.data;
+          generatedError = retry.error;
+        }
+        if (generatedError) throw generatedError;
+        generatedEntryId = generated?.id ?? originalInventoryPayload.id;
+      } else if (existingEntry?.id) {
+        const { error: deleteError } = await supabaseAdmin
+          .from('original_inventory_entries')
+          .delete()
+          .eq('id', existingEntry.id);
+        if (deleteError) throw deleteError;
+      }
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_silo_entries')
+        .upsert(
+          {
+            id: randomUUID(),
+            config_id: configId,
+            date_key: dateKey,
+            percent,
+            hopper_present: hopperPresent,
+            calculated_qty: calculatedQty,
+            generated_entry_id: generatedEntryId,
+            user_name: getActorName(currentUser),
+            updated_at: new Date().toISOString()
+          },
+          { onConflict: 'config_id,date_key' }
+        )
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapOriginalInventorySiloEntry(data);
     }
     case 'addOriginalInventoryCatalog': {
       const name = String(payload?.name ?? '').trim();

@@ -27,6 +27,8 @@ import type {
   OriginalInventoryErpSnapshotEntry,
   OriginalInventoryErpSnapshotImportResult,
   OriginalInventoryEntry,
+  OriginalInventorySiloConfig,
+  OriginalInventorySiloEntry,
   PermissionGroup,
   PeriodReport,
   ReportRow,
@@ -572,6 +574,35 @@ export const getOriginalInventory = async (): Promise<OriginalInventoryEntry[]> 
 
 export const getOriginalInventoryCatalog = async (): Promise<OriginalInventoryCatalogEntry[]> =>
   appRequest('getOriginalInventoryCatalog');
+
+export const getOriginalInventorySilosConfig = async (): Promise<OriginalInventorySiloConfig[]> =>
+  appRequest('getOriginalInventorySilosConfig');
+
+export const upsertOriginalInventorySiloConfig = async (payload: {
+  id?: string;
+  name: string;
+  chamber: string;
+  materialName: string;
+  warehouseId?: string | null;
+  percentKg: number;
+  hopperKg: number;
+  isActive: boolean;
+  orderNo: number;
+}): Promise<OriginalInventorySiloConfig> => appRequest('upsertOriginalInventorySiloConfig', payload);
+
+export const removeOriginalInventorySiloConfig = async (id: string): Promise<void> =>
+  appRequest('removeOriginalInventorySiloConfig', { id });
+
+export const getOriginalInventorySiloEntries = async (
+  dateKey: string
+): Promise<OriginalInventorySiloEntry[]> => appRequest('getOriginalInventorySiloEntries', { dateKey });
+
+export const saveOriginalInventorySiloEntry = async (payload: {
+  configId: string;
+  dateKey: string;
+  percent: number;
+  hopperPresent: boolean;
+}): Promise<OriginalInventorySiloEntry> => appRequest('saveOriginalInventorySiloEntry', payload);
 
 export const getOriginalInventoryCatalogFromErp = async (): Promise<OriginalInventoryCatalogEntry[]> =>
   appRequest('getOriginalInventoryCatalogFromErp');
