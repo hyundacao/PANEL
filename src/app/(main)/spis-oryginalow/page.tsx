@@ -2557,7 +2557,7 @@ export default function OriginalInventoryPage() {
                             className="min-h-[42px]"
                           />
                         </div>
-                        <div className="grid grid-cols-[minmax(76px,0.85fr)_minmax(118px,1fr)_minmax(86px,0.85fr)] gap-2">
+                        <div className="grid grid-cols-3 gap-1.5 min-[380px]:gap-2">
                           <div className="flex min-h-[44px] flex-col justify-center rounded-lg border border-[rgba(255,122,26,0.26)] bg-[rgba(255,122,26,0.07)] px-2 py-1.5 text-center">
                             <p className="text-[9px] font-semibold uppercase tracking-wide text-dim">
                               Wychodzi
@@ -2566,17 +2566,30 @@ export default function OriginalInventoryPage() {
                               {formatQty(calculatedQty)}
                             </p>
                           </div>
-                          <div className="flex min-h-[44px] items-center justify-center rounded-lg border border-border bg-[rgba(255,255,255,0.025)] px-2">
-                            <Toggle
-                              checked={draft.hopperPresent}
-                              onCheckedChange={(value) => updateSiloDraft(config.id, { hopperPresent: value })}
-                              label="Lejek jest"
-                            />
-                          </div>
+                          <button
+                            type="button"
+                            onClick={() => updateSiloDraft(config.id, { hopperPresent: !draft.hopperPresent })}
+                            className="flex min-h-[44px] min-w-0 items-center justify-center gap-1 rounded-lg border border-border bg-[rgba(255,255,255,0.025)] px-1 text-[11px] font-semibold text-body min-[380px]:gap-1.5 min-[380px]:text-xs"
+                          >
+                            <span
+                              className={`relative h-6 w-10 shrink-0 rounded-full border transition ${
+                                draft.hopperPresent
+                                  ? 'border-[rgba(255,122,26,0.95)] bg-[linear-gradient(180deg,rgba(255,186,122,0.55),rgba(255,122,26,0.55))]'
+                                  : 'border-[rgba(255,122,26,0.45)] bg-[rgba(10,10,12,0.65)]'
+                              }`}
+                            >
+                              <span
+                                className={`absolute top-1 h-4 w-4 rounded-full bg-[rgba(255,255,255,0.9)] shadow-[0_2px_6px_rgba(0,0,0,0.45)] transition ${
+                                  draft.hopperPresent ? 'left-[19px] bg-[#FF7A1A]' : 'left-1'
+                                }`}
+                              />
+                            </span>
+                            <span className="whitespace-nowrap">Lejek</span>
+                          </button>
                           <Button
                             onClick={() => handleSaveSilo(config.id)}
                             disabled={readOnly || saveSiloMutation.isPending}
-                            className="min-h-[44px] w-full px-2"
+                            className="min-h-[44px] w-full min-w-0 px-1.5 text-sm min-[380px]:px-2"
                           >
                             Zapisz
                           </Button>
