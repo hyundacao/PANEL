@@ -43,6 +43,7 @@ import type {
   OriginalInventoryCatalogEntry,
   OriginalInventoryErpSnapshotEntry,
   OriginalInventoryEntry,
+  OriginalInventoryGrindTask,
   OriginalInventorySiloConfig,
   OriginalInventorySiloEntry,
   PeriodReport,
@@ -461,6 +462,20 @@ const mapOriginalInventorySiloEntry = (row: any): OriginalInventorySiloEntry => 
   updatedAt: row.updated_at
 });
 
+const mapOriginalInventoryGrindTask = (row: any): OriginalInventoryGrindTask => ({
+  id: String(row.id),
+  materialName: String(row.material_name ?? '').trim(),
+  targetMaterialName: row.target_material_name ? String(row.target_material_name).trim() : null,
+  qty: toNumber(row.qty),
+  unit: String(row.unit ?? '').trim() || 'kg',
+  status: row.status === 'DONE' ? 'DONE' : 'PENDING',
+  sourceReportDate: row.source_report_date ?? null,
+  createdBy: String(row.created_by ?? '').trim() || 'nieznany',
+  createdAt: row.created_at ?? new Date().toISOString(),
+  completedBy: row.completed_by ?? null,
+  completedAt: row.completed_at ?? null
+});
+
 const mapRaportZmianowySession = (row: any): RaportZmianowySession => ({
   id: row.id,
   createdAt: row.created_at,
@@ -844,6 +859,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'getOriginalInventoryCatalog':
     case 'getOriginalInventorySilosConfig':
     case 'getOriginalInventorySiloEntries':
+    case 'getOriginalInventoryGrindTasks':
       requireAnyTabAccess(user, 'PRZEMIALY', [
         'spis-oryginalow',
         'suszarki'
@@ -860,6 +876,8 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       return;
     case 'addOriginalInventory':
     case 'saveOriginalInventorySiloEntry':
+    case 'addOriginalInventoryGrindTask':
+    case 'completeOriginalInventoryGrindTask':
       requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
     case 'addOriginalInventoryCatalog':
@@ -1742,6 +1760,12 @@ const isMissingOriginalInventorySilosTableError = (error: unknown) => {
   const text =
     error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error ?? '');
   return text.includes('original_inventory_silos') || text.includes('original_inventory_silo_entries');
+};
+
+const isMissingOriginalInventoryGrindTasksTableError = (error: unknown) => {
+  const text =
+    error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error ?? '');
+  return text.includes('original_inventory_grind_tasks');
 };
 
 const isWarehouseIdNotNullError = (error: unknown) => {
@@ -5514,6 +5538,72 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         throw error;
       }
       return (data ?? []).map(mapOriginalInventorySiloEntry);
+    }
+    case 'getOriginalInventoryGrindTasks': {
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_grind_tasks')
+        .select('*')
+        .order('status', { ascending: false })
+        .order('created_at', { ascending: false });
+      if (error) {
+        if (isMissingOriginalInventoryGrindTasksTableError(error)) return [];
+        throw error;
+      }
+      return (data ?? []).map(mapOriginalInventoryGrindTask);
+    }
+    case 'addOriginalInventoryGrindTask': {
+      const materialName = String(payload?.materialName ?? '').trim();
+      const targetMaterialName = String(payload?.targetMaterialName ?? '').trim() || null;
+      const unit = String(payload?.unit ?? '').trim() || 'kg';
+      const qty = toNumber(payload?.qty);
+      const sourceReportDate = String(payload?.sourceReportDate ?? '').trim() || null;
+      if (!materialName) throw new Error('MATERIAL_REQUIRED');
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error('QTY_REQUIRED');
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_grind_tasks')
+        .insert({
+          id: randomUUID(),
+          material_name: materialName,
+          target_material_name: targetMaterialName,
+          qty,
+          unit,
+          source_report_date: sourceReportDate,
+          status: 'PENDING',
+          created_by: getActorName(currentUser),
+          created_at: new Date().toISOString()
+        })
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (isMissingOriginalInventoryGrindTasksTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS');
+        }
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      return mapOriginalInventoryGrindTask(data);
+    }
+    case 'completeOriginalInventoryGrindTask': {
+      const id = String(payload?.id ?? '').trim();
+      if (!id) throw new Error('NOT_FOUND');
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_grind_tasks')
+        .update({
+          status: 'DONE',
+          completed_by: getActorName(currentUser),
+          completed_at: new Date().toISOString()
+        })
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (isMissingOriginalInventoryGrindTasksTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS');
+        }
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      return mapOriginalInventoryGrindTask(data);
     }
     case 'getOriginalInventoryCatalogFromErp': {
       return fetchOriginalCatalogFromErpProxy();

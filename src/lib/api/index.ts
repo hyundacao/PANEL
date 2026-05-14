@@ -27,6 +27,7 @@ import type {
   OriginalInventoryErpSnapshotEntry,
   OriginalInventoryErpSnapshotImportResult,
   OriginalInventoryEntry,
+  OriginalInventoryGrindTask,
   OriginalInventorySiloConfig,
   OriginalInventorySiloEntry,
   PermissionGroup,
@@ -603,6 +604,22 @@ export const saveOriginalInventorySiloEntry = async (payload: {
   percent: number;
   hopperPresent: boolean;
 }): Promise<OriginalInventorySiloEntry> => appRequest('saveOriginalInventorySiloEntry', payload);
+
+export const getOriginalInventoryGrindTasks = async (): Promise<OriginalInventoryGrindTask[]> =>
+  appRequest('getOriginalInventoryGrindTasks');
+
+export const addOriginalInventoryGrindTask = async (payload: {
+  materialName: string;
+  targetMaterialName?: string;
+  qty: number;
+  unit?: string;
+  sourceReportDate?: string;
+}): Promise<OriginalInventoryGrindTask> => appRequest('addOriginalInventoryGrindTask', payload);
+
+export const completeOriginalInventoryGrindTask = async (
+  id: string
+): Promise<OriginalInventoryGrindTask> =>
+  appRequest('completeOriginalInventoryGrindTask', { id });
 
 export const getOriginalInventoryCatalogFromErp = async (): Promise<OriginalInventoryCatalogEntry[]> =>
   appRequest('getOriginalInventoryCatalogFromErp');

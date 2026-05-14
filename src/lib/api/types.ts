@@ -195,6 +195,22 @@ export type OriginalInventorySiloEntry = {
   updatedAt: string;
 };
 
+export type OriginalInventoryGrindTaskStatus = 'PENDING' | 'DONE';
+
+export type OriginalInventoryGrindTask = {
+  id: string;
+  materialName: string;
+  targetMaterialName?: string | null;
+  qty: number;
+  unit: string;
+  status: OriginalInventoryGrindTaskStatus;
+  sourceReportDate?: string | null;
+  createdBy: string;
+  createdAt: string;
+  completedBy?: string | null;
+  completedAt?: string | null;
+};
+
 export type OriginalInventoryCatalogImportResult = {
   total: number;
   inserted: number;

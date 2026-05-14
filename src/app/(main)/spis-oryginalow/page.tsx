@@ -4,12 +4,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Cell } from 'exceljs';
 import {
+  addOriginalInventoryGrindTask,
+  completeOriginalInventoryGrindTask,
   addOriginalInventory,
   getOriginalInventory,
   getOriginalInventoryCatalog,
   getOriginalInventoryCatalogFromErp,
   getOriginalInventoryErpSnapshot,
   getOriginalInventoryErpSnapshotsByDates,
+  getOriginalInventoryGrindTasks,
   getOriginalInventorySiloEntries,
   getOriginalInventorySilosConfig,
   importOriginalInventoryCatalogFile,
@@ -82,7 +85,7 @@ const isErpOriginalsSourceError = (error: unknown) =>
 const isErpSnapshotMigrationError = (error: unknown) =>
   error instanceof Error && error.message === ERP_SNAPSHOT_MIGRATION_REQUIRED;
 
-type OriginalInventoryTab = 'spis' | 'kartoteki' | 'stany-erp' | 'raporty';
+type OriginalInventoryTab = 'spis' | 'kartoteki' | 'stany-erp' | 'raporty' | 'do-zmielenia';
 
 const getInitialTabValue = (): OriginalInventoryTab => {
   if (typeof window === 'undefined') return 'spis';
@@ -91,7 +94,8 @@ const getInitialTabValue = (): OriginalInventoryTab => {
     saved === 'spis' ||
     saved === 'kartoteki' ||
     saved === 'stany-erp' ||
-    saved === 'raporty'
+    saved === 'raporty' ||
+    saved === 'do-zmielenia'
   ) {
     return saved;
   }
@@ -390,6 +394,12 @@ export default function OriginalInventoryPage() {
   const [showReportRealQty, setShowReportRealQty] = useState(true);
   const [showReportAvailableQty, setShowReportAvailableQty] = useState(false);
   const [showReportUncountedItems, setShowReportUncountedItems] = useState(false);
+  const [grindDialogMaterial, setGrindDialogMaterial] = useState<{
+    name: string;
+    unit: string;
+  } | null>(null);
+  const [grindQty, setGrindQty] = useState('');
+  const [grindTargetMaterial, setGrindTargetMaterial] = useState('');
   const [spisDate, setSpisDate] = useState(getLocalDateValue());
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogImportFile, setCatalogImportFile] = useState<File | null>(null);
@@ -464,6 +474,10 @@ export default function OriginalInventoryPage() {
     queryKey: ['original-inventory-silo-entries', spisDate],
     queryFn: () => getOriginalInventorySiloEntries(spisDate),
     enabled: Boolean(spisDate)
+  });
+  const { data: grindTasks = [] } = useQuery({
+    queryKey: ['original-inventory-grind-tasks'],
+    queryFn: getOriginalInventoryGrindTasks
   });
   const erpCatalogItems = useMemo(
     () => (Array.isArray(erpCatalogState?.items) ? erpCatalogState.items : []),
@@ -656,6 +670,40 @@ export default function OriginalInventoryPage() {
         DATE_REQUIRED: 'Wybierz dzien spisu.'
       };
       toast({ title: messageMap[err.message] ?? 'Nie zapisano silosa.', tone: 'error' });
+    }
+  });
+  const addGrindTaskMutation = useMutation({
+    mutationFn: addOriginalInventoryGrindTask,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-grind-tasks'] });
+      setGrindDialogMaterial(null);
+      setGrindQty('');
+      setGrindTargetMaterial('');
+      toast({ title: 'Dodano do zmielenia', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        MATERIAL_REQUIRED: 'Nie wybrano materialu.',
+        QTY_REQUIRED: 'Wpisz poprawna ilosc kg.',
+        MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS:
+          'Brakuje migracji bazy dla listy do zmielenia.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie dodano do zmielenia.', tone: 'error' });
+    }
+  });
+  const completeGrindTaskMutation = useMutation({
+    mutationFn: completeOriginalInventoryGrindTask,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-grind-tasks'] });
+      toast({ title: 'Oznaczono jako zmielone', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        NOT_FOUND: 'Nie znaleziono pozycji.',
+        MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS:
+          'Brakuje migracji bazy dla listy do zmielenia.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie zapisano statusu.', tone: 'error' });
     }
   });
   const resetCatalogImportState = () => {
@@ -2301,6 +2349,33 @@ export default function OriginalInventoryPage() {
     row.unit
   ]);
 
+  const pendingGrindTasks = grindTasks.filter((task) => task.status !== 'DONE');
+  const doneGrindTasks = grindTasks.filter((task) => task.status === 'DONE');
+  const openGrindDialog = (row: (typeof reportRows)[number]) => {
+    setGrindDialogMaterial({ name: row.name, unit: row.unit || 'kg' });
+    setGrindQty('');
+  };
+  const closeGrindDialog = () => {
+    if (addGrindTaskMutation.isPending) return;
+    setGrindDialogMaterial(null);
+    setGrindQty('');
+    setGrindTargetMaterial('');
+  };
+  const handleAddGrindTask = () => {
+    if (!grindDialogMaterial) return;
+    const qty = parseQtyInput(grindQty);
+    if (qty === null || !Number.isFinite(qty) || qty <= 0) {
+      toast({ title: 'Wpisz poprawna ilosc kg.', tone: 'error' });
+      return;
+    }
+    addGrindTaskMutation.mutate({
+      materialName: grindDialogMaterial.name,
+      targetMaterialName: grindTargetMaterial.trim(),
+      qty,
+      unit: grindDialogMaterial.unit || 'kg',
+      sourceReportDate: spisDate
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -2329,6 +2404,12 @@ export default function OriginalInventoryPage() {
             className="flex min-h-[42px] items-center justify-center px-2 text-center text-xs leading-tight sm:min-h-0 sm:px-3 sm:text-sm data-[state=active]:bg-[var(--value-purple)] data-[state=active]:text-bg"
           >
             RAPORTY
+          </TabsTrigger>
+          <TabsTrigger
+            value="do-zmielenia"
+            className="flex min-h-[42px] items-center justify-center px-2 text-center text-xs leading-tight sm:min-h-0 sm:px-3 sm:text-sm data-[state=active]:bg-[var(--success)] data-[state=active]:text-bg"
+          >
+            DO ZMIELENIA
           </TabsTrigger>
         </TabsList>
 
@@ -3156,6 +3237,7 @@ export default function OriginalInventoryPage() {
                 <DataTable
                   columns={reportColumns}
                   rows={selectedReportTableRows}
+                  onRowClick={(rowIndex) => openGrindDialog(selectedReportRows[rowIndex])}
                 />
               ) : (
                 <p className="text-sm text-dim">Brak tej pozycji w raporcie dla wybranego dnia.</p>
@@ -3244,6 +3326,7 @@ export default function OriginalInventoryPage() {
                 <DataTable
                   columns={reportColumns}
                   rows={reportTableRows}
+                  onRowClick={(rowIndex) => openGrindDialog(reportRows[rowIndex])}
                   stickyHeader
                   desktopMaxHeightClassName="max-h-[82vh]"
                 />
@@ -3284,7 +3367,153 @@ export default function OriginalInventoryPage() {
             )}
           </Card>
         </TabsContent>
+
+        <TabsContent value="do-zmielenia" className="space-y-4">
+          <Card className="space-y-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                  Do zmielenia
+                </p>
+                <p className="text-sm text-dim">
+                  Prosta lista pozycji dodanych z raportu.
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-surface2 px-4 py-2 text-sm font-semibold text-title">
+                Aktywne: {pendingGrindTasks.length}
+              </div>
+            </div>
+
+            {pendingGrindTasks.length === 0 ? (
+              <p className="rounded-xl border border-border bg-surface2 p-4 text-sm text-dim">
+                Brak pozycji do zmielenia.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {pendingGrindTasks.map((task) => (
+                  <div
+                    key={task.id}
+                    className="grid gap-3 rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(0,0,0,0.48))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] md:grid-cols-[minmax(0,1fr)_140px_150px] md:items-center"
+                  >
+                    <div className="min-w-0">
+                      <p className="break-words text-sm font-semibold text-title">
+                        {task.materialName}
+                      </p>
+                      <p className="mt-1 text-xs text-dim">
+                        Dodal: {task.createdBy}
+                      </p>
+                      {task.targetMaterialName && (
+                        <p className="mt-2 text-xs font-semibold text-brand">
+                          Na kartoteke: {task.targetMaterialName}
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-2xl font-black text-brand">
+                      {formatQty(task.qty)} {task.unit}
+                    </div>
+                    <Button
+                      onClick={() => completeGrindTaskMutation.mutate(task.id)}
+                      disabled={readOnly || completeGrindTaskMutation.isPending}
+                      className="w-full bg-[var(--success)] text-bg hover:bg-[var(--success)]"
+                    >
+                      Zmielone
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          {doneGrindTasks.length > 0 && (
+            <Card className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                Zmielone
+              </p>
+              <div className="space-y-2">
+                {doneGrindTasks.slice(0, 30).map((task) => (
+                  <div
+                    key={task.id}
+                    className="grid gap-2 rounded-xl border border-[rgba(34,197,94,0.22)] bg-[rgba(34,197,94,0.08)] p-3 text-sm md:grid-cols-[minmax(0,1fr)_130px]"
+                  >
+                    <p className="min-w-0 break-words font-semibold text-title">
+                      {task.materialName}
+                      {task.targetMaterialName && (
+                        <span className="ml-2 text-dim">
+                          -&gt; {task.targetMaterialName}
+                        </span>
+                      )}
+                    </p>
+                    <p className="font-black text-success">
+                      {formatQty(task.qty)} {task.unit}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </TabsContent>
       </Tabs>
+
+      {grindDialogMaterial && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-[var(--scrim)]" onClick={closeGrindDialog} />
+          <div className="fixed left-1/2 top-[84dvh] z-10 w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[rgba(255,122,26,0.35)] bg-[var(--surface-1)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55),inset_0_1px_0_var(--inner-highlight)]">
+            <button
+              type="button"
+              onClick={closeGrindDialog}
+              className="absolute right-4 top-4 text-dim hover:text-title"
+              aria-label="Zamknij"
+            >
+              X
+            </button>
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                  Dodaj do zmielenia
+                </p>
+                <h3 className="mt-1 break-words text-lg font-black text-title">
+                  {grindDialogMaterial.name}
+                </h3>
+              </div>
+              <div>
+                <label className="text-xs uppercase tracking-wide text-dim">
+                  Ile kg do wpisania
+                </label>
+                <Input
+                  value={grindQty}
+                  onChange={(event) => setGrindQty(event.target.value)}
+                  inputMode="decimal"
+                  placeholder="np. 20"
+                  className="mt-1 min-h-[54px] text-xl font-black"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="text-xs uppercase tracking-wide text-dim">
+                  Na jaka kartoteke zmielic
+                </label>
+                <Input
+                  value={grindTargetMaterial}
+                  onChange={(event) => setGrindTargetMaterial(event.target.value)}
+                  placeholder="np. PRZEMIAL PP MIX"
+                  className="mt-1 min-h-[54px] font-semibold"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Button variant="outline" onClick={closeGrindDialog}>
+                  Anuluj
+                </Button>
+                <Button
+                  onClick={handleAddGrindTask}
+                  disabled={readOnly || addGrindTaskMutation.isPending}
+                >
+                  Zatwierdz
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
