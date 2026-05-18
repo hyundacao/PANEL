@@ -621,6 +621,16 @@ export const completeOriginalInventoryGrindTask = async (
 ): Promise<OriginalInventoryGrindTask> =>
   appRequest('completeOriginalInventoryGrindTask', { id });
 
+export const completeOriginalInventoryGrindTasks = async (
+  ids: string[]
+): Promise<OriginalInventoryGrindTask[]> =>
+  appRequest('completeOriginalInventoryGrindTasks', { ids });
+
+export const reopenOriginalInventoryGrindTasks = async (
+  ids: string[]
+): Promise<OriginalInventoryGrindTask[]> =>
+  appRequest('reopenOriginalInventoryGrindTasks', { ids });
+
 export const getOriginalInventoryCatalogFromErp = async (): Promise<OriginalInventoryCatalogEntry[]> =>
   appRequest('getOriginalInventoryCatalogFromErp');
 

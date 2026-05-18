@@ -878,6 +878,8 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'saveOriginalInventorySiloEntry':
     case 'addOriginalInventoryGrindTask':
     case 'completeOriginalInventoryGrindTask':
+    case 'completeOriginalInventoryGrindTasks':
+    case 'reopenOriginalInventoryGrindTasks':
       requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
     case 'addOriginalInventoryCatalog':
@@ -5604,6 +5606,51 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }
       if (!data) throw new Error('NOT_FOUND');
       return mapOriginalInventoryGrindTask(data);
+    }
+    case 'completeOriginalInventoryGrindTasks': {
+      const ids = Array.isArray(payload?.ids)
+        ? payload.ids.map((id: unknown) => String(id ?? '').trim()).filter(Boolean)
+        : [];
+      if (ids.length === 0) throw new Error('NOT_FOUND');
+      const completedAt = new Date().toISOString();
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_grind_tasks')
+        .update({
+          status: 'DONE',
+          completed_by: getActorName(currentUser),
+          completed_at: completedAt
+        })
+        .in('id', ids)
+        .select('*');
+      if (error) {
+        if (isMissingOriginalInventoryGrindTasksTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS');
+        }
+        throw error;
+      }
+      return (data ?? []).map(mapOriginalInventoryGrindTask);
+    }
+    case 'reopenOriginalInventoryGrindTasks': {
+      const ids = Array.isArray(payload?.ids)
+        ? payload.ids.map((id: unknown) => String(id ?? '').trim()).filter(Boolean)
+        : [];
+      if (ids.length === 0) throw new Error('NOT_FOUND');
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_grind_tasks')
+        .update({
+          status: 'PENDING',
+          completed_by: null,
+          completed_at: null
+        })
+        .in('id', ids)
+        .select('*');
+      if (error) {
+        if (isMissingOriginalInventoryGrindTasksTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS');
+        }
+        throw error;
+      }
+      return (data ?? []).map(mapOriginalInventoryGrindTask);
     }
     case 'getOriginalInventoryCatalogFromErp': {
       return fetchOriginalCatalogFromErpProxy();

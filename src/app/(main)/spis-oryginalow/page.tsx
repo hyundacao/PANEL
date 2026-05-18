@@ -5,8 +5,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Cell } from 'exceljs';
 import {
   addOriginalInventoryGrindTask,
-  completeOriginalInventoryGrindTask,
+  completeOriginalInventoryGrindTasks,
   addOriginalInventory,
+  getCatalog,
   getOriginalInventory,
   getOriginalInventoryCatalog,
   getOriginalInventoryCatalogFromErp,
@@ -20,6 +21,7 @@ import {
   getWarehouses,
   removeOriginalInventoryErpSnapshot,
   removeOriginalInventory,
+  reopenOriginalInventoryGrindTasks,
   saveOriginalInventorySiloEntry,
   updateOriginalInventory
 } from '@/lib/api';
@@ -400,6 +402,7 @@ export default function OriginalInventoryPage() {
   } | null>(null);
   const [grindQty, setGrindQty] = useState('');
   const [grindTargetMaterial, setGrindTargetMaterial] = useState('');
+  const [showGrindTargetSuggestions, setShowGrindTargetSuggestions] = useState(false);
   const [spisDate, setSpisDate] = useState(getLocalDateValue());
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogImportFile, setCatalogImportFile] = useState<File | null>(null);
@@ -478,6 +481,10 @@ export default function OriginalInventoryPage() {
   const { data: grindTasks = [] } = useQuery({
     queryKey: ['original-inventory-grind-tasks'],
     queryFn: getOriginalInventoryGrindTasks
+  });
+  const { data: grindTargetSourceMaterials = [] } = useQuery({
+    queryKey: ['catalog'],
+    queryFn: getCatalog
   });
   const erpCatalogItems = useMemo(
     () => (Array.isArray(erpCatalogState?.items) ? erpCatalogState.items : []),
@@ -679,6 +686,7 @@ export default function OriginalInventoryPage() {
       setGrindDialogMaterial(null);
       setGrindQty('');
       setGrindTargetMaterial('');
+      setShowGrindTargetSuggestions(false);
       toast({ title: 'Dodano do zmielenia', tone: 'success' });
     },
     onError: (err: Error) => {
@@ -691,19 +699,34 @@ export default function OriginalInventoryPage() {
       toast({ title: messageMap[err.message] ?? 'Nie dodano do zmielenia.', tone: 'error' });
     }
   });
-  const completeGrindTaskMutation = useMutation({
-    mutationFn: completeOriginalInventoryGrindTask,
+  const completeGrindDocumentMutation = useMutation({
+    mutationFn: completeOriginalInventoryGrindTasks,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['original-inventory-grind-tasks'] });
-      toast({ title: 'Oznaczono jako zmielone', tone: 'success' });
+      toast({ title: 'Oznaczono dokument jako zmielony', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        NOT_FOUND: 'Nie znaleziono pozycji.',
+        NOT_FOUND: 'Nie znaleziono dokumentu.',
         MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS:
           'Brakuje migracji bazy dla listy do zmielenia.'
       };
-      toast({ title: messageMap[err.message] ?? 'Nie zapisano statusu.', tone: 'error' });
+      toast({ title: messageMap[err.message] ?? 'Nie zapisano dokumentu.', tone: 'error' });
+    }
+  });
+  const reopenGrindDocumentMutation = useMutation({
+    mutationFn: reopenOriginalInventoryGrindTasks,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-grind-tasks'] });
+      toast({ title: 'Cofnieto dokument do edycji', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        NOT_FOUND: 'Nie znaleziono dokumentu.',
+        MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS:
+          'Brakuje migracji bazy dla listy do zmielenia.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie cofnieto dokumentu.', tone: 'error' });
     }
   });
   const resetCatalogImportState = () => {
@@ -2349,17 +2372,103 @@ export default function OriginalInventoryPage() {
     row.unit
   ]);
 
+  const grindTargetOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    grindTargetSourceMaterials
+      .filter((material) => material.isActive)
+      .forEach((material) => {
+        [material.name, material.catalogName, material.code]
+          .map((value) => String(value ?? '').trim())
+          .filter(Boolean)
+          .forEach((value) => {
+            const key = normalizeCatalogNameKey(value);
+            if (key && !options.has(key)) options.set(key, value);
+          });
+      });
+    return [...options.values()].sort((a, b) => collator.compare(a, b));
+  }, [grindTargetSourceMaterials]);
+  const grindTargetSuggestions = useMemo(() => {
+    if (!normalizeCatalogNameKey(grindTargetMaterial)) return grindTargetOptions.slice(0, 8);
+    return grindTargetOptions
+      .filter((option) => matchesCatalogSearch(grindTargetMaterial, option))
+      .slice(0, 8);
+  }, [grindTargetMaterial, grindTargetOptions]);
   const pendingGrindTasks = grindTasks.filter((task) => task.status !== 'DONE');
   const doneGrindTasks = grindTasks.filter((task) => task.status === 'DONE');
+  const buildGrindDocuments = (
+    tasks: typeof grindTasks,
+    mode: 'pending' | 'done'
+  ) => {
+    const documents: Array<{
+      key: string;
+      targetMaterialName: string;
+      tasks: typeof grindTasks;
+      totalQty: number;
+      createdAt: string;
+      completedAt?: string | null;
+      completedBy?: string | null;
+    }> = [];
+    const sorted = [...tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+    sorted.forEach((task) => {
+      const targetMaterialName = task.targetMaterialName?.trim() || 'Brak docelowej kartoteki';
+      const targetKey = normalizeCatalogNameKey(targetMaterialName) || targetMaterialName.toLowerCase();
+      const doneKey = mode === 'done' ? `${task.completedAt ?? task.createdAt}|${task.completedBy ?? ''}` : '';
+      const candidate =
+        mode === 'pending'
+          ? [...documents]
+              .reverse()
+              .find(
+                (document) =>
+                  normalizeCatalogNameKey(document.targetMaterialName) === targetKey &&
+                  document.totalQty + task.qty <= 500
+              )
+          : documents.find(
+              (document) =>
+                document.key === `${targetKey}|${doneKey}`
+            );
+
+      if (candidate) {
+        candidate.tasks.push(task);
+        candidate.totalQty += task.qty;
+        return;
+      }
+
+      documents.push({
+        key:
+          mode === 'pending'
+            ? `${targetKey}|${documents.filter((document) => normalizeCatalogNameKey(document.targetMaterialName) === targetKey).length + 1}`
+            : `${targetKey}|${doneKey}`,
+        targetMaterialName,
+        tasks: [task],
+        totalQty: task.qty,
+        createdAt: task.createdAt,
+        completedAt: task.completedAt,
+        completedBy: task.completedBy
+      });
+    });
+
+    return documents.sort((a, b) => {
+      if (mode === 'done') {
+        return String(b.completedAt ?? b.createdAt).localeCompare(String(a.completedAt ?? a.createdAt));
+      }
+      return a.createdAt.localeCompare(b.createdAt);
+    });
+  };
+  const pendingGrindDocuments = buildGrindDocuments(pendingGrindTasks, 'pending');
+  const doneGrindDocuments = buildGrindDocuments(doneGrindTasks, 'done');
   const openGrindDialog = (row: (typeof reportRows)[number]) => {
     setGrindDialogMaterial({ name: row.name, unit: row.unit || 'kg' });
     setGrindQty('');
+    setGrindTargetMaterial('');
+    setShowGrindTargetSuggestions(false);
   };
   const closeGrindDialog = () => {
     if (addGrindTaskMutation.isPending) return;
     setGrindDialogMaterial(null);
     setGrindQty('');
     setGrindTargetMaterial('');
+    setShowGrindTargetSuggestions(false);
   };
   const handleAddGrindTask = () => {
     if (!grindDialogMaterial) return;
@@ -2368,9 +2477,18 @@ export default function OriginalInventoryPage() {
       toast({ title: 'Wpisz poprawna ilosc kg.', tone: 'error' });
       return;
     }
+    if (qty > 500) {
+      toast({ title: 'Jeden dokument moze miec maksymalnie 500 kg.', tone: 'error' });
+      return;
+    }
+    const targetMaterialName = grindTargetMaterial.trim();
+    if (!targetMaterialName) {
+      toast({ title: 'Wybierz docelowa kartoteke.', tone: 'error' });
+      return;
+    }
     addGrindTaskMutation.mutate({
       materialName: grindDialogMaterial.name,
-      targetMaterialName: grindTargetMaterial.trim(),
+      targetMaterialName,
       qty,
       unit: grindDialogMaterial.unit || 'kg',
       sourceReportDate: spisDate
@@ -3380,72 +3498,126 @@ export default function OriginalInventoryPage() {
                 </p>
               </div>
               <div className="rounded-xl border border-border bg-surface2 px-4 py-2 text-sm font-semibold text-title">
-                Aktywne: {pendingGrindTasks.length}
+                Aktywne dokumenty: {pendingGrindDocuments.length}
               </div>
             </div>
 
-            {pendingGrindTasks.length === 0 ? (
+            {pendingGrindDocuments.length === 0 ? (
               <p className="rounded-xl border border-border bg-surface2 p-4 text-sm text-dim">
                 Brak pozycji do zmielenia.
               </p>
             ) : (
-              <div className="space-y-2">
-                {pendingGrindTasks.map((task) => (
+              <div className="space-y-3">
+                {pendingGrindDocuments.map((document, index) => (
                   <div
-                    key={task.id}
-                    className="grid gap-3 rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(0,0,0,0.48))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] md:grid-cols-[minmax(0,1fr)_140px_150px] md:items-center"
+                    key={document.key}
+                    className="rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(0,0,0,0.48))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
                   >
-                    <div className="min-w-0">
-                      <p className="break-words text-sm font-semibold text-title">
-                        {task.materialName}
-                      </p>
-                      <p className="mt-1 text-xs text-dim">
-                        Dodal: {task.createdBy}
-                      </p>
-                      {task.targetMaterialName && (
-                        <p className="mt-2 text-xs font-semibold text-brand">
-                          Na kartoteke: {task.targetMaterialName}
+                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_150px] md:items-center">
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
+                          Dokument #{index + 1}
                         </p>
-                      )}
+                        <h3 className="mt-1 break-words text-lg font-black text-brand">
+                          {document.targetMaterialName}
+                        </h3>
+                        <p className="mt-1 text-xs text-dim">
+                          {document.tasks.length} poz. | limit dokumentu 500 kg
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
+                          Suma
+                        </p>
+                        <p className="text-2xl font-black text-title">
+                          {formatQty(document.totalQty)} kg
+                        </p>
+                      </div>
+                      <Button
+                        onClick={() =>
+                          completeGrindDocumentMutation.mutate(document.tasks.map((task) => task.id))
+                        }
+                        disabled={readOnly || completeGrindDocumentMutation.isPending}
+                        className="w-full bg-[var(--success)] text-bg hover:bg-[var(--success)]"
+                      >
+                        Zmielone
+                      </Button>
                     </div>
-                    <div className="text-2xl font-black text-brand">
-                      {formatQty(task.qty)} {task.unit}
+                    <div className="mt-4 overflow-hidden rounded-xl border border-border">
+                      {document.tasks.map((task) => (
+                        <div
+                          key={task.id}
+                          className="grid gap-2 border-t border-border px-3 py-2 first:border-t-0 md:grid-cols-[minmax(0,1fr)_120px]"
+                        >
+                          <div className="min-w-0">
+                            <p className="break-words text-sm font-semibold text-title">
+                              {task.materialName}
+                            </p>
+                            <p className="text-xs text-dim">
+                              Dodal: {task.createdBy}
+                            </p>
+                          </div>
+                          <p className="font-black text-brand md:text-right">
+                            {formatQty(task.qty)} {task.unit}
+                          </p>
+                        </div>
+                      ))}
                     </div>
-                    <Button
-                      onClick={() => completeGrindTaskMutation.mutate(task.id)}
-                      disabled={readOnly || completeGrindTaskMutation.isPending}
-                      className="w-full bg-[var(--success)] text-bg hover:bg-[var(--success)]"
-                    >
-                      Zmielone
-                    </Button>
                   </div>
                 ))}
               </div>
             )}
           </Card>
 
-          {doneGrindTasks.length > 0 && (
+          {doneGrindDocuments.length > 0 && (
             <Card className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                 Zmielone
               </p>
               <div className="space-y-2">
-                {doneGrindTasks.slice(0, 30).map((task) => (
+                {doneGrindDocuments.slice(0, 30).map((document) => (
                   <div
-                    key={task.id}
-                    className="grid gap-2 rounded-xl border border-[rgba(34,197,94,0.22)] bg-[rgba(34,197,94,0.08)] p-3 text-sm md:grid-cols-[minmax(0,1fr)_130px]"
+                    key={document.key}
+                    className="rounded-xl border border-[rgba(34,197,94,0.22)] bg-[rgba(34,197,94,0.08)] p-3 text-sm"
                   >
-                    <p className="min-w-0 break-words font-semibold text-title">
-                      {task.materialName}
-                      {task.targetMaterialName && (
-                        <span className="ml-2 text-dim">
-                          -&gt; {task.targetMaterialName}
-                        </span>
-                      )}
-                    </p>
-                    <p className="font-black text-success">
-                      {formatQty(task.qty)} {task.unit}
-                    </p>
+                    <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_170px_170px] md:items-center">
+                      <div>
+                        <p className="font-black text-success">{document.targetMaterialName}</p>
+                        <p className="text-xs text-dim">
+                          Zmielone:{' '}
+                          {document.completedAt
+                            ? new Date(document.completedAt).toLocaleString('pl-PL')
+                            : 'brak daty'}{' '}
+                          przez {document.completedBy ?? 'nieznany'}
+                        </p>
+                      </div>
+                      <p className="font-black text-success md:text-right">
+                        {formatQty(document.totalQty)} kg
+                      </p>
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          reopenGrindDocumentMutation.mutate(document.tasks.map((task) => task.id))
+                        }
+                        disabled={readOnly || reopenGrindDocumentMutation.isPending}
+                        className="w-full border-[rgba(255,122,26,0.55)] text-title"
+                      >
+                        Cofnij do edycji
+                      </Button>
+                    </div>
+                    <div className="mt-3 space-y-1 border-t border-[rgba(34,197,94,0.18)] pt-3">
+                      {document.tasks.map((task) => (
+                        <div
+                          key={task.id}
+                          className="grid gap-1 text-xs md:grid-cols-[minmax(0,1fr)_100px]"
+                        >
+                          <span className="break-words text-title">{task.materialName}</span>
+                          <span className="font-semibold text-success md:text-right">
+                            {formatQty(task.qty)} {task.unit}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -3492,12 +3664,39 @@ export default function OriginalInventoryPage() {
                 <label className="text-xs uppercase tracking-wide text-dim">
                   Na jaka kartoteke zmielic
                 </label>
-                <Input
-                  value={grindTargetMaterial}
-                  onChange={(event) => setGrindTargetMaterial(event.target.value)}
-                  placeholder="np. PRZEMIAL PP MIX"
-                  className="mt-1 min-h-[54px] font-semibold"
-                />
+                <div className="relative mt-1">
+                  <Input
+                    value={grindTargetMaterial}
+                    onChange={(event) => {
+                      setGrindTargetMaterial(event.target.value);
+                      setShowGrindTargetSuggestions(true);
+                    }}
+                    onFocus={() => setShowGrindTargetSuggestions(true)}
+                    onBlur={() => {
+                      setTimeout(() => setShowGrindTargetSuggestions(false), 120);
+                    }}
+                    placeholder="np. PRZEMIAL PP MIX"
+                    className="min-h-[54px] font-semibold"
+                  />
+                  {showGrindTargetSuggestions && grindTargetSuggestions.length > 0 && (
+                    <div className="absolute z-30 mt-2 max-h-60 w-full overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.45)]">
+                      {grindTargetSuggestions.map((option) => (
+                        <button
+                          key={option}
+                          type="button"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            setGrindTargetMaterial(option);
+                            setShowGrindTargetSuggestions(false);
+                          }}
+                          className="block w-full px-3 py-2 text-left text-sm font-semibold text-body transition hover:bg-[rgba(255,255,255,0.06)]"
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <Button variant="outline" onClick={closeGrindDialog}>
