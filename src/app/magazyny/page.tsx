@@ -7,6 +7,7 @@ import {
   ArrowLeftRight,
   Boxes,
   FileText,
+  Gauge,
   Shield,
   Wrench,
   type LucideIcon
@@ -61,6 +62,18 @@ const moduleOptions: ModuleOption[] = [
     tags: ['Produkcja', 'Statystyki'],
     keywords: ['hala', 'spis', 'raporty', 'kartoteka', 'suszarki', 'wymieszane'],
     icon: Boxes
+  },
+  {
+    id: 'bilans-przezbrojen',
+    key: 'BILANS_PRZEZBROJEN',
+    requiredTabs: ['bilans-przezbrojen'],
+    title: 'Bilans przezbrojeń i personelu',
+    description: 'Planowanie dostępności mechaników, ustawiaczy i techników uruchomienia pod zaplanowane przezbrojenia.',
+    action: 'Wejdź',
+    href: '/bilans-przezbrojen',
+    tags: ['Produkcja', 'Personel'],
+    keywords: ['przezbrojenia', 'personel', 'mechanicy', 'ustawiacze', 'technik uruchomienia', 'obsada'],
+    icon: Gauge
   },
   {
     id: 'przemialy-erp',

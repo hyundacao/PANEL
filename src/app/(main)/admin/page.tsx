@@ -173,6 +173,9 @@ const czesciTabOptions: Array<{ key: WarehouseTab; label: string }> = [
 const raportZmianowyTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'raport-zmianowy', label: 'Raport zmianowy' }
 ];
+const bilansPrzezbrojenTabOptions: Array<{ key: WarehouseTab; label: string }> = [
+  { key: 'bilans-przezbrojen', label: 'Bilans przezbrojen' }
+];
 const erpModuleTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'erp-magazynier', label: 'Magazynier' },
   { key: 'erp-rozdzielca', label: 'Rozdzielca Wydziałowy' },
@@ -184,6 +187,7 @@ const warehouseLabels: Record<WarehouseKey, string> = {
   PRZEMIALY: 'Zarządzanie przemiałami i przygotowaniem produkcji',
   CZESCI: 'Magazyn czesci zamiennych',
   RAPORT_ZMIANOWY: 'Raport zmianowy',
+  BILANS_PRZEZBROJEN: 'Bilans przezbrojen i personelu',
   PRZESUNIECIA_ERP: 'Przesuniecia magazynowe ERP'
 };
 
@@ -864,7 +868,9 @@ export default function AdminPage() {
         ? przemialyTabOptions
         : warehouseKey === 'RAPORT_ZMIANOWY'
           ? raportZmianowyTabOptions
-          : czesciTabOptions;
+          : warehouseKey === 'BILANS_PRZEZBROJEN'
+            ? bilansPrzezbrojenTabOptions
+            : czesciTabOptions;
     const visibleTabs =
       warehouseKey === 'CZESCI' && !canSeeHistory
         ? tabOptions.filter((tab) => tab.key !== 'historia')
@@ -2681,6 +2687,12 @@ export default function AdminPage() {
                     updatePermissionGroupFormAccess,
                     'ADMIN'
                   )}
+                  {renderWarehouseAccess(
+                    'BILANS_PRZEZBROJEN',
+                    permissionGroupForm.access,
+                    updatePermissionGroupFormAccess,
+                    'ADMIN'
+                  )}
                   {renderErpModuleAccess(
                     permissionGroupForm.access,
                     updatePermissionGroupFormAccess,
@@ -2829,6 +2841,12 @@ export default function AdminPage() {
                             (updater) => updatePermissionGroupDraftAccess(group.id, updater),
                             'ADMIN'
                           )}
+                          {renderWarehouseAccess(
+                            'BILANS_PRZEZBROJEN',
+                            draft.access,
+                            (updater) => updatePermissionGroupDraftAccess(group.id, updater),
+                            'ADMIN'
+                          )}
                           {renderErpModuleAccess(
                             draft.access,
                             (updater) => updatePermissionGroupDraftAccess(group.id, updater),
@@ -2913,6 +2931,10 @@ export default function AdminPage() {
                         }
                         if (nextRole === 'HEAD_ADMIN') {
                           nextAccess.warehouses.PRZEMIALY = getRolePreset('PRZEMIALY', 'ROZDZIELCA');
+                          nextAccess.warehouses.BILANS_PRZEZBROJEN = getRolePreset(
+                            'BILANS_PRZEZBROJEN',
+                            'ROZDZIELCA'
+                          );
                           nextAccess.warehouses.CZESCI = getRolePreset('CZESCI', 'MECHANIK');
                           nextAccess.warehouses.RAPORT_ZMIANOWY = getRolePreset(
                             'RAPORT_ZMIANOWY',
@@ -2964,6 +2986,12 @@ export default function AdminPage() {
                 <div className="grid gap-4 lg:grid-cols-2">
                   {renderWarehouseAccess(
                     'PRZEMIALY',
+                    userForm.access,
+                    updateUserFormAccess,
+                    userForm.role
+                  )}
+                  {renderWarehouseAccess(
+                    'BILANS_PRZEZBROJEN',
                     userForm.access,
                     updateUserFormAccess,
                     userForm.role
@@ -3060,6 +3088,10 @@ export default function AdminPage() {
                             }
                             if (nextRole === 'HEAD_ADMIN') {
                               nextAccess.warehouses.PRZEMIALY = getRolePreset('PRZEMIALY', 'ROZDZIELCA');
+                              nextAccess.warehouses.BILANS_PRZEZBROJEN = getRolePreset(
+                                'BILANS_PRZEZBROJEN',
+                                'ROZDZIELCA'
+                              );
                               nextAccess.warehouses.CZESCI = getRolePreset('CZESCI', 'MECHANIK');
                               nextAccess.warehouses.RAPORT_ZMIANOWY = getRolePreset(
                                 'RAPORT_ZMIANOWY',
@@ -3203,6 +3235,12 @@ export default function AdminPage() {
                           <div className="grid gap-4 lg:grid-cols-2">
                             {renderWarehouseAccess(
                               'PRZEMIALY',
+                              draft.access,
+                              (updater) => updateUserDraftAccess(item.id, updater),
+                              draft.role
+                            )}
+                            {renderWarehouseAccess(
+                              'BILANS_PRZEZBROJEN',
                               draft.access,
                               (updater) => updateUserDraftAccess(item.id, updater),
                               draft.role

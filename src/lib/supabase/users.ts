@@ -39,6 +39,7 @@ const validWarehouseKeys: WarehouseKey[] = [
   'PRZEMIALY',
   'CZESCI',
   'RAPORT_ZMIANOWY',
+  'BILANS_PRZEZBROJEN',
   'PRZESUNIECIA_ERP'
 ];
 const validWarehouseRoles: WarehouseRole[] = ['PODGLAD', 'MECHANIK', 'ROZDZIELCA'];
@@ -117,6 +118,18 @@ const normalizeAccessFromDb = (access: UserAccess | null | undefined): UserAcces
       .map(([key, value]) => [key, normalizeWarehouseAccess(value)])
       .filter(([, value]) => Boolean(value))
   ) as UserAccess['warehouses'];
+  const przemialyAccess = warehouses.PRZEMIALY;
+  if (
+    przemialyAccess?.tabs.includes('bilans-przezbrojen') &&
+    !warehouses.BILANS_PRZEZBROJEN
+  ) {
+    warehouses.BILANS_PRZEZBROJEN = {
+      role: przemialyAccess.role,
+      readOnly: przemialyAccess.readOnly,
+      tabs: ['bilans-przezbrojen'],
+      admin: Boolean(przemialyAccess.admin)
+    };
+  }
   return {
     admin: Boolean(source.admin),
     warehouses

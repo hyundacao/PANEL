@@ -4,6 +4,7 @@ export type WarehouseKey =
   | 'PRZEMIALY'
   | 'CZESCI'
   | 'RAPORT_ZMIANOWY'
+  | 'BILANS_PRZEZBROJEN'
   | 'PRZESUNIECIA_ERP';
 
 export type WarehouseRole = 'ROZDZIELCA' | 'MECHANIK' | 'PODGLAD';
@@ -22,6 +23,8 @@ export type CzesciTab = 'pobierz' | 'uzupelnij' | 'stany' | 'historia';
 
 export type RaportZmianowyTab = 'raport-zmianowy';
 
+export type BilansPrzezbrojenTab = 'bilans-przezbrojen';
+
 export type ErpTransfersTab =
   | 'erp-magazynier'
   | 'erp-rozdzielca'
@@ -33,6 +36,7 @@ export type WarehouseTab =
   | PrzemialyTab
   | CzesciTab
   | RaportZmianowyTab
+  | BilansPrzezbrojenTab
   | ErpTransfersTab;
 
 export type WarehouseAccess = {

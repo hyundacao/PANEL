@@ -27,6 +27,7 @@ const getTitle = (pathname: string) => {
   if (pathname.startsWith('/wymieszane')) return 'Wymieszane tworzywa';
   if (pathname.startsWith('/raporty')) return 'Raporty';
   if (pathname.startsWith('/kartoteka')) return 'Stany magazynowe';
+  if (pathname.startsWith('/bilans-przezbrojen')) return 'Bilans przezbrojeń';
   if (pathname.startsWith('/suszarki')) return 'Suszarki';
   if (pathname.startsWith('/czesci/historia')) return 'Historia';
   if (pathname.startsWith('/czesci/stany')) return 'Stany magazynowe';
@@ -41,6 +42,7 @@ const getTitle = (pathname: string) => {
 const getWarehouseFromPath = (pathname: string): WarehouseKey | null => {
   if (pathname.startsWith('/czesci')) return 'CZESCI';
   if (pathname.startsWith('/raport-zmianowy')) return 'RAPORT_ZMIANOWY';
+  if (pathname.startsWith('/bilans-przezbrojen')) return 'BILANS_PRZEZBROJEN';
   if (pathname.startsWith('/admin')) return null;
   return 'PRZEMIALY';
 };
@@ -52,6 +54,7 @@ const getTabFromPath = (pathname: string): WarehouseTab | null => {
   if (pathname.startsWith('/przesuniecia')) return 'przesuniecia';
   if (pathname.startsWith('/raporty')) return 'raporty';
   if (pathname.startsWith('/kartoteka')) return 'kartoteka';
+  if (pathname.startsWith('/bilans-przezbrojen')) return 'bilans-przezbrojen';
   if (pathname.startsWith('/wymieszane')) return 'wymieszane';
   if (pathname.startsWith('/suszarki')) return 'suszarki';
   if (pathname.startsWith('/czesci/pobierz')) return 'pobierz';
@@ -89,9 +92,14 @@ const navItemsRaport: MobileNavItem[] = [
   { label: 'Raport zmianowy', href: '/raport-zmianowy', tab: 'raport-zmianowy' }
 ];
 
+const navItemsBilans: MobileNavItem[] = [
+  { label: 'Bilans przezbrojeń', href: '/bilans-przezbrojen', tab: 'bilans-przezbrojen' }
+];
+
 const getModuleNavItems = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'CZESCI') return navItemsCzesci;
   if (warehouse === 'RAPORT_ZMIANOWY') return navItemsRaport;
+  if (warehouse === 'BILANS_PRZEZBROJEN') return navItemsBilans;
   return navItemsPrzemialy;
 };
 

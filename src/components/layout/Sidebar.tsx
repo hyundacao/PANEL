@@ -8,6 +8,7 @@ import {
   ClipboardCheck,
   FileText,
   Layers,
+  UsersRound,
   Shield,
   ArrowLeftRight,
   Shuffle,
@@ -67,6 +68,10 @@ const navItemsRaport: NavItem[] = [
   { label: 'Raport zmianowy', href: '/raport-zmianowy', icon: FileText, tab: 'raport-zmianowy' }
 ];
 
+const navItemsBilans: NavItem[] = [
+  { label: 'Bilans przezbrojeń', href: '/bilans-przezbrojen', icon: UsersRound, tab: 'bilans-przezbrojen' }
+];
+
 export const Sidebar = () => {
   const pathname = usePathname();
   const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse, clearActiveWarehouse } = useUiStore();
@@ -79,7 +84,9 @@ export const Sidebar = () => {
       ? navItemsCzesci
       : warehouse === 'RAPORT_ZMIANOWY'
         ? navItemsRaport
-        : navItemsPrzemialy;
+        : warehouse === 'BILANS_PRZEZBROJEN'
+          ? navItemsBilans
+          : navItemsPrzemialy;
   const visibleItems = items.filter((item) => {
     if (!warehouse) return false;
     if (item.requiresAdmin && !isWarehouseAdmin(user, warehouse)) {
@@ -111,9 +118,11 @@ export const Sidebar = () => {
         ? 'PANEL MAGAZYNU PRZEMIAŁÓW'
         : warehouse === 'RAPORT_ZMIANOWY'
           ? 'PANEL RAPORTU ZMIANOWEGO'
-          : warehouse === 'PRZESUNIECIA_ERP'
-            ? 'PANEL PRZESUNIĘĆ ERP'
-            : 'PANEL MODUŁU';
+          : warehouse === 'BILANS_PRZEZBROJEN'
+            ? 'PANEL BILANSU PRZEZBROJEŃ'
+            : warehouse === 'PRZESUNIECIA_ERP'
+              ? 'PANEL PRZESUNIĘĆ ERP'
+              : 'PANEL MODUŁU';
   const headerLabel = isAdminRoute && !isPrzemialyModuleManagementRoute ? 'MODUŁY' : warehouseLabel;
   const showHeaderLabel =
     (isAdminRoute && !isPrzemialyModuleManagementRoute) ||

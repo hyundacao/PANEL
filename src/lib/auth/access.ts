@@ -19,6 +19,7 @@ export const PRZEMIALY_TABS: WarehouseTab[] = [
 
 export const CZESCI_TABS: WarehouseTab[] = ['pobierz', 'uzupelnij', 'stany', 'historia'];
 export const RAPORT_ZMIANOWY_TABS: WarehouseTab[] = ['raport-zmianowy'];
+export const BILANS_PRZEZBROJEN_TABS: WarehouseTab[] = ['bilans-przezbrojen'];
 export const ERP_TRANSFERS_TABS: WarehouseTab[] = [
   'erp-magazynier',
   'erp-rozdzielca',
@@ -44,7 +45,7 @@ export const getAdminWarehouses = (
 ): WarehouseKey[] => {
   if (!user) return [];
   if (isHeadAdmin(user))
-    return ['PRZEMIALY', 'CZESCI', 'RAPORT_ZMIANOWY', 'PRZESUNIECIA_ERP'];
+    return ['PRZEMIALY', 'CZESCI', 'RAPORT_ZMIANOWY', 'BILANS_PRZEZBROJEN', 'PRZESUNIECIA_ERP'];
   if (user.role !== 'ADMIN') return [];
   return Object.entries(user.access.warehouses)
     .filter(([, value]) => Boolean(value?.admin))
@@ -68,7 +69,7 @@ export const getRoleLabel = (user: AppUser | null | undefined, warehouse: Wareho
 export const getAccessibleWarehouses = (user: AppUser | null | undefined): WarehouseKey[] => {
   if (!user) return [];
   if (isHeadAdmin(user))
-    return ['PRZEMIALY', 'CZESCI', 'RAPORT_ZMIANOWY', 'PRZESUNIECIA_ERP'];
+    return ['PRZEMIALY', 'CZESCI', 'RAPORT_ZMIANOWY', 'BILANS_PRZEZBROJEN', 'PRZESUNIECIA_ERP'];
   return Object.keys(user.access.warehouses) as WarehouseKey[];
 };
 
@@ -117,6 +118,12 @@ export const getRolePreset = (
     }
     return { role, readOnly: false, tabs: RAPORT_ZMIANOWY_TABS, admin: false };
   }
+  if (warehouse === 'BILANS_PRZEZBROJEN') {
+    if (role === 'PODGLAD') {
+      return { role, readOnly: true, tabs: BILANS_PRZEZBROJEN_TABS, admin: false };
+    }
+    return { role, readOnly: false, tabs: BILANS_PRZEZBROJEN_TABS, admin: false };
+  }
   if (warehouse === 'PRZESUNIECIA_ERP') {
     if (role === 'PODGLAD') {
       return { role, readOnly: true, tabs: ERP_TRANSFERS_TABS, admin: false };
@@ -148,6 +155,7 @@ export const getWarehouseLabel = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'PRZEMIALY')
     return 'Zarządzanie przemiałami i przygotowaniem produkcji';
   if (warehouse === 'RAPORT_ZMIANOWY') return 'Raport zmianowy';
+  if (warehouse === 'BILANS_PRZEZBROJEN') return 'Bilans przezbrojeń';
   if (warehouse === 'PRZESUNIECIA_ERP') return 'Przesunięcia magazynowe ERP';
   return 'Magazyn';
 };
