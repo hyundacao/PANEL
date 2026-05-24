@@ -399,6 +399,7 @@ export default function OriginalInventoryPage() {
   const [grindDialogMaterial, setGrindDialogMaterial] = useState<{
     name: string;
     unit: string;
+    availableQty: number | null;
   } | null>(null);
   const [grindQty, setGrindQty] = useState('');
   const [grindTargetMaterial, setGrindTargetMaterial] = useState('');
@@ -2458,7 +2459,11 @@ export default function OriginalInventoryPage() {
   const pendingGrindDocuments = buildGrindDocuments(pendingGrindTasks, 'pending');
   const doneGrindDocuments = buildGrindDocuments(doneGrindTasks, 'done');
   const openGrindDialog = (row: (typeof reportRows)[number]) => {
-    setGrindDialogMaterial({ name: row.name, unit: row.unit || 'kg' });
+    setGrindDialogMaterial({
+      name: row.name,
+      unit: row.unit || 'kg',
+      availableQty: row.currentAvailableErpQty
+    });
     setGrindQty('');
     setGrindTargetMaterial('');
     setShowGrindTargetSuggestions(false);
@@ -3659,6 +3664,38 @@ export default function OriginalInventoryPage() {
                   className="mt-1 min-h-[54px] text-xl font-black"
                   autoFocus
                 />
+                <Button
+                  type="button"
+                  onClick={() => {
+                    if (
+                      grindDialogMaterial.availableQty === null ||
+                      grindDialogMaterial.availableQty <= 0
+                    ) {
+                      toast({ title: 'Brak stanu do dyspozycji dla tej pozycji.', tone: 'error' });
+                      return;
+                    }
+                    setGrindQty(formatQty(grindDialogMaterial.availableQty));
+                  }}
+                  disabled={
+                    grindDialogMaterial.availableQty === null ||
+                    grindDialogMaterial.availableQty <= 0
+                  }
+                  className="mt-3 flex min-h-[54px] w-full items-center justify-between gap-3 rounded-xl border border-[rgba(255,122,26,0.58)] bg-[linear-gradient(135deg,rgba(255,122,26,0.22),rgba(255,122,26,0.06)_48%,rgba(0,0,0,0.24))] px-4 text-left shadow-[0_0_24px_rgba(255,122,26,0.12),inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-[rgba(255,122,26,0.88)] hover:bg-[linear-gradient(135deg,rgba(255,122,26,0.30),rgba(255,122,26,0.08)_48%,rgba(0,0,0,0.24))] disabled:opacity-45"
+                >
+                  <span>
+                    <span className="block text-[10px] font-black uppercase tracking-wide text-brand">
+                      Szybkie uzupelnienie
+                    </span>
+                    <span className="block text-sm font-black text-title">
+                      Dodaj caly stan do dyspozycji
+                    </span>
+                  </span>
+                  <span className="shrink-0 rounded-lg border border-[rgba(255,122,26,0.45)] bg-[rgba(255,122,26,0.16)] px-3 py-2 text-base font-black text-brand">
+                    {grindDialogMaterial.availableQty !== null
+                      ? `${formatQty(grindDialogMaterial.availableQty)} ${grindDialogMaterial.unit}`
+                      : '-'}
+                  </span>
+                </Button>
               </div>
               <div>
                 <label className="text-xs uppercase tracking-wide text-dim">
