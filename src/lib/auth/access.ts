@@ -20,6 +20,7 @@ export const PRZEMIALY_TABS: WarehouseTab[] = [
 export const CZESCI_TABS: WarehouseTab[] = ['pobierz', 'uzupelnij', 'stany', 'historia'];
 export const RAPORT_ZMIANOWY_TABS: WarehouseTab[] = ['raport-zmianowy'];
 export const BILANS_PRZEZBROJEN_TABS: WarehouseTab[] = ['bilans-przezbrojen'];
+export const FARBY_TASMY_TABS: WarehouseTab[] = ['rozliczanie-farb-tasm'];
 export const ERP_TRANSFERS_TABS: WarehouseTab[] = [
   'erp-magazynier',
   'erp-rozdzielca',
@@ -37,15 +38,33 @@ export const isWarehouseAdmin = (
 ) =>
   Boolean(
     isHeadAdmin(user) ||
-      (user?.role === 'ADMIN' && user?.access?.warehouses?.[warehouse]?.admin)
+      (user?.role === 'ADMIN' &&
+        (user?.access?.warehouses?.[warehouse]?.admin ||
+          (warehouse === 'FARBY_TASMY' && user?.access?.warehouses?.PRZEMIALY?.admin)))
   );
+
+const hasLegacyPaintTapeAccess = (user: AppUser | null | undefined) => {
+  if (!user) return false;
+  if (isHeadAdmin(user)) return true;
+  if (user.access.warehouses.FARBY_TASMY) return true;
+  if (user.role === 'ADMIN' && user.access.warehouses.PRZEMIALY?.admin) return true;
+  return Boolean(user.access.warehouses.PRZEMIALY?.tabs?.includes('spis-oryginalow'));
+};
+
+const allWarehouseKeys: WarehouseKey[] = [
+  'PRZEMIALY',
+  'FARBY_TASMY',
+  'CZESCI',
+  'RAPORT_ZMIANOWY',
+  'BILANS_PRZEZBROJEN',
+  'PRZESUNIECIA_ERP'
+];
 
 export const getAdminWarehouses = (
   user: AppUser | null | undefined
 ): WarehouseKey[] => {
   if (!user) return [];
-  if (isHeadAdmin(user))
-    return ['PRZEMIALY', 'CZESCI', 'RAPORT_ZMIANOWY', 'BILANS_PRZEZBROJEN', 'PRZESUNIECIA_ERP'];
+  if (isHeadAdmin(user)) return allWarehouseKeys;
   if (user.role !== 'ADMIN') return [];
   return Object.entries(user.access.warehouses)
     .filter(([, value]) => Boolean(value?.admin))
@@ -68,9 +87,10 @@ export const getRoleLabel = (user: AppUser | null | undefined, warehouse: Wareho
 
 export const getAccessibleWarehouses = (user: AppUser | null | undefined): WarehouseKey[] => {
   if (!user) return [];
-  if (isHeadAdmin(user))
-    return ['PRZEMIALY', 'CZESCI', 'RAPORT_ZMIANOWY', 'BILANS_PRZEZBROJEN', 'PRZESUNIECIA_ERP'];
-  return Object.keys(user.access.warehouses) as WarehouseKey[];
+  if (isHeadAdmin(user)) return allWarehouseKeys;
+  const keys = new Set(Object.keys(user.access.warehouses) as WarehouseKey[]);
+  if (hasLegacyPaintTapeAccess(user)) keys.add('FARBY_TASMY');
+  return [...keys];
 };
 
 export const canAccessWarehouse = (
@@ -79,6 +99,7 @@ export const canAccessWarehouse = (
 ) => {
   if (!user) return false;
   if (isHeadAdmin(user)) return true;
+  if (warehouse === 'FARBY_TASMY') return hasLegacyPaintTapeAccess(user);
   return Boolean(user.access.warehouses[warehouse]);
 };
 
@@ -89,6 +110,10 @@ export const canSeeTab = (
 ) => {
   if (!user) return false;
   if (isHeadAdmin(user) || isWarehouseAdmin(user, warehouse)) return true;
+  if (warehouse === 'FARBY_TASMY') {
+    if (tab !== 'rozliczanie-farb-tasm') return false;
+    return hasLegacyPaintTapeAccess(user);
+  }
   if (warehouse === 'CZESCI' && tab === 'historia') return false;
   return Boolean(user.access.warehouses[warehouse]?.tabs?.includes(tab));
 };
@@ -99,6 +124,13 @@ export const isReadOnly = (
 ) => {
   if (!user) return true;
   if (isHeadAdmin(user) || isWarehouseAdmin(user, warehouse)) return false;
+  if (warehouse === 'FARBY_TASMY') {
+    return (
+      user.access.warehouses.FARBY_TASMY?.readOnly ??
+      user.access.warehouses.PRZEMIALY?.readOnly ??
+      true
+    );
+  }
   return user.access.warehouses[warehouse]?.readOnly ?? true;
 };
 
@@ -123,6 +155,12 @@ export const getRolePreset = (
       return { role, readOnly: true, tabs: BILANS_PRZEZBROJEN_TABS, admin: false };
     }
     return { role, readOnly: false, tabs: BILANS_PRZEZBROJEN_TABS, admin: false };
+  }
+  if (warehouse === 'FARBY_TASMY') {
+    if (role === 'PODGLAD') {
+      return { role, readOnly: true, tabs: FARBY_TASMY_TABS, admin: false };
+    }
+    return { role, readOnly: false, tabs: FARBY_TASMY_TABS, admin: false };
   }
   if (warehouse === 'PRZESUNIECIA_ERP') {
     if (role === 'PODGLAD') {
@@ -154,6 +192,7 @@ export const getWarehouseLabel = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'CZESCI') return 'Magazyn części zamiennych';
   if (warehouse === 'PRZEMIALY')
     return 'Zarządzanie przemiałami i przygotowaniem produkcji';
+  if (warehouse === 'FARBY_TASMY') return 'Rozliczanie farb i taśm';
   if (warehouse === 'RAPORT_ZMIANOWY') return 'Raport zmianowy';
   if (warehouse === 'BILANS_PRZEZBROJEN') return 'Bilans przezbrojeń';
   if (warehouse === 'PRZESUNIECIA_ERP') return 'Przesunięcia magazynowe ERP';

@@ -2,6 +2,7 @@ export type Role = 'VIEWER' | 'USER' | 'ADMIN' | 'HEAD_ADMIN';
 
 export type WarehouseKey =
   | 'PRZEMIALY'
+  | 'FARBY_TASMY'
   | 'CZESCI'
   | 'RAPORT_ZMIANOWY'
   | 'BILANS_PRZEZBROJEN'
@@ -25,6 +26,8 @@ export type RaportZmianowyTab = 'raport-zmianowy';
 
 export type BilansPrzezbrojenTab = 'bilans-przezbrojen';
 
+export type FarbyTasmyTab = 'rozliczanie-farb-tasm';
+
 export type ErpTransfersTab =
   | 'erp-magazynier'
   | 'erp-rozdzielca'
@@ -34,6 +37,7 @@ export type ErpTransfersTab =
 
 export type WarehouseTab =
   | PrzemialyTab
+  | FarbyTasmyTab
   | CzesciTab
   | RaportZmianowyTab
   | BilansPrzezbrojenTab
@@ -240,6 +244,35 @@ export type OriginalInventoryErpSnapshotImportResult = {
   inserted: number;
   replaced: number;
   snapshotDate: string;
+};
+
+export type PaintTapeSettlementStatus = 'OPEN' | 'DETAILS_REQUIRED' | 'DONE';
+
+export type PaintTapeSettlementIssue = {
+  id: string;
+  createdAt: string;
+  createdBy: string;
+  qty: number;
+};
+
+export type PaintTapeSettlement = {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  orderNumber: string;
+  detailName: string;
+  itemName: string;
+  itemIndexCode?: string | null;
+  unit: string;
+  startQty: number;
+  warehouseIssuedQty: number;
+  warehouseIssuedIssues: PaintTapeSettlementIssue[];
+  endQty?: number | null;
+  producedQty?: number | null;
+  usageQty?: number | null;
+  usagePerPiece?: number | null;
+  status: PaintTapeSettlementStatus;
 };
 
 export type DashboardSummary = {

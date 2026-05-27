@@ -30,6 +30,7 @@ import type {
   OriginalInventoryGrindTask,
   OriginalInventorySiloConfig,
   OriginalInventorySiloEntry,
+  PaintTapeSettlement,
   PermissionGroup,
   PeriodReport,
   ReportRow,
@@ -754,6 +755,44 @@ export const removeOriginalInventory = async (entryId: string) =>
 
 export const removeOriginalInventoryCatalog = async (catalogId: string) =>
   appRequest('removeOriginalInventoryCatalog', { catalogId });
+
+export const getPaintTapeSettlements = async (): Promise<PaintTapeSettlement[]> =>
+  appRequest('getPaintTapeSettlements');
+
+export const getProductionDetailSuggestions = async (): Promise<string[]> =>
+  appRequest('getProductionDetailSuggestions');
+
+export const createPaintTapeSettlement = async (payload: {
+  orderNumber: string;
+  detailName: string;
+  itemName: string;
+  itemIndexCode?: string | null;
+  unit?: string;
+  startQty: number;
+  warehouseIssuedQty?: number;
+}): Promise<PaintTapeSettlement> => appRequest('createPaintTapeSettlement', payload);
+
+export const updatePaintTapeSettlement = async (payload: {
+  id: string;
+  orderNumber?: string;
+  detailName?: string;
+  itemName?: string;
+  itemIndexCode?: string | null;
+  unit?: string;
+  startQty?: number;
+  warehouseIssuedQty?: number;
+  endQty?: number | null;
+  producedQty?: number | null;
+  reopen?: boolean;
+}): Promise<PaintTapeSettlement> => appRequest('updatePaintTapeSettlement', payload);
+
+export const addPaintTapeSettlementIssue = async (payload: {
+  settlementId: string;
+  qty: number;
+}): Promise<PaintTapeSettlement> => appRequest('addPaintTapeSettlementIssue', payload);
+
+export const removePaintTapeSettlement = async (id: string): Promise<void> =>
+  appRequest('removePaintTapeSettlement', { id });
 
 export const addSparePart = async (payload: {
   code: string;

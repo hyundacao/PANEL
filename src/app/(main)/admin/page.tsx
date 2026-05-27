@@ -185,6 +185,7 @@ const erpModuleTabOptions: Array<{ key: WarehouseTab; label: string }> = [
 ];
 const warehouseLabels: Record<WarehouseKey, string> = {
   PRZEMIALY: 'Zarządzanie przemiałami i przygotowaniem produkcji',
+  FARBY_TASMY: 'Rozliczanie farb i taśm',
   CZESCI: 'Magazyn czesci zamiennych',
   RAPORT_ZMIANOWY: 'Raport zmianowy',
   BILANS_PRZEZBROJEN: 'Bilans przezbrojen i personelu',

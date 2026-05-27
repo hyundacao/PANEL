@@ -14,7 +14,8 @@ import {
   Shuffle,
   Wind,
   LogOut,
-  History
+  History,
+  Droplets
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useUiStore } from '@/lib/store/ui';
@@ -72,6 +73,15 @@ const navItemsBilans: NavItem[] = [
   { label: 'Bilans przezbrojeń', href: '/bilans-przezbrojen', icon: UsersRound, tab: 'bilans-przezbrojen' }
 ];
 
+const navItemsFarbyTasmy: NavItem[] = [
+  {
+    label: 'Rozliczanie farb i taśm',
+    href: '/rozliczanie-farb-tasm',
+    icon: Droplets,
+    tab: 'rozliczanie-farb-tasm'
+  }
+];
+
 export const Sidebar = () => {
   const pathname = usePathname();
   const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse, clearActiveWarehouse } = useUiStore();
@@ -86,7 +96,9 @@ export const Sidebar = () => {
         ? navItemsRaport
         : warehouse === 'BILANS_PRZEZBROJEN'
           ? navItemsBilans
-          : navItemsPrzemialy;
+          : warehouse === 'FARBY_TASMY'
+            ? navItemsFarbyTasmy
+            : navItemsPrzemialy;
   const visibleItems = items.filter((item) => {
     if (!warehouse) return false;
     if (item.requiresAdmin && !isWarehouseAdmin(user, warehouse)) {
@@ -105,6 +117,9 @@ export const Sidebar = () => {
     if (href === '/spis-oryginalow') {
       return pathname === '/spis-oryginalow' || pathname.startsWith('/spis-oryginalow/');
     }
+    if (href === '/rozliczanie-farb-tasm') {
+      return pathname === '/rozliczanie-farb-tasm' || pathname.startsWith('/rozliczanie-farb-tasm/');
+    }
     if (href === '/przesuniecia') {
       return pathname === '/przesuniecia' || pathname.startsWith('/przesuniecia/');
     }
@@ -116,6 +131,8 @@ export const Sidebar = () => {
       ? 'PANEL MAGAZYNU CZĘŚCI ZAMIENNYCH'
       : warehouse === 'PRZEMIALY'
         ? 'PANEL MAGAZYNU PRZEMIAŁÓW'
+        : warehouse === 'FARBY_TASMY'
+          ? 'PANEL ROZLICZANIA FARB I TAŚM'
         : warehouse === 'RAPORT_ZMIANOWY'
           ? 'PANEL RAPORTU ZMIANOWEGO'
           : warehouse === 'BILANS_PRZEZBROJEN'
@@ -126,7 +143,7 @@ export const Sidebar = () => {
   const headerLabel = isAdminRoute && !isPrzemialyModuleManagementRoute ? 'MODUŁY' : warehouseLabel;
   const showHeaderLabel =
     (isAdminRoute && !isPrzemialyModuleManagementRoute) ||
-    (warehouse !== 'CZESCI' && warehouse !== 'PRZEMIALY');
+    (warehouse !== 'CZESCI' && warehouse !== 'PRZEMIALY' && warehouse !== 'FARBY_TASMY');
   const closeOnMobile = () => {
     if (typeof window === 'undefined') return;
     if (window.matchMedia('(max-width: 767px)').matches) {

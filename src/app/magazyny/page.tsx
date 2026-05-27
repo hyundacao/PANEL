@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import {
   ArrowLeftRight,
   Boxes,
+  Droplets,
   FileText,
   Gauge,
   Shield,
@@ -62,6 +63,18 @@ const moduleOptions: ModuleOption[] = [
     tags: ['Produkcja', 'Statystyki'],
     keywords: ['hala', 'spis', 'raporty', 'kartoteka', 'suszarki', 'wymieszane'],
     icon: Boxes
+  },
+  {
+    id: 'farby-tasmy',
+    key: 'FARBY_TASMY',
+    requiredTabs: ['rozliczanie-farb-tasm'],
+    title: 'Rozliczanie farb i taśm',
+    description: 'Rozliczanie zużycia po zleceniach: stan przed, pobrania z magazynu, stan po i ilość detali.',
+    action: 'Wejdź',
+    href: '/rozliczanie-farb-tasm',
+    tags: ['Produkcja', 'Farby i taśmy'],
+    keywords: ['farby', 'taśmy', 'rozliczanie', 'zlecenia', 'zużycie', 'detale', 'erp'],
+    icon: Droplets
   },
   {
     id: 'bilans-przezbrojen',

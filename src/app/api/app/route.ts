@@ -46,6 +46,9 @@ import type {
   OriginalInventoryGrindTask,
   OriginalInventorySiloConfig,
   OriginalInventorySiloEntry,
+  PaintTapeSettlementIssue,
+  PaintTapeSettlement,
+  PaintTapeSettlementStatus,
   PeriodReport,
   RaportZmianowyEntry,
   RaportZmianowyEntryLog,
@@ -476,6 +479,73 @@ const mapOriginalInventoryGrindTask = (row: any): OriginalInventoryGrindTask => 
   completedAt: row.completed_at ?? null
 });
 
+const calculatePaintTapeStatus = (
+  endQty: number | null | undefined,
+  producedQty: number | null | undefined
+): PaintTapeSettlementStatus => {
+  if (endQty === null || endQty === undefined) return 'OPEN';
+  if (producedQty === null || producedQty === undefined || producedQty <= 0) {
+    return 'DETAILS_REQUIRED';
+  }
+  return 'DONE';
+};
+
+const normalizePaintTapeStatus = (
+  status: unknown,
+  endQty: number | null | undefined,
+  producedQty: number | null | undefined
+): PaintTapeSettlementStatus => {
+  if (status === 'OPEN' || status === 'DETAILS_REQUIRED' || status === 'DONE') {
+    return status;
+  }
+  return calculatePaintTapeStatus(endQty, producedQty);
+};
+
+const mapPaintTapeSettlementIssue = (row: any): PaintTapeSettlementIssue => ({
+  id: String(row.id),
+  createdAt: row.created_at ?? new Date().toISOString(),
+  createdBy: String(row.created_by ?? '').trim() || 'nieznany',
+  qty: toNumber(row.qty)
+});
+
+const mapPaintTapeSettlement = (
+  row: any,
+  issueRows: any[] = []
+): PaintTapeSettlement => {
+  const startQty = toNumber(row.start_qty);
+  const warehouseIssuedIssues = issueRows.map(mapPaintTapeSettlementIssue);
+  const warehouseIssuedQty =
+    warehouseIssuedIssues.length > 0
+      ? warehouseIssuedIssues.reduce((sum, issue) => sum + issue.qty, 0)
+      : toNumber(row.warehouse_issued_qty);
+  const endQty = row.end_qty === null || row.end_qty === undefined ? null : toNumber(row.end_qty);
+  const producedQty =
+    row.produced_qty === null || row.produced_qty === undefined ? null : toNumber(row.produced_qty);
+  const usageQty = endQty === null ? null : Math.max(0, startQty + warehouseIssuedQty - endQty);
+  const usagePerPiece =
+    usageQty !== null && producedQty !== null && producedQty > 0 ? usageQty / producedQty : null;
+
+  return {
+    id: String(row.id),
+    createdAt: row.created_at ?? new Date().toISOString(),
+    updatedAt: row.updated_at ?? row.created_at ?? new Date().toISOString(),
+    createdBy: String(row.created_by ?? '').trim() || 'nieznany',
+    orderNumber: String(row.order_number ?? '').trim(),
+    detailName: String(row.detail_name ?? '').trim(),
+    itemName: String(row.item_name ?? '').trim(),
+    itemIndexCode: row.item_index_code ? String(row.item_index_code).trim() : null,
+    unit: String(row.unit ?? '').trim() || 'kg',
+    startQty,
+    warehouseIssuedQty,
+    warehouseIssuedIssues,
+    endQty,
+    producedQty,
+    usageQty,
+    usagePerPiece,
+    status: normalizePaintTapeStatus(row.status, endQty, producedQty)
+  };
+};
+
 const mapRaportZmianowySession = (row: any): RaportZmianowySession => ({
   id: row.id,
   createdAt: row.created_at,
@@ -641,6 +711,8 @@ const statusCodeFromError = (code: string) => {
   if (code === 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED') return 503;
   if (code === 'ERP_ORIGINALS_PROXY_UNAUTHORIZED') return 403;
   if (code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS') return 503;
+  if (code === 'MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENTS') return 503;
+  if (code === 'SETTLEMENT_DONE_LOCKED') return 409;
   if (
     code === 'ERP_ORIGINALS_PROXY_UNAVAILABLE' ||
     code === 'ERP_ORIGINALS_PROXY_TIMEOUT' ||
@@ -718,6 +790,14 @@ const requireTabWriteAccess = (
   if (isReadOnly(user, warehouse)) {
     throw new Error('FORBIDDEN');
   }
+};
+
+const requireOriginalInventoryOrPaintTapeReadAccess = (
+  user: AppUser,
+  przemialyTabs: WarehouseTab[] = ['spis-oryginalow']
+) => {
+  if (canSeeTab(user, 'FARBY_TASMY', 'rozliczanie-farb-tasm')) return;
+  requireAnyTabAccess(user, 'PRZEMIALY', przemialyTabs);
 };
 
 const requireWarehouseAdminAccess = (user: AppUser, warehouse: WarehouseKey) => {
@@ -860,19 +940,21 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'getOriginalInventorySilosConfig':
     case 'getOriginalInventorySiloEntries':
     case 'getOriginalInventoryGrindTasks':
-      requireAnyTabAccess(user, 'PRZEMIALY', [
+    case 'getPaintTapeSettlements':
+    case 'getProductionDetailSuggestions':
+      requireOriginalInventoryOrPaintTapeReadAccess(user, [
         'spis-oryginalow',
         'suszarki'
       ]);
       return;
     case 'getOriginalInventoryCatalogFromErp':
-      requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      requireOriginalInventoryOrPaintTapeReadAccess(user);
       return;
     case 'getOriginalInventoryErpSnapshot':
-      requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      requireOriginalInventoryOrPaintTapeReadAccess(user);
       return;
     case 'getOriginalInventoryErpSnapshotsByDates':
-      requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      requireOriginalInventoryOrPaintTapeReadAccess(user);
       return;
     case 'addOriginalInventory':
     case 'saveOriginalInventorySiloEntry':
@@ -881,6 +963,12 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'completeOriginalInventoryGrindTasks':
     case 'reopenOriginalInventoryGrindTasks':
       requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      return;
+    case 'createPaintTapeSettlement':
+    case 'updatePaintTapeSettlement':
+    case 'addPaintTapeSettlementIssue':
+    case 'removePaintTapeSettlement':
+      requireTabWriteAccess(user, 'FARBY_TASMY', ['rozliczanie-farb-tasm']);
       return;
     case 'addOriginalInventoryCatalog':
       requireTabWriteAccess(user, 'PRZEMIALY', [
@@ -1035,6 +1123,10 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'updateOriginalInventory',
   'removeOriginalInventory',
   'removeOriginalInventoryCatalog',
+  'createPaintTapeSettlement',
+  'updatePaintTapeSettlement',
+  'addPaintTapeSettlementIssue',
+  'removePaintTapeSettlement',
   'addSparePart',
   'updateSparePart',
   'removeSparePart',
@@ -1135,6 +1227,10 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   saveOriginalInventorySiloEntry: 'Spis oryginalow: zapis silosa',
   updateOriginalInventory: 'Spis oryginalow: aktualizacja wpisu',
   removeOriginalInventory: 'Spis oryginalow: usuniecie wpisu',
+  createPaintTapeSettlement: 'Rozliczanie farb i tasm: nowe zlecenie',
+  updatePaintTapeSettlement: 'Rozliczanie farb i tasm: aktualizacja zlecenia',
+  addPaintTapeSettlementIssue: 'Rozliczanie farb i tasm: ruch pobrania z magazynu',
+  removePaintTapeSettlement: 'Rozliczanie farb i tasm: usuniecie zlecenia',
   addSparePart: 'Czesci: dodanie pozycji',
   updateSparePart: 'Czesci: aktualizacja pozycji',
   removeSparePart: 'Czesci: usuniecie pozycji',
@@ -1768,6 +1864,103 @@ const isMissingOriginalInventoryGrindTasksTableError = (error: unknown) => {
   const text =
     error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error ?? '');
   return text.includes('original_inventory_grind_tasks');
+};
+
+const isMissingPaintTapeSettlementsTableError = (error: unknown) => {
+  const text =
+    error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error ?? '');
+  return (
+    text.includes('paint_tape_settlements') ||
+    text.includes('paint_tape_settlement_issues') ||
+    text.includes('42P01')
+  );
+};
+
+const isMissingOptionalDetailSourceTableError = (error: unknown) => {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown };
+  if (String(candidate.code ?? '').trim() === '42P01') return true;
+  const text =
+    error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error ?? '');
+  return (
+    text.includes('paint_tape_settlements') ||
+    text.includes('raport_zmianowy_items') ||
+    text.includes('warehouse_transfer_document_items') ||
+    text.includes('PGRST205')
+  );
+};
+
+const isFormIndexLikeDetail = (value: unknown) =>
+  String(value ?? '').trim().toUpperCase().startsWith('FW');
+
+const isFwpIndex = (value: unknown) =>
+  String(value ?? '').trim().toUpperCase().startsWith('FWP');
+
+const cleanProductionDetailSuggestion = (value: unknown) =>
+  String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^FWP?[-\s]+/i, '')
+    .replace(/^FW[-\s]+/i, '')
+    .trim();
+
+const addProductionDetailSuggestion = (
+  target: Map<string, string>,
+  value: unknown,
+  indexCode?: unknown
+) => {
+  const text = cleanProductionDetailSuggestion(value);
+  if (!text || isFormIndexLikeDetail(text)) return;
+  const index = String(indexCode ?? '').replace(/\s+/g, ' ').trim();
+  if (isFwpIndex(index)) return;
+  const label =
+    index && !normalizeTargetLocationFilterToken(text).includes(normalizeTargetLocationFilterToken(index))
+      ? `${text} (${index})`
+      : text;
+  if (!isSingleDetailSuggestion(label)) return;
+  const key = label.toLocaleLowerCase('pl-PL');
+  if (!target.has(key)) target.set(key, label);
+};
+
+const countDetailIndices = (value: string) => {
+  const matches = value.match(/\([^)]+\)/g) ?? [];
+  return matches.filter((match) => /\d/.test(match)).length;
+};
+
+const isSingleDetailSuggestion = (value: string) => {
+  if (value.includes(' / ')) return false;
+  return countDetailIndices(value) <= 1;
+};
+
+const hasLowPriorityToolingMarker = (value: string) => /\bM[-\s]?(1|10|13)\b/i.test(value);
+
+const compareProductionDetailSuggestions = (a: string, b: string) => {
+  const aLowPriority = hasLowPriorityToolingMarker(a);
+  const bLowPriority = hasLowPriorityToolingMarker(b);
+  if (aLowPriority !== bLowPriority) return aLowPriority ? 1 : -1;
+  return a.localeCompare(b, 'pl', { sensitivity: 'base', numeric: true });
+};
+
+const getPaintTapeSettlementIssueMap = async (settlementIds: string[]) => {
+  const issueMap = new Map<string, any[]>();
+  if (settlementIds.length === 0) return issueMap;
+  const { data, error } = await supabaseAdmin
+    .from('paint_tape_settlement_issues')
+    .select('*')
+    .in('settlement_id', settlementIds)
+    .order('created_at', { ascending: true });
+  if (error) {
+    if (isMissingPaintTapeSettlementsTableError(error)) return issueMap;
+    throw error;
+  }
+  (data ?? []).forEach((row: any) => {
+    const settlementId = String(row.settlement_id ?? '');
+    if (!settlementId) return;
+    const list = issueMap.get(settlementId) ?? [];
+    list.push(row);
+    issueMap.set(settlementId, list);
+  });
+  return issueMap;
 };
 
 const isWarehouseIdNotNullError = (error: unknown) => {
@@ -5651,6 +5844,359 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         throw error;
       }
       return (data ?? []).map(mapOriginalInventoryGrindTask);
+    }
+    case 'getPaintTapeSettlements': {
+      const { data, error } = await supabaseAdmin
+        .from('paint_tape_settlements')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) {
+        if (isMissingPaintTapeSettlementsTableError(error)) return [];
+        throw error;
+      }
+      const rows = data ?? [];
+      const issueMap = await getPaintTapeSettlementIssueMap(rows.map((row: any) => String(row.id)));
+      return rows.map((row: any) => mapPaintTapeSettlement(row, issueMap.get(String(row.id)) ?? []));
+    }
+    case 'getProductionDetailSuggestions': {
+      const suggestions = new Map<string, string>();
+
+      const settlementDetails = await supabaseAdmin
+        .from('paint_tape_settlements')
+        .select('detail_name')
+        .order('detail_name', { ascending: true });
+      if (settlementDetails.error && !isMissingOptionalDetailSourceTableError(settlementDetails.error)) {
+        throw settlementDetails.error;
+      }
+      (settlementDetails.data ?? []).forEach((row: any) =>
+        addProductionDetailSuggestion(suggestions, row.detail_name)
+      );
+
+      const reportItems = await supabaseAdmin
+        .from('raport_zmianowy_items')
+        .select('index_code, description')
+        .order('description', { ascending: true });
+      if (reportItems.error && !isMissingOptionalDetailSourceTableError(reportItems.error)) {
+        throw reportItems.error;
+      }
+      (reportItems.data ?? []).forEach((row: any) => {
+        addProductionDetailSuggestion(suggestions, row.description, row.index_code);
+      });
+
+      const transferItems = await supabaseAdmin
+        .from('warehouse_transfer_document_items')
+        .select('index_code, index_code2, name')
+        .order('name', { ascending: true });
+      if (transferItems.error && !isMissingOptionalDetailSourceTableError(transferItems.error)) {
+        throw transferItems.error;
+      }
+      (transferItems.data ?? []).forEach((row: any) => {
+        addProductionDetailSuggestion(suggestions, row.name, row.index_code);
+      });
+
+      const originalCatalogRows = await supabaseAdmin
+        .from('original_inventory_catalog')
+        .select('name, index_code')
+        .order('name', { ascending: true });
+      if (
+        originalCatalogRows.error &&
+        !isMissingOptionalDetailSourceTableError(originalCatalogRows.error)
+      ) {
+        throw originalCatalogRows.error;
+      }
+      (originalCatalogRows.data ?? []).forEach((row: any) => {
+        addProductionDetailSuggestion(suggestions, row.name, row.index_code);
+      });
+
+      const originalSnapshotRows = await supabaseAdmin
+        .from('original_inventory_erp_snapshots')
+        .select('name, index_code')
+        .order('name', { ascending: true });
+      if (
+        originalSnapshotRows.error &&
+        !isMissingOptionalDetailSourceTableError(originalSnapshotRows.error)
+      ) {
+        throw originalSnapshotRows.error;
+      }
+      (originalSnapshotRows.data ?? []).forEach((row: any) => {
+        addProductionDetailSuggestion(suggestions, row.name, row.index_code);
+      });
+
+      const materialRows = await supabaseAdmin
+        .from('materials')
+        .select('code, name, material_catalogs(name)')
+        .order('name', { ascending: true });
+      if (materialRows.error && !isMissingOptionalDetailSourceTableError(materialRows.error)) {
+        throw materialRows.error;
+      }
+      (materialRows.data ?? []).forEach((row: any) => {
+        addProductionDetailSuggestion(suggestions, row.name, row.code);
+        addProductionDetailSuggestion(suggestions, row.material_catalogs?.name, row.code);
+      });
+
+      return [...suggestions.values()].sort((a, b) =>
+        compareProductionDetailSuggestions(a, b)
+      );
+    }
+    case 'createPaintTapeSettlement': {
+      const orderNumber = String(payload?.orderNumber ?? '').trim();
+      const detailName = String(payload?.detailName ?? '').trim();
+      const itemName = String(payload?.itemName ?? '').trim();
+      const itemIndexCode = String(payload?.itemIndexCode ?? '').trim() || null;
+      const unit = String(payload?.unit ?? '').trim() || 'kg';
+      const startQty = toNumber(payload?.startQty);
+      const warehouseIssuedQty = Math.max(0, toNumber(payload?.warehouseIssuedQty ?? 0));
+      if (!orderNumber) throw new Error('ORDER_REQUIRED');
+      if (!detailName) throw new Error('DETAIL_REQUIRED');
+      if (!itemName) throw new Error('ITEM_REQUIRED');
+      if (!Number.isFinite(startQty) || startQty < 0) throw new Error('QTY_REQUIRED');
+      const now = new Date().toISOString();
+      const { data, error } = await supabaseAdmin
+        .from('paint_tape_settlements')
+        .insert({
+          id: randomUUID(),
+          created_at: now,
+          updated_at: now,
+          created_by: getActorName(currentUser),
+          order_number: orderNumber,
+          detail_name: detailName,
+          item_name: itemName,
+          item_index_code: itemIndexCode,
+          unit,
+          start_qty: startQty,
+          warehouse_issued_qty: warehouseIssuedQty,
+          end_qty: null,
+          produced_qty: null,
+          status: 'OPEN'
+        })
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (isMissingPaintTapeSettlementsTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENTS');
+        }
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      const issueRows: any[] = [];
+      if (warehouseIssuedQty > 0) {
+        const { data: issueData, error: issueError } = await supabaseAdmin
+          .from('paint_tape_settlement_issues')
+          .insert({
+            id: randomUUID(),
+            settlement_id: data.id,
+            qty: warehouseIssuedQty,
+            created_at: now,
+            created_by: getActorName(currentUser)
+          })
+          .select('*')
+          .maybeSingle();
+        if (issueError) {
+          if (isMissingPaintTapeSettlementsTableError(issueError)) {
+            throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENTS');
+          }
+          throw issueError;
+        }
+        if (issueData) issueRows.push(issueData);
+      }
+      return mapPaintTapeSettlement(data, issueRows);
+    }
+    case 'addPaintTapeSettlementIssue': {
+      const settlementId = String(payload?.settlementId ?? '').trim();
+      const qty = toNumber(payload?.qty);
+      if (!settlementId) throw new Error('NOT_FOUND');
+      if (!Number.isFinite(qty) || qty === 0) throw new Error('QTY_REQUIRED');
+
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('paint_tape_settlements')
+        .select('*')
+        .eq('id', settlementId)
+        .maybeSingle();
+      if (existingError) {
+        if (isMissingPaintTapeSettlementsTableError(existingError)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENTS');
+        }
+        throw existingError;
+      }
+      if (!existing) throw new Error('NOT_FOUND');
+      if (normalizePaintTapeStatus(existing.status, existing.end_qty, existing.produced_qty) === 'DONE') {
+        throw new Error('SETTLEMENT_DONE_LOCKED');
+      }
+
+      const issueMap = await getPaintTapeSettlementIssueMap([settlementId]);
+      const existingIssues = issueMap.get(settlementId) ?? [];
+      const currentIssuedQty =
+        existingIssues.length > 0
+          ? existingIssues.reduce((sum, row) => sum + toNumber(row.qty), 0)
+          : toNumber(existing.warehouse_issued_qty);
+      const nextIssuedQty = currentIssuedQty + qty;
+      if (nextIssuedQty < 0) throw new Error('QTY_REQUIRED');
+
+      const now = new Date().toISOString();
+      const { data: issueData, error: issueError } = await supabaseAdmin
+        .from('paint_tape_settlement_issues')
+        .insert({
+          id: randomUUID(),
+          settlement_id: settlementId,
+          qty,
+          created_at: now,
+          created_by: getActorName(currentUser)
+        })
+        .select('*')
+        .maybeSingle();
+      if (issueError) {
+        if (isMissingPaintTapeSettlementsTableError(issueError)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENTS');
+        }
+        throw issueError;
+      }
+
+      const nextStatus = calculatePaintTapeStatus(existing.end_qty, existing.produced_qty);
+      const { data, error } = await supabaseAdmin
+        .from('paint_tape_settlements')
+        .update({
+          warehouse_issued_qty: nextIssuedQty,
+          updated_at: now,
+          status: nextStatus
+        })
+        .eq('id', settlementId)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapPaintTapeSettlement(data, [...existingIssues, issueData].filter(Boolean));
+    }
+    case 'updatePaintTapeSettlement': {
+      const id = String(payload?.id ?? '').trim();
+      if (!id) throw new Error('NOT_FOUND');
+
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('paint_tape_settlements')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (existingError) {
+        if (isMissingPaintTapeSettlementsTableError(existingError)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENTS');
+        }
+        throw existingError;
+      }
+      if (!existing) throw new Error('NOT_FOUND');
+
+      const currentStatus = normalizePaintTapeStatus(existing.status, existing.end_qty, existing.produced_qty);
+      const isDoneReopen =
+        currentStatus === 'DONE' &&
+        payload?.reopen === true &&
+        Object.keys(payload ?? {}).every((key) => key === 'id' || key === 'reopen');
+      if (currentStatus === 'DONE' && !isDoneReopen) {
+        throw new Error('SETTLEMENT_DONE_LOCKED');
+      }
+
+      const updates: Record<string, unknown> = {
+        updated_at: new Date().toISOString()
+      };
+      if (payload?.orderNumber !== undefined) {
+        const orderNumber = String(payload.orderNumber ?? '').trim();
+        if (!orderNumber) throw new Error('ORDER_REQUIRED');
+        updates.order_number = orderNumber;
+      }
+      if (payload?.detailName !== undefined) {
+        const detailName = String(payload.detailName ?? '').trim();
+        if (!detailName) throw new Error('DETAIL_REQUIRED');
+        updates.detail_name = detailName;
+      }
+      if (payload?.itemName !== undefined) {
+        const itemName = String(payload.itemName ?? '').trim();
+        if (!itemName) throw new Error('ITEM_REQUIRED');
+        updates.item_name = itemName;
+      }
+      if (payload?.itemIndexCode !== undefined) {
+        updates.item_index_code = String(payload.itemIndexCode ?? '').trim() || null;
+      }
+      if (payload?.unit !== undefined) {
+        updates.unit = String(payload.unit ?? '').trim() || 'kg';
+      }
+      if (payload?.startQty !== undefined) {
+        const startQty = toNumber(payload.startQty);
+        if (!Number.isFinite(startQty) || startQty < 0) throw new Error('QTY_REQUIRED');
+        updates.start_qty = startQty;
+      }
+      if (payload?.warehouseIssuedQty !== undefined) {
+        const warehouseIssuedQty = toNumber(payload.warehouseIssuedQty);
+        if (!Number.isFinite(warehouseIssuedQty) || warehouseIssuedQty < 0) {
+          throw new Error('QTY_REQUIRED');
+        }
+        updates.warehouse_issued_qty = warehouseIssuedQty;
+      }
+      if (payload?.endQty !== undefined) {
+        if (payload.endQty === null || payload.endQty === '') {
+          updates.end_qty = null;
+        } else {
+          const endQty = toNumber(payload.endQty);
+          if (!Number.isFinite(endQty) || endQty < 0) throw new Error('QTY_REQUIRED');
+          updates.end_qty = endQty;
+        }
+      }
+      if (payload?.producedQty !== undefined) {
+        if (payload.producedQty === null || payload.producedQty === '') {
+          updates.produced_qty = null;
+        } else {
+          const producedQty = toNumber(payload.producedQty);
+          if (!Number.isFinite(producedQty) || producedQty < 0) throw new Error('QTY_REQUIRED');
+          updates.produced_qty = producedQty;
+        }
+      }
+
+      const nextEndQty =
+        updates.end_qty !== undefined ? (updates.end_qty as number | null) : existing.end_qty;
+      const nextProducedQty =
+        updates.produced_qty !== undefined
+          ? (updates.produced_qty as number | null)
+          : existing.produced_qty;
+      updates.status = isDoneReopen
+        ? 'DETAILS_REQUIRED'
+        : calculatePaintTapeStatus(nextEndQty, nextProducedQty);
+
+      const { data, error } = await supabaseAdmin
+        .from('paint_tape_settlements')
+        .update(updates)
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      const issueMap = await getPaintTapeSettlementIssueMap([id]);
+      return mapPaintTapeSettlement(data, issueMap.get(id) ?? []);
+    }
+    case 'removePaintTapeSettlement': {
+      const id = String(payload?.id ?? '').trim();
+      if (!id) throw new Error('NOT_FOUND');
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('paint_tape_settlements')
+        .select('end_qty, produced_qty, status')
+        .eq('id', id)
+        .maybeSingle();
+      if (existingError) {
+        if (isMissingPaintTapeSettlementsTableError(existingError)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENTS');
+        }
+        throw existingError;
+      }
+      if (!existing) throw new Error('NOT_FOUND');
+      if (normalizePaintTapeStatus(existing.status, existing.end_qty, existing.produced_qty) === 'DONE') {
+        throw new Error('SETTLEMENT_DONE_LOCKED');
+      }
+      const { error } = await supabaseAdmin
+        .from('paint_tape_settlements')
+        .delete()
+        .eq('id', id);
+      if (error) {
+        if (isMissingPaintTapeSettlementsTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENTS');
+        }
+        throw error;
+      }
+      return;
     }
     case 'getOriginalInventoryCatalogFromErp': {
       return fetchOriginalCatalogFromErpProxy();

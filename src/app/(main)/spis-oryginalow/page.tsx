@@ -531,8 +531,11 @@ export default function OriginalInventoryPage() {
       ? catalogError.message
       : '';
   const erpSourceUnavailable = erpCatalogState.sourceUnavailable;
-  const erpSnapshotEntries = erpSnapshotState.items;
-  const erpSnapshotMigrationRequired = erpSnapshotState.migrationRequired;
+  const erpSnapshotEntries = useMemo(
+    () => (Array.isArray(erpSnapshotState?.items) ? erpSnapshotState.items : []),
+    [erpSnapshotState]
+  );
+  const erpSnapshotMigrationRequired = Boolean(erpSnapshotState?.migrationRequired);
   const erpSnapshotMap = useMemo(() => {
     const map = new Map<
       string,
@@ -1429,7 +1432,13 @@ export default function OriginalInventoryPage() {
     });
     return [...map.values()].sort((a, b) => collator.compare(a.name, b.name));
   }, [erpSnapshotEntries]);
-  const historicalErpSnapshotEntries = historicalErpSnapshotState.items;
+  const historicalErpSnapshotEntries = useMemo(
+    () =>
+      Array.isArray(historicalErpSnapshotState?.items)
+        ? historicalErpSnapshotState.items
+        : [],
+    [historicalErpSnapshotState]
+  );
   const reportErpSnapshotMigrationRequired =
     erpSnapshotMigrationRequired || historicalErpSnapshotState.migrationRequired;
   const erpSnapshotByDateAndMaterial = useMemo(() => {

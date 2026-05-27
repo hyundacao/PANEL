@@ -693,6 +693,43 @@ alter table if exists public.original_inventory_grind_tasks
 create index if not exists original_inventory_grind_tasks_status_created_idx
   on public.original_inventory_grind_tasks(status, created_at desc);
 
+create table if not exists public.paint_tape_settlements (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by text not null default 'nieznany',
+  order_number text not null,
+  detail_name text not null,
+  item_name text not null,
+  item_index_code text,
+  unit text not null default 'kg',
+  start_qty numeric not null default 0 check (start_qty >= 0),
+  warehouse_issued_qty numeric not null default 0 check (warehouse_issued_qty >= 0),
+  end_qty numeric check (end_qty is null or end_qty >= 0),
+  produced_qty numeric check (produced_qty is null or produced_qty >= 0),
+  status text not null default 'OPEN' check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE'))
+);
+
+create index if not exists paint_tape_settlements_status_idx
+  on public.paint_tape_settlements (status, created_at desc);
+
+create index if not exists paint_tape_settlements_order_idx
+  on public.paint_tape_settlements (lower(order_number));
+
+create index if not exists paint_tape_settlements_item_idx
+  on public.paint_tape_settlements (lower(item_name), lower(coalesce(item_index_code, '')));
+
+create table if not exists public.paint_tape_settlement_issues (
+  id uuid primary key default gen_random_uuid(),
+  settlement_id uuid not null references public.paint_tape_settlements(id) on delete cascade,
+  qty numeric not null check (qty <> 0),
+  created_at timestamptz not null default now(),
+  created_by text not null default 'nieznany'
+);
+
+create index if not exists paint_tape_settlement_issues_settlement_idx
+  on public.paint_tape_settlement_issues (settlement_id, created_at);
+
 -- =========================
 -- RAPORT ZMIANOWY
 -- =========================
@@ -809,6 +846,8 @@ begin
         'original_inventory_catalog',
         'original_inventory_erp_snapshots',
         'original_inventory_grind_tasks',
+        'paint_tape_settlements',
+        'paint_tape_settlement_issues',
         'raport_zmianowy_sessions',
         'raport_zmianowy_items',
         'raport_zmianowy_entries',

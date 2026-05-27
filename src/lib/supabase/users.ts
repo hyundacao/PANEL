@@ -37,6 +37,7 @@ const defaultAccessWithPasswordFlag = {
 } as UserAccess & { mustChangePassword?: boolean };
 const validWarehouseKeys: WarehouseKey[] = [
   'PRZEMIALY',
+  'FARBY_TASMY',
   'CZESCI',
   'RAPORT_ZMIANOWY',
   'BILANS_PRZEZBROJEN',
