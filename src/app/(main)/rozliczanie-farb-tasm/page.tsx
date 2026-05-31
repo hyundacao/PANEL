@@ -989,7 +989,7 @@ export default function PaintTapeSettlementsPage() {
                     className="min-h-[42px] px-3 py-2"
                   >
                     <Save className="mr-2 h-4 w-4" />
-                    Zapisz zlecenie
+                    Przesuń do zakończonych
                   </Button>
                 </div>
                 <div className="flex items-end">
