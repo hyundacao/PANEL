@@ -273,6 +273,8 @@ export type PaintTapeSettlement = {
   usageQty?: number | null;
   usagePerPiece?: number | null;
   status: PaintTapeSettlementStatus;
+  accountedAt?: string | null;
+  accountedBy?: string | null;
 };
 
 export type DashboardSummary = {

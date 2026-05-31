@@ -784,6 +784,8 @@ export const updatePaintTapeSettlement = async (payload: {
   endQty?: number | null;
   producedQty?: number | null;
   reopen?: boolean;
+  moveToOpen?: boolean;
+  accounted?: boolean;
 }): Promise<PaintTapeSettlement> => appRequest('updatePaintTapeSettlement', payload);
 
 export const addPaintTapeSettlementIssue = async (payload: {

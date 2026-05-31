@@ -24,6 +24,10 @@ create index if not exists paint_tape_settlements_order_idx
 create index if not exists paint_tape_settlements_item_idx
   on public.paint_tape_settlements (lower(item_name), lower(coalesce(item_index_code, '')));
 
+alter table if exists public.paint_tape_settlements
+  add column if not exists accounted_at timestamptz,
+  add column if not exists accounted_by text;
+
 create table if not exists public.paint_tape_settlement_issues (
   id uuid primary key default gen_random_uuid(),
   settlement_id uuid not null references public.paint_tape_settlements(id) on delete cascade,

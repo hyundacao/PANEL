@@ -542,7 +542,9 @@ const mapPaintTapeSettlement = (
     producedQty,
     usageQty,
     usagePerPiece,
-    status: normalizePaintTapeStatus(row.status, endQty, producedQty)
+    status: normalizePaintTapeStatus(row.status, endQty, producedQty),
+    accountedAt: row.accounted_at ?? null,
+    accountedBy: row.accounted_by ? String(row.accounted_by).trim() : null
   };
 };
 
@@ -712,6 +714,7 @@ const statusCodeFromError = (code: string) => {
   if (code === 'ERP_ORIGINALS_PROXY_UNAUTHORIZED') return 403;
   if (code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS') return 503;
   if (code === 'MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENTS') return 503;
+  if (code === 'MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENT_ACCOUNTING') return 503;
   if (code === 'SETTLEMENT_DONE_LOCKED') return 409;
   if (
     code === 'ERP_ORIGINALS_PROXY_UNAVAILABLE' ||
@@ -1873,6 +1876,16 @@ const isMissingPaintTapeSettlementsTableError = (error: unknown) => {
     text.includes('paint_tape_settlements') ||
     text.includes('paint_tape_settlement_issues') ||
     text.includes('42P01')
+  );
+};
+
+const isMissingPaintTapeSettlementAccountingColumnsError = (error: unknown) => {
+  const text =
+    error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error ?? '');
+  return (
+    text.includes('accounted_at') ||
+    text.includes('accounted_by') ||
+    text.includes('PGRST204')
   );
 };
 
@@ -5860,76 +5873,58 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     }
     case 'getProductionDetailSuggestions': {
       const suggestions = new Map<string, string>();
+      const readOptionalDetailRows = async <T,>(query: PromiseLike<{ data: T[] | null; error: unknown }>) => {
+        const { data, error } = await query;
+        if (!error) return data ?? [];
+        if (isMissingOptionalDetailSourceTableError(error)) return [];
+        throw error;
+      };
 
-      const settlementDetails = await supabaseAdmin
+      const settlementDetails = await readOptionalDetailRows<any>(supabaseAdmin
         .from('paint_tape_settlements')
         .select('detail_name')
-        .order('detail_name', { ascending: true });
-      if (settlementDetails.error && !isMissingOptionalDetailSourceTableError(settlementDetails.error)) {
-        throw settlementDetails.error;
-      }
-      (settlementDetails.data ?? []).forEach((row: any) =>
+        .order('detail_name', { ascending: true }));
+      settlementDetails.forEach((row: any) =>
         addProductionDetailSuggestion(suggestions, row.detail_name)
       );
 
-      const reportItems = await supabaseAdmin
+      const reportItems = await readOptionalDetailRows<any>(supabaseAdmin
         .from('raport_zmianowy_items')
         .select('index_code, description')
-        .order('description', { ascending: true });
-      if (reportItems.error && !isMissingOptionalDetailSourceTableError(reportItems.error)) {
-        throw reportItems.error;
-      }
-      (reportItems.data ?? []).forEach((row: any) => {
+        .order('description', { ascending: true }));
+      reportItems.forEach((row: any) => {
         addProductionDetailSuggestion(suggestions, row.description, row.index_code);
       });
 
-      const transferItems = await supabaseAdmin
+      const transferItems = await readOptionalDetailRows<any>(supabaseAdmin
         .from('warehouse_transfer_document_items')
         .select('index_code, index_code2, name')
-        .order('name', { ascending: true });
-      if (transferItems.error && !isMissingOptionalDetailSourceTableError(transferItems.error)) {
-        throw transferItems.error;
-      }
-      (transferItems.data ?? []).forEach((row: any) => {
+        .order('name', { ascending: true }));
+      transferItems.forEach((row: any) => {
         addProductionDetailSuggestion(suggestions, row.name, row.index_code);
       });
 
-      const originalCatalogRows = await supabaseAdmin
+      const originalCatalogRows = await readOptionalDetailRows<any>(supabaseAdmin
         .from('original_inventory_catalog')
         .select('name, index_code')
-        .order('name', { ascending: true });
-      if (
-        originalCatalogRows.error &&
-        !isMissingOptionalDetailSourceTableError(originalCatalogRows.error)
-      ) {
-        throw originalCatalogRows.error;
-      }
-      (originalCatalogRows.data ?? []).forEach((row: any) => {
+        .order('name', { ascending: true }));
+      originalCatalogRows.forEach((row: any) => {
         addProductionDetailSuggestion(suggestions, row.name, row.index_code);
       });
 
-      const originalSnapshotRows = await supabaseAdmin
+      const originalSnapshotRows = await readOptionalDetailRows<any>(supabaseAdmin
         .from('original_inventory_erp_snapshots')
         .select('name, index_code')
-        .order('name', { ascending: true });
-      if (
-        originalSnapshotRows.error &&
-        !isMissingOptionalDetailSourceTableError(originalSnapshotRows.error)
-      ) {
-        throw originalSnapshotRows.error;
-      }
-      (originalSnapshotRows.data ?? []).forEach((row: any) => {
+        .order('name', { ascending: true }));
+      originalSnapshotRows.forEach((row: any) => {
         addProductionDetailSuggestion(suggestions, row.name, row.index_code);
       });
 
-      const materialRows = await supabaseAdmin
+      const materialRows = await readOptionalDetailRows<any>(supabaseAdmin
         .from('materials')
         .select('code, name, material_catalogs(name)')
-        .order('name', { ascending: true });
-      if (materialRows.error && !isMissingOptionalDetailSourceTableError(materialRows.error)) {
-        throw materialRows.error;
-      }
-      (materialRows.data ?? []).forEach((row: any) => {
+        .order('name', { ascending: true }));
+      materialRows.forEach((row: any) => {
         addProductionDetailSuggestion(suggestions, row.name, row.code);
         addProductionDetailSuggestion(suggestions, row.material_catalogs?.name, row.code);
       });
@@ -6088,7 +6083,15 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         currentStatus === 'DONE' &&
         payload?.reopen === true &&
         Object.keys(payload ?? {}).every((key) => key === 'id' || key === 'reopen');
-      if (currentStatus === 'DONE' && !isDoneReopen) {
+      const isAccountingUpdate =
+        currentStatus === 'DONE' &&
+        typeof payload?.accounted === 'boolean' &&
+        Object.keys(payload ?? {}).every((key) => key === 'id' || key === 'accounted');
+      const isMoveToOpen =
+        currentStatus !== 'DONE' &&
+        payload?.moveToOpen === true &&
+        Object.keys(payload ?? {}).every((key) => key === 'id' || key === 'moveToOpen' || key === 'producedQty');
+      if (currentStatus === 'DONE' && !isDoneReopen && !isAccountingUpdate) {
         throw new Error('SETTLEMENT_DONE_LOCKED');
       }
 
@@ -6146,6 +6149,20 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           updates.produced_qty = producedQty;
         }
       }
+      if (payload?.accounted !== undefined) {
+        if (currentStatus !== 'DONE') throw new Error('SETTLEMENT_NOT_DONE');
+        if (payload.accounted === true) {
+          updates.accounted_at = new Date().toISOString();
+          updates.accounted_by = getActorName(currentUser);
+        } else {
+          updates.accounted_at = null;
+          updates.accounted_by = null;
+        }
+      }
+      if (isDoneReopen) {
+        if ('accounted_at' in existing) updates.accounted_at = null;
+        if ('accounted_by' in existing) updates.accounted_by = null;
+      }
 
       const nextEndQty =
         updates.end_qty !== undefined ? (updates.end_qty as number | null) : existing.end_qty;
@@ -6155,7 +6172,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           : existing.produced_qty;
       updates.status = isDoneReopen
         ? 'DETAILS_REQUIRED'
-        : calculatePaintTapeStatus(nextEndQty, nextProducedQty);
+        : isMoveToOpen
+          ? 'OPEN'
+          : calculatePaintTapeStatus(nextEndQty, nextProducedQty);
 
       const { data, error } = await supabaseAdmin
         .from('paint_tape_settlements')
@@ -6163,7 +6182,12 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .eq('id', id)
         .select('*')
         .maybeSingle();
-      if (error) throw error;
+      if (error) {
+        if (isMissingPaintTapeSettlementAccountingColumnsError(error)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENT_ACCOUNTING');
+        }
+        throw error;
+      }
       if (!data) throw new Error('NOT_FOUND');
       const issueMap = await getPaintTapeSettlementIssueMap([id]);
       return mapPaintTapeSettlement(data, issueMap.get(id) ?? []);

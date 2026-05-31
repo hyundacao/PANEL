@@ -707,7 +707,9 @@ create table if not exists public.paint_tape_settlements (
   warehouse_issued_qty numeric not null default 0 check (warehouse_issued_qty >= 0),
   end_qty numeric check (end_qty is null or end_qty >= 0),
   produced_qty numeric check (produced_qty is null or produced_qty >= 0),
-  status text not null default 'OPEN' check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE'))
+  status text not null default 'OPEN' check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE')),
+  accounted_at timestamptz,
+  accounted_by text
 );
 
 create index if not exists paint_tape_settlements_status_idx
