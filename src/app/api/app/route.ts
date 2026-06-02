@@ -6,6 +6,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin';
 import { formatDate } from '@/lib/utils/format';
 import {
   canAccessWarehouse,
+  canUsePaintTapePermission,
   canSeeTab,
   isReadOnly,
   isWarehouseAdmin
@@ -48,6 +49,7 @@ import type {
   OriginalInventorySiloEntry,
   PaintTapeSettlementIssue,
   PaintTapeSettlement,
+  PaintTapePermissionKey,
   PaintTapeSettlementStatus,
   PeriodReport,
   RaportZmianowyEntry,
@@ -837,6 +839,19 @@ const isErpWarehouseManagementAction = (action: string, payload: any) => {
 };
 
 const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
+  const requirePaintTapeWriteAccess = (permission: PaintTapePermissionKey) => {
+    requireTabWriteAccess(user, 'FARBY_TASMY', ['rozliczanie-farb-tasm']);
+    if (!canUsePaintTapePermission(user, permission)) {
+      throw new Error('FORBIDDEN');
+    }
+  };
+  const getPaintTapeUpdatePermission = (): PaintTapePermissionKey => {
+    if (payload?.accounted !== undefined || payload?.reopen === true) return 'accounting';
+    if (payload?.moveToOpen === true) return 'details';
+    if (payload?.producedQty !== undefined && payload?.endQty === undefined) return 'details';
+    return 'open';
+  };
+
   switch (action) {
     case 'getDashboard':
     case 'getTotalsHistory':
@@ -968,10 +983,14 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
       return;
     case 'createPaintTapeSettlement':
+      requirePaintTapeWriteAccess('create');
+      return;
     case 'updatePaintTapeSettlement':
+      requirePaintTapeWriteAccess(getPaintTapeUpdatePermission());
+      return;
     case 'addPaintTapeSettlementIssue':
     case 'removePaintTapeSettlement':
-      requireTabWriteAccess(user, 'FARBY_TASMY', ['rozliczanie-farb-tasm']);
+      requirePaintTapeWriteAccess('open');
       return;
     case 'addOriginalInventoryCatalog':
       requireTabWriteAccess(user, 'PRZEMIALY', [
@@ -5941,7 +5960,6 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const unit = String(payload?.unit ?? '').trim() || 'kg';
       const startQty = toNumber(payload?.startQty);
       const warehouseIssuedQty = Math.max(0, toNumber(payload?.warehouseIssuedQty ?? 0));
-      if (!orderNumber) throw new Error('ORDER_REQUIRED');
       if (!detailName) throw new Error('DETAIL_REQUIRED');
       if (!itemName) throw new Error('ITEM_REQUIRED');
       if (!Number.isFinite(startQty) || startQty < 0) throw new Error('QTY_REQUIRED');
@@ -5953,7 +5971,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           created_at: now,
           updated_at: now,
           created_by: getActorName(currentUser),
-          order_number: orderNumber,
+          order_number: orderNumber || null,
           detail_name: detailName,
           item_name: itemName,
           item_index_code: itemIndexCode,

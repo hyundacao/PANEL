@@ -73,9 +73,16 @@ import type {
   WarehouseKey,
   WarehouseRole,
   WarehouseTab,
+  PaintTapePermissionKey,
   OriginalInventorySiloConfig
 } from '@/lib/api/types';
-import { getRolePreset, isHeadAdmin, isWarehouseAdmin } from '@/lib/auth/access';
+import {
+  DEFAULT_PAINT_TAPE_PERMISSIONS,
+  PAINT_TAPE_PERMISSION_KEYS,
+  getRolePreset,
+  isHeadAdmin,
+  isWarehouseAdmin
+} from '@/lib/auth/access';
 import { DEFAULT_RESET_PASSWORD } from '@/lib/auth/password';
 
 type WarehouseDraft = {
@@ -182,6 +189,13 @@ const erpModuleTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'erp-rozdzielca-zmianowy', label: 'Rozdzielca zmianowy' },
   { key: 'erp-wypisz-dokument', label: 'Wypisz dokument' },
   { key: 'erp-historia-dokumentow', label: 'Historia dokumentow' }
+];
+const paintTapePermissionOptions: Array<{ key: PaintTapePermissionKey; label: string }> = [
+  { key: 'create', label: 'Dodawanie zlecen' },
+  { key: 'open', label: 'Otwarte zlecenia - pobrania i stan po' },
+  { key: 'details', label: 'Wpis ilosci wykonanych sztuk' },
+  { key: 'accounting', label: 'Rozliczanie zakonczonych zlecen' },
+  { key: 'celebration', label: 'Easter egg po rozliczeniu' }
 ];
 const warehouseLabels: Record<WarehouseKey, string> = {
   PRZEMIALY: 'Zarządzanie przemiałami i przygotowaniem produkcji',
@@ -295,7 +309,10 @@ const cloneAccess = (access: UserAccess): UserAccess => ({
       key,
       value ? { ...value, tabs: [...value.tabs] } : value
     ])
-  ) as UserAccess['warehouses']
+  ) as UserAccess['warehouses'],
+  paintTapePermissions: access.paintTapePermissions
+    ? { ...access.paintTapePermissions }
+    : undefined
 });
 
 const isRecordEqual = <T,>(
@@ -325,7 +342,10 @@ const accessKey = (access: UserAccess) => {
       return `${key}:${entry.role}:${entry.readOnly ? 1 : 0}:${adminKey}:${tabsKey}`;
     })
     .join('|');
-  return `${access.admin ? 1 : 0}|${warehouseKey}`;
+  const paintTapeKey = PAINT_TAPE_PERMISSION_KEYS.map(
+    (key) => `${key}:${access.paintTapePermissions?.[key] === false ? 0 : 1}`
+  ).join(',');
+  return `${access.admin ? 1 : 0}|${warehouseKey}|paintTape:${paintTapeKey}`;
 };
 
 const groupIdsKey = (groupIds: string[]) =>
@@ -979,6 +999,145 @@ export default function AdminPage() {
         </div>
         {blockEditing && (
           <p className="text-xs text-dim">Head admin ma pelny dostep do wszystkich magazynow.</p>
+        )}
+      </Card>
+    );
+  };
+
+  const renderPaintTapeAccess = (
+    access: UserAccess,
+    onChange: (updater: (current: UserAccess) => UserAccess) => void,
+    userRole: Role
+  ) => {
+    const warehouseAccess = access.warehouses.FARBY_TASMY;
+    const enabled = Boolean(warehouseAccess);
+    const blockEditing = userRole === 'HEAD_ADMIN';
+    const readOnlyValue = enabled && warehouseAccess ? warehouseAccess.readOnly : false;
+    const adminValue = enabled && warehouseAccess ? Boolean(warehouseAccess.admin) : false;
+    const permissions = {
+      ...DEFAULT_PAINT_TAPE_PERMISSIONS,
+      ...(access.paintTapePermissions ?? {})
+    };
+
+    return (
+      <Card className={`space-y-3 ${blockEditing ? 'opacity-70' : ''}`}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dostep</p>
+            <p className="text-sm font-semibold text-title">{warehouseLabels.FARBY_TASMY}</p>
+          </div>
+          <AdminToggle
+            checked={enabled}
+            onCheckedChange={(value) => {
+              if (blockEditing) return;
+              onChange((current) => {
+                const next = cloneAccess(current);
+                if (!value) {
+                  delete next.warehouses.FARBY_TASMY;
+                  return next;
+                }
+                next.warehouses.FARBY_TASMY = getRolePreset('FARBY_TASMY', 'ROZDZIELCA');
+                next.paintTapePermissions = { ...DEFAULT_PAINT_TAPE_PERMISSIONS };
+                return next;
+              });
+            }}
+            disabled={blockEditing}
+          />
+        </div>
+
+        <div
+          className={cn(
+            'space-y-3',
+            blockEditing && 'pointer-events-none',
+            !enabled && 'opacity-70'
+          )}
+        >
+          {userRole === 'ADMIN' && (
+            <AdminToggle
+              checked={adminValue}
+              onCheckedChange={(value) =>
+                onChange((current) => {
+                  const next = cloneAccess(current);
+                  const currentAccess = next.warehouses.FARBY_TASMY;
+                  if (!currentAccess) return next;
+                  currentAccess.admin = value;
+                  return next;
+                })
+              }
+              label="Administrator modulu"
+              disabled={blockEditing || !enabled}
+            />
+          )}
+          <AdminToggle
+            checked={readOnlyValue}
+            onCheckedChange={(value) =>
+              onChange((current) => {
+                const next = cloneAccess(current);
+                const currentAccess = next.warehouses.FARBY_TASMY;
+                if (!currentAccess) return next;
+                currentAccess.readOnly = value;
+                return next;
+              })
+            }
+            label="Tylko do odczytu"
+            disabled={blockEditing || !enabled}
+          />
+          <AdminToggle
+            checked={enabled && Boolean(warehouseAccess?.tabs.includes('rozliczanie-farb-tasm'))}
+            onCheckedChange={(value) =>
+              onChange((current) => {
+                const next = cloneAccess(current);
+                const currentAccess = next.warehouses.FARBY_TASMY;
+                if (!currentAccess) return next;
+                const set = new Set(currentAccess.tabs);
+                if (value) {
+                  set.add('rozliczanie-farb-tasm');
+                } else {
+                  set.delete('rozliczanie-farb-tasm');
+                }
+                currentAccess.tabs = Array.from(set);
+                return next;
+              })
+            }
+            label="Widok modulu"
+            disabled={blockEditing || !enabled}
+          />
+
+          <div className="rounded-xl border border-[rgba(255,255,255,0.10)] bg-[rgba(255,255,255,0.03)] p-3">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-dim">
+              Etapy rozliczania
+            </p>
+            <div className="grid gap-2">
+              {paintTapePermissionOptions.map((permission) => (
+                <AdminToggle
+                  key={`paint-tape-${permission.key}`}
+                  checked={permissions[permission.key] !== false}
+                  onCheckedChange={(value) =>
+                    onChange((current) => {
+                      const next = cloneAccess(current);
+                      if (!next.warehouses.FARBY_TASMY) return next;
+                      next.paintTapePermissions = {
+                        ...DEFAULT_PAINT_TAPE_PERMISSIONS,
+                        ...(next.paintTapePermissions ?? {}),
+                        [permission.key]: value
+                      };
+                      return next;
+                    })
+                  }
+                  label={permission.label}
+                  disabled={blockEditing || !enabled || readOnlyValue}
+                />
+              ))}
+            </div>
+          </div>
+          {!enabled && (
+            <p className="text-xs text-dim">
+              Wlacz dostep, aby aktywowac etapy rozliczania farb i tasm.
+            </p>
+          )}
+        </div>
+        {blockEditing && (
+          <p className="text-xs text-dim">Head admin ma pelny dostep do wszystkich etapow.</p>
         )}
       </Card>
     );
@@ -2694,6 +2853,11 @@ export default function AdminPage() {
                     updatePermissionGroupFormAccess,
                     'ADMIN'
                   )}
+                  {renderPaintTapeAccess(
+                    permissionGroupForm.access,
+                    updatePermissionGroupFormAccess,
+                    'ADMIN'
+                  )}
                   {renderErpModuleAccess(
                     permissionGroupForm.access,
                     updatePermissionGroupFormAccess,
@@ -2848,6 +3012,11 @@ export default function AdminPage() {
                             (updater) => updatePermissionGroupDraftAccess(group.id, updater),
                             'ADMIN'
                           )}
+                          {renderPaintTapeAccess(
+                            draft.access,
+                            (updater) => updatePermissionGroupDraftAccess(group.id, updater),
+                            'ADMIN'
+                          )}
                           {renderErpModuleAccess(
                             draft.access,
                             (updater) => updatePermissionGroupDraftAccess(group.id, updater),
@@ -2936,6 +3105,13 @@ export default function AdminPage() {
                             'BILANS_PRZEZBROJEN',
                             'ROZDZIELCA'
                           );
+                          nextAccess.warehouses.FARBY_TASMY = getRolePreset(
+                            'FARBY_TASMY',
+                            'ROZDZIELCA'
+                          );
+                          nextAccess.paintTapePermissions = {
+                            ...DEFAULT_PAINT_TAPE_PERMISSIONS
+                          };
                           nextAccess.warehouses.CZESCI = getRolePreset('CZESCI', 'MECHANIK');
                           nextAccess.warehouses.RAPORT_ZMIANOWY = getRolePreset(
                             'RAPORT_ZMIANOWY',
@@ -2993,6 +3169,11 @@ export default function AdminPage() {
                   )}
                   {renderWarehouseAccess(
                     'BILANS_PRZEZBROJEN',
+                    userForm.access,
+                    updateUserFormAccess,
+                    userForm.role
+                  )}
+                  {renderPaintTapeAccess(
                     userForm.access,
                     updateUserFormAccess,
                     userForm.role
@@ -3093,6 +3274,13 @@ export default function AdminPage() {
                                 'BILANS_PRZEZBROJEN',
                                 'ROZDZIELCA'
                               );
+                              nextAccess.warehouses.FARBY_TASMY = getRolePreset(
+                                'FARBY_TASMY',
+                                'ROZDZIELCA'
+                              );
+                              nextAccess.paintTapePermissions = {
+                                ...DEFAULT_PAINT_TAPE_PERMISSIONS
+                              };
                               nextAccess.warehouses.CZESCI = getRolePreset('CZESCI', 'MECHANIK');
                               nextAccess.warehouses.RAPORT_ZMIANOWY = getRolePreset(
                                 'RAPORT_ZMIANOWY',
@@ -3242,6 +3430,11 @@ export default function AdminPage() {
                             )}
                             {renderWarehouseAccess(
                               'BILANS_PRZEZBROJEN',
+                              draft.access,
+                              (updater) => updateUserDraftAccess(item.id, updater),
+                              draft.role
+                            )}
+                            {renderPaintTapeAccess(
                               draft.access,
                               (updater) => updateUserDraftAccess(item.id, updater),
                               draft.role

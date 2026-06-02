@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Minus, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
 import {
@@ -27,7 +28,7 @@ import { Input } from '@/components/ui/Input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { useToastStore } from '@/components/ui/Toast';
 import { useUiStore } from '@/lib/store/ui';
-import { isReadOnly } from '@/lib/auth/access';
+import { getPaintTapePermissions, isReadOnly } from '@/lib/auth/access';
 import { cn } from '@/lib/utils/cn';
 import { parseQtyInput } from '@/lib/utils/format';
 
@@ -163,6 +164,15 @@ const formatIssueHistory = (settlement: PaintTapeSettlement) =>
     })
     .join(' · ');
 
+const celebrationParticles = Array.from({ length: 28 }, (_, index) => ({
+  id: index,
+  angle: (index / 28) * 360,
+  distance: 96 + (index % 5) * 26,
+  delay: (index % 7) * 0.045,
+  size: 7 + (index % 4) * 3,
+  color: ['#FF6A00', '#22C55E', '#7C5CFF', '#F59E0B', '#F1F5F9'][index % 5]
+}));
+
 const formatPerPiece = (value: number | null | undefined, unit = 'kg') => {
   if (value === null || value === undefined || Number.isNaN(value)) return '-';
   return `${value.toLocaleString('pl-PL', {
@@ -195,6 +205,12 @@ export default function PaintTapeSettlementsPage() {
   const toast = useToastStore((state) => state.push);
   const { user } = useUiStore();
   const readOnly = isReadOnly(user, 'FARBY_TASMY');
+  const paintTapePermissions = getPaintTapePermissions(user);
+  const canCreate = !readOnly && paintTapePermissions.create;
+  const canOpen = !readOnly && paintTapePermissions.open;
+  const canDetails = !readOnly && paintTapePermissions.details;
+  const canAccounting = !readOnly && paintTapePermissions.accounting;
+  const canShowCelebration = paintTapePermissions.celebration;
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<FilterValue>('CREATE');
   const [query, setQuery] = useState('');
@@ -203,6 +219,7 @@ export default function PaintTapeSettlementsPage() {
   const [groupProducedDrafts, setGroupProducedDrafts] = useState<Record<string, string>>({});
   const [groupExtraOrderDrafts, setGroupExtraOrderDrafts] = useState<Record<string, string>>({});
   const [issueDraft, setIssueDraft] = useState<IssueDraft | null>(null);
+  const [celebrationVisible, setCelebrationVisible] = useState(false);
   const [showDetailSuggestions, setShowDetailSuggestions] = useState(false);
   const [showItemSuggestionsFor, setShowItemSuggestionsFor] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -210,9 +227,31 @@ export default function PaintTapeSettlementsPage() {
     detailName: ''
   });
   const nextItemDraftId = useRef(2);
+  const celebrationTimerRef = useRef<number | null>(null);
   const [itemDrafts, setItemDrafts] = useState<PaintTapeItemDraft[]>([
     createEmptyPaintTapeItem(1)
   ]);
+  const visibleFilters = useMemo(
+    () =>
+      [
+        paintTapePermissions.create ? { value: 'CREATE' as FilterValue, label: 'Dodaj zlecenie' } : null,
+        paintTapePermissions.open ? { value: 'OPEN' as FilterValue, label: 'Otwarte zlecenia' } : null,
+        paintTapePermissions.details
+          ? { value: 'DETAILS_REQUIRED' as FilterValue, label: 'Zlecenia do wpisania ilości' }
+          : null,
+        paintTapePermissions.accounting ? { value: 'DONE' as FilterValue, label: 'Zakończone zlecenia' } : null
+      ].filter(Boolean) as Array<{ value: FilterValue; label: string }>,
+    [
+      paintTapePermissions.accounting,
+      paintTapePermissions.create,
+      paintTapePermissions.details,
+      paintTapePermissions.open
+    ]
+  );
+
+  const activeFilter = visibleFilters.some((item) => item.value === filter)
+    ? filter
+    : visibleFilters[0]?.value ?? 'CREATE';
 
   const { data: settlements = [], isLoading } = useQuery({
     queryKey: ['paint-tape-settlements'],
@@ -348,6 +387,20 @@ export default function PaintTapeSettlementsPage() {
     return source.slice(0, 14);
   };
 
+  const showAccountedCelebration = () => {
+    if (celebrationTimerRef.current) {
+      window.clearTimeout(celebrationTimerRef.current);
+    }
+    setCelebrationVisible(false);
+    window.requestAnimationFrame(() => {
+      setCelebrationVisible(true);
+      celebrationTimerRef.current = window.setTimeout(() => {
+        setCelebrationVisible(false);
+        celebrationTimerRef.current = null;
+      }, 4200);
+    });
+  };
+
   const createMutation = useMutation({
     mutationFn: async (
       payloads: Array<Parameters<typeof createPaintTapeSettlement>[0]>
@@ -380,10 +433,13 @@ export default function PaintTapeSettlementsPage() {
     mutationFn: async (
       payloads: Array<Parameters<typeof updatePaintTapeSettlement>[0]>
     ) => Promise.all(payloads.map((payload) => updatePaintTapeSettlement(payload))),
-    onSuccess: () => {
+    onSuccess: (_data, payloads) => {
       setDrafts({});
       setGroupProducedDrafts({});
       setGroupExtraOrderDrafts({});
+      if (canShowCelebration && payloads.some((payload) => payload.accounted === true)) {
+        showAccountedCelebration();
+      }
       void queryClient.invalidateQueries({ queryKey: ['paint-tape-settlements'] });
       toast({ title: 'Zapisano zlecenie', tone: 'success' });
     },
@@ -425,7 +481,7 @@ export default function PaintTapeSettlementsPage() {
   const filteredSettlements = useMemo(() => {
     const normalizedQuery = normalizeKey(query);
     return settlements.filter((settlement) => {
-      if (filter === 'CREATE' || settlement.status !== filter) return false;
+      if (activeFilter === 'CREATE' || settlement.status !== activeFilter) return false;
       if (!normalizedQuery) return true;
       return [
         settlement.orderNumber,
@@ -434,7 +490,7 @@ export default function PaintTapeSettlementsPage() {
         settlement.itemIndexCode
       ].some((value) => matchesTokenSearch(value, normalizedQuery));
     });
-  }, [filter, query, settlements]);
+  }, [activeFilter, query, settlements]);
 
   const groupedSettlements = useMemo(() => {
     const groups = new Map<string, SettlementGroup>();
@@ -515,11 +571,15 @@ export default function PaintTapeSettlementsPage() {
 
   const handleCreate = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canCreate) {
+      toast({ title: 'Brak uprawnien do dodawania zlecen.', tone: 'error' });
+      return;
+    }
     const validItemDrafts = itemDrafts.filter(
       (draft) => draft.itemName.trim() || draft.startQty.trim()
     );
-    if (!form.orderNumber.trim() || !form.detailName.trim() || validItemDrafts.length === 0) {
-      toast({ title: 'Uzupełnij numer zlecenia, detal i przynajmniej jedną farbę/taśmę.', tone: 'error' });
+    if (!form.detailName.trim() || validItemDrafts.length === 0) {
+      toast({ title: 'Uzupełnij detal i przynajmniej jedną farbę/taśmę.', tone: 'error' });
       return;
     }
     const payloads = validItemDrafts.map((draft) => {
@@ -529,7 +589,7 @@ export default function PaintTapeSettlementsPage() {
         draft,
         startQty,
         payload: {
-          orderNumber: form.orderNumber.trim(),
+          orderNumber: form.orderNumber.trim() || undefined,
           detailName: form.detailName.trim(),
           itemName: item?.name ?? draft.itemName.trim(),
           itemIndexCode: item?.indexCode ?? null,
@@ -557,12 +617,14 @@ export default function PaintTapeSettlementsPage() {
   };
 
   const addItemDraft = () => {
+    if (!canCreate) return;
     const nextId = nextItemDraftId.current;
     nextItemDraftId.current += 1;
     setItemDrafts((prev) => [...prev, createEmptyPaintTapeItem(nextId)]);
   };
 
   const removeItemDraft = (id: string) => {
+    if (!canCreate) return;
     setItemDrafts((prev) =>
       prev.length <= 1 ? prev : prev.filter((draft) => draft.id !== id)
     );
@@ -570,6 +632,10 @@ export default function PaintTapeSettlementsPage() {
   };
 
   const handleSaveOpenGroup = (group: SettlementGroup) => {
+    if (!canOpen) {
+      toast({ title: 'Brak uprawnien do otwartych zlecen.', tone: 'error' });
+      return;
+    }
     const firstSettlement = group.items[0];
     if (!firstSettlement) return;
     const orderNumber =
@@ -604,6 +670,10 @@ export default function PaintTapeSettlementsPage() {
   };
 
   const handleAddOrderNumber = (group: SettlementGroup) => {
+    if (!canOpen) {
+      toast({ title: 'Brak uprawnien do otwartych zlecen.', tone: 'error' });
+      return;
+    }
     const firstSettlement = group.items[0];
     if (!firstSettlement) return;
     const extraOrderNumber = String(groupExtraOrderDrafts[group.key] ?? '').trim();
@@ -621,6 +691,10 @@ export default function PaintTapeSettlementsPage() {
   };
 
   const handleSaveDetailsGroup = (group: SettlementGroup) => {
+    if (!canDetails) {
+      toast({ title: 'Brak uprawnien do wpisywania ilosci.', tone: 'error' });
+      return;
+    }
     const producedQty = parseQtyInput(getGroupProducedDraft(group));
     const firstSettlement = group.items[0];
     if (!firstSettlement) return;
@@ -642,6 +716,10 @@ export default function PaintTapeSettlementsPage() {
   };
 
   const handleReopenGroup = (group: SettlementGroup) => {
+    if (!canAccounting) {
+      toast({ title: 'Brak uprawnien do rozliczania zakonczonych zlecen.', tone: 'error' });
+      return;
+    }
     updateGroupMutation.mutate(
       group.items.map((settlement) => ({
         id: settlement.id,
@@ -651,6 +729,10 @@ export default function PaintTapeSettlementsPage() {
   };
 
   const handleMoveGroupBackToOpen = (group: SettlementGroup) => {
+    if (!canDetails) {
+      toast({ title: 'Brak uprawnien do cofania zlecen.', tone: 'error' });
+      return;
+    }
     updateGroupMutation.mutate(
       group.items.map((settlement) => ({
         id: settlement.id,
@@ -661,6 +743,10 @@ export default function PaintTapeSettlementsPage() {
   };
 
   const handleAccountedGroup = (group: SettlementGroup) => {
+    if (!canAccounting) {
+      toast({ title: 'Brak uprawnien do rozliczania zakonczonych zlecen.', tone: 'error' });
+      return;
+    }
     updateGroupMutation.mutate(
       group.items.map((settlement) => ({
         id: settlement.id,
@@ -670,11 +756,16 @@ export default function PaintTapeSettlementsPage() {
   };
 
   const handleIssueMove = (settlement: PaintTapeSettlement, direction: 1 | -1) => {
+    if (!canOpen || activeFilter !== 'OPEN') return;
     setIssueDraft({ settlementId: settlement.id, direction, value: '' });
   };
 
   const submitIssueMove = (settlement: PaintTapeSettlement) => {
     if (!issueDraft || issueDraft.settlementId !== settlement.id) return;
+    if (!canOpen || activeFilter !== 'OPEN') {
+      toast({ title: 'Brak uprawnien do otwartych zlecen.', tone: 'error' });
+      return;
+    }
     const qty = parseQtyInput(issueDraft.value);
     if (qty === null || qty <= 0) {
       toast({ title: 'Podaj poprawną ilość pobrania.', tone: 'error' });
@@ -692,7 +783,7 @@ export default function PaintTapeSettlementsPage() {
     if (isDone) {
       return (
         <p className={compact ? 'mt-1 text-lg font-black leading-tight text-[var(--value-purple)]' : 'font-black text-[var(--value-purple)]'}>
-          {settlement.orderNumber}
+          {settlement.orderNumber || 'Bez numeru'}
         </p>
       );
     }
@@ -700,7 +791,7 @@ export default function PaintTapeSettlementsPage() {
       <Input
         value={draft.orderNumber}
         onChange={(event) => setDraft(settlement, { orderNumber: event.target.value })}
-        disabled={readOnly || updateGroupMutation.isPending}
+        disabled={!canOpen || activeFilter !== 'OPEN' || updateGroupMutation.isPending}
         aria-label="Numer zlecenia"
         className={compact ? 'mt-1 h-10 font-black text-[var(--value-purple)]' : 'h-10 min-w-[120px] font-black text-[var(--value-purple)]'}
       />
@@ -708,7 +799,7 @@ export default function PaintTapeSettlementsPage() {
   };
 
   const renderIssuedControl = (settlement: PaintTapeSettlement, compact = false) => {
-    const disabled = readOnly || settlement.status === 'DONE' || issueMutation.isPending;
+    const disabled = !canOpen || activeFilter !== 'OPEN' || settlement.status === 'DONE' || issueMutation.isPending;
     const history = formatIssueHistory(settlement);
     const activeIssueDraft =
       issueDraft?.settlementId === settlement.id ? issueDraft : null;
@@ -798,7 +889,7 @@ export default function PaintTapeSettlementsPage() {
               removeMutation.mutate(settlement.id);
             }
           }}
-          disabled={readOnly || removeMutation.isPending}
+          disabled={!canOpen || activeFilter !== 'OPEN' || removeMutation.isPending}
           className={compact ? 'min-h-[44px] w-12 px-0 py-2' : 'min-h-[40px] px-3 py-2'}
           aria-label="Usuń farbę / taśmę"
         >
@@ -856,7 +947,7 @@ export default function PaintTapeSettlementsPage() {
               value={draft.endQty}
               onChange={(event) => setDraft(settlement, { endQty: event.target.value })}
               inputMode="decimal"
-              disabled={readOnly || isDone || filter !== 'OPEN'}
+              disabled={!canOpen || isDone || activeFilter !== 'OPEN'}
               aria-label="Stan farby po zakończeniu"
               className="mt-1 h-10"
             />
@@ -867,7 +958,7 @@ export default function PaintTapeSettlementsPage() {
               {formatQty(settlement.usageQty, unit)}
             </p>
           </div>
-          {filter !== 'OPEN' && (
+          {activeFilter !== 'OPEN' && (
             <div className="min-h-[68px]">
               <p className="h-4 text-[10px] font-semibold uppercase tracking-wide text-dim">Zużycie / szt.</p>
               <p className="mt-1 flex min-h-10 items-center break-words text-base font-black leading-tight text-title">
@@ -903,7 +994,7 @@ export default function PaintTapeSettlementsPage() {
           <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">Zlecenie</p>
             {renderOrderNumber(firstSettlement, true)}
-            {filter === 'OPEN' && (
+            {activeFilter === 'OPEN' && (
               <div className="mt-2 grid max-w-xl gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                 <Input
                   value={groupExtraOrderDrafts[group.key] ?? ''}
@@ -920,14 +1011,14 @@ export default function PaintTapeSettlementsPage() {
                     }
                   }}
                   placeholder="kolejny numer zlecenia"
-                  disabled={readOnly || groupBusy}
+                  disabled={!canOpen || groupBusy}
                   className="h-10"
                 />
                 <Button
                   type="button"
                   variant="secondary"
                   onClick={() => handleAddOrderNumber(group)}
-                  disabled={readOnly || groupBusy}
+                  disabled={!canOpen || groupBusy}
                   className="min-h-[40px] px-3 py-2"
                 >
                   <Plus className="mr-2 h-4 w-4" />
@@ -950,19 +1041,19 @@ export default function PaintTapeSettlementsPage() {
                 <Badge tone="info">{group.items.length} farby / taśmy</Badge>
               )}
             </div>
-            {filter === 'OPEN' && (
+            {activeFilter === 'OPEN' && (
               <Button
                 type="button"
                 variant="secondary"
                 onClick={() => handleSaveOpenGroup(group)}
-                disabled={readOnly || groupBusy}
+                disabled={!canOpen || groupBusy}
                 className="min-h-[42px] px-3 py-2"
               >
                 <Save className="mr-2 h-4 w-4" />
                 Przesuń zlecenie do wpisu ilości
               </Button>
             )}
-            {filter === 'DETAILS_REQUIRED' && (
+            {activeFilter === 'DETAILS_REQUIRED' && (
               <div className="grid gap-2 sm:grid-cols-[180px_auto_auto]">
                 <div>
                   <label className="text-xs uppercase tracking-wide text-dim">Ilość detali</label>
@@ -975,7 +1066,7 @@ export default function PaintTapeSettlementsPage() {
                       }))
                     }
                     inputMode="numeric"
-                    disabled={readOnly || groupBusy}
+                    disabled={!canDetails || groupBusy}
                     aria-label="Ilość wyprodukowanych detali"
                     className="mt-1 h-10"
                   />
@@ -985,7 +1076,7 @@ export default function PaintTapeSettlementsPage() {
                     type="button"
                     variant="secondary"
                     onClick={() => handleSaveDetailsGroup(group)}
-                    disabled={readOnly || groupBusy}
+                    disabled={!canDetails || groupBusy}
                     className="min-h-[42px] px-3 py-2"
                   >
                     <Save className="mr-2 h-4 w-4" />
@@ -997,7 +1088,7 @@ export default function PaintTapeSettlementsPage() {
                     type="button"
                     variant="ghost"
                     onClick={() => handleMoveGroupBackToOpen(group)}
-                    disabled={readOnly || groupBusy}
+                    disabled={!canDetails || groupBusy}
                     className="min-h-[42px] px-3 py-2"
                   >
                     <RotateCcw className="mr-2 h-4 w-4" />
@@ -1006,13 +1097,13 @@ export default function PaintTapeSettlementsPage() {
                 </div>
               </div>
             )}
-            {filter === 'DONE' && (
+            {activeFilter === 'DONE' && (
               <div className="flex flex-wrap gap-2 md:justify-end">
                 <Button
                   type="button"
                   variant="secondary"
                   onClick={() => handleAccountedGroup(group)}
-                  disabled={readOnly || groupBusy || groupAccounted}
+                  disabled={!canAccounting || groupBusy || groupAccounted}
                   className={cn(
                     'min-h-[42px] px-3 py-2',
                     groupAccounted &&
@@ -1026,7 +1117,7 @@ export default function PaintTapeSettlementsPage() {
                   type="button"
                   variant="secondary"
                   onClick={() => handleReopenGroup(group)}
-                  disabled={readOnly || groupBusy}
+                  disabled={!canAccounting || groupBusy}
                   className="min-h-[42px] px-3 py-2"
                 >
                   <RotateCcw className="mr-2 h-4 w-4" />
@@ -1053,8 +1144,8 @@ export default function PaintTapeSettlementsPage() {
                   'Pobrane z magazynu',
                   'Stan po',
                   'Zużycie',
-                  ...(filter === 'OPEN' ? [] : ['Zużycie / szt.']),
-                  ...(filter === 'DONE' ? [] : ['Akcje'])
+                  ...(activeFilter === 'OPEN' ? [] : ['Zużycie / szt.']),
+                  ...(activeFilter === 'DONE' ? [] : ['Akcje'])
                 ].map((column) => (
                   <th
                     key={`${group.key}-${column}`}
@@ -1071,8 +1162,8 @@ export default function PaintTapeSettlementsPage() {
                 const erp = getErpForSettlement(settlement);
                 const unit = settlement.unit || 'kg';
                 const isDone = settlement.status === 'DONE';
-                const showPerPiece = filter !== 'OPEN';
-                const showActions = filter !== 'DONE';
+                const showPerPiece = activeFilter !== 'OPEN';
+                const showActions = activeFilter !== 'DONE';
                 return (
                   <tr
                     key={settlement.id}
@@ -1099,7 +1190,7 @@ export default function PaintTapeSettlementsPage() {
                         value={draft.endQty}
                         onChange={(event) => setDraft(settlement, { endQty: event.target.value })}
                         inputMode="decimal"
-                        disabled={readOnly || isDone || filter !== 'OPEN'}
+                        disabled={!canOpen || isDone || activeFilter !== 'OPEN'}
                         aria-label="Stan farby po zakończeniu"
                         className="min-w-[110px]"
                       />
@@ -1123,33 +1214,81 @@ export default function PaintTapeSettlementsPage() {
     );
   });
 
+  const celebrationOverlay = celebrationVisible ? (
+    <div
+      className="pointer-events-none fixed inset-0 z-[1200] flex items-center justify-center overflow-hidden bg-[rgba(5,6,10,0.34)] px-4"
+      aria-live="polite"
+    >
+      <div className="paint-tape-celebration relative flex min-h-[320px] w-full max-w-[520px] flex-col items-center justify-center">
+        <div className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2">
+          {celebrationParticles.map((particle) => (
+            <span
+              key={particle.id}
+              className="paint-tape-celebration-particle absolute left-1/2 top-1/2 rounded-full"
+              style={
+                {
+                  '--angle': `${particle.angle}deg`,
+                  '--distance': `${particle.distance}px`,
+                  '--delay': `${particle.delay}s`,
+                  width: `${particle.size}px`,
+                  height: `${particle.size}px`,
+                  backgroundColor: particle.color
+                } as CSSProperties
+              }
+            />
+          ))}
+        </div>
+
+        <div className="paint-tape-teddy relative h-[250px] w-[296px] overflow-hidden rounded-2xl drop-shadow-[0_26px_54px_rgba(0,0,0,0.45)] sm:h-[300px] sm:w-[356px]">
+          <iframe
+            src="https://tenor.com/embed/23978789"
+            title="Bear Dance GIF"
+            className="h-full w-full border-0"
+            allowFullScreen
+            loading="lazy"
+          />
+        </div>
+        <div className="paint-tape-celebration-text mt-4 rounded-2xl border border-[rgba(255,255,255,0.16)] bg-[rgba(9,10,14,0.82)] px-5 py-4 text-center shadow-[0_18px_60px_rgba(0,0,0,0.42)] backdrop-blur">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-success">
+            Gratulacje
+          </p>
+          <p className="mt-1 text-xl font-black text-title sm:text-2xl">
+            Rozliczyłaś zlecenie
+          </p>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   const statusButtonClass =
     'min-h-[48px] border-[rgba(255,122,26,0.22)] bg-[rgba(255,122,26,0.035)] px-4 py-2.5 text-center leading-tight shadow-[0_8px_22px_rgba(255,122,26,0.08)] data-[state=active]:shadow-[0_0_0_2px_rgba(255,122,26,0.22),0_0_22px_rgba(255,122,26,0.28),inset_0_1px_0_rgba(255,255,255,0.1)]';
 
   const statusFilters = (
-    <Tabs value={filter} onValueChange={(value) => setFilter(value as FilterValue)}>
+    <Tabs value={activeFilter} onValueChange={(value) => setFilter(value as FilterValue)}>
       <TabsList className="grid w-full grid-cols-1 gap-2 border-0 bg-transparent p-0 shadow-none sm:grid-cols-4">
-        <TabsTrigger className={statusButtonClass} value="CREATE">
-          Dodaj zlecenie
-        </TabsTrigger>
-        <TabsTrigger className={statusButtonClass} value="OPEN">
-          Otwarte zlecenia
-        </TabsTrigger>
-        <TabsTrigger className={statusButtonClass} value="DETAILS_REQUIRED">
-          Zlecenia do wpisania ilości
-        </TabsTrigger>
-        <TabsTrigger className={statusButtonClass} value="DONE">
-          Zakończone zlecenia
-        </TabsTrigger>
+        {visibleFilters.map((item) => (
+          <TabsTrigger key={item.value} className={statusButtonClass} value={item.value}>
+            {item.label}
+          </TabsTrigger>
+        ))}
       </TabsList>
     </Tabs>
   );
-
   return (
     <div className="space-y-5">
+      {celebrationOverlay}
       {statusFilters}
 
-      {filter === 'CREATE' && (
+      {visibleFilters.length === 0 && (
+        <Card>
+          <EmptyState
+            title="Brak dostepu do etapow"
+            description="Administrator musi wlaczyc przynajmniej jeden etap rozliczania farb i tasm."
+          />
+        </Card>
+      )}
+
+      {activeFilter === 'CREATE' && visibleFilters.length > 0 && (
       <Card>
         <form onSubmit={handleCreate} className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1158,10 +1297,10 @@ export default function PaintTapeSettlementsPage() {
                 Nowe rozliczenie
               </p>
               <p className="text-sm text-dim">
-                Numer zlecenia wpisz ręcznie, a detal i farbę/taśmę wybierz z podpowiedzi.
+                Numer zlecenia mozesz dopisac pozniej, a detal i farbe/tasme wybierz z podpowiedzi.
               </p>
             </div>
-            <Button type="submit" disabled={readOnly || createMutation.isPending}>
+            <Button type="submit" disabled={!canCreate || createMutation.isPending}>
               <Plus className="mr-2 h-4 w-4" />
               Dodaj zlecenie
             </Button>
@@ -1173,8 +1312,8 @@ export default function PaintTapeSettlementsPage() {
               <Input
                 value={form.orderNumber}
                 onChange={(event) => setForm((prev) => ({ ...prev, orderNumber: event.target.value }))}
-                placeholder="np. ZL/123"
-                disabled={readOnly}
+                placeholder="opcjonalnie, np. ZL/123"
+                disabled={!canCreate}
                 className="mt-1"
               />
             </div>
@@ -1192,7 +1331,7 @@ export default function PaintTapeSettlementsPage() {
                     setTimeout(() => setShowDetailSuggestions(false), 120);
                   }}
                   placeholder="zacznij wpisywać"
-                  disabled={readOnly}
+                  disabled={!canCreate}
                 />
                 {showDetailSuggestions && detailSuggestions.length > 0 && (
                   <div className="absolute z-40 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_16px_36px_rgba(0,0,0,0.48)]">
@@ -1225,7 +1364,7 @@ export default function PaintTapeSettlementsPage() {
                 type="button"
                 variant="secondary"
                 onClick={addItemDraft}
-                disabled={readOnly || createMutation.isPending}
+                disabled={!canCreate || createMutation.isPending}
                 className="min-h-[40px] px-3 py-2"
               >
                 <Plus className="mr-2 h-4 w-4" />
@@ -1268,7 +1407,7 @@ export default function PaintTapeSettlementsPage() {
                             }, 120);
                           }}
                           placeholder="zacznij wpisywać"
-                          disabled={readOnly}
+                          disabled={!canCreate}
                         />
                         {showItemSuggestionsFor === draft.id && itemSuggestions.length > 0 && (
                           <div className="absolute z-40 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_16px_36px_rgba(0,0,0,0.48)]">
@@ -1317,7 +1456,7 @@ export default function PaintTapeSettlementsPage() {
                         }
                         inputMode="decimal"
                         placeholder="np. 5,2"
-                        disabled={readOnly}
+                        disabled={!canCreate}
                         className="mt-1"
                       />
                     </div>
@@ -1326,7 +1465,7 @@ export default function PaintTapeSettlementsPage() {
                         type="button"
                         variant="ghost"
                         onClick={() => removeItemDraft(draft.id)}
-                        disabled={readOnly || itemDrafts.length <= 1 || createMutation.isPending}
+                        disabled={!canCreate || itemDrafts.length <= 1 || createMutation.isPending}
                         className="min-h-[40px] w-full px-3 py-2 md:w-11 md:px-0"
                         aria-label="Usuń farbę / taśmę"
                       >
@@ -1342,7 +1481,7 @@ export default function PaintTapeSettlementsPage() {
       </Card>
       )}
 
-      {filter !== 'CREATE' && (
+      {activeFilter !== 'CREATE' && visibleFilters.length > 0 && (
       <Card className="space-y-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-2">

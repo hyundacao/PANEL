@@ -3,7 +3,7 @@ create table if not exists public.paint_tape_settlements (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   created_by text not null default 'nieznany',
-  order_number text not null,
+  order_number text,
   detail_name text not null,
   item_name text not null,
   item_index_code text,
@@ -23,6 +23,9 @@ create index if not exists paint_tape_settlements_order_idx
 
 create index if not exists paint_tape_settlements_item_idx
   on public.paint_tape_settlements (lower(item_name), lower(coalesce(item_index_code, '')));
+
+alter table if exists public.paint_tape_settlements
+  alter column order_number drop not null;
 
 alter table if exists public.paint_tape_settlements
   add column if not exists accounted_at timestamptz,

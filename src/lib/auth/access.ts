@@ -3,7 +3,9 @@
   WarehouseAccess,
   WarehouseKey,
   WarehouseRole,
-  WarehouseTab
+  WarehouseTab,
+  PaintTapePermissionKey,
+  PaintTapePermissions
 } from '@/lib/api/types';
 
 export const PRZEMIALY_TABS: WarehouseTab[] = [
@@ -21,6 +23,20 @@ export const CZESCI_TABS: WarehouseTab[] = ['pobierz', 'uzupelnij', 'stany', 'hi
 export const RAPORT_ZMIANOWY_TABS: WarehouseTab[] = ['raport-zmianowy'];
 export const BILANS_PRZEZBROJEN_TABS: WarehouseTab[] = ['bilans-przezbrojen'];
 export const FARBY_TASMY_TABS: WarehouseTab[] = ['rozliczanie-farb-tasm'];
+export const PAINT_TAPE_PERMISSION_KEYS: PaintTapePermissionKey[] = [
+  'create',
+  'open',
+  'details',
+  'accounting',
+  'celebration'
+];
+export const DEFAULT_PAINT_TAPE_PERMISSIONS: PaintTapePermissions = {
+  create: true,
+  open: true,
+  details: true,
+  accounting: true,
+  celebration: true
+};
 export const ERP_TRANSFERS_TABS: WarehouseTab[] = [
   'erp-magazynier',
   'erp-rozdzielca',
@@ -46,9 +62,10 @@ export const isWarehouseAdmin = (
 const hasLegacyPaintTapeAccess = (user: AppUser | null | undefined) => {
   if (!user) return false;
   if (isHeadAdmin(user)) return true;
-  if (user.access.warehouses.FARBY_TASMY) return true;
-  if (user.role === 'ADMIN' && user.access.warehouses.PRZEMIALY?.admin) return true;
-  return Boolean(user.access.warehouses.PRZEMIALY?.tabs?.includes('spis-oryginalow'));
+  const warehouses = user.access?.warehouses ?? {};
+  if (warehouses.FARBY_TASMY) return true;
+  if (user.role === 'ADMIN' && warehouses.PRZEMIALY?.admin) return true;
+  return Boolean(warehouses.PRZEMIALY?.tabs?.includes('spis-oryginalow'));
 };
 
 const allWarehouseKeys: WarehouseKey[] = [
@@ -66,7 +83,7 @@ export const getAdminWarehouses = (
   if (!user) return [];
   if (isHeadAdmin(user)) return allWarehouseKeys;
   if (user.role !== 'ADMIN') return [];
-  return Object.entries(user.access.warehouses)
+  return Object.entries(user.access?.warehouses ?? {})
     .filter(([, value]) => Boolean(value?.admin))
     .map(([key]) => key as WarehouseKey);
 };
@@ -75,7 +92,7 @@ export const hasAnyAdminAccess = (user: AppUser | null | undefined) => {
   if (!user) return false;
   if (isHeadAdmin(user)) return true;
   if (user.role !== 'ADMIN') return false;
-  return Object.values(user.access.warehouses).some((entry) => Boolean(entry?.admin));
+  return Object.values(user.access?.warehouses ?? {}).some((entry) => Boolean(entry?.admin));
 };
 
 export const getRoleLabel = (user: AppUser | null | undefined, warehouse: WarehouseKey | null) => {
@@ -88,7 +105,7 @@ export const getRoleLabel = (user: AppUser | null | undefined, warehouse: Wareho
 export const getAccessibleWarehouses = (user: AppUser | null | undefined): WarehouseKey[] => {
   if (!user) return [];
   if (isHeadAdmin(user)) return allWarehouseKeys;
-  const keys = new Set(Object.keys(user.access.warehouses) as WarehouseKey[]);
+  const keys = new Set(Object.keys(user.access?.warehouses ?? {}) as WarehouseKey[]);
   if (hasLegacyPaintTapeAccess(user)) keys.add('FARBY_TASMY');
   return [...keys];
 };
@@ -100,7 +117,7 @@ export const canAccessWarehouse = (
   if (!user) return false;
   if (isHeadAdmin(user)) return true;
   if (warehouse === 'FARBY_TASMY') return hasLegacyPaintTapeAccess(user);
-  return Boolean(user.access.warehouses[warehouse]);
+  return Boolean(user.access?.warehouses?.[warehouse]);
 };
 
 export const canSeeTab = (
@@ -115,7 +132,7 @@ export const canSeeTab = (
     return hasLegacyPaintTapeAccess(user);
   }
   if (warehouse === 'CZESCI' && tab === 'historia') return false;
-  return Boolean(user.access.warehouses[warehouse]?.tabs?.includes(tab));
+  return Boolean(user.access?.warehouses?.[warehouse]?.tabs?.includes(tab));
 };
 
 export const isReadOnly = (
@@ -126,12 +143,44 @@ export const isReadOnly = (
   if (isHeadAdmin(user) || isWarehouseAdmin(user, warehouse)) return false;
   if (warehouse === 'FARBY_TASMY') {
     return (
-      user.access.warehouses.FARBY_TASMY?.readOnly ??
-      user.access.warehouses.PRZEMIALY?.readOnly ??
+      user.access?.warehouses?.FARBY_TASMY?.readOnly ??
+      user.access?.warehouses?.PRZEMIALY?.readOnly ??
       true
     );
   }
-  return user.access.warehouses[warehouse]?.readOnly ?? true;
+  return user.access?.warehouses?.[warehouse]?.readOnly ?? true;
+};
+
+export const getPaintTapePermissions = (
+  user: AppUser | null | undefined
+): PaintTapePermissions => {
+  if (!user) {
+    return { create: false, open: false, details: false, accounting: false, celebration: false };
+  }
+  if (isHeadAdmin(user) || isWarehouseAdmin(user, 'FARBY_TASMY')) {
+    return { ...DEFAULT_PAINT_TAPE_PERMISSIONS };
+  }
+  if (!canSeeTab(user, 'FARBY_TASMY', 'rozliczanie-farb-tasm')) {
+    return { create: false, open: false, details: false, accounting: false, celebration: false };
+  }
+  const raw = user.access?.paintTapePermissions;
+  if (!raw) return { ...DEFAULT_PAINT_TAPE_PERMISSIONS };
+  return {
+    create: raw.create !== false,
+    open: raw.open !== false,
+    details: raw.details !== false,
+    accounting: raw.accounting !== false,
+    celebration: raw.celebration !== false
+  };
+};
+
+export const canUsePaintTapePermission = (
+  user: AppUser | null | undefined,
+  permission: PaintTapePermissionKey
+) => {
+  if (!user) return false;
+  if (isReadOnly(user, 'FARBY_TASMY')) return false;
+  return getPaintTapePermissions(user)[permission];
 };
 
 export const getRolePreset = (

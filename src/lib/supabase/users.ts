@@ -9,6 +9,7 @@ import type {
   WarehouseRole,
   WarehouseTab
 } from '@/lib/api/types';
+import { PAINT_TAPE_PERMISSION_KEYS } from '@/lib/auth/access';
 
 export type DbUserRow = {
   id: string;
@@ -101,7 +102,10 @@ const cloneAccess = (access: UserAccess): UserAccess => ({
     Object.entries(access.warehouses)
       .filter(([key]) => isWarehouseKey(key))
       .map(([key, value]) => [key, value ? { ...value, tabs: [...value.tabs] } : value])
-  ) as UserAccess['warehouses']
+  ) as UserAccess['warehouses'],
+  paintTapePermissions: access.paintTapePermissions
+    ? { ...access.paintTapePermissions }
+    : undefined
 });
 
 const normalizeAccessFromDb = (access: UserAccess | null | undefined): UserAccess => {
@@ -131,9 +135,22 @@ const normalizeAccessFromDb = (access: UserAccess | null | undefined): UserAcces
       admin: Boolean(przemialyAccess.admin)
     };
   }
+  const paintTapePermissionsRaw =
+    source.paintTapePermissions && typeof source.paintTapePermissions === 'object'
+      ? (source.paintTapePermissions as Record<string, unknown>)
+      : null;
+  const paintTapePermissions = paintTapePermissionsRaw
+    ? Object.fromEntries(
+        PAINT_TAPE_PERMISSION_KEYS.map((key) => [
+          key,
+          paintTapePermissionsRaw[key] !== false
+        ])
+      )
+    : undefined;
   return {
     admin: Boolean(source.admin),
-    warehouses
+    warehouses,
+    paintTapePermissions
   };
 };
 
@@ -168,9 +185,25 @@ const mergeAccesses = (accesses: UserAccess[]): UserAccess => {
         ? mergeWarehouseAccess(current, warehouseAccess)
         : { ...warehouseAccess, tabs: [...warehouseAccess.tabs] };
     });
+    const leftPaintTape = acc.paintTapePermissions;
+    const rightPaintTape = normalized.paintTapePermissions;
+    const paintTapePermissions =
+      leftPaintTape && rightPaintTape
+        ? Object.fromEntries(
+            PAINT_TAPE_PERMISSION_KEYS.map((key) => [
+              key,
+              Boolean(leftPaintTape[key] || rightPaintTape[key])
+            ])
+          )
+        : leftPaintTape
+          ? { ...leftPaintTape }
+          : rightPaintTape
+            ? { ...rightPaintTape }
+            : undefined;
     return {
       admin: Boolean(acc.admin || normalized.admin),
-      warehouses: mergedWarehouses
+      warehouses: mergedWarehouses,
+      paintTapePermissions
     };
   }, cloneAccess(defaultAccess));
 };

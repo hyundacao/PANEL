@@ -50,9 +50,14 @@ export type WarehouseAccess = {
   admin?: boolean;
 };
 
+export type PaintTapePermissionKey = 'create' | 'open' | 'details' | 'accounting' | 'celebration';
+
+export type PaintTapePermissions = Record<PaintTapePermissionKey, boolean>;
+
 export type UserAccess = {
   admin: boolean;
   warehouses: Partial<Record<WarehouseKey, WarehouseAccess>>;
+  paintTapePermissions?: Partial<PaintTapePermissions>;
 };
 
 export type PermissionGroup = {

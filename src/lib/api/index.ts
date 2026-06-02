@@ -763,7 +763,7 @@ export const getProductionDetailSuggestions = async (): Promise<string[]> =>
   appRequest('getProductionDetailSuggestions');
 
 export const createPaintTapeSettlement = async (payload: {
-  orderNumber: string;
+  orderNumber?: string;
   detailName: string;
   itemName: string;
   itemIndexCode?: string | null;

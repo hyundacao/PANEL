@@ -673,65 +673,6 @@ create unique index if not exists original_inventory_erp_snapshots_date_name_ind
     coalesce(lower(index_code), '')
   );
 
-create table if not exists public.original_inventory_grind_tasks (
-  id uuid primary key default gen_random_uuid(),
-  material_name text not null,
-  target_material_name text,
-  qty numeric not null default 0,
-  unit text not null default 'kg',
-  status text not null default 'PENDING' check (status in ('PENDING', 'DONE')),
-  source_report_date text,
-  created_by text not null default 'nieznany',
-  created_at timestamptz not null default now(),
-  completed_by text,
-  completed_at timestamptz
-);
-
-alter table if exists public.original_inventory_grind_tasks
-  add column if not exists target_material_name text;
-
-create index if not exists original_inventory_grind_tasks_status_created_idx
-  on public.original_inventory_grind_tasks(status, created_at desc);
-
-create table if not exists public.paint_tape_settlements (
-  id uuid primary key default gen_random_uuid(),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  created_by text not null default 'nieznany',
-  order_number text,
-  detail_name text not null,
-  item_name text not null,
-  item_index_code text,
-  unit text not null default 'kg',
-  start_qty numeric not null default 0 check (start_qty >= 0),
-  warehouse_issued_qty numeric not null default 0 check (warehouse_issued_qty >= 0),
-  end_qty numeric check (end_qty is null or end_qty >= 0),
-  produced_qty numeric check (produced_qty is null or produced_qty >= 0),
-  status text not null default 'OPEN' check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE')),
-  accounted_at timestamptz,
-  accounted_by text
-);
-
-create index if not exists paint_tape_settlements_status_idx
-  on public.paint_tape_settlements (status, created_at desc);
-
-create index if not exists paint_tape_settlements_order_idx
-  on public.paint_tape_settlements (lower(order_number));
-
-create index if not exists paint_tape_settlements_item_idx
-  on public.paint_tape_settlements (lower(item_name), lower(coalesce(item_index_code, '')));
-
-create table if not exists public.paint_tape_settlement_issues (
-  id uuid primary key default gen_random_uuid(),
-  settlement_id uuid not null references public.paint_tape_settlements(id) on delete cascade,
-  qty numeric not null check (qty <> 0),
-  created_at timestamptz not null default now(),
-  created_by text not null default 'nieznany'
-);
-
-create index if not exists paint_tape_settlement_issues_settlement_idx
-  on public.paint_tape_settlement_issues (settlement_id, created_at);
-
 -- =========================
 -- RAPORT ZMIANOWY
 -- =========================
@@ -847,9 +788,6 @@ begin
         'original_inventory_entries',
         'original_inventory_catalog',
         'original_inventory_erp_snapshots',
-        'original_inventory_grind_tasks',
-        'paint_tape_settlements',
-        'paint_tape_settlement_issues',
         'raport_zmianowy_sessions',
         'raport_zmianowy_items',
         'raport_zmianowy_entries',
@@ -1290,5 +1228,173 @@ values
 on conflict do nothing;
 
 commit;
+
+notify pgrst, 'reload schema';
+
+alter table original_inventory_entries
+  add column if not exists source_type text,
+  add column if not exists source_id text;
+
+create unique index if not exists original_inventory_entries_source_idx
+  on original_inventory_entries(source_type, source_id)
+  where source_type is not null and source_id is not null;
+
+create table if not exists original_inventory_silos (
+  id uuid primary key,
+  name text not null,
+  chamber text not null,
+  material_name text not null,
+  warehouse_id text not null references warehouses(id) on delete restrict,
+  percent_kg numeric not null default 0,
+  hopper_kg numeric not null default 0,
+  is_active boolean not null default true,
+  order_no integer not null default 0,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists original_inventory_silo_entries (
+  id uuid primary key,
+  config_id uuid not null references original_inventory_silos(id) on delete cascade,
+  date_key text not null,
+  percent numeric not null default 0,
+  hopper_present boolean not null default false,
+  calculated_qty numeric not null default 0,
+  generated_entry_id uuid references original_inventory_entries(id) on delete set null,
+  user_name text not null default 'nieznany',
+  updated_at timestamptz not null default now(),
+  unique(config_id, date_key)
+);
+
+create table if not exists public.original_inventory_grind_tasks (
+  id uuid primary key,
+  material_name text not null,
+  target_material_name text,
+  qty numeric not null default 0,
+  unit text not null default 'kg',
+  status text not null default 'PENDING' check (status in ('PENDING', 'DONE')),
+  source_report_date text,
+  created_by text not null default 'nieznany',
+  created_at timestamptz not null default now(),
+  completed_by text,
+  completed_at timestamptz
+);
+
+alter table if exists public.original_inventory_grind_tasks
+  add column if not exists target_material_name text;
+
+create index if not exists original_inventory_grind_tasks_status_created_idx
+  on public.original_inventory_grind_tasks(status, created_at desc);
+
+alter table if exists public.original_inventory_grind_tasks enable row level security;
+
+create table if not exists public.paint_tape_settlements (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by text not null default 'nieznany',
+  order_number text,
+  detail_name text not null,
+  item_name text not null,
+  item_index_code text,
+  unit text not null default 'kg',
+  start_qty numeric not null default 0 check (start_qty >= 0),
+  warehouse_issued_qty numeric not null default 0 check (warehouse_issued_qty >= 0),
+  end_qty numeric check (end_qty is null or end_qty >= 0),
+  produced_qty numeric check (produced_qty is null or produced_qty >= 0),
+  status text not null default 'OPEN' check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE'))
+);
+
+create index if not exists paint_tape_settlements_status_idx
+  on public.paint_tape_settlements (status, created_at desc);
+
+create index if not exists paint_tape_settlements_order_idx
+  on public.paint_tape_settlements (lower(order_number));
+
+create index if not exists paint_tape_settlements_item_idx
+  on public.paint_tape_settlements (lower(item_name), lower(coalesce(item_index_code, '')));
+
+create table if not exists public.paint_tape_settlement_issues (
+  id uuid primary key default gen_random_uuid(),
+  settlement_id uuid not null references public.paint_tape_settlements(id) on delete cascade,
+  qty numeric not null check (qty <> 0),
+  created_at timestamptz not null default now(),
+  created_by text not null default 'nieznany'
+);
+
+create index if not exists paint_tape_settlement_issues_settlement_idx
+  on public.paint_tape_settlement_issues (settlement_id, created_at);
+
+insert into public.paint_tape_settlement_issues (settlement_id, qty, created_at, created_by)
+select id, warehouse_issued_qty, created_at, created_by
+from public.paint_tape_settlements settlement
+where warehouse_issued_qty <> 0
+  and not exists (
+    select 1
+    from public.paint_tape_settlement_issues issue
+    where issue.settlement_id = settlement.id
+  );
+
+alter table if exists public.paint_tape_settlements enable row level security;
+alter table if exists public.paint_tape_settlement_issues enable row level security;
+
+notify pgrst, 'reload schema';
+
+
+create table if not exists public.paint_tape_settlements (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by text not null default 'nieznany',
+  order_number text,
+  detail_name text not null,
+  item_name text not null,
+  item_index_code text,
+  unit text not null default 'kg',
+  start_qty numeric not null default 0 check (start_qty >= 0),
+  warehouse_issued_qty numeric not null default 0 check (warehouse_issued_qty >= 0),
+  end_qty numeric check (end_qty is null or end_qty >= 0),
+  produced_qty numeric check (produced_qty is null or produced_qty >= 0),
+  status text not null default 'OPEN' check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE'))
+);
+
+create index if not exists paint_tape_settlements_status_idx
+  on public.paint_tape_settlements (status, created_at desc);
+
+create index if not exists paint_tape_settlements_order_idx
+  on public.paint_tape_settlements (lower(order_number));
+
+create index if not exists paint_tape_settlements_item_idx
+  on public.paint_tape_settlements (lower(item_name), lower(coalesce(item_index_code, '')));
+
+alter table if exists public.paint_tape_settlements
+  alter column order_number drop not null;
+
+alter table if exists public.paint_tape_settlements
+  add column if not exists accounted_at timestamptz,
+  add column if not exists accounted_by text;
+
+create table if not exists public.paint_tape_settlement_issues (
+  id uuid primary key default gen_random_uuid(),
+  settlement_id uuid not null references public.paint_tape_settlements(id) on delete cascade,
+  qty numeric not null check (qty <> 0),
+  created_at timestamptz not null default now(),
+  created_by text not null default 'nieznany'
+);
+
+create index if not exists paint_tape_settlement_issues_settlement_idx
+  on public.paint_tape_settlement_issues (settlement_id, created_at);
+
+insert into public.paint_tape_settlement_issues (settlement_id, qty, created_at, created_by)
+select id, warehouse_issued_qty, created_at, created_by
+from public.paint_tape_settlements settlement
+where warehouse_issued_qty <> 0
+  and not exists (
+    select 1
+    from public.paint_tape_settlement_issues issue
+    where issue.settlement_id = settlement.id
+  );
+
+alter table if exists public.paint_tape_settlements enable row level security;
+alter table if exists public.paint_tape_settlement_issues enable row level security;
 
 notify pgrst, 'reload schema';
