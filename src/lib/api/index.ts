@@ -783,6 +783,7 @@ export const updatePaintTapeSettlement = async (payload: {
   warehouseIssuedQty?: number;
   endQty?: number | null;
   producedQty?: number | null;
+  completeProduction?: boolean;
   reopen?: boolean;
   moveToOpen?: boolean;
   accounted?: boolean;

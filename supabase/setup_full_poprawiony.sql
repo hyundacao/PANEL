@@ -1301,6 +1301,7 @@ create table if not exists public.paint_tape_settlements (
   warehouse_issued_qty numeric not null default 0 check (warehouse_issued_qty >= 0),
   end_qty numeric check (end_qty is null or end_qty >= 0),
   produced_qty numeric check (produced_qty is null or produced_qty >= 0),
+  production_completed_at timestamptz,
   status text not null default 'OPEN' check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE'))
 );
 
@@ -1354,6 +1355,7 @@ create table if not exists public.paint_tape_settlements (
   warehouse_issued_qty numeric not null default 0 check (warehouse_issued_qty >= 0),
   end_qty numeric check (end_qty is null or end_qty >= 0),
   produced_qty numeric check (produced_qty is null or produced_qty >= 0),
+  production_completed_at timestamptz,
   status text not null default 'OPEN' check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE'))
 );
 
@@ -1368,6 +1370,9 @@ create index if not exists paint_tape_settlements_item_idx
 
 alter table if exists public.paint_tape_settlements
   alter column order_number drop not null;
+
+alter table if exists public.paint_tape_settlements
+  add column if not exists production_completed_at timestamptz;
 
 alter table if exists public.paint_tape_settlements
   add column if not exists accounted_at timestamptz,

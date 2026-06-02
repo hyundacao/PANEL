@@ -707,6 +707,7 @@ create table if not exists public.paint_tape_settlements (
   warehouse_issued_qty numeric not null default 0 check (warehouse_issued_qty >= 0),
   end_qty numeric check (end_qty is null or end_qty >= 0),
   produced_qty numeric check (produced_qty is null or produced_qty >= 0),
+  production_completed_at timestamptz,
   status text not null default 'OPEN' check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE')),
   accounted_at timestamptz,
   accounted_by text
@@ -720,6 +721,9 @@ create index if not exists paint_tape_settlements_order_idx
 
 create index if not exists paint_tape_settlements_item_idx
   on public.paint_tape_settlements (lower(item_name), lower(coalesce(item_index_code, '')));
+
+alter table if exists public.paint_tape_settlements
+  add column if not exists production_completed_at timestamptz;
 
 create table if not exists public.paint_tape_settlement_issues (
   id uuid primary key default gen_random_uuid(),

@@ -545,6 +545,7 @@ const mapPaintTapeSettlement = (
     usageQty,
     usagePerPiece,
     status: normalizePaintTapeStatus(row.status, endQty, producedQty),
+    productionCompletedAt: row.production_completed_at ?? null,
     accountedAt: row.accounted_at ?? null,
     accountedBy: row.accounted_by ? String(row.accounted_by).trim() : null
   };
@@ -1904,6 +1905,7 @@ const isMissingPaintTapeSettlementAccountingColumnsError = (error: unknown) => {
   return (
     text.includes('accounted_at') ||
     text.includes('accounted_by') ||
+    text.includes('production_completed_at') ||
     text.includes('PGRST204')
   );
 };
@@ -6158,6 +6160,12 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           updates.end_qty = endQty;
         }
       }
+      if (payload?.completeProduction === true) {
+        const completedEndQty =
+          updates.end_qty !== undefined ? (updates.end_qty as number | null) : existing.end_qty;
+        if (completedEndQty === null || completedEndQty === undefined) throw new Error('QTY_REQUIRED');
+        updates.production_completed_at = new Date().toISOString();
+      }
       if (payload?.producedQty !== undefined) {
         if (payload.producedQty === null || payload.producedQty === '') {
           updates.produced_qty = null;
@@ -6180,6 +6188,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (isDoneReopen) {
         if ('accounted_at' in existing) updates.accounted_at = null;
         if ('accounted_by' in existing) updates.accounted_by = null;
+      }
+      if (isMoveToOpen) {
+        updates.production_completed_at = null;
       }
 
       const nextEndQty =

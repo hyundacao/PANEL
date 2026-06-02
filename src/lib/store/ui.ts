@@ -93,9 +93,33 @@ const roleFromUser = (user: AppUser | null): Role => {
 };
 const storageKey = 'apka-ui';
 const rememberKey = `${storageKey}:remember`;
+const readStorageItem = (target: Storage, name: string) => {
+  try {
+    return target.getItem(name);
+  } catch {
+    return null;
+  }
+};
+
+const writeStorageItem = (target: Storage, name: string, value: string) => {
+  try {
+    target.setItem(name, value);
+  } catch {
+    // Storage can be blocked on some mobile browsers. Keep the app usable without persistence.
+  }
+};
+
+const removeStorageItem = (target: Storage, name: string) => {
+  try {
+    target.removeItem(name);
+  } catch {
+    // Ignore storage cleanup failures; they should not crash the UI.
+  }
+};
+
 const getRememberFlag = () => {
   if (typeof window === 'undefined') return true;
-  return window.localStorage.getItem(rememberKey) !== '0';
+  return readStorageItem(window.localStorage, rememberKey) !== '0';
 };
 
 const storage = createJSONStorage<PersistedUiState>(() => ({
@@ -103,21 +127,21 @@ const storage = createJSONStorage<PersistedUiState>(() => ({
     if (typeof window === 'undefined') return null;
     const remember = getRememberFlag();
     const source = remember ? window.localStorage : window.sessionStorage;
-    return source.getItem(name);
+    return readStorageItem(source, name);
   },
   setItem: (name: string, value: string) => {
     if (typeof window === 'undefined') return;
     const remember = getRememberFlag();
     const target = remember ? window.localStorage : window.sessionStorage;
     const other = remember ? window.sessionStorage : window.localStorage;
-    target.setItem(name, value);
-    other.removeItem(name);
+    writeStorageItem(target, name, value);
+    removeStorageItem(other, name);
   },
   removeItem: (name: string) => {
     if (typeof window === 'undefined') return;
-    window.localStorage.removeItem(name);
-    window.sessionStorage.removeItem(name);
-    window.localStorage.removeItem(rememberKey);
+    removeStorageItem(window.localStorage, name);
+    removeStorageItem(window.sessionStorage, name);
+    removeStorageItem(window.localStorage, rememberKey);
   }
 }));
 
@@ -139,7 +163,7 @@ export const useUiStore = create<UiState>()(
       rememberMe: true,
       setRememberMe: (value) => {
         if (typeof window !== 'undefined') {
-          window.localStorage.setItem(rememberKey, value ? '1' : '0');
+          writeStorageItem(window.localStorage, rememberKey, value ? '1' : '0');
         }
         set({ rememberMe: value });
       },

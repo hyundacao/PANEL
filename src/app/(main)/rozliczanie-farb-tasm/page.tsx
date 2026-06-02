@@ -1,9 +1,9 @@
-'use client';
+﻿'use client';
 
 import { useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Minus, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
+import { CheckCircle2, Minus, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react';
 import {
   addPaintTapeSettlementIssue,
   createPaintTapeSettlement,
@@ -151,6 +151,19 @@ const formatShortDate = (value: string) => {
   return date.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' });
 };
 
+const formatDateTime = (value: string | null | undefined) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('pl-PL', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};
+
 const formatSignedQty = (value: number, unit = 'kg') => {
   const sign = value > 0 ? '+' : '-';
   return `${sign}${formatQty(Math.abs(value), unit)}`;
@@ -162,7 +175,7 @@ const formatIssueHistory = (settlement: PaintTapeSettlement) =>
       const date = formatShortDate(issue.createdAt);
       return `${date ? `${date} ` : ''}${formatSignedQty(issue.qty, settlement.unit || 'kg')}`;
     })
-    .join(' · ');
+    .join(' 路 ');
 
 const celebrationParticles = Array.from({ length: 28 }, (_, index) => ({
   id: index,
@@ -217,7 +230,6 @@ export default function PaintTapeSettlementsPage() {
   const [snapshotDate, setSnapshotDate] = useState(getLocalDateValue());
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
   const [groupProducedDrafts, setGroupProducedDrafts] = useState<Record<string, string>>({});
-  const [groupExtraOrderDrafts, setGroupExtraOrderDrafts] = useState<Record<string, string>>({});
   const [issueDraft, setIssueDraft] = useState<IssueDraft | null>(null);
   const [celebrationVisible, setCelebrationVisible] = useState(false);
   const [showDetailSuggestions, setShowDetailSuggestions] = useState(false);
@@ -436,7 +448,6 @@ export default function PaintTapeSettlementsPage() {
     onSuccess: (_data, payloads) => {
       setDrafts({});
       setGroupProducedDrafts({});
-      setGroupExtraOrderDrafts({});
       if (canShowCelebration && payloads.some((payload) => payload.accounted === true)) {
         showAccountedCelebration();
       }
@@ -552,23 +563,6 @@ export default function PaintTapeSettlementsPage() {
     return usageQty / producedQty;
   };
 
-  const appendOrderNumber = (currentValue: string, nextValue: string) => {
-    const currentParts = currentValue
-      .split(/[;,/]+/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-    const nextParts = nextValue
-      .split(/[;,/]+/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-    const values = new Map<string, string>();
-    [...currentParts, ...nextParts].forEach((part) => {
-      const key = normalizeKey(part);
-      if (key && !values.has(key)) values.set(key, part);
-    });
-    return [...values.values()].join(', ');
-  };
-
   const handleCreate = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canCreate) {
@@ -664,30 +658,10 @@ export default function PaintTapeSettlementsPage() {
         id: settlement.id,
         orderNumber,
         endQty,
-        producedQty: null
+        producedQty: null,
+        completeProduction: true
       }))
     );
-  };
-
-  const handleAddOrderNumber = (group: SettlementGroup) => {
-    if (!canOpen) {
-      toast({ title: 'Brak uprawnien do otwartych zlecen.', tone: 'error' });
-      return;
-    }
-    const firstSettlement = group.items[0];
-    if (!firstSettlement) return;
-    const extraOrderNumber = String(groupExtraOrderDrafts[group.key] ?? '').trim();
-    if (!extraOrderNumber) {
-      toast({ title: 'Wpisz kolejny numer zlecenia.', tone: 'error' });
-      return;
-    }
-    const currentOrderNumber =
-      getDraft(firstSettlement).orderNumber.trim() ||
-      group.orderNumber.trim() ||
-      firstSettlement.orderNumber.trim();
-    const nextOrderNumber = appendOrderNumber(currentOrderNumber, extraOrderNumber);
-    setDraft(firstSettlement, { orderNumber: nextOrderNumber });
-    setGroupExtraOrderDrafts((prev) => ({ ...prev, [group.key]: '' }));
   };
 
   const handleSaveDetailsGroup = (group: SettlementGroup) => {
@@ -747,10 +721,11 @@ export default function PaintTapeSettlementsPage() {
       toast({ title: 'Brak uprawnien do rozliczania zakonczonych zlecen.', tone: 'error' });
       return;
     }
+    const nextAccounted = !group.items.every((settlement) => Boolean(settlement.accountedAt));
     updateGroupMutation.mutate(
       group.items.map((settlement) => ({
         id: settlement.id,
-        accounted: true
+        accounted: nextAccounted
       }))
     );
   };
@@ -904,74 +879,102 @@ export default function PaintTapeSettlementsPage() {
     const erp = getErpForSettlement(settlement);
     const unit = settlement.unit || 'kg';
     const isDone = settlement.status === 'DONE';
+    const showPerPiece = activeFilter !== 'OPEN';
     const erpText = erp
       ? `${formatQty(erp.realQty, erp.unit)} rzecz. / ${formatQty(erp.availableQty, erp.unit)} dysp.`
       : 'brak';
 
     return (
-      <div className="rounded-xl border border-[rgba(255,255,255,0.10)] bg-[rgba(0,0,0,0.22)] p-3">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">Farba / taśma</p>
-          <p
-            className="mt-1 break-words text-sm font-black leading-snug"
-            style={{ color: 'var(--brand)' }}
-          >
-            {settlement.itemName}
-          </p>
-          {settlement.itemIndexCode && (
-            <p className="mt-1 break-words text-xs font-semibold text-dim">
-              {settlement.itemIndexCode}
+      <section className="border-t border-[rgba(255,255,255,0.10)] py-4 first:border-t-0 first:pt-0 last:pb-0">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
+              Farba / tasma
             </p>
-          )}
-          <p className="mt-2 text-xs font-semibold leading-snug text-dim">
-            ERP {snapshotDate}: {erpText}
-          </p>
+            <p
+              className="mt-1 break-words text-sm font-black leading-snug"
+              style={{ color: 'var(--brand)' }}
+            >
+              {settlement.itemName}
+            </p>
+            {settlement.itemIndexCode && (
+              <p className="mt-1 break-words text-xs font-semibold text-dim">
+                {settlement.itemIndexCode}
+              </p>
+            )}
+          </div>
+          {activeFilter === 'OPEN' && renderSettlementActions(settlement, true)}
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-4 border-t border-[rgba(255,255,255,0.08)] pt-3">
-          <div className="min-h-[68px]">
-            <p className="h-4 text-[10px] font-semibold uppercase tracking-wide text-dim">Stan przed</p>
-            <p className="mt-1 flex h-10 items-center text-base font-black text-title">
-              {formatQty(settlement.startQty, unit)}
+        <p className="mt-2 text-xs font-semibold leading-snug text-dim">
+          ERP {snapshotDate}: {erpText}
+        </p>
+
+        {activeFilter === 'OPEN' && (
+          <div className="mt-3 space-y-3 rounded-lg border border-[rgba(255,122,26,0.20)] bg-[rgba(255,122,26,0.045)] p-3">
+            <div>
+              <label className="block text-[10px] font-semibold uppercase tracking-wide text-dim">
+                Pobrane z magazynu
+              </label>
+              <div className="mt-1">{renderIssuedControl(settlement, true)}</div>
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase tracking-wide text-dim">
+                Stan po produkcji
+              </label>
+              <Input
+                value={draft.endQty}
+                onChange={(event) => setDraft(settlement, { endQty: event.target.value })}
+                inputMode="decimal"
+                disabled={!canOpen || isDone || activeFilter !== 'OPEN'}
+                aria-label="Stan farby po zakończeniu"
+                className="mt-1 h-11"
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+          <div className="flex min-h-[70px] flex-col items-center justify-center rounded-lg bg-[rgba(255,255,255,0.035)] px-3 py-2 text-center">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
+              Stan przed
             </p>
-          </div>
-          <div className="min-h-[68px]">
-            <label className="block h-4 truncate text-[10px] font-semibold uppercase tracking-wide text-dim">
-              Pobrane z magazynu
-            </label>
-            <div className="mt-1">{renderIssuedControl(settlement, true)}</div>
-          </div>
-          <div className="min-h-[68px]">
-            <label className="block h-4 text-[10px] font-semibold uppercase tracking-wide text-dim">Stan po</label>
-            <Input
-              value={draft.endQty}
-              onChange={(event) => setDraft(settlement, { endQty: event.target.value })}
-              inputMode="decimal"
-              disabled={!canOpen || isDone || activeFilter !== 'OPEN'}
-              aria-label="Stan farby po zakończeniu"
-              className="mt-1 h-10"
-            />
-          </div>
-          <div className="min-h-[68px]">
-            <p className="h-4 text-[10px] font-semibold uppercase tracking-wide text-dim">Zużycie</p>
-            <p className="mt-1 flex h-10 items-center text-base font-black text-title">
-              {formatQty(settlement.usageQty, unit)}
-            </p>
+            <p className="mt-1 font-black text-title">{formatQty(settlement.startQty, unit)}</p>
           </div>
           {activeFilter !== 'OPEN' && (
-            <div className="min-h-[68px]">
-              <p className="h-4 text-[10px] font-semibold uppercase tracking-wide text-dim">Zużycie / szt.</p>
-              <p className="mt-1 flex min-h-10 items-center break-words text-base font-black leading-tight text-title">
+            <div className="flex min-h-[70px] flex-col items-center justify-center rounded-lg bg-[rgba(255,255,255,0.035)] px-3 py-2 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
+                Pobrane
+              </p>
+              <p className="mt-1 font-black text-title">
+                {formatQty(settlement.warehouseIssuedQty, unit)}
+              </p>
+            </div>
+          )}
+          {activeFilter !== 'OPEN' && (
+            <div className="flex min-h-[70px] flex-col items-center justify-center rounded-lg bg-[rgba(255,255,255,0.035)] px-3 py-2 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
+                Stan po
+              </p>
+              <p className="mt-1 font-black text-title">{formatQty(settlement.endQty, unit)}</p>
+            </div>
+          )}
+          <div className="flex min-h-[70px] flex-col items-center justify-center rounded-lg bg-[rgba(255,255,255,0.035)] px-3 py-2 text-center">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">Zuzycie</p>
+            <p className="mt-1 font-black text-title">{formatQty(settlement.usageQty, unit)}</p>
+          </div>
+          {showPerPiece && (
+            <div className="col-span-2 flex min-h-[70px] flex-col items-center justify-center rounded-lg bg-[rgba(255,255,255,0.035)] px-3 py-2 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
+                Zuzycie / szt.
+              </p>
+              <p className="mt-1 break-words font-black leading-tight text-title">
                 {formatPerPiece(getUsagePerPiecePreview(settlement, group), unit)}
               </p>
             </div>
           )}
         </div>
-
-        <div className="mt-4 border-t border-[rgba(255,255,255,0.08)] pt-3">
-          {renderSettlementActions(settlement, true)}
-        </div>
-      </div>
+      </section>
     );
   };
 
@@ -981,80 +984,52 @@ export default function PaintTapeSettlementsPage() {
     const groupProducedDraft = getGroupProducedDraft(group);
     const groupBusy = updateGroupMutation.isPending;
     const groupAccounted = group.items.every((settlement) => Boolean(settlement.accountedAt));
+    const startedAt = group.items
+      .map((settlement) => settlement.createdAt)
+      .filter(Boolean)
+      .sort()[0];
+    const completedDates = group.items
+      .map((settlement) => settlement.productionCompletedAt)
+      .filter(Boolean)
+      .sort();
+    const completedAt = completedDates[completedDates.length - 1];
     return (
       <article
         key={group.key}
         className={cn(
-          'rounded-xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(0,0,0,0.50))] p-4 shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.08)]',
+          'rounded-xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(0,0,0,0.50))] p-3 shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.08)] md:p-4',
           groupAccounted &&
             'border-[color:color-mix(in_srgb,var(--success)_55%,transparent)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--success)_16%,rgba(255,255,255,0.04)),rgba(0,0,0,0.48))] shadow-[0_0_0_1px_color-mix(in_srgb,var(--success)_25%,transparent),0_16px_38px_rgba(0,0,0,0.30)]'
         )}
       >
         <div className="flex flex-col gap-3 border-b border-[rgba(255,255,255,0.08)] pb-3 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">Zlecenie</p>
-            {renderOrderNumber(firstSettlement, true)}
-            {activeFilter === 'OPEN' && (
-              <div className="mt-2 grid max-w-xl gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                <Input
-                  value={groupExtraOrderDrafts[group.key] ?? ''}
-                  onChange={(event) =>
-                    setGroupExtraOrderDrafts((prev) => ({
-                      ...prev,
-                      [group.key]: event.target.value
-                    }))
-                  }
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      handleAddOrderNumber(group);
-                    }
-                  }}
-                  placeholder="kolejny numer zlecenia"
-                  disabled={!canOpen || groupBusy}
-                  className="h-10"
-                />
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => handleAddOrderNumber(group)}
-                  disabled={!canOpen || groupBusy}
-                  className="min-h-[40px] px-3 py-2"
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Dodaj numer
-                </Button>
-              </div>
-            )}
             <p
-              className="mt-2 break-words text-sm font-semibold leading-snug"
-              style={{ color: 'var(--brand)' }}
+              className="break-words text-sm font-black leading-snug text-[var(--value-purple)]"
             >
               {group.detailName}
             </p>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-semibold">
+              <span style={{ color: 'var(--success)' }}>
+                Rozpoczęto: {formatDateTime(startedAt) || '-'}
+              </span>
+              <span style={{ color: 'var(--danger)' }}>
+                Zakończono produkcję: {formatDateTime(completedAt) || '-'}
+              </span>
+            </div>
+            <p className="mt-3 text-[10px] font-semibold uppercase tracking-wide text-dim">Zlecenie</p>
+            {renderOrderNumber(firstSettlement, true)}
           </div>
           <div className="flex shrink-0 flex-col gap-3 md:items-end">
             <div className="flex flex-wrap items-center gap-2">
-              {getStatusBadge(firstSettlement)}
+              {activeFilter !== 'DONE' && getStatusBadge(firstSettlement)}
               {groupAccounted && <Badge tone="success">Rozliczone</Badge>}
               {group.items.length > 1 && (
                 <Badge tone="info">{group.items.length} farby / taśmy</Badge>
               )}
             </div>
-            {activeFilter === 'OPEN' && (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => handleSaveOpenGroup(group)}
-                disabled={!canOpen || groupBusy}
-                className="min-h-[42px] px-3 py-2"
-              >
-                <Save className="mr-2 h-4 w-4" />
-                Przesuń zlecenie do wpisu ilości
-              </Button>
-            )}
             {activeFilter === 'DETAILS_REQUIRED' && (
-              <div className="grid gap-2 sm:grid-cols-[180px_auto_auto]">
+              <div className="grid gap-2 sm:max-w-[220px]">
                 <div>
                   <label className="text-xs uppercase tracking-wide text-dim">Ilość detali</label>
                   <Input
@@ -1071,64 +1046,12 @@ export default function PaintTapeSettlementsPage() {
                     className="mt-1 h-10"
                   />
                 </div>
-                <div className="flex items-end">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() => handleSaveDetailsGroup(group)}
-                    disabled={!canDetails || groupBusy}
-                    className="min-h-[42px] px-3 py-2"
-                  >
-                    <Save className="mr-2 h-4 w-4" />
-                    Przesuń do zakończonych
-                  </Button>
-                </div>
-                <div className="flex items-end">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => handleMoveGroupBackToOpen(group)}
-                    disabled={!canDetails || groupBusy}
-                    className="min-h-[42px] px-3 py-2"
-                  >
-                    <RotateCcw className="mr-2 h-4 w-4" />
-                    Cofnij do otwartych
-                  </Button>
-                </div>
-              </div>
-            )}
-            {activeFilter === 'DONE' && (
-              <div className="flex flex-wrap gap-2 md:justify-end">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => handleAccountedGroup(group)}
-                  disabled={!canAccounting || groupBusy || groupAccounted}
-                  className={cn(
-                    'min-h-[42px] px-3 py-2',
-                    groupAccounted &&
-                      'border-[color:color-mix(in_srgb,var(--success)_65%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_16%,transparent)] text-success'
-                  )}
-                >
-                  <CheckCircle2 className="mr-2 h-4 w-4" />
-                  Rozliczone
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => handleReopenGroup(group)}
-                  disabled={!canAccounting || groupBusy}
-                  className="min-h-[42px] px-3 py-2"
-                >
-                  <RotateCcw className="mr-2 h-4 w-4" />
-                  Cofnij zlecenie
-                </Button>
               </div>
             )}
           </div>
         </div>
 
-        <div className="mt-3 space-y-3 md:hidden">
+        <div className="mt-3 md:hidden">
           {group.items.map((settlement) => (
             <div key={settlement.id}>{renderMobileSettlementItem(settlement, group)}</div>
           ))}
@@ -1210,6 +1133,75 @@ export default function PaintTapeSettlementsPage() {
             </tbody>
           </table>
         </div>
+
+        {activeFilter === 'OPEN' && (
+          <div className="mt-4 border-t border-[rgba(255,255,255,0.10)] pt-4 md:flex md:justify-end">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => handleSaveOpenGroup(group)}
+              disabled={!canOpen || groupBusy}
+              className="min-h-[42px] w-full px-3 py-2 md:w-auto"
+            >
+              <Save className="mr-2 h-4 w-4" />
+              Przesuń zlecenie do wpisu ilości
+            </Button>
+          </div>
+        )}
+
+        {activeFilter === 'DETAILS_REQUIRED' && (
+          <div className="mt-4 grid gap-2 border-t border-[rgba(255,255,255,0.10)] pt-4 sm:grid-cols-2 md:flex md:justify-end">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => handleSaveDetailsGroup(group)}
+              disabled={!canDetails || groupBusy}
+              className="min-h-[42px] w-full px-3 py-2 md:w-auto"
+            >
+              <Save className="mr-2 h-4 w-4" />
+              Przesuń do zakończonych
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => handleMoveGroupBackToOpen(group)}
+              disabled={!canDetails || groupBusy}
+              className="min-h-[42px] w-full px-3 py-2 md:w-auto"
+            >
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Cofnij do otwartych
+            </Button>
+          </div>
+        )}
+        {activeFilter === 'DONE' && (
+          <div className="mt-4 grid gap-2 border-t border-[rgba(255,255,255,0.10)] pt-4 sm:grid-cols-2 md:flex md:justify-end">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => handleAccountedGroup(group)}
+              disabled={!canAccounting || groupBusy}
+              aria-pressed={groupAccounted}
+              className={cn(
+                'min-h-[42px] w-full px-3 py-2 md:w-auto',
+                groupAccounted &&
+                  'border-[color:color-mix(in_srgb,var(--success)_65%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_16%,transparent)] text-success'
+              )}
+            >
+              <CheckCircle2 className="mr-2 h-4 w-4" />
+              Rozliczone
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => handleReopenGroup(group)}
+              disabled={!canAccounting || groupBusy}
+              className="min-h-[42px] w-full px-3 py-2 md:w-auto"
+            >
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Cofnij zlecenie
+            </Button>
+          </div>
+        )}
       </article>
     );
   });
@@ -1261,11 +1253,11 @@ export default function PaintTapeSettlementsPage() {
   ) : null;
 
   const statusButtonClass =
-    'min-h-[48px] border-[rgba(255,122,26,0.22)] bg-[rgba(255,122,26,0.035)] px-4 py-2.5 text-center leading-tight shadow-[0_8px_22px_rgba(255,122,26,0.08)] data-[state=active]:shadow-[0_0_0_2px_rgba(255,122,26,0.22),0_0_22px_rgba(255,122,26,0.28),inset_0_1px_0_rgba(255,255,255,0.1)]';
+    'flex min-h-[50px] min-w-0 items-center justify-center whitespace-normal break-words border-[rgba(255,122,26,0.22)] bg-[rgba(255,122,26,0.035)] px-2 py-2 text-center text-[12px] leading-tight shadow-[0_8px_22px_rgba(255,122,26,0.08)] data-[state=active]:shadow-[0_0_0_2px_rgba(255,122,26,0.22),0_0_22px_rgba(255,122,26,0.28),inset_0_1px_0_rgba(255,255,255,0.1)] sm:min-h-[44px] sm:px-3 sm:text-sm';
 
   const statusFilters = (
     <Tabs value={activeFilter} onValueChange={(value) => setFilter(value as FilterValue)}>
-      <TabsList className="grid w-full grid-cols-1 gap-2 border-0 bg-transparent p-0 shadow-none sm:grid-cols-4">
+      <TabsList className="grid w-full grid-cols-2 gap-2 border-0 bg-transparent p-0 shadow-none sm:grid-cols-4">
         {visibleFilters.map((item) => (
           <TabsTrigger key={item.value} className={statusButtonClass} value={item.value}>
             {item.label}
@@ -1289,33 +1281,31 @@ export default function PaintTapeSettlementsPage() {
       )}
 
       {activeFilter === 'CREATE' && visibleFilters.length > 0 && (
-      <Card>
-        <form onSubmit={handleCreate} className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-                Nowe rozliczenie
-              </p>
-              <p className="text-sm text-dim">
-                Numer zlecenia mozesz dopisac pozniej, a detal i farbe/tasme wybierz z podpowiedzi.
-              </p>
-            </div>
-            <Button type="submit" disabled={!canCreate || createMutation.isPending}>
-              <Plus className="mr-2 h-4 w-4" />
-              Dodaj zlecenie
-            </Button>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2">
+      <Card className="space-y-5 border-0 bg-transparent p-0 shadow-none hover:border-transparent hover:bg-transparent md:border-border md:bg-surface md:p-6 md:shadow-[inset_0_1px_0_var(--inner-highlight)] md:hover:border-borderStrong md:hover:bg-surface2">
+        <form onSubmit={handleCreate} className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-2">
             <div>
               <label className="text-xs uppercase tracking-wide text-dim">Numer zlecenia</label>
-              <Input
-                value={form.orderNumber}
-                onChange={(event) => setForm((prev) => ({ ...prev, orderNumber: event.target.value }))}
-                placeholder="opcjonalnie, np. ZL/123"
-                disabled={!canCreate}
-                className="mt-1"
-              />
+              <div className="relative mt-1">
+                <Input
+                  value={form.orderNumber}
+                  onChange={(event) => setForm((prev) => ({ ...prev, orderNumber: event.target.value }))}
+                  placeholder="opcjonalnie, np. ZL/123"
+                  disabled={!canCreate}
+                  className="pr-10"
+                />
+                {form.orderNumber && (
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, orderNumber: '' }))}
+                    disabled={!canCreate}
+                    className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-dim transition hover:bg-[rgba(255,255,255,0.08)] hover:text-title disabled:opacity-40"
+                    aria-label="Wyczyść numer zlecenia"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </div>
             <div>
               <label className="text-xs uppercase tracking-wide text-dim">Nazwa detalu</label>
@@ -1332,7 +1322,22 @@ export default function PaintTapeSettlementsPage() {
                   }}
                   placeholder="zacznij wpisywać"
                   disabled={!canCreate}
+                  className="pr-10"
                 />
+                {form.detailName && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForm((prev) => ({ ...prev, detailName: '' }));
+                      setShowDetailSuggestions(false);
+                    }}
+                    disabled={!canCreate}
+                    className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-dim transition hover:bg-[rgba(255,255,255,0.08)] hover:text-title disabled:opacity-40"
+                    aria-label="Wyczyść nazwę detalu"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
                 {showDetailSuggestions && detailSuggestions.length > 0 && (
                   <div className="absolute z-40 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_16px_36px_rgba(0,0,0,0.48)]">
                     {detailSuggestions.map((name) => (
@@ -1356,7 +1361,7 @@ export default function PaintTapeSettlementsPage() {
           </div>
 
           <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                 Farby / taśmy
               </p>
@@ -1365,21 +1370,21 @@ export default function PaintTapeSettlementsPage() {
                 variant="secondary"
                 onClick={addItemDraft}
                 disabled={!canCreate || createMutation.isPending}
-                className="min-h-[40px] px-3 py-2"
+                className="min-h-[40px] shrink-0 px-3 py-2"
               >
                 <Plus className="mr-2 h-4 w-4" />
                 Dodaj farbę / taśmę
               </Button>
             </div>
 
-            <div className="space-y-3">
+            <div className="border-t border-[rgba(255,255,255,0.10)] md:space-y-3 md:border-t-0">
               {itemDrafts.map((draft, index) => {
                 const itemSuggestions = getItemSuggestions(draft.itemName);
                 const formErpSnapshot = getFormErpSnapshot(draft.itemName);
                 return (
                   <div
                     key={draft.id}
-                    className="grid gap-3 rounded-xl border border-[rgba(255,255,255,0.10)] bg-[rgba(255,255,255,0.03)] p-3 md:grid-cols-[minmax(0,1fr)_180px_auto]"
+                    className="grid gap-3 border-b border-[rgba(255,255,255,0.10)] py-4 last:border-b-0 md:rounded-xl md:border md:border-[rgba(255,255,255,0.10)] md:bg-[rgba(255,255,255,0.03)] md:p-3 md:last:border-b md:grid-cols-[minmax(0,1fr)_180px_auto]"
                   >
                     <div>
                       <label className="text-xs uppercase tracking-wide text-dim">
@@ -1408,7 +1413,22 @@ export default function PaintTapeSettlementsPage() {
                           }}
                           placeholder="zacznij wpisywać"
                           disabled={!canCreate}
+                          className="pr-10"
                         />
+                        {draft.itemName && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateItemDraft(draft.id, { itemName: '' });
+                              setShowItemSuggestionsFor(null);
+                            }}
+                            disabled={!canCreate}
+                            className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-dim transition hover:bg-[rgba(255,255,255,0.08)] hover:text-title disabled:opacity-40"
+                            aria-label="Wyczyść farbę / taśmę"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
                         {showItemSuggestionsFor === draft.id && itemSuggestions.length > 0 && (
                           <div className="absolute z-40 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_16px_36px_rgba(0,0,0,0.48)]">
                             {itemSuggestions.map((item) => (
@@ -1449,24 +1469,37 @@ export default function PaintTapeSettlementsPage() {
                       <label className="text-xs uppercase tracking-wide text-dim">
                         Stan przed
                       </label>
-                      <Input
-                        value={draft.startQty}
-                        onChange={(event) =>
-                          updateItemDraft(draft.id, { startQty: event.target.value })
-                        }
-                        inputMode="decimal"
-                        placeholder="np. 5,2"
-                        disabled={!canCreate}
-                        className="mt-1"
-                      />
+                      <div className="relative mt-1">
+                        <Input
+                          value={draft.startQty}
+                          onChange={(event) =>
+                            updateItemDraft(draft.id, { startQty: event.target.value })
+                          }
+                          inputMode="decimal"
+                          placeholder="np. 5,2"
+                          disabled={!canCreate}
+                          className="pr-10"
+                        />
+                        {draft.startQty && (
+                          <button
+                            type="button"
+                            onClick={() => updateItemDraft(draft.id, { startQty: '' })}
+                            disabled={!canCreate}
+                            className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-dim transition hover:bg-[rgba(255,255,255,0.08)] hover:text-title disabled:opacity-40"
+                            aria-label="Wyczyść stan przed"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-end">
+                    <div className="flex items-end justify-end">
                       <Button
                         type="button"
                         variant="ghost"
                         onClick={() => removeItemDraft(draft.id)}
                         disabled={!canCreate || itemDrafts.length <= 1 || createMutation.isPending}
-                        className="min-h-[40px] w-full px-3 py-2 md:w-11 md:px-0"
+                        className="min-h-[40px] w-11 px-0 py-2"
                         aria-label="Usuń farbę / taśmę"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -1477,12 +1510,23 @@ export default function PaintTapeSettlementsPage() {
               })}
             </div>
           </div>
+
+          <div className="border-t border-[rgba(255,255,255,0.10)] pt-4">
+            <Button
+              type="submit"
+              disabled={!canCreate || createMutation.isPending}
+              className="w-full sm:w-auto"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Dodaj zlecenie
+            </Button>
+          </div>
         </form>
       </Card>
       )}
 
       {activeFilter !== 'CREATE' && visibleFilters.length > 0 && (
-      <Card className="space-y-4">
+      <Card className="space-y-4 border-0 bg-transparent p-0 shadow-none hover:border-transparent hover:bg-transparent md:border-border md:bg-surface md:p-6 md:shadow-[inset_0_1px_0_var(--inner-highlight)] md:hover:border-borderStrong md:hover:bg-surface2">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
