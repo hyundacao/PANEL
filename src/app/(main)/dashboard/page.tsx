@@ -223,7 +223,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-2.5 xl:grid-cols-[minmax(360px,0.8fr)_minmax(0,1fr)] xl:items-stretch">
-        <GlowPanel className="min-h-[320px] xl:h-[280px] 2xl:h-[310px]">
+        <GlowPanel className="min-h-[300px] xl:h-[300px] 2xl:h-[320px]">
           <div className="flex h-full flex-col p-3 md:p-3.5">
             <PanelTitle icon={<Cuboid size={19} />} title="Stan aktualny" />
             <div className="relative mt-2 flex min-h-0 flex-1 flex-col justify-center overflow-hidden bg-[radial-gradient(circle_at_50%_42%,rgba(255,106,0,0.15),transparent_42%)] px-2 py-4 md:px-7">
@@ -249,7 +249,7 @@ export default function DashboardPage() {
           </div>
         </GlowPanel>
 
-        <GlowPanel className="xl:h-[280px] 2xl:h-[310px]">
+        <GlowPanel className="min-h-[300px] xl:h-[300px] 2xl:h-[320px]">
           <div className="flex h-full flex-col p-3 md:p-3.5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <PanelTitle icon={<CalendarDays size={18} />} title="Historia stanu" />
@@ -270,7 +270,7 @@ export default function DashboardPage() {
                 ))}
               </div>
             </div>
-            <div className="mt-3 h-[190px] min-h-0 xl:flex-1">
+            <div className="mt-3 h-[210px] min-h-0 xl:flex-1">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={totalsHistory ?? []} margin={{ top: 12, right: 8, left: 0, bottom: 0 }}>
                   <defs>

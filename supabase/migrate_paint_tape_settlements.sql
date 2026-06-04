@@ -26,6 +26,36 @@ create index if not exists paint_tape_settlements_item_idx
   on public.paint_tape_settlements (lower(item_name), lower(coalesce(item_index_code, '')));
 
 alter table if exists public.paint_tape_settlements
+  add column if not exists status text not null default 'OPEN';
+
+alter table if exists public.paint_tape_settlements
+  alter column status set default 'OPEN';
+
+alter table if exists public.paint_tape_settlements
+  drop constraint if exists paint_tape_settlements_status_check;
+
+update public.paint_tape_settlements
+set status = case
+  when end_qty is null then 'OPEN'
+  when produced_qty is null or produced_qty <= 0 then 'DETAILS_REQUIRED'
+  else 'DONE'
+end
+where status is null
+  or status not in ('OPEN', 'DETAILS_REQUIRED', 'DONE')
+  or status is distinct from case
+    when end_qty is null then 'OPEN'
+    when produced_qty is null or produced_qty <= 0 then 'DETAILS_REQUIRED'
+    else 'DONE'
+  end;
+
+alter table if exists public.paint_tape_settlements
+  alter column status set not null;
+
+alter table if exists public.paint_tape_settlements
+  add constraint paint_tape_settlements_status_check
+  check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE'));
+
+alter table if exists public.paint_tape_settlements
   alter column order_number drop not null;
 
 alter table if exists public.paint_tape_settlements

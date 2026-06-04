@@ -1836,6 +1836,7 @@ const fetchCatalogs = async () => {
 };
 
 const ORIGINAL_CATALOG_PAGE_SIZE = 1000;
+const ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE = 1000;
 
 const fetchAllOriginalCatalogRows = async () => {
   const rows: any[] = [];
@@ -2054,19 +2055,32 @@ const fetchOriginalInventoryErpSnapshotsByDates = async (snapshotDates: string[]
     )
   );
   if (uniqueDates.length === 0) return [];
-  const { data, error } = await supabaseAdmin
-    .from('original_inventory_erp_snapshots')
-    .select('*')
-    .in('snapshot_date', uniqueDates)
-    .order('snapshot_date', { ascending: false })
-    .order('name', { ascending: true });
-  if (error) {
-    if (isMissingOriginalInventoryErpSnapshotsTableError(error)) {
-      throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
+
+  const rows: any[] = [];
+  for (let from = 0; ; from += ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE) {
+    const to = from + ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE - 1;
+    const { data, error } = await supabaseAdmin
+      .from('original_inventory_erp_snapshots')
+      .select('*')
+      .in('snapshot_date', uniqueDates)
+      .order('snapshot_date', { ascending: false })
+      .order('name', { ascending: true })
+      .range(from, to);
+    if (error) {
+      if (isMissingOriginalInventoryErpSnapshotsTableError(error)) {
+        throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
+      }
+      throw error;
     }
-    throw error;
+
+    const page = data ?? [];
+    rows.push(...page);
+    if (page.length < ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE) {
+      break;
+    }
   }
-  return (data ?? []).map(mapOriginalInventoryErpSnapshotEntry);
+
+  return rows.map(mapOriginalInventoryErpSnapshotEntry);
 };
 
 const extractErpOriginalCatalogItems = (payload: unknown): Array<Record<string, unknown>> => {

@@ -44,8 +44,7 @@ import {
   parseOriginalInventoryCatalogRows
 } from '@/lib/utils/originalInventoryCatalog';
 import {
-  normalizeOriginalInventoryName,
-  normalizeOriginalInventoryNameKey
+  normalizeOriginalInventoryName
 } from '@/lib/utils/originalInventoryName';
 import {
   isOriginalInventoryErpSnapshotPdfFile,
@@ -217,7 +216,14 @@ const normalizeImportCell = (value: unknown) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-const normalizeCatalogNameKey = (value: unknown) => normalizeOriginalInventoryNameKey(value);
+const normalizeCatalogNameKey = (value: unknown) =>
+  normalizeOriginalInventoryName(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[łŁ]/g, 'l')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 
 const tokenizeCatalogSearch = (value: unknown) =>
   normalizeCatalogNameKey(value)
@@ -2387,13 +2393,9 @@ export default function OriginalInventoryPage() {
     grindTargetSourceMaterials
       .filter((material) => material.isActive)
       .forEach((material) => {
-        [material.name, material.catalogName, material.code]
-          .map((value) => String(value ?? '').trim())
-          .filter(Boolean)
-          .forEach((value) => {
-            const key = normalizeCatalogNameKey(value);
-            if (key && !options.has(key)) options.set(key, value);
-          });
+        const value = material.code.trim();
+        const key = normalizeCatalogNameKey(value);
+        if (key && !options.has(key)) options.set(key, value);
       });
     return [...options.values()].sort((a, b) => collator.compare(a, b));
   }, [grindTargetSourceMaterials]);
