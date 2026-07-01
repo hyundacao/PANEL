@@ -194,6 +194,17 @@ const formatPerPiece = (value: number | null | undefined, unit = 'kg') => {
   })} ${unit}/szt.`;
 };
 
+const formatPiecesQty = (value: number | null | undefined) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+  const formatted = Number.isInteger(value)
+    ? value.toLocaleString('pl-PL')
+    : value.toLocaleString('pl-PL', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 3
+      });
+  return `${formatted} szt.`;
+};
+
 const numberInputValue = (value: number | null | undefined) =>
   value === null || value === undefined ? '' : String(value).replace('.', ',');
 
@@ -982,6 +993,7 @@ export default function PaintTapeSettlementsPage() {
     const firstSettlement = group.items[0];
     if (!firstSettlement) return null;
     const groupProducedDraft = getGroupProducedDraft(group);
+    const groupProducedQty = firstSettlement.producedQty;
     const groupBusy = updateGroupMutation.isPending;
     const groupAccounted = group.items.every((settlement) => Boolean(settlement.accountedAt));
     const startedAt = group.items
@@ -1021,6 +1033,16 @@ export default function PaintTapeSettlementsPage() {
             {renderOrderNumber(firstSettlement, true)}
           </div>
           <div className="flex shrink-0 flex-col gap-3 md:items-end">
+            {activeFilter === 'DONE' && (
+              <div className="w-full rounded-lg border border-[rgba(124,92,255,0.45)] bg-[rgba(124,92,255,0.10)] px-4 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] md:min-w-[190px] md:text-right">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
+                  Ilość wykonana
+                </p>
+                <p className="mt-1 text-xl font-black leading-tight text-[var(--value-purple)]">
+                  {formatPiecesQty(groupProducedQty)}
+                </p>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               {activeFilter !== 'DONE' && getStatusBadge(firstSettlement)}
               {groupAccounted && <Badge tone="success">Rozliczone</Badge>}
