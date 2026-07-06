@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Minus, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react';
+import { CheckCircle2, FileSpreadsheet, Minus, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react';
 import {
   addPaintTapeSettlementIssue,
   createPaintTapeSettlement,
@@ -40,6 +40,12 @@ type RowDraft = {
   producedQty: string;
 };
 
+type OrderQuantityDraft = {
+  id: string;
+  orderNumber: string;
+  producedQty: string;
+};
+
 type IssueDraft = {
   settlementId: string;
   direction: 1 | -1;
@@ -70,6 +76,20 @@ const getLocalDateValue = (date = new Date()) => {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+};
+
+const getLocalDateTimeInputValue = (date = new Date()) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+};
+
+const toIsoFromDateTimeInput = (value: string) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
 
 const normalizeKey = (value: unknown) =>
@@ -208,6 +228,63 @@ const formatPiecesQty = (value: number | null | undefined) => {
 const numberInputValue = (value: number | null | undefined) =>
   value === null || value === undefined ? '' : String(value).replace('.', ',');
 
+const sanitizeFileName = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .toLowerCase();
+
+const createEmptyOrderQuantityDraft = (index: number): OrderQuantityDraft => ({
+  id: `order-${index}`,
+  orderNumber: '',
+  producedQty: ''
+});
+
+const splitOrderNumbers = (value: string) =>
+  value
+    .split(value.includes(';') || value.includes('\n') ? /[;\n]+/ : /[,\n]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+const parseOrderQuantityDraftsFromText = (
+  orderNumber: string,
+  producedQty?: number | null
+): OrderQuantityDraft[] => {
+  const parts = splitOrderNumbers(orderNumber);
+  if (parts.length === 0) {
+    return [createEmptyOrderQuantityDraft(1)];
+  }
+  return parts.map((part, index) => {
+    const match = part.match(/^(.+?)\s*[-:|]\s*([\d\s,.]+)\s*(?:szt\.?)?$/i);
+    const order = match?.[1]?.trim() || part.trim();
+    const qty = match?.[2]?.trim() || (parts.length === 1 ? numberInputValue(producedQty) : '');
+    return {
+      id: `order-${index + 1}`,
+      orderNumber: order,
+      producedQty: qty
+    };
+  });
+};
+
+const serializeOrderQuantities = (
+  rows: Array<{ orderNumber: string; producedQty: number }>
+) => rows.map((row) => `${row.orderNumber} - ${numberInputValue(row.producedQty)} szt.`).join('; ');
+
+const formatOrderQuantitySummary = (orderNumber: string, producedQty?: number | null) => {
+  const rows = parseOrderQuantityDraftsFromText(orderNumber, producedQty)
+    .map((row) => {
+      const qty = parseQtyInput(row.producedQty);
+      return row.orderNumber.trim() && qty !== null && qty > 0
+        ? `${row.orderNumber.trim()}: ${formatPiecesQty(qty)}`
+        : row.orderNumber.trim();
+    })
+    .filter(Boolean);
+  return rows.length > 0 ? rows.join(' | ') : 'Bez numeru';
+};
+
 const getStatusBadge = (settlement: PaintTapeSettlement) => {
   if (settlement.status === 'DONE') return <Badge tone="success">Zakończone</Badge>;
   if (settlement.status === 'DETAILS_REQUIRED') {
@@ -240,16 +317,21 @@ export default function PaintTapeSettlementsPage() {
   const [query, setQuery] = useState('');
   const [snapshotDate, setSnapshotDate] = useState(getLocalDateValue());
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
-  const [groupProducedDrafts, setGroupProducedDrafts] = useState<Record<string, string>>({});
+  const [groupOrderQuantityDrafts, setGroupOrderQuantityDrafts] = useState<
+    Record<string, OrderQuantityDraft[]>
+  >({});
+  const [groupCompletedAtDrafts, setGroupCompletedAtDrafts] = useState<Record<string, string>>({});
   const [issueDraft, setIssueDraft] = useState<IssueDraft | null>(null);
   const [celebrationVisible, setCelebrationVisible] = useState(false);
   const [showDetailSuggestions, setShowDetailSuggestions] = useState(false);
   const [showItemSuggestionsFor, setShowItemSuggestionsFor] = useState<string | null>(null);
   const [form, setForm] = useState({
     orderNumber: '',
-    detailName: ''
+    detailName: '',
+    productionStartedAt: getLocalDateTimeInputValue()
   });
   const nextItemDraftId = useRef(2);
+  const nextOrderQuantityDraftId = useRef(1000);
   const celebrationTimerRef = useRef<number | null>(null);
   const [itemDrafts, setItemDrafts] = useState<PaintTapeItemDraft[]>([
     createEmptyPaintTapeItem(1)
@@ -431,7 +513,8 @@ export default function PaintTapeSettlementsPage() {
     onSuccess: () => {
       setForm({
         orderNumber: '',
-        detailName: ''
+        detailName: '',
+        productionStartedAt: getLocalDateTimeInputValue()
       });
       nextItemDraftId.current = 2;
       setItemDrafts([createEmptyPaintTapeItem(1)]);
@@ -458,7 +541,8 @@ export default function PaintTapeSettlementsPage() {
     ) => Promise.all(payloads.map((payload) => updatePaintTapeSettlement(payload))),
     onSuccess: (_data, payloads) => {
       setDrafts({});
-      setGroupProducedDrafts({});
+      setGroupOrderQuantityDrafts({});
+      setGroupCompletedAtDrafts({});
       if (canShowCelebration && payloads.some((payload) => payload.accounted === true)) {
         showAccountedCelebration();
       }
@@ -563,8 +647,66 @@ export default function PaintTapeSettlementsPage() {
     }));
   };
 
-  const getGroupProducedDraft = (group: SettlementGroup) =>
-    groupProducedDrafts[group.key] ?? numberInputValue(group.items[0]?.producedQty);
+  const getGroupOrderQuantityDrafts = (group: SettlementGroup) => {
+    const saved = groupOrderQuantityDrafts[group.key];
+    if (saved) return saved;
+    const firstSettlement = group.items[0];
+    return parseOrderQuantityDraftsFromText(
+      firstSettlement?.orderNumber ?? group.orderNumber,
+      firstSettlement?.producedQty
+    );
+  };
+
+  const setGroupOrderQuantityDraft = (
+    group: SettlementGroup,
+    id: string,
+    patch: Partial<OrderQuantityDraft>
+  ) => {
+    setGroupOrderQuantityDrafts((prev) => ({
+      ...prev,
+      [group.key]: getGroupOrderQuantityDrafts(group).map((draft) =>
+        draft.id === id ? { ...draft, ...patch } : draft
+      )
+    }));
+  };
+
+  const addGroupOrderQuantityDraft = (group: SettlementGroup) => {
+    const nextId = nextOrderQuantityDraftId.current;
+    nextOrderQuantityDraftId.current += 1;
+    setGroupOrderQuantityDrafts((prev) => ({
+      ...prev,
+      [group.key]: [...getGroupOrderQuantityDrafts(group), createEmptyOrderQuantityDraft(nextId)]
+    }));
+  };
+
+  const removeGroupOrderQuantityDraft = (group: SettlementGroup, id: string) => {
+    setGroupOrderQuantityDrafts((prev) => {
+      const next = getGroupOrderQuantityDrafts(group).filter((draft) => draft.id !== id);
+      return {
+        ...prev,
+        [group.key]: next.length > 0 ? next : [createEmptyOrderQuantityDraft(1)]
+      };
+    });
+  };
+
+  const getParsedGroupOrderQuantities = (group: SettlementGroup) =>
+    getGroupOrderQuantityDrafts(group)
+      .map((draft) => ({
+        orderNumber: draft.orderNumber.trim(),
+        producedQty: parseQtyInput(draft.producedQty)
+      }))
+      .filter(
+        (row): row is { orderNumber: string; producedQty: number } =>
+          Boolean(row.orderNumber) && row.producedQty !== null && row.producedQty > 0
+      );
+
+  const getGroupProducedDraft = (group: SettlementGroup) => {
+    const total = getParsedGroupOrderQuantities(group).reduce(
+      (sum, row) => sum + row.producedQty,
+      0
+    );
+    return total > 0 ? numberInputValue(total) : numberInputValue(group.items[0]?.producedQty);
+  };
 
   const getUsagePerPiecePreview = (settlement: PaintTapeSettlement, group: SettlementGroup) => {
     const producedQty = parseQtyInput(getGroupProducedDraft(group));
@@ -572,6 +714,168 @@ export default function PaintTapeSettlementsPage() {
     const usageQty = settlement.usageQty;
     if (usageQty === null || usageQty === undefined || Number.isNaN(usageQty)) return null;
     return usageQty / producedQty;
+  };
+
+  const getUsageAllocationPreview = (settlement: PaintTapeSettlement, group: SettlementGroup) => {
+    const usageQty = settlement.usageQty;
+    if (usageQty === null || usageQty === undefined || Number.isNaN(usageQty)) return [];
+    const orderRows = getParsedGroupOrderQuantities(group);
+    const totalProduced = orderRows.reduce((sum, row) => sum + row.producedQty, 0);
+    if (totalProduced <= 0) return [];
+    return orderRows.map((row) => ({
+      orderNumber: row.orderNumber,
+      producedQty: row.producedQty,
+      usageQty: usageQty * (row.producedQty / totalProduced)
+    }));
+  };
+
+  const getGroupCompletedAtDraft = (group: SettlementGroup) =>
+    groupCompletedAtDrafts[group.key] ?? getLocalDateTimeInputValue();
+
+  const handleExportGroup = async (group: SettlementGroup) => {
+    const firstSettlement = group.items[0];
+    if (!firstSettlement) return;
+    try {
+      const ExcelJSModule = await import('exceljs');
+      const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Produkcja', {
+        views: [{ state: 'frozen', ySplit: 8 }]
+      });
+      const startedAt = group.items
+        .map((settlement) => settlement.createdAt)
+        .filter(Boolean)
+        .sort()[0];
+      const completedDates = group.items
+        .map((settlement) => settlement.productionCompletedAt)
+        .filter(Boolean)
+        .sort();
+      const completedAt = completedDates[completedDates.length - 1];
+      const orderRows = getParsedGroupOrderQuantities(group);
+      const totalProduced =
+        firstSettlement.producedQty ??
+        orderRows.reduce((sum, row) => sum + row.producedQty, 0);
+      const generatedAt = new Date().toLocaleString('pl-PL');
+
+      workbook.creator = 'APKA DLA KAMILA';
+      workbook.created = new Date();
+
+      worksheet.columns = [
+        { key: 'lp', width: 5 },
+        { key: 'orderNumber', width: 16 },
+        { key: 'detailName', width: 38 },
+        { key: 'producedQty', width: 12 },
+        { key: 'material', width: 52 },
+        { key: 'physicalUsage', width: 13 },
+        { key: 'physicalUsagePerPiece', width: 15 },
+        { key: 'technicalUsagePerPiece', width: 15 },
+        { key: 'technicalUsage', width: 13 }
+      ];
+
+      worksheet.mergeCells('A1:I1');
+      worksheet.getCell('A1').value =
+        `${group.detailName} | Rozpoczęto: ${formatDateTime(startedAt) || '-'} | ` +
+        `Zakończono: ${formatDateTime(completedAt) || '-'} | Wygenerowano: ${generatedAt}`;
+      worksheet.getRow(1).font = { bold: true, color: { argb: 'FF6D5DFF' }, size: 12 };
+      worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      worksheet.getRow(1).height = 24;
+
+      const headerRow = worksheet.getRow(2);
+      headerRow.values = [
+        '',
+        'NR ZLECENIA',
+        'NAZWA (INDEKS)',
+        'ILOŚĆ SZT',
+        'MATERIAŁ',
+        'ZUŻYCIE FIZ',
+        'ZUŻYCIE FIZ/SZT',
+        'ZUŻYCIE TECH/SZT',
+        'ZUŻYCIE TECH'
+      ];
+      headerRow.font = { bold: true, color: { argb: 'FF111827' }, size: 10 };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      headerRow.height = 20;
+      headerRow.eachCell((cell) => {
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FF7A7A7A' } },
+          left: { style: 'thin', color: { argb: 'FF7A7A7A' } },
+          bottom: { style: 'thin', color: { argb: 'FF7A7A7A' } },
+          right: { style: 'thin', color: { argb: 'FF7A7A7A' } }
+        };
+      });
+
+      const sourceOrderRows =
+        orderRows.length > 0
+          ? orderRows
+          : [{ orderNumber: firstSettlement.orderNumber || '', producedQty: totalProduced ?? 0 }];
+      sourceOrderRows.forEach((orderRow, orderIndex) => {
+        group.items.forEach((settlement, materialIndex) => {
+          const usageQty =
+            settlement.usageQty === null ||
+            settlement.usageQty === undefined ||
+            Number.isNaN(settlement.usageQty) ||
+            !totalProduced
+              ? null
+              : settlement.usageQty * (orderRow.producedQty / totalProduced);
+          const usagePerPiece =
+            usageQty !== null && orderRow.producedQty > 0 ? usageQty / orderRow.producedQty : null;
+          worksheet.addRow({
+            lp: materialIndex === 0 ? `${orderIndex + 1}.` : '',
+            orderNumber: materialIndex === 0 ? orderRow.orderNumber : '',
+            detailName: materialIndex === 0 ? group.detailName : '',
+            producedQty: materialIndex === 0 ? orderRow.producedQty : '',
+            material: `${settlement.itemName}${settlement.itemIndexCode ? ` - ${settlement.itemIndexCode}` : ''}`,
+            physicalUsage: usageQty,
+            physicalUsagePerPiece: usagePerPiece,
+            technicalUsagePerPiece: '',
+            technicalUsage: ''
+          });
+        });
+      });
+
+      worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber <= 2) return;
+        const detailLength = String(row.getCell(3).value ?? '').length;
+        const materialLength = String(row.getCell(5).value ?? '').length;
+        const lineCount = Math.max(Math.ceil(detailLength / 34), Math.ceil(materialLength / 48), 1);
+        row.height = Math.min(Math.max(20, lineCount * 18), 58);
+        row.eachCell((cell, columnNumber) => {
+          cell.alignment = {
+            vertical: 'middle',
+            horizontal: columnNumber === 3 || columnNumber === 5 ? 'left' : 'center',
+            wrapText: true
+          };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FF8A8A8A' } },
+            left: { style: 'thin', color: { argb: 'FF8A8A8A' } },
+            bottom: { style: 'thin', color: { argb: 'FF8A8A8A' } },
+            right: { style: 'thin', color: { argb: 'FF8A8A8A' } }
+          };
+        });
+        row.getCell(2).font = { bold: true, color: { argb: 'FF6D5DFF' } };
+        row.getCell(3).font = { bold: true, color: { argb: 'FF6D5DFF' } };
+        row.getCell(5).font = { bold: true, color: { argb: 'FFFF6A00' } };
+      });
+      worksheet.autoFilter = 'A2:I2';
+      worksheet.getColumn(6).numFmt = '0.###';
+      worksheet.getColumn(7).numFmt = '0.000000';
+      worksheet.getColumn(8).numFmt = '0.000000';
+      worksheet.getColumn(9).numFmt = '0.###';
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `rozliczenie-produkcji-${sanitizeFileName(group.detailName || firstSettlement.orderNumber || 'produkcja')}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ title: 'Nie udało się wyeksportować produkcji do XLSX.', tone: 'error' });
+    }
   };
 
   const handleCreate = (event: React.FormEvent<HTMLFormElement>) => {
@@ -587,6 +891,11 @@ export default function PaintTapeSettlementsPage() {
       toast({ title: 'Uzupełnij detal i przynajmniej jedną farbę/taśmę.', tone: 'error' });
       return;
     }
+    const createdAt = toIsoFromDateTimeInput(form.productionStartedAt);
+    if (!createdAt) {
+      toast({ title: 'Podaj poprawną datę rozpoczęcia produkcji.', tone: 'error' });
+      return;
+    }
     const payloads = validItemDrafts.map((draft) => {
       const startQty = parseQtyInput(draft.startQty);
       const item = getSelectedItem(draft.itemName);
@@ -600,7 +909,8 @@ export default function PaintTapeSettlementsPage() {
           itemIndexCode: item?.indexCode ?? null,
           unit: item?.unit ?? 'kg',
           startQty: startQty ?? 0,
-          warehouseIssuedQty: 0
+          warehouseIssuedQty: 0,
+          createdAt
         }
       };
     });
@@ -651,6 +961,13 @@ export default function PaintTapeSettlementsPage() {
       toast({ title: 'Podaj numer zlecenia.', tone: 'error' });
       return;
     }
+    const productionCompletedAt = toIsoFromDateTimeInput(
+      groupCompletedAtDrafts[group.key] ?? getLocalDateTimeInputValue()
+    );
+    if (!productionCompletedAt) {
+      toast({ title: 'Podaj poprawną datę zakończenia produkcji.', tone: 'error' });
+      return;
+    }
     const payloads = group.items.map((settlement) => {
       const draft = getDraft(settlement);
       const endQty = draft.endQty.trim() ? parseQtyInput(draft.endQty) : null;
@@ -670,6 +987,7 @@ export default function PaintTapeSettlementsPage() {
         orderNumber,
         endQty,
         producedQty: null,
+        productionCompletedAt,
         completeProduction: true
       }))
     );
@@ -680,17 +998,30 @@ export default function PaintTapeSettlementsPage() {
       toast({ title: 'Brak uprawnien do wpisywania ilosci.', tone: 'error' });
       return;
     }
-    const producedQty = parseQtyInput(getGroupProducedDraft(group));
     const firstSettlement = group.items[0];
     if (!firstSettlement) return;
-    const orderNumber =
-      getDraft(firstSettlement).orderNumber.trim() ||
-      group.orderNumber.trim() ||
-      firstSettlement.orderNumber.trim();
-    if (producedQty === null || producedQty <= 0) {
-      toast({ title: 'Podaj poprawną ilość detali dla całego zlecenia.', tone: 'error' });
+    const orderRows = getGroupOrderQuantityDrafts(group).map((draft) => ({
+      orderNumber: draft.orderNumber.trim(),
+      producedQty: parseQtyInput(draft.producedQty)
+    }));
+    if (orderRows.some((row) => !row.orderNumber && row.producedQty !== null)) {
+      toast({ title: 'Podaj numer zlecenia przy każdej ilości.', tone: 'error' });
       return;
     }
+    if (orderRows.some((row) => row.orderNumber && (row.producedQty === null || row.producedQty <= 0))) {
+      toast({ title: 'Podaj poprawną ilość sztuk dla każdego zlecenia.', tone: 'error' });
+      return;
+    }
+    const validOrderRows = orderRows.filter(
+      (row): row is { orderNumber: string; producedQty: number } =>
+        Boolean(row.orderNumber) && row.producedQty !== null && row.producedQty > 0
+    );
+    if (validOrderRows.length === 0) {
+      toast({ title: 'Dodaj przynajmniej jedno zlecenie z ilością sztuk.', tone: 'error' });
+      return;
+    }
+    const producedQty = validOrderRows.reduce((sum, row) => sum + row.producedQty, 0);
+    const orderNumber = serializeOrderQuantities(validOrderRows);
     updateGroupMutation.mutate(
       group.items.map((settlement) => ({
         id: settlement.id,
@@ -769,7 +1100,7 @@ export default function PaintTapeSettlementsPage() {
     if (isDone) {
       return (
         <p className={compact ? 'mt-1 text-lg font-black leading-tight text-[var(--value-purple)]' : 'font-black text-[var(--value-purple)]'}>
-          {settlement.orderNumber || 'Bez numeru'}
+          {formatOrderQuantitySummary(settlement.orderNumber, settlement.producedQty)}
         </p>
       );
     }
@@ -982,6 +1313,16 @@ export default function PaintTapeSettlementsPage() {
               <p className="mt-1 break-words font-black leading-tight text-title">
                 {formatPerPiece(getUsagePerPiecePreview(settlement, group), unit)}
               </p>
+              {getUsageAllocationPreview(settlement, group).length > 0 && (
+                <div className="mt-2 w-full space-y-1 text-xs font-semibold text-dim">
+                  {getUsageAllocationPreview(settlement, group).map((allocation) => (
+                    <p key={`${settlement.id}-${allocation.orderNumber}`}>
+                      <span className="text-[var(--value-purple)]">{allocation.orderNumber}</span>
+                      : {formatQty(allocation.usageQty, unit)}
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -989,10 +1330,9 @@ export default function PaintTapeSettlementsPage() {
     );
   };
 
-  const groupedCards = groupedSettlements.map((group) => {
+    const groupedCards = groupedSettlements.map((group) => {
     const firstSettlement = group.items[0];
     if (!firstSettlement) return null;
-    const groupProducedDraft = getGroupProducedDraft(group);
     const groupProducedQty = firstSettlement.producedQty;
     const groupBusy = updateGroupMutation.isPending;
     const groupAccounted = group.items.every((settlement) => Boolean(settlement.accountedAt));
@@ -1031,6 +1371,25 @@ export default function PaintTapeSettlementsPage() {
             </div>
             <p className="mt-3 text-[10px] font-semibold uppercase tracking-wide text-dim">Zlecenie</p>
             {renderOrderNumber(firstSettlement, true)}
+            {activeFilter === 'OPEN' && (
+              <div className="mt-3 max-w-[340px]">
+                <label className="text-[10px] font-semibold uppercase tracking-wide text-dim">
+                  Zakończenie produkcji
+                </label>
+                <Input
+                  type="datetime-local"
+                  value={getGroupCompletedAtDraft(group)}
+                  onChange={(event) =>
+                    setGroupCompletedAtDrafts((prev) => ({
+                      ...prev,
+                      [group.key]: event.target.value
+                    }))
+                  }
+                  disabled={!canOpen || groupBusy}
+                  className="mt-1 h-10"
+                />
+              </div>
+            )}
           </div>
           <div className="flex shrink-0 flex-col gap-3 md:items-end">
             {activeFilter === 'DONE' && (
@@ -1051,23 +1410,53 @@ export default function PaintTapeSettlementsPage() {
               )}
             </div>
             {activeFilter === 'DETAILS_REQUIRED' && (
-              <div className="grid gap-2 sm:max-w-[220px]">
-                <div>
-                  <label className="text-xs uppercase tracking-wide text-dim">Ilość detali</label>
-                  <Input
-                    value={groupProducedDraft}
-                    onChange={(event) =>
-                      setGroupProducedDrafts((prev) => ({
-                        ...prev,
-                        [group.key]: event.target.value
-                      }))
-                    }
-                    inputMode="numeric"
-                    disabled={!canDetails || groupBusy}
-                    aria-label="Ilość wyprodukowanych detali"
-                    className="mt-1 h-10"
-                  />
-                </div>
+              <div className="grid gap-2 sm:min-w-[360px]">
+                <p className="text-xs uppercase tracking-wide text-dim">Zlecenia i ilości sztuk</p>
+                {getGroupOrderQuantityDrafts(group).map((draft) => (
+                  <div key={draft.id} className="grid grid-cols-[minmax(0,1fr)_120px_auto] gap-2">
+                    <Input
+                      value={draft.orderNumber}
+                      onChange={(event) =>
+                        setGroupOrderQuantityDraft(group, draft.id, { orderNumber: event.target.value })
+                      }
+                      placeholder="np. 5599"
+                      disabled={!canDetails || groupBusy}
+                      aria-label="Numer zlecenia"
+                      className="h-10"
+                    />
+                    <Input
+                      value={draft.producedQty}
+                      onChange={(event) =>
+                        setGroupOrderQuantityDraft(group, draft.id, { producedQty: event.target.value })
+                      }
+                      inputMode="numeric"
+                      placeholder="szt."
+                      disabled={!canDetails || groupBusy}
+                      aria-label="Ilość sztuk dla zlecenia"
+                      className="h-10"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => removeGroupOrderQuantityDraft(group, draft.id)}
+                      disabled={!canDetails || groupBusy || getGroupOrderQuantityDrafts(group).length <= 1}
+                      className="h-10 w-10 px-0 py-0"
+                      aria-label="Usuń zlecenie"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => addGroupOrderQuantityDraft(group)}
+                  disabled={!canDetails || groupBusy}
+                  className="min-h-[38px] justify-start px-3 py-2"
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Dodaj kolejne zlecenie
+                </Button>
               </div>
             )}
           </div>
@@ -1143,7 +1532,17 @@ export default function PaintTapeSettlementsPage() {
                     <td className="px-4 py-3">{formatQty(settlement.usageQty, unit)}</td>
                     {showPerPiece && (
                       <td className="px-4 py-3">
-                        {formatPerPiece(getUsagePerPiecePreview(settlement, group), unit)}
+                        <p>{formatPerPiece(getUsagePerPiecePreview(settlement, group), unit)}</p>
+                        {getUsageAllocationPreview(settlement, group).length > 0 && (
+                          <div className="mt-2 space-y-1 text-xs font-semibold text-dim">
+                            {getUsageAllocationPreview(settlement, group).map((allocation) => (
+                              <p key={`${settlement.id}-${allocation.orderNumber}`}>
+                                <span className="text-[var(--value-purple)]">{allocation.orderNumber}</span>
+                                : {formatQty(allocation.usageQty, unit)}
+                              </p>
+                            ))}
+                          </div>
+                        )}
                       </td>
                     )}
                     {showActions && (
@@ -1157,7 +1556,16 @@ export default function PaintTapeSettlementsPage() {
         </div>
 
         {activeFilter === 'OPEN' && (
-          <div className="mt-4 border-t border-[rgba(255,255,255,0.10)] pt-4 md:flex md:justify-end">
+          <div className="mt-4 grid gap-3 border-t border-[rgba(255,255,255,0.10)] pt-4 md:flex md:justify-end">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => void handleExportGroup(group)}
+              className="min-h-[42px] w-full px-3 py-2 md:w-auto"
+            >
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+              Eksport Excel
+            </Button>
             <Button
               type="button"
               variant="secondary"
@@ -1173,6 +1581,15 @@ export default function PaintTapeSettlementsPage() {
 
         {activeFilter === 'DETAILS_REQUIRED' && (
           <div className="mt-4 grid gap-2 border-t border-[rgba(255,255,255,0.10)] pt-4 sm:grid-cols-2 md:flex md:justify-end">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => void handleExportGroup(group)}
+              className="min-h-[42px] w-full px-3 py-2 md:w-auto"
+            >
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+              Eksport Excel
+            </Button>
             <Button
               type="button"
               variant="secondary"
@@ -1197,6 +1614,15 @@ export default function PaintTapeSettlementsPage() {
         )}
         {activeFilter === 'DONE' && (
           <div className="mt-4 grid gap-2 border-t border-[rgba(255,255,255,0.10)] pt-4 sm:grid-cols-2 md:flex md:justify-end">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => void handleExportGroup(group)}
+              className="min-h-[42px] w-full px-3 py-2 md:w-auto"
+            >
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+              Eksport Excel
+            </Button>
             <Button
               type="button"
               variant="secondary"
@@ -1305,14 +1731,14 @@ export default function PaintTapeSettlementsPage() {
       {activeFilter === 'CREATE' && visibleFilters.length > 0 && (
       <Card className="space-y-5 border-0 bg-transparent p-0 shadow-none hover:border-transparent hover:bg-transparent md:border-border md:bg-surface md:p-6 md:shadow-[inset_0_1px_0_var(--inner-highlight)] md:hover:border-borderStrong md:hover:bg-surface2">
         <form onSubmit={handleCreate} className="space-y-5">
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-3">
             <div>
-              <label className="text-xs uppercase tracking-wide text-dim">Numer zlecenia</label>
+              <label className="text-xs uppercase tracking-wide text-dim">Numery zleceń</label>
               <div className="relative mt-1">
                 <Input
                   value={form.orderNumber}
                   onChange={(event) => setForm((prev) => ({ ...prev, orderNumber: event.target.value }))}
-                  placeholder="opcjonalnie, np. ZL/123"
+                  placeholder="opcjonalnie, np. 5599, 5812, 5852"
                   disabled={!canCreate}
                   className="pr-10"
                 />
@@ -1379,6 +1805,20 @@ export default function PaintTapeSettlementsPage() {
                   </div>
                 )}
               </div>
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-wide text-dim">
+                Rozpoczęcie produkcji
+              </label>
+              <Input
+                type="datetime-local"
+                value={form.productionStartedAt}
+                onChange={(event) =>
+                  setForm((prev) => ({ ...prev, productionStartedAt: event.target.value }))
+                }
+                disabled={!canCreate}
+                className="mt-1"
+              />
             </div>
           </div>
 

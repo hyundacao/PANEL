@@ -1837,6 +1837,7 @@ const fetchCatalogs = async () => {
 
 const ORIGINAL_CATALOG_PAGE_SIZE = 1000;
 const ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE = 1000;
+const ORIGINAL_INVENTORY_ENTRY_PAGE_SIZE = 1000;
 
 const fetchAllOriginalCatalogRows = async () => {
   const rows: any[] = [];
@@ -5691,13 +5692,25 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .lt('at', retentionCutoffIso);
       if (purgeError) throw purgeError;
 
-      const { data, error } = await supabaseAdmin
-        .from('original_inventory_entries')
-        .select('*')
-        .gte('at', retentionCutoffIso)
-        .order('at', { ascending: false });
-      if (error) throw error;
-      return (data ?? []).map(mapOriginalInventoryEntry);
+      const rows: any[] = [];
+      for (let from = 0; ; from += ORIGINAL_INVENTORY_ENTRY_PAGE_SIZE) {
+        const to = from + ORIGINAL_INVENTORY_ENTRY_PAGE_SIZE - 1;
+        const { data, error } = await supabaseAdmin
+          .from('original_inventory_entries')
+          .select('*')
+          .gte('at', retentionCutoffIso)
+          .order('at', { ascending: false })
+          .range(from, to);
+        if (error) throw error;
+
+        const page = data ?? [];
+        rows.push(...page);
+        if (page.length < ORIGINAL_INVENTORY_ENTRY_PAGE_SIZE) {
+          break;
+        }
+      }
+
+      return rows.map(mapOriginalInventoryEntry);
     }
     case 'getOriginalInventoryCatalog': {
       const catalog = await fetchOriginalCatalog();
@@ -5980,11 +5993,15 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!itemName) throw new Error('ITEM_REQUIRED');
       if (!Number.isFinite(startQty) || startQty < 0) throw new Error('QTY_REQUIRED');
       const now = new Date().toISOString();
+      const createdAtRaw = payload?.createdAt ? String(payload.createdAt) : now;
+      const createdAtDate = new Date(createdAtRaw);
+      if (Number.isNaN(createdAtDate.getTime())) throw new Error('DATE_REQUIRED');
+      const createdAt = createdAtDate.toISOString();
       const { data, error } = await supabaseAdmin
         .from('paint_tape_settlements')
         .insert({
           id: randomUUID(),
-          created_at: now,
+          created_at: createdAt,
           updated_at: now,
           created_by: getActorName(currentUser),
           order_number: orderNumber || null,
@@ -6178,7 +6195,12 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         const completedEndQty =
           updates.end_qty !== undefined ? (updates.end_qty as number | null) : existing.end_qty;
         if (completedEndQty === null || completedEndQty === undefined) throw new Error('QTY_REQUIRED');
-        updates.production_completed_at = new Date().toISOString();
+        const completedAtRaw = payload?.productionCompletedAt
+          ? String(payload.productionCompletedAt)
+          : new Date().toISOString();
+        const completedAtDate = new Date(completedAtRaw);
+        if (Number.isNaN(completedAtDate.getTime())) throw new Error('DATE_REQUIRED');
+        updates.production_completed_at = completedAtDate.toISOString();
       }
       if (payload?.producedQty !== undefined) {
         if (payload.producedQty === null || payload.producedQty === '') {

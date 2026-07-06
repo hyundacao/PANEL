@@ -67,7 +67,8 @@ const isOriginalInventoryWarehouseVisible = (name: string) => {
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const exportCatalogCollator = new Intl.Collator('pl', { sensitivity: 'base', numeric: true });
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
-const REPORT_HISTORY_DAYS = 4;
+const REPORT_HISTORY_DAYS_SHORT = 4;
+const REPORT_HISTORY_DAYS_TWO_MONTHS = 60;
 const ERP_ORIGINALS_PROXY_NOT_CONFIGURED = 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED';
 const ERP_SNAPSHOT_MIGRATION_REQUIRED = 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS';
 const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
@@ -113,6 +114,19 @@ const getLocalDateValue = (date = new Date()) => {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+};
+
+const getPreviousDateKeys = (dateKey: string, days: number) => {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  if (!year || !month || !day) return [];
+  const baseDate = new Date(year, month - 1, day);
+  if (Number.isNaN(baseDate.getTime())) return [];
+
+  return Array.from({ length: days }, (_, index) => {
+    const value = new Date(baseDate);
+    value.setDate(baseDate.getDate() - index - 1);
+    return getLocalDateValue(value);
+  });
 };
 
 const buildEntryTimestamp = (dateKey: string) => {
@@ -399,8 +413,7 @@ export default function OriginalInventoryPage() {
   const [showNameSuggestions, setShowNameSuggestions] = useState(false);
   const [reportQuery, setReportQuery] = useState('');
   const [showReportSuggestions, setShowReportSuggestions] = useState(false);
-  const [showReportRealQty, setShowReportRealQty] = useState(true);
-  const [showReportAvailableQty, setShowReportAvailableQty] = useState(false);
+  const [reportQuantityMode, setReportQuantityMode] = useState<'real' | 'available'>('real');
   const [showReportUncountedItems, setShowReportUncountedItems] = useState(false);
   const [grindDialogMaterial, setGrindDialogMaterial] = useState<{
     name: string;
@@ -1377,29 +1390,35 @@ export default function OriginalInventoryPage() {
   }, [entries, spisDate]);
   const reportPreviousSnapshotDates = useMemo(() => {
     const dates = new Set<string>();
+    const allowedDates = new Set(getPreviousDateKeys(spisDate, REPORT_HISTORY_DAYS_TWO_MONTHS));
     reportSourceEntries.forEach((entry) => {
       (inventoryHistoryByMaterial.get(entry.key) ?? [])
-        .filter((point) => point.dateKey < spisDate)
-        .slice(0, REPORT_HISTORY_DAYS)
+        .filter((point) => allowedDates.has(point.dateKey))
         .forEach((point) => dates.add(point.dateKey));
     });
     return [...dates].sort((a, b) => b.localeCompare(a));
   }, [inventoryHistoryByMaterial, reportSourceEntries, spisDate]);
   const reportHistoryDates = useMemo(
-    () => reportPreviousSnapshotDates.slice(0, REPORT_HISTORY_DAYS),
+    () => reportPreviousSnapshotDates.slice(0, REPORT_HISTORY_DAYS_SHORT),
     [reportPreviousSnapshotDates]
   );
+  const reportHistoryDatesTwoMonths = useMemo(
+    () => reportPreviousSnapshotDates.slice(0, REPORT_HISTORY_DAYS_TWO_MONTHS),
+    [reportPreviousSnapshotDates]
+  );
+  const reportHistoryDatesForExport = reportHistoryDatesTwoMonths;
   const {
     data: historicalErpSnapshotState = {
       items: [] as OriginalInventoryErpSnapshotEntry[],
       migrationRequired: false
-    }
+    },
+    isFetching: isHistoricalErpSnapshotFetching
   } = useQuery({
-    queryKey: ['spis-oryginalow-erp-snapshot-history', reportHistoryDates],
+    queryKey: ['spis-oryginalow-erp-snapshot-history', reportHistoryDatesTwoMonths],
     queryFn: async () => {
       try {
         return {
-          items: await getOriginalInventoryErpSnapshotsByDates(reportHistoryDates),
+          items: await getOriginalInventoryErpSnapshotsByDates(reportHistoryDatesTwoMonths),
           migrationRequired: false
         };
       } catch (error) {
@@ -1557,6 +1576,73 @@ export default function OriginalInventoryPage() {
         return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
       });
   }, [erpSnapshotByDateAndMaterial, erpSnapshotMap, inventoryHistoryByMaterial, reportHistoryDates, reportSourceEntries, spisDate]);
+  const reportRowsForExport = useMemo(() => {
+    return [...reportSourceEntries]
+      .map((entry) => {
+        const historyByDate = new Map(
+          (inventoryHistoryByMaterial.get(entry.key) ?? []).map((point) => [point.dateKey, point])
+        );
+        const previousComparisons = reportHistoryDatesForExport.map((dateKey) => {
+          const point = historyByDate.get(dateKey);
+          if (!point) return null;
+          const erpPoint = erpSnapshotByDateAndMaterial.get(point.dateKey)?.get(entry.key) ?? null;
+          const realErpQty = erpPoint?.realQty ?? null;
+          const availableErpQty = erpPoint?.availableQty ?? null;
+          return {
+            dateKey: point.dateKey,
+            spisQty: point.qty,
+            realErpQty,
+            availableErpQty,
+            realDiffQty: realErpQty === null ? null : point.qty - realErpQty,
+            availableDiffQty: availableErpQty === null ? null : point.qty - availableErpQty
+          };
+        });
+        const currentSnapshot = erpSnapshotMap.get(entry.key);
+        const currentComparison = {
+          dateKey: spisDate,
+          spisQty: entry.qty,
+          realErpQty: currentSnapshot?.realQty ?? null,
+          availableErpQty: currentSnapshot?.availableQty ?? null,
+          realDiffQty:
+            currentSnapshot?.realQty === undefined ? null : entry.qty - (currentSnapshot?.realQty ?? 0),
+          availableDiffQty:
+            currentSnapshot?.availableQty === undefined
+              ? null
+              : entry.qty - (currentSnapshot?.availableQty ?? 0)
+        };
+        return {
+          key: entry.key,
+          name: entry.name,
+          unit: entry.unit,
+          currentRealErpQty: currentComparison.realErpQty,
+          currentAvailableErpQty: currentComparison.availableErpQty,
+          currentSpisQty: currentComparison.spisQty,
+          currentRealDiffQty: currentComparison.realDiffQty,
+          currentAvailableDiffQty: currentComparison.availableDiffQty,
+          previousRealDiffs: previousComparisons.map((point) =>
+            point
+              ? {
+                  dateKey: point.dateKey,
+                  diffQty: point.realDiffQty
+                }
+              : null
+          ),
+          previousAvailableDiffs: previousComparisons.map((point) =>
+            point
+              ? {
+                  dateKey: point.dateKey,
+                  diffQty: point.availableDiffQty
+                }
+              : null
+          )
+        };
+      })
+      .sort((a, b) => {
+        const nameCompare = exportCatalogCollator.compare(a.name.trim(), b.name.trim());
+        if (nameCompare !== 0) return nameCompare;
+        return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
+      });
+  }, [erpSnapshotByDateAndMaterial, erpSnapshotMap, inventoryHistoryByMaterial, reportHistoryDatesForExport, reportSourceEntries, spisDate]);
   const dailyComparison = useMemo(
     () =>
       reportRows.map((row) => ({
@@ -1684,304 +1770,16 @@ export default function OriginalInventoryPage() {
       .slice(0, 8);
   }, [reportOptions, reportQuery]);
 
-  const handleExportDailyLegacy = async () => {
-    if (!spisDate || reportRows.length === 0) return;
-    try {
-      const ExcelJSModule = await import('exceljs');
-      const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
-      const generatedAt = new Date().toLocaleString('pl-PL');
-      const fitWidth = (
-        values: string[],
-        minWidth: number,
-        maxWidth: number,
-        multiplier = 1,
-        padding = 2
-      ) => {
-        const longest = values.reduce((max, value) => Math.max(max, value.length), 0);
-        return Math.min(maxWidth, Math.max(minWidth, Math.ceil(longest * multiplier) + padding));
-      };
-      const columnWidths = {
-        name: fitWidth(
-          ['Material', ...reportRows.map((row) => row.name)],
-          34,
-          90,
-          1.18,
-          4
-        ),
-        unit: fitWidth(
-          ['Jedn.', ...reportRows.map((row) => row.unit)],
-          8,
-          12
-        ),
-        erpToday: fitWidth(
-          [
-            'ERP dziś (rzecz./dysp.)',
-            ...reportRows.map((row) =>
-              formatErpSnapshotPair(
-                row.currentRealErpQty,
-                row.currentAvailableErpQty,
-                formatExcelQty
-              )
-            )
-          ],
-          12,
-          18
-        ),
-        spisToday: fitWidth(
-          ['Spis dziś', ...reportRows.map((row) => formatExcelQty(row.currentSpisQty))],
-          12,
-          18
-        ),
-        diffToday: fitWidth(
-          [
-            'Różnica dziś (rzecz./dysp.)',
-            ...reportRows.map((row) =>
-              formatDiffPair(
-                row.currentRealDiffQty,
-                row.currentAvailableDiffQty,
-                formatExcelSignedQty
-              )
-            )
-          ],
-          14,
-          20
-        ),
-        diffPrev1: fitWidth(
-          [
-            'Różnica -1',
-            ...reportRows.map((row) =>
-              formatDiffHistoryPair(
-                row.previousRealDiffs[0],
-                row.previousAvailableDiffs[0],
-                formatExcelDiffHistoryCell
-              )
-            )
-          ],
-          18,
-          24
-        ),
-        diffPrev2: fitWidth(
-          [
-            'Różnica -2',
-            ...reportRows.map((row) =>
-              formatDiffHistoryPair(
-                row.previousRealDiffs[1],
-                row.previousAvailableDiffs[1],
-                formatExcelDiffHistoryCell
-              )
-            )
-          ],
-          18,
-          24
-        ),
-        diffPrev3: fitWidth(
-          [
-            'Różnica -3',
-            ...reportRows.map((row) =>
-              formatDiffHistoryPair(
-                row.previousRealDiffs[2],
-                row.previousAvailableDiffs[2],
-                formatExcelDiffHistoryCell
-              )
-            )
-          ],
-          18,
-          24
-        ),
-        diffPrev4: fitWidth(
-          [
-            'Różnica -4',
-            ...reportRows.map((row) =>
-              formatDiffHistoryPair(
-                row.previousRealDiffs[3],
-                row.previousAvailableDiffs[3],
-                formatExcelDiffHistoryCell
-              )
-            )
-          ],
-          18,
-          24
-        ),
-        
-      };
-      const workbook = new ExcelJS.Workbook();
-      workbook.creator = 'APKA DLA KAMILA';
-      workbook.created = new Date();
-
-      const worksheet = workbook.addWorksheet('Raport', {
-        views: [{ state: 'frozen', ySplit: 4 }]
-      });
-
-      worksheet.columns = [
-        { header: 'Material', key: 'name', width: columnWidths.name },
-        { header: 'Jedn.', key: 'unit', width: columnWidths.unit },
-        { header: 'ERP dziś (rzecz./dysp.)', key: 'erpToday', width: columnWidths.erpToday },
-        { header: 'Spis dziś', key: 'spisToday', width: columnWidths.spisToday },
-        { header: 'Różnica dziś (rzecz./dysp.)', key: 'diffToday', width: columnWidths.diffToday },
-        { header: 'Różnica -1', key: 'diffPrev1', width: columnWidths.diffPrev1 },
-        { header: 'Różnica -2', key: 'diffPrev2', width: columnWidths.diffPrev2 },
-        { header: 'Różnica -3', key: 'diffPrev3', width: columnWidths.diffPrev3 },
-        { header: 'Różnica -4', key: 'diffPrev4', width: columnWidths.diffPrev4 }
-      ];
-
-      worksheet.mergeCells('A1:J1');
-      worksheet.mergeCells('A2:D2');
-      worksheet.mergeCells('E2:G2');
-      worksheet.mergeCells('H2:J2');
-      worksheet.getCell('A1').value = 'Raport kontroli rozjazdów - spis oryginałów';
-      worksheet.getCell('A2').value = `Dzień raportu: ${spisDate}`;
-      worksheet.getCell('E2').value = currentErpSnapshotMeta
-        ? `ERP wgrane: ${new Date(currentErpSnapshotMeta.importedAt).toLocaleString('pl-PL')}`
-        : 'ERP wgrane: brak';
-      worksheet.getCell('H2').value = `Wygenerowano: ${generatedAt}`;
-
-      worksheet.getRow(1).height = 26;
-      worksheet.getRow(2).height = 22;
-      worksheet.getRow(4).values = [
-        'Material',
-        'Jedn.',
-        'ERP dziś (rzecz./dysp.)',
-        'Spis dziś',
-        'Różnica dziś (rzecz./dysp.)',
-        'Różnica -1',
-        'Różnica -2',
-        'Różnica -3',
-        'Różnica -4'
-      ];
-      worksheet.autoFilter = 'A4:J4';
-
-      const border = {
-        top: { style: 'thin', color: { argb: '33FFFFFF' } },
-        left: { style: 'thin', color: { argb: '22FFFFFF' } },
-        bottom: { style: 'thin', color: { argb: '33FFFFFF' } },
-        right: { style: 'thin', color: { argb: '22FFFFFF' } }
-      } as const;
-
-      const applyDarkCell = (cell: Cell, fillColor: string) => {
-        cell.font = { color: { argb: 'FFFFFBF7' }, size: 11, name: 'Segoe UI' };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillColor } };
-        cell.border = border;
-        cell.alignment = { vertical: 'middle', horizontal: 'left' };
-      };
-
-      const titleCell = worksheet.getCell('A1');
-      titleCell.font = { bold: true, size: 16, color: { argb: 'FFFFF8F1' }, name: 'Segoe UI Semibold' };
-      titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF121212' } };
-      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
-
-      ['A2', 'E2', 'H2'].forEach((cellRef) => {
-        const cell = worksheet.getCell(cellRef);
-        cell.font = { bold: true, size: 10, color: { argb: 'FFFFC58A' }, name: 'Segoe UI Semibold' };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1A1A1A' } };
-        cell.alignment = { vertical: 'middle' };
-      });
-
-      worksheet.getRow(4).eachCell((cell) => {
-        cell.font = { bold: true, color: { argb: 'FF111111' }, size: 11, name: 'Segoe UI Semibold' };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF8C32' } };
-        cell.border = border;
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      });
-
-      reportRows.forEach((row, rowIndex) => {
-        const excelRow = worksheet.addRow({
-          name: row.name,
-          unit: row.unit,
-          erpToday: formatErpSnapshotPair(
-            row.currentRealErpQty,
-            row.currentAvailableErpQty,
-            formatExcelQty
-          ),
-          spisToday: formatExcelQty(row.currentSpisQty),
-          diffToday: formatDiffPair(
-            row.currentRealDiffQty,
-            row.currentAvailableDiffQty,
-            formatExcelSignedQty
-          ),
-          diffPrev1: formatDiffHistoryPair(
-            row.previousRealDiffs[0],
-            row.previousAvailableDiffs[0],
-            formatExcelDiffHistoryCell
-          ),
-          diffPrev2: formatDiffHistoryPair(
-            row.previousRealDiffs[1],
-            row.previousAvailableDiffs[1],
-            formatExcelDiffHistoryCell
-          ),
-          diffPrev3: formatDiffHistoryPair(
-            row.previousRealDiffs[2],
-            row.previousAvailableDiffs[2],
-            formatExcelDiffHistoryCell
-          ),
-          diffPrev4: formatDiffHistoryPair(
-            row.previousRealDiffs[3],
-            row.previousAvailableDiffs[3],
-            formatExcelDiffHistoryCell
-          )
-        });
-        excelRow.height = 26;
-        const baseFill = rowIndex % 2 === 0 ? 'FF111111' : 'FF1A1A1A';
-        excelRow.eachCell((cell, columnNumber) => {
-          applyDarkCell(cell, baseFill);
-          if (columnNumber === 1) {
-            cell.font = {
-              color: { argb: 'FFFFC58A' },
-              size: 11,
-              bold: true,
-              name: 'Segoe UI Semibold'
-            };
-            cell.alignment = { vertical: 'middle', horizontal: 'left' };
-          }
-          if ([3, 4].includes(columnNumber)) {
-            cell.alignment = { horizontal: 'center', vertical: 'middle' };
-          }
-          if (columnNumber === 5) {
-            cell.alignment = { horizontal: 'right', vertical: 'middle' };
-          }
-          if (columnNumber >= 6 && columnNumber <= 10) {
-            cell.alignment = { wrapText: true, vertical: 'middle' };
-            cell.font = { color: { argb: 'FFF7ED' }, size: 10, name: 'Segoe UI' };
-          }
-        });
-
-        const diffTodayCell = excelRow.getCell(5);
-
-        if (row.currentRealDiffQty !== null && Number.isFinite(row.currentRealDiffQty)) {
-          diffTodayCell.fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: {
-              argb:
-                row.currentRealDiffQty === 0
-                  ? 'FF173A2A'
-                  : Math.abs(row.currentRealDiffQty) >= 10
-                    ? 'FF7A2600'
-                    : 'FF4E1B00'
-            }
-          };
-          diffTodayCell.font = { color: { argb: 'FFFFF4EA' }, bold: true, name: 'Segoe UI Semibold' };
-        }
-      });
-
-      const buffer = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buffer], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `spis-oryginalow-raport-${spisDate}.xlsx`;
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      toast({ title: 'Nie udalo sie wyeksportowac raportu XLSX.', tone: 'error' });
-    }
-  };
-
-  void handleExportDailyLegacy;
+  const reportExportHistoryDateLabels = useMemo(
+    () =>
+      Array.from({ length: reportHistoryDatesForExport.length }, (_, index) =>
+        reportHistoryDatesForExport[index] ? formatCompactDate(reportHistoryDatesForExport[index]) : '-'
+      ),
+    [reportHistoryDatesForExport]
+  );
 
   const handleExportDaily = async () => {
-    if (!spisDate || reportRows.length === 0) return;
+    if (!spisDate || reportRowsForExport.length === 0) return;
     try {
       const ExcelJSModule = await import('exceljs');
       const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
@@ -2020,8 +1818,9 @@ export default function OriginalInventoryPage() {
         maxWidth: number;
         multiplier?: number;
         padding?: number;
-        getValue: (row: (typeof reportRows)[number]) => string;
+        getValue: (row: (typeof reportRowsForExport)[number]) => string;
       };
+      const exportReportModes = visibleReportModes;
       const exportColumns: ExportColumn[] = [
         {
           key: 'name',
@@ -2032,17 +1831,17 @@ export default function OriginalInventoryPage() {
           maxWidth: 80,
           multiplier: 1.12,
           padding: 4,
-          getValue: (row: (typeof reportRows)[number]) => row.name
+          getValue: (row: (typeof reportRowsForExport)[number]) => row.name
         },
-        ...visibleReportModes.map((mode) => ({
-          key: `erpToday-${mode.key}`,
-          header: `ERP dzis (${mode.shortLabel})`,
-          wrap: false,
-          align: 'center' as const,
-          minWidth: 14,
-          maxWidth: 18,
-          getValue: (row: (typeof reportRows)[number]) =>
-            formatExcelQty(mode.key === 'real' ? row.currentRealErpQty : row.currentAvailableErpQty)
+        ...exportReportModes.map((mode) => ({
+            key: `erpToday-${mode.key}`,
+            header: `ERP dzis (${mode.shortLabel})`,
+            wrap: false,
+            align: 'center' as const,
+            minWidth: 14,
+            maxWidth: 18,
+            getValue: (row: (typeof reportRowsForExport)[number]) =>
+              formatExcelQty(mode.key === 'real' ? row.currentRealErpQty : row.currentAvailableErpQty)
         })),
         {
           key: 'spisToday',
@@ -2051,34 +1850,36 @@ export default function OriginalInventoryPage() {
           align: 'center' as const,
           minWidth: 12,
           maxWidth: 18,
-          getValue: (row: (typeof reportRows)[number]) => formatExcelQty(row.currentSpisQty)
+          getValue: (row: (typeof reportRowsForExport)[number]) => formatExcelQty(row.currentSpisQty)
         },
-        ...visibleReportModes.map((mode) => ({
-          key: `diffToday-${mode.key}`,
-          header: `Roznica dzis (${mode.shortLabel})`,
-          wrap: false,
-          align: 'right' as const,
-          minWidth: 16,
-          maxWidth: 20,
-          getValue: (row: (typeof reportRows)[number]) =>
-            formatExcelSignedQty(
-              mode.key === 'real' ? row.currentRealDiffQty : row.currentAvailableDiffQty
-            )
-        })),
-        ...Array.from({ length: REPORT_HISTORY_DAYS }, (_, index) =>
-          visibleReportModes.map((mode) => ({
-            key: `diffPrev${index + 1}-${mode.key}`,
-            header: `Roznica ${reportHistoryDateLabels[index]} (${mode.shortLabel})`,
+        ...exportReportModes.map((mode) => ({
+            key: `diffToday-${mode.key}`,
+            header: `Roznica dzis (${mode.shortLabel})`,
             wrap: false,
-            align: 'left' as const,
+            align: 'right' as const,
             minWidth: 16,
-            maxWidth: 22,
-            getValue: (row: (typeof reportRows)[number]) =>
-              formatExcelDiffHistoryCell(
-                mode.key === 'real' ? row.previousRealDiffs[index] : row.previousAvailableDiffs[index]
+            maxWidth: 20,
+            getValue: (row: (typeof reportRowsForExport)[number]) =>
+              formatExcelSignedQty(
+                mode.key === 'real' ? row.currentRealDiffQty : row.currentAvailableDiffQty
               )
-          }))
-        ).flat(),
+        })),
+        ...Array.from({ length: reportExportHistoryDateLabels.length }, (_, index) =>
+            exportReportModes.map((mode) => ({
+              key: `diffPrev${index + 1}-${mode.key}`,
+              header: `Roznica ${reportExportHistoryDateLabels[index]} (${mode.shortLabel})`,
+              wrap: false,
+              align: 'left' as const,
+              minWidth: 16,
+              maxWidth: 22,
+              getValue: (row: (typeof reportRowsForExport)[number]) =>
+                formatExcelDiffHistoryCell(
+                  mode.key === 'real'
+                    ? row.previousRealDiffs[index]
+                    : row.previousAvailableDiffs[index]
+                )
+            }))
+          ).flat(),
         {
           key: 'unit',
           header: 'Jedn.',
@@ -2086,14 +1887,14 @@ export default function OriginalInventoryPage() {
           align: 'center' as const,
           minWidth: 8,
           maxWidth: 12,
-          getValue: (row: (typeof reportRows)[number]) => row.unit
+          getValue: (row: (typeof reportRowsForExport)[number]) => row.unit
         }
       ];
       const columnWidths = Object.fromEntries(
         exportColumns.map((column) => [
           column.key,
           fitWidth(
-            [column.header, ...reportRows.map((row) => column.getValue(row))],
+            [column.header, ...reportRowsForExport.map((row) => column.getValue(row))],
             column.minWidth,
             column.maxWidth,
             column.multiplier ?? 1,
@@ -2124,8 +1925,8 @@ export default function OriginalInventoryPage() {
         ? `Dzien raportu: ${spisDate} | ERP wgrane: ${new Date(currentErpSnapshotMeta.importedAt).toLocaleString('pl-PL')}`
         : `Dzien raportu: ${spisDate} | ERP wgrane: brak`;
       worksheet.getCell('A3').value =
-        `Wygenerowano: ${generatedAt} | Dane ERP: ${reportModeSummary} | ` +
-        'Kolumny XLSX: osobne kolumny';
+        `Wygenerowano: ${generatedAt} | Dane ERP: ${exportReportModes.map((mode) => mode.fullLabel).join(', ')} | ` +
+        `Historia: ${reportExportHistoryDateLabels.length} dni | Kolumny XLSX: ${exportColumns.length}`;
 
       worksheet.getRow(1).height = 26;
       worksheet.getRow(2).height = 22;
@@ -2166,7 +1967,7 @@ export default function OriginalInventoryPage() {
         cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
       });
 
-      reportRows.forEach((row, rowIndex) => {
+      reportRowsForExport.forEach((row, rowIndex) => {
         const excelRow = worksheet.addRow(
           exportColumns.reduce<Record<string, string>>((accumulator, column) => {
             accumulator[column.key] = column.getValue(row);
@@ -2202,7 +2003,7 @@ export default function OriginalInventoryPage() {
           };
         });
 
-        visibleReportModes.forEach((mode) => {
+        exportReportModes.forEach((mode) => {
           const diffTodayColumnIndex =
             exportColumns.findIndex((column) => column.key === `diffToday-${mode.key}`) + 1;
           const diffHighlightValue =
@@ -2245,7 +2046,6 @@ export default function OriginalInventoryPage() {
       toast({ title: 'Nie udalo sie wyeksportowac raportu XLSX.', tone: 'error' });
     }
   };
-
   const materialGroupList = useMemo(() => {
     const list = [...materialGroups.values()].map((group) => {
       const total = group.entries.reduce((sum, entry) => sum + entry.qty, 0);
@@ -2293,35 +2093,27 @@ export default function OriginalInventoryPage() {
         .join(' + ')
     : '';
   const currentReportDateLabel = formatCompactDate(spisDate);
-  const reportHistoryDateLabels = Array.from({ length: REPORT_HISTORY_DAYS }, (_, index) =>
+  const reportHistoryDateLabels = Array.from({ length: reportHistoryDates.length }, (_, index) =>
     reportHistoryDates[index] ? formatCompactDate(reportHistoryDates[index]) : '-'
   );
   const visibleReportModes = [
-    showReportRealQty
+    reportQuantityMode === 'real'
       ? {
           key: 'real' as const,
           shortLabel: 'rzecz.',
           fullLabel: 'stan rzeczywisty'
         }
-      : null,
-    showReportAvailableQty
-      ? {
+      : {
           key: 'available' as const,
           shortLabel: 'dysp.',
           fullLabel: 'stan do dyspozycji'
         }
-      : null
-  ].filter((mode): mode is { key: 'real' | 'available'; shortLabel: string; fullLabel: string } =>
-    Boolean(mode)
-  );
-  const reportModeSummary = visibleReportModes.map((mode) => mode.fullLabel).join(', ');
+  ];
   const handleReportRealQtyToggle = (checked: boolean) => {
-    if (!checked && !showReportAvailableQty) return;
-    setShowReportRealQty(checked);
+    if (checked) setReportQuantityMode('real');
   };
   const handleReportAvailableQtyToggle = (checked: boolean) => {
-    if (!checked && !showReportRealQty) return;
-    setShowReportAvailableQty(checked);
+    if (checked) setReportQuantityMode('available');
   };
   const reportColumns = [
     'Material',
@@ -2342,7 +2134,7 @@ export default function OriginalInventoryPage() {
     ...visibleReportModes.map((mode) =>
       formatSignedQty(mode.key === 'real' ? row.currentRealDiffQty : row.currentAvailableDiffQty)
     ),
-    ...Array.from({ length: REPORT_HISTORY_DAYS }, (_, index) =>
+    ...Array.from({ length: reportHistoryDateLabels.length }, (_, index) =>
       visibleReportModes.map((mode) =>
         formatDiffHistoryCell(
           mode.key === 'real' ? row.previousRealDiffs[index] : row.previousAvailableDiffs[index]
@@ -2360,7 +2152,7 @@ export default function OriginalInventoryPage() {
     ...visibleReportModes.map((mode) =>
       formatSignedQty(mode.key === 'real' ? row.currentRealDiffQty : row.currentAvailableDiffQty)
     ),
-    ...Array.from({ length: REPORT_HISTORY_DAYS }, (_, index) =>
+    ...Array.from({ length: reportHistoryDateLabels.length }, (_, index) =>
       visibleReportModes.map((mode) =>
         formatDiffHistoryCell(
           mode.key === 'real' ? row.previousRealDiffs[index] : row.previousAvailableDiffs[index]
@@ -3383,17 +3175,16 @@ export default function OriginalInventoryPage() {
               Raport kontroli rozjazdów
             </p>
             <p className="text-sm text-dim">
-              Raport obejmuje tylko pozycje spisane w wybranym dniu i pokazuje rozjazd na tle
-              4 poprzednich różnic tej samej pozycji.
+              Raport obejmuje tylko pozycje spisane w wybranym dniu i pokazuje rozjazd na tle 4 poprzednich dni.
             </p>
             <div className="flex flex-wrap items-center gap-4">
               <Toggle
-                checked={showReportRealQty}
+                checked={reportQuantityMode === 'real'}
                 onCheckedChange={handleReportRealQtyToggle}
                 label="Pokaz stan rzeczywisty"
               />
               <Toggle
-                checked={showReportAvailableQty}
+                checked={reportQuantityMode === 'available'}
                 onCheckedChange={handleReportAvailableQtyToggle}
                 label="Pokaz stan do dyspozycji"
               />
@@ -3417,7 +3208,7 @@ export default function OriginalInventoryPage() {
                 <Button
                   variant="secondary"
                   onClick={handleExportDaily}
-                  disabled={reportRows.length === 0}
+                  disabled={reportRowsForExport.length === 0 || isHistoricalErpSnapshotFetching}
                 >
                   Eksportuj do Excel (XLSX)
                 </Button>
