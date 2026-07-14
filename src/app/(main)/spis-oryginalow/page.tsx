@@ -3160,11 +3160,13 @@ export default function OriginalInventoryPage() {
             </div>
             {selectedReportMaterialKey && (
               selectedReportTableRows.length > 0 ? (
-                <DataTable
-                  columns={reportColumns}
-                  rows={selectedReportTableRows}
-                  onRowClick={(rowIndex) => openGrindDialog(selectedReportRows[rowIndex])}
-                />
+                <div className="[&_tbody]:font-semibold [&_tbody_td:first-child]:font-bold">
+                  <DataTable
+                    columns={reportColumns}
+                    rows={selectedReportTableRows}
+                    onRowClick={(rowIndex) => openGrindDialog(selectedReportRows[rowIndex])}
+                  />
+                </div>
               ) : (
                 <p className="text-sm text-dim">Brak tej pozycji w raporcie dla wybranego dnia.</p>
               )
@@ -3248,13 +3250,15 @@ export default function OriginalInventoryPage() {
                 ])}
                   />
                 )}
-                <DataTable
-                  columns={reportColumns}
-                  rows={reportTableRows}
-                  onRowClick={(rowIndex) => openGrindDialog(reportRows[rowIndex])}
-                  stickyHeader
-                  desktopMaxHeightClassName="max-h-[82vh]"
-                />
+                <div className="[&_tbody]:font-semibold [&_tbody_td:first-child]:font-bold">
+                  <DataTable
+                    columns={reportColumns}
+                    rows={reportTableRows}
+                    onRowClick={(rowIndex) => openGrindDialog(reportRows[rowIndex])}
+                    stickyHeader
+                    desktopMaxHeightClassName="max-h-[82vh]"
+                  />
+                </div>
               </>
             )}
           </Card>
@@ -3270,12 +3274,14 @@ export default function OriginalInventoryPage() {
               <p className="text-sm text-dim">Brak danych ERP i spisu dla wybranego dnia.</p>
             ) : (
               <>
-                <DataTable
-                  columns={dailyComparisonColumns}
-                  rows={dailyComparisonRows}
-                  stickyHeader
-                  desktopMaxHeightClassName="max-h-[82vh]"
-                />
+                <div className="[&_tbody]:font-semibold [&_tbody_td:first-child]:font-bold">
+                  <DataTable
+                    columns={dailyComparisonColumns}
+                    rows={dailyComparisonRows}
+                    stickyHeader
+                    desktopMaxHeightClassName="max-h-[82vh]"
+                  />
+                </div>
                 {false && (
                   <DataTable
                 columns={['Material', 'ERP (rzecz./dysp.)', 'Spis', 'Różnica (rzecz./dysp.)', 'Jedn.']}

@@ -1,7 +1,6 @@
 ﻿'use client';
 
 import { useMemo, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, FileSpreadsheet, Minus, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react';
 import {
@@ -197,15 +196,6 @@ const formatIssueHistory = (settlement: PaintTapeSettlement) =>
     })
     .join(' | ');
 
-const celebrationParticles = Array.from({ length: 28 }, (_, index) => ({
-  id: index,
-  angle: (index / 28) * 360,
-  distance: 96 + (index % 5) * 26,
-  delay: (index % 7) * 0.045,
-  size: 7 + (index % 4) * 3,
-  color: ['#FF6A00', '#22C55E', '#7C5CFF', '#F59E0B', '#F1F5F9'][index % 5]
-}));
-
 const formatPerPiece = (value: number | null | undefined, unit = 'kg') => {
   if (value === null || value === undefined || Number.isNaN(value)) return '-';
   return `${value.toLocaleString('pl-PL', {
@@ -293,11 +283,18 @@ const getStatusBadge = (settlement: PaintTapeSettlement) => {
   return <Badge tone="info">Otwarte</Badge>;
 };
 
-const buildSnapshotMap = (items: OriginalInventoryErpSnapshotEntry[]) => {
+const buildSnapshotMap = (items: unknown) => {
   const map = new Map<string, OriginalInventoryErpSnapshotEntry>();
-  items.forEach((item) => {
-    map.set(normalizeKey(item.name), item);
-    if (item.indexCode) map.set(normalizeKey(item.indexCode), item);
+  if (!Array.isArray(items)) return map;
+  items.forEach((rawItem) => {
+    if (!rawItem || typeof rawItem !== 'object') return;
+    const item = rawItem as OriginalInventoryErpSnapshotEntry;
+    if (typeof item.name === 'string' && item.name.trim()) {
+      map.set(normalizeKey(item.name), item);
+    }
+    if (typeof item.indexCode === 'string' && item.indexCode.trim()) {
+      map.set(normalizeKey(item.indexCode), item);
+    }
   });
   return map;
 };
@@ -311,7 +308,6 @@ export default function PaintTapeSettlementsPage() {
   const canOpen = !readOnly && paintTapePermissions.open;
   const canDetails = !readOnly && paintTapePermissions.details;
   const canAccounting = !readOnly && paintTapePermissions.accounting;
-  const canShowCelebration = paintTapePermissions.celebration;
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<FilterValue>('CREATE');
   const [query, setQuery] = useState('');
@@ -325,7 +321,6 @@ export default function PaintTapeSettlementsPage() {
     () => new Set()
   );
   const [issueDraft, setIssueDraft] = useState<IssueDraft | null>(null);
-  const [celebrationVisible, setCelebrationVisible] = useState(false);
   const [showDetailSuggestions, setShowDetailSuggestions] = useState(false);
   const [showItemSuggestionsFor, setShowItemSuggestionsFor] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -335,7 +330,6 @@ export default function PaintTapeSettlementsPage() {
   });
   const nextItemDraftId = useRef(2);
   const nextOrderQuantityDraftId = useRef(1000);
-  const celebrationTimerRef = useRef<number | null>(null);
   const [itemDrafts, setItemDrafts] = useState<PaintTapeItemDraft[]>([
     createEmptyPaintTapeItem(1)
   ]);
@@ -405,7 +399,8 @@ export default function PaintTapeSettlementsPage() {
     queryKey: ['spis-oryginalow-erp-snapshot', snapshotDate],
     queryFn: async () => {
       try {
-        return await getOriginalInventoryErpSnapshot(snapshotDate);
+        const snapshot = await getOriginalInventoryErpSnapshot(snapshotDate);
+        return Array.isArray(snapshot) ? snapshot : [];
       } catch (error) {
         const code = error instanceof Error ? error.message : '';
         if (code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS') {
@@ -501,22 +496,6 @@ export default function PaintTapeSettlementsPage() {
     return source.slice(0, 14);
   };
 
-  const showAccountedCelebration = () => {
-    if (celebrationTimerRef.current) {
-      window.clearTimeout(celebrationTimerRef.current);
-    }
-    setCelebrationVisible(false);
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        setCelebrationVisible(true);
-        celebrationTimerRef.current = window.setTimeout(() => {
-          setCelebrationVisible(false);
-          celebrationTimerRef.current = null;
-        }, 4200);
-      });
-    });
-  };
-
   const createMutation = useMutation({
     mutationFn: async (
       payloads: Array<Parameters<typeof createPaintTapeSettlement>[0]>
@@ -554,9 +533,6 @@ export default function PaintTapeSettlementsPage() {
       setDrafts({});
       setGroupOrderQuantityDrafts({});
       setGroupCompletedAtDrafts({});
-      if (canShowCelebration && payloads.some((payload) => payload.accounted === true)) {
-        showAccountedCelebration();
-      }
       void queryClient.invalidateQueries({ queryKey: ['paint-tape-settlements'] });
       toast({ title: 'Zapisano zlecenie', tone: 'success' });
     },
@@ -1886,51 +1862,6 @@ export default function PaintTapeSettlementsPage() {
     );
   });
 
-  const celebrationOverlay = celebrationVisible ? (
-    <div
-      className="pointer-events-none fixed inset-0 z-[1200] flex items-center justify-center overflow-hidden bg-[rgba(5,6,10,0.34)] px-4"
-      aria-live="polite"
-    >
-      <div className="paint-tape-celebration relative flex min-h-[320px] w-full max-w-[520px] flex-col items-center justify-center">
-        <div className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2">
-          {celebrationParticles.map((particle) => (
-            <span
-              key={particle.id}
-              className="paint-tape-celebration-particle absolute left-1/2 top-1/2 rounded-full"
-              style={
-                {
-                  '--angle': `${particle.angle}deg`,
-                  '--distance': `${particle.distance}px`,
-                  '--delay': `${particle.delay}s`,
-                  width: `${particle.size}px`,
-                  height: `${particle.size}px`,
-                  backgroundColor: particle.color
-                } as CSSProperties
-              }
-            />
-          ))}
-        </div>
-
-        <div className="paint-tape-teddy relative flex h-[250px] w-[296px] items-center justify-center overflow-hidden rounded-[2rem] border border-[rgba(255,255,255,0.14)] bg-[radial-gradient(circle_at_50%_38%,rgba(255,196,92,0.30),transparent_34%),linear-gradient(145deg,rgba(255,122,0,0.24),rgba(124,92,255,0.28)_55%,rgba(8,10,16,0.94))] text-[128px] drop-shadow-[0_26px_54px_rgba(0,0,0,0.45)] sm:h-[300px] sm:w-[356px] sm:text-[164px]">
-          <span className="paint-tape-teddy-emoji select-none" aria-hidden="true">
-            🧸
-          </span>
-          <span className="absolute bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/10 bg-black/30 px-4 py-2 text-xs font-black uppercase tracking-[0.24em] text-white/90 backdrop-blur-sm">
-            Dobra robota!
-          </span>
-        </div>
-        <div className="paint-tape-celebration-text mt-4 rounded-2xl border border-[rgba(255,255,255,0.16)] bg-[rgba(9,10,14,0.82)] px-5 py-4 text-center shadow-[0_18px_60px_rgba(0,0,0,0.42)] backdrop-blur">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-success">
-            Gratulacje
-          </p>
-          <p className="mt-1 text-xl font-black text-title sm:text-2xl">
-            Rozliczyłaś zlecenie
-          </p>
-        </div>
-      </div>
-    </div>
-  ) : null;
-
   const statusButtonClass =
     'flex min-h-[50px] min-w-0 items-center justify-center whitespace-normal break-words border-[rgba(255,122,26,0.22)] bg-[rgba(255,122,26,0.035)] px-2 py-2 text-center text-[12px] leading-tight shadow-[0_8px_22px_rgba(255,122,26,0.08)] data-[state=active]:shadow-[0_0_0_2px_rgba(255,122,26,0.22),0_0_22px_rgba(255,122,26,0.28),inset_0_1px_0_rgba(255,255,255,0.1)] sm:min-h-[44px] sm:px-3 sm:text-sm';
 
@@ -1947,7 +1878,6 @@ export default function PaintTapeSettlementsPage() {
   );
   return (
     <div className="space-y-5">
-      {celebrationOverlay}
       {statusFilters}
 
       {visibleFilters.length === 0 && (
