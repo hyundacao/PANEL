@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { ArrowLeftRight, Bell, Cog, KeyRound, LogOut, Menu, X } from 'lucide-react';
+import { Bell, Cog, KeyRound, LogOut, Menu, X } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useUiStore } from '@/lib/store/ui';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { canSeeTab, getAccessibleWarehouses } from '@/lib/auth/access';
+import { canSeeTab } from '@/lib/auth/access';
 import { changeOwnPassword, logoutUser } from '@/lib/api';
 import { useToastStore } from '@/components/ui/Toast';
 import {
@@ -39,7 +39,6 @@ export const Topbar = ({
     sidebarCollapsed,
     user,
     setUser,
-    clearActiveWarehouse,
     logout,
     activeWarehouse,
     erpDocumentNotificationsEnabled,
@@ -51,8 +50,6 @@ export const Topbar = ({
     erpPushDispatcherTargetSelection,
     setErpPushDispatcherTargetSelection
   } = useUiStore();
-  const warehouses = getAccessibleWarehouses(user);
-  const canSwitch = warehouses.length > 1;
   const isErpModule = activeWarehouse === 'PRZESUNIECIA_ERP';
   const canConfigureWarehousemanPush = canSeeTab(user, 'PRZESUNIECIA_ERP', 'erp-magazynier');
   const canConfigureDispatcherPush =
@@ -398,32 +395,6 @@ export const Topbar = ({
             >
               <KeyRound className="mr-2 h-4 w-4" />
               Zmien haslo
-            </Button>
-          </>
-        )}
-        {canSwitch && (
-          <>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                clearActiveWarehouse();
-                router.push('/magazyny');
-              }}
-              className="h-10 min-h-10 w-10 px-0 py-0 md:hidden"
-              aria-label="Zmień moduł"
-            >
-              <ArrowLeftRight className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                clearActiveWarehouse();
-                router.push('/magazyny');
-              }}
-              className="hidden md:inline-flex"
-            >
-              <ArrowLeftRight className="mr-2 h-4 w-4" />
-              Zmień moduł
             </Button>
           </>
         )}

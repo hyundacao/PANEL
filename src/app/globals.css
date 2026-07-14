@@ -78,6 +78,12 @@ body > * {
   transform-origin: 52% 78%;
 }
 
+.paint-tape-teddy-emoji {
+  filter: drop-shadow(0 18px 18px rgba(0, 0, 0, 0.34));
+  animation: paint-tape-teddy-dance 0.58s ease-in-out infinite alternate;
+  transform-origin: 50% 82%;
+}
+
 .paint-tape-celebration-text {
   animation: paint-tape-celebration-text 4.2s ease both;
 }
@@ -119,6 +125,15 @@ body > * {
   }
 }
 
+@keyframes paint-tape-teddy-dance {
+  0% {
+    transform: translateX(-10px) rotate(-9deg) scale(0.96);
+  }
+  100% {
+    transform: translateX(10px) rotate(9deg) scale(1.04);
+  }
+}
+
 @keyframes paint-tape-celebration-text {
   0%,
   10% {
@@ -157,6 +172,7 @@ body > * {
 @media (prefers-reduced-motion: reduce) {
   .paint-tape-celebration,
   .paint-tape-teddy,
+  .paint-tape-teddy-emoji,
   .paint-tape-celebration-text,
   .paint-tape-celebration-particle {
     animation-duration: 0.01ms;

@@ -68,12 +68,12 @@ const moduleOptions: ModuleOption[] = [
     id: 'farby-tasmy',
     key: 'FARBY_TASMY',
     requiredTabs: ['rozliczanie-farb-tasm'],
-    title: 'Rozliczanie farb i taśm',
+    title: 'Rozliczanie farb i rozcieńczalników',
     description: 'Rozliczanie zużycia po zleceniach: stan przed, pobrania z magazynu, stan po i ilość detali.',
     action: 'Wejdź',
-    href: '/rozliczanie-farb-tasm',
-    tags: ['Produkcja', 'Farby i taśmy'],
-    keywords: ['farby', 'taśmy', 'rozliczanie', 'zlecenia', 'zużycie', 'detale', 'erp'],
+    href: '/rozliczanie-farb-rozcienczalnikow',
+    tags: ['Produkcja', 'Farby i rozcieńczalniki'],
+    keywords: ['farby', 'rozcieńczalniki', 'rozliczanie', 'zlecenia', 'zużycie', 'detale', 'erp'],
     icon: Droplets
   },
   {

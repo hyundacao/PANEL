@@ -32,7 +32,7 @@ import { getPaintTapePermissions, isReadOnly } from '@/lib/auth/access';
 import { cn } from '@/lib/utils/cn';
 import { parseQtyInput } from '@/lib/utils/format';
 
-type FilterValue = 'CREATE' | 'OPEN' | 'DETAILS_REQUIRED' | 'DONE';
+type FilterValue = 'CREATE' | 'OPEN' | 'DETAILS_REQUIRED' | 'DONE' | 'ACCOUNTED';
 
 type RowDraft = {
   orderNumber: string;
@@ -195,7 +195,7 @@ const formatIssueHistory = (settlement: PaintTapeSettlement) =>
       const date = formatShortDate(issue.createdAt);
       return `${date ? `${date} ` : ''}${formatSignedQty(issue.qty, settlement.unit || 'kg')}`;
     })
-    .join(' 路 ');
+    .join(' | ');
 
 const celebrationParticles = Array.from({ length: 28 }, (_, index) => ({
   id: index,
@@ -321,6 +321,9 @@ export default function PaintTapeSettlementsPage() {
     Record<string, OrderQuantityDraft[]>
   >({});
   const [groupCompletedAtDrafts, setGroupCompletedAtDrafts] = useState<Record<string, string>>({});
+  const [selectedExportGroupKeys, setSelectedExportGroupKeys] = useState<Set<string>>(
+    () => new Set()
+  );
   const [issueDraft, setIssueDraft] = useState<IssueDraft | null>(null);
   const [celebrationVisible, setCelebrationVisible] = useState(false);
   const [showDetailSuggestions, setShowDetailSuggestions] = useState(false);
@@ -344,10 +347,16 @@ export default function PaintTapeSettlementsPage() {
         paintTapePermissions.details
           ? { value: 'DETAILS_REQUIRED' as FilterValue, label: 'Zlecenia do wpisania ilości' }
           : null,
-        paintTapePermissions.accounting ? { value: 'DONE' as FilterValue, label: 'Zakończone zlecenia' } : null
+        paintTapePermissions.accounting
+          ? { value: 'DONE' as FilterValue, label: 'Zlecenia do rozliczenia' }
+          : null,
+        paintTapePermissions.accounted
+          ? { value: 'ACCOUNTED' as FilterValue, label: 'Rozliczone' }
+          : null
       ].filter(Boolean) as Array<{ value: FilterValue; label: string }>,
     [
       paintTapePermissions.accounting,
+      paintTapePermissions.accounted,
       paintTapePermissions.create,
       paintTapePermissions.details,
       paintTapePermissions.open
@@ -498,11 +507,13 @@ export default function PaintTapeSettlementsPage() {
     }
     setCelebrationVisible(false);
     window.requestAnimationFrame(() => {
-      setCelebrationVisible(true);
-      celebrationTimerRef.current = window.setTimeout(() => {
-        setCelebrationVisible(false);
-        celebrationTimerRef.current = null;
-      }, 4200);
+      window.requestAnimationFrame(() => {
+        setCelebrationVisible(true);
+        celebrationTimerRef.current = window.setTimeout(() => {
+          setCelebrationVisible(false);
+          celebrationTimerRef.current = null;
+        }, 4200);
+      });
     });
   };
 
@@ -587,7 +598,13 @@ export default function PaintTapeSettlementsPage() {
   const filteredSettlements = useMemo(() => {
     const normalizedQuery = normalizeKey(query);
     return settlements.filter((settlement) => {
-      if (activeFilter === 'CREATE' || settlement.status !== activeFilter) return false;
+      const matchesStage =
+        activeFilter === 'ACCOUNTED'
+          ? settlement.status === 'DONE' && Boolean(settlement.accountedAt)
+          : activeFilter === 'DONE'
+            ? settlement.status === 'DONE' && !settlement.accountedAt
+            : activeFilter !== 'CREATE' && settlement.status === activeFilter;
+      if (!matchesStage) return false;
       if (!normalizedQuery) return true;
       return [
         settlement.orderNumber,
@@ -878,6 +895,188 @@ export default function PaintTapeSettlementsPage() {
     }
   };
 
+  const toggleExportGroupSelection = (groupKey: string, checked: boolean) => {
+    setSelectedExportGroupKeys((current) => {
+      const next = new Set(current);
+      if (checked) next.add(groupKey);
+      else next.delete(groupKey);
+      return next;
+    });
+  };
+
+  const toggleAllVisibleExportGroups = (checked: boolean) => {
+    setSelectedExportGroupKeys((current) => {
+      const next = new Set(current);
+      groupedSettlements.forEach((group) => {
+        if (checked) next.add(group.key);
+        else next.delete(group.key);
+      });
+      return next;
+    });
+  };
+
+  const handleExportSelectedGroups = async () => {
+    const selectedGroups = groupedSettlements.filter((group) =>
+      selectedExportGroupKeys.has(group.key)
+    );
+    if (selectedGroups.length === 0) {
+      toast({ title: 'Wybierz przynajmniej jedną produkcję.', tone: 'error' });
+      return;
+    }
+
+    try {
+      const ExcelJSModule = await import('exceljs');
+      const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Wybrane produkcje', {
+        views: [{ state: 'frozen', ySplit: 2 }]
+      });
+
+      workbook.creator = 'APKA DLA KAMILA';
+      workbook.created = new Date();
+      worksheet.columns = [
+        { key: 'lp', width: 5 },
+        { key: 'orderNumber', width: 16 },
+        { key: 'detailName', width: 38 },
+        { key: 'producedQty', width: 12 },
+        { key: 'material', width: 52 },
+        { key: 'physicalUsage', width: 13 },
+        { key: 'physicalUsagePerPiece', width: 15 },
+        { key: 'technicalUsagePerPiece', width: 15 },
+        { key: 'technicalUsage', width: 13 }
+      ];
+
+      const generatedAt = new Date().toLocaleString('pl-PL');
+      selectedGroups.forEach((group, groupIndex) => {
+        const firstSettlement = group.items[0];
+        if (!firstSettlement) return;
+        if (groupIndex > 0) worksheet.addRow([]);
+
+        const startedAt = group.items
+          .map((settlement) => settlement.createdAt)
+          .filter(Boolean)
+          .sort()[0];
+        const completedDates = group.items
+          .map((settlement) => settlement.productionCompletedAt)
+          .filter(Boolean)
+          .sort();
+        const completedAt = completedDates[completedDates.length - 1];
+        const orderRows = getParsedGroupOrderQuantities(group);
+        const totalProduced =
+          firstSettlement.producedQty ??
+          orderRows.reduce((sum, row) => sum + row.producedQty, 0);
+        const sourceOrderRows =
+          orderRows.length > 0
+            ? orderRows
+            : [{ orderNumber: firstSettlement.orderNumber || '', producedQty: totalProduced ?? 0 }];
+
+        const titleRowNumber = worksheet.rowCount + 1;
+        worksheet.mergeCells(titleRowNumber, 1, titleRowNumber, 9);
+        const titleRow = worksheet.getRow(titleRowNumber);
+        titleRow.getCell(1).value =
+          `${group.detailName} | Rozpoczęto: ${formatDateTime(startedAt) || '-'} | ` +
+          `Zakończono: ${formatDateTime(completedAt) || '-'} | Wygenerowano: ${generatedAt}`;
+        titleRow.font = { bold: true, color: { argb: 'FF6D5DFF' }, size: 12 };
+        titleRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+        titleRow.height = 24;
+
+        const headerRow = worksheet.addRow([
+          '',
+          'NR ZLECENIA',
+          'NAZWA (INDEKS)',
+          'ILOŚĆ SZT',
+          'MATERIAŁ',
+          'ZUŻYCIE FIZ',
+          'ZUŻYCIE FIZ/SZT',
+          'ZUŻYCIE TECH/SZT',
+          'ZUŻYCIE TECH'
+        ]);
+        headerRow.font = { bold: true, color: { argb: 'FF111827' }, size: 10 };
+        headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
+        headerRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+        headerRow.height = 20;
+        headerRow.eachCell((cell) => {
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FF7A7A7A' } },
+            left: { style: 'thin', color: { argb: 'FF7A7A7A' } },
+            bottom: { style: 'thin', color: { argb: 'FF7A7A7A' } },
+            right: { style: 'thin', color: { argb: 'FF7A7A7A' } }
+          };
+        });
+
+        sourceOrderRows.forEach((orderRow, orderIndex) => {
+          group.items.forEach((settlement, materialIndex) => {
+            const usageQty =
+              settlement.usageQty === null ||
+              settlement.usageQty === undefined ||
+              Number.isNaN(settlement.usageQty) ||
+              !totalProduced
+                ? null
+                : settlement.usageQty * (orderRow.producedQty / totalProduced);
+            const usagePerPiece =
+              usageQty !== null && orderRow.producedQty > 0
+                ? usageQty / orderRow.producedQty
+                : null;
+            const row = worksheet.addRow({
+              lp: orderIndex === 0 && materialIndex === 0 ? `${groupIndex + 1}.` : '',
+              orderNumber: materialIndex === 0 ? orderRow.orderNumber : '',
+              detailName: materialIndex === 0 ? group.detailName : '',
+              producedQty: materialIndex === 0 ? orderRow.producedQty : '',
+              material: `${settlement.itemName}${settlement.itemIndexCode ? ` - ${settlement.itemIndexCode}` : ''}`,
+              physicalUsage: usageQty,
+              physicalUsagePerPiece: usagePerPiece,
+              technicalUsagePerPiece: '',
+              technicalUsage: ''
+            });
+            const detailLength = String(row.getCell(3).value ?? '').length;
+            const materialLength = String(row.getCell(5).value ?? '').length;
+            const lineCount = Math.max(
+              Math.ceil(detailLength / 34),
+              Math.ceil(materialLength / 48),
+              1
+            );
+            row.height = Math.min(Math.max(20, lineCount * 18), 58);
+            row.eachCell((cell, columnNumber) => {
+              cell.alignment = {
+                vertical: 'middle',
+                horizontal: columnNumber === 3 || columnNumber === 5 ? 'left' : 'center',
+                wrapText: true
+              };
+              cell.border = {
+                top: { style: 'thin', color: { argb: 'FF8A8A8A' } },
+                left: { style: 'thin', color: { argb: 'FF8A8A8A' } },
+                bottom: { style: 'thin', color: { argb: 'FF8A8A8A' } },
+                right: { style: 'thin', color: { argb: 'FF8A8A8A' } }
+              };
+            });
+            row.getCell(2).font = { bold: true, color: { argb: 'FF6D5DFF' } };
+            row.getCell(3).font = { bold: true, color: { argb: 'FF6D5DFF' } };
+            row.getCell(5).font = { bold: true, color: { argb: 'FFFF6A00' } };
+          });
+        });
+      });
+
+      worksheet.getColumn(6).numFmt = '0.###';
+      worksheet.getColumn(7).numFmt = '0.000000';
+      worksheet.getColumn(8).numFmt = '0.000000';
+      worksheet.getColumn(9).numFmt = '0.###';
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `rozliczenia-produkcji-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setSelectedExportGroupKeys(new Set());
+    } catch {
+      toast({ title: 'Nie udało się wyeksportować wybranych produkcji do XLSX.', tone: 'error' });
+    }
+  };
+
   const handleCreate = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canCreate) {
@@ -888,7 +1087,7 @@ export default function PaintTapeSettlementsPage() {
       (draft) => draft.itemName.trim() || draft.startQty.trim()
     );
     if (!form.detailName.trim() || validItemDrafts.length === 0) {
-      toast({ title: 'Uzupełnij detal i przynajmniej jedną farbę/taśmę.', tone: 'error' });
+      toast({ title: 'Uzupełnij detal i przynajmniej jedną farbę lub rozcieńczalnik.', tone: 'error' });
       return;
     }
     const createdAt = toIsoFromDateTimeInput(form.productionStartedAt);
@@ -915,11 +1114,11 @@ export default function PaintTapeSettlementsPage() {
       };
     });
     if (payloads.some(({ draft }) => !draft.itemName.trim())) {
-      toast({ title: 'Uzupełnij nazwę każdej farby/taśmy.', tone: 'error' });
+      toast({ title: 'Uzupełnij nazwę każdej farby lub rozcieńczalnika.', tone: 'error' });
       return;
     }
     if (payloads.some(({ startQty }) => startQty === null)) {
-      toast({ title: 'Podaj stan przed rozpoczęciem dla każdej farby/taśmy.', tone: 'error' });
+      toast({ title: 'Podaj stan przed rozpoczęciem dla każdej farby lub każdego rozcieńczalnika.', tone: 'error' });
       return;
     }
     createMutation.mutate(payloads.map(({ payload }) => payload));
@@ -974,11 +1173,11 @@ export default function PaintTapeSettlementsPage() {
       return { settlement, draft, endQty };
     });
     if (payloads.some(({ draft }) => !draft.endQty.trim())) {
-      toast({ title: 'Podaj stan po dla każdej farby/taśmy w zleceniu.', tone: 'error' });
+      toast({ title: 'Podaj stan po dla każdej farby lub każdego rozcieńczalnika w zleceniu.', tone: 'error' });
       return;
     }
     if (payloads.some(({ endQty }) => endQty === null)) {
-      toast({ title: 'Podaj poprawny stan po dla każdej farby/taśmy.', tone: 'error' });
+      toast({ title: 'Podaj poprawny stan po dla każdej farby lub każdego rozcieńczalnika.', tone: 'error' });
       return;
     }
     updateGroupMutation.mutate(
@@ -1133,7 +1332,12 @@ export default function PaintTapeSettlementsPage() {
           >
             <Minus className="h-4 w-4" />
           </Button>
-          <div className="flex min-h-10 min-w-0 flex-1 items-center justify-center rounded-xl border border-border bg-[rgba(0,0,0,0.32)] px-3 text-sm font-black text-title">
+          <div
+            className={cn(
+              'flex h-10 items-center justify-center rounded-xl border border-border bg-[rgba(0,0,0,0.32)] px-3 text-sm font-black text-title',
+              compact ? 'min-w-0 flex-1' : 'w-[170px] shrink-0'
+            )}
+          >
             {formatQty(settlement.warehouseIssuedQty, settlement.unit || 'kg')}
           </div>
           <Button
@@ -1202,13 +1406,13 @@ export default function PaintTapeSettlementsPage() {
           type="button"
           variant="ghost"
           onClick={() => {
-            if (window.confirm(`Usunąć farbę/taśmę ${settlement.itemName} ze zlecenia ${settlement.orderNumber}?`)) {
+            if (window.confirm(`Usunąć farbę/rozcieńczalnik ${settlement.itemName} ze zlecenia ${settlement.orderNumber}?`)) {
               removeMutation.mutate(settlement.id);
             }
           }}
           disabled={!canOpen || activeFilter !== 'OPEN' || removeMutation.isPending}
           className={compact ? 'min-h-[44px] w-12 px-0 py-2' : 'min-h-[40px] px-3 py-2'}
-          aria-label="Usuń farbę / taśmę"
+          aria-label="Usuń farbę / rozcieńczalnik"
         >
           <Trash2 className="h-4 w-4" />
         </Button>
@@ -1231,7 +1435,7 @@ export default function PaintTapeSettlementsPage() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
-              Farba / tasma
+              Farba / rozcieńczalnik
             </p>
             <p
               className="mt-1 break-words text-sm font-black leading-snug"
@@ -1330,7 +1534,7 @@ export default function PaintTapeSettlementsPage() {
     );
   };
 
-    const groupedCards = groupedSettlements.map((group) => {
+  const groupedCards = groupedSettlements.map((group) => {
     const firstSettlement = group.items[0];
     if (!firstSettlement) return null;
     const groupProducedQty = firstSettlement.producedQty;
@@ -1350,6 +1554,9 @@ export default function PaintTapeSettlementsPage() {
         key={group.key}
         className={cn(
           'rounded-xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(0,0,0,0.50))] p-3 shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.08)] md:p-4',
+          activeFilter === 'DONE' &&
+            selectedExportGroupKeys.has(group.key) &&
+            'border-[var(--accent)] shadow-[0_0_0_1px_rgba(255,122,0,0.35),0_16px_38px_rgba(0,0,0,0.30)]',
           groupAccounted &&
             'border-[color:color-mix(in_srgb,var(--success)_55%,transparent)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--success)_16%,rgba(255,255,255,0.04)),rgba(0,0,0,0.48))] shadow-[0_0_0_1px_color-mix(in_srgb,var(--success)_25%,transparent),0_16px_38px_rgba(0,0,0,0.30)]'
         )}
@@ -1357,7 +1564,7 @@ export default function PaintTapeSettlementsPage() {
         <div className="flex flex-col gap-3 border-b border-[rgba(255,255,255,0.08)] pb-3 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
             <p
-              className="break-words text-sm font-black leading-snug text-[var(--value-purple)]"
+              className="break-words text-lg font-black leading-tight text-[var(--value-purple)] md:text-xl"
             >
               {group.detailName}
             </p>
@@ -1391,22 +1598,35 @@ export default function PaintTapeSettlementsPage() {
               </div>
             )}
           </div>
-          <div className="flex shrink-0 flex-col gap-3 md:items-end">
-            {activeFilter === 'DONE' && (
-              <div className="w-full rounded-lg border border-[rgba(124,92,255,0.45)] bg-[rgba(124,92,255,0.10)] px-4 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] md:min-w-[190px] md:text-right">
+          <div className="grid shrink-0 gap-2 sm:grid-cols-[170px_220px] md:w-[398px]">
+            {(activeFilter === 'DONE' || activeFilter === 'ACCOUNTED') && (
+              <label className="flex min-h-[72px] w-full cursor-pointer items-center justify-center gap-2.5 rounded-xl border border-[rgba(255,122,0,0.38)] bg-[rgba(255,122,0,0.06)] px-3 py-3 text-xs font-bold text-title transition-colors hover:bg-[rgba(255,122,0,0.12)]">
+                <input
+                  type="checkbox"
+                  checked={selectedExportGroupKeys.has(group.key)}
+                  onChange={(event) =>
+                    toggleExportGroupSelection(group.key, event.target.checked)
+                  }
+                  className="h-4 w-4 shrink-0 accent-[var(--accent)]"
+                />
+                Wybierz produkcję
+              </label>
+            )}
+            {(activeFilter === 'DONE' || activeFilter === 'ACCOUNTED') && (
+              <div className="flex min-h-[72px] w-full flex-col items-center justify-center rounded-xl border border-[rgba(124,92,255,0.42)] bg-[rgba(124,92,255,0.09)] px-4 py-3 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
                   Ilość wykonana
                 </p>
-                <p className="mt-1 text-xl font-black leading-tight text-[var(--value-purple)]">
+                <p className="mt-1 text-[26px] font-black leading-none tracking-tight text-[var(--value-purple)] md:text-[28px]">
                   {formatPiecesQty(groupProducedQty)}
                 </p>
               </div>
             )}
-            <div className="flex flex-wrap items-center gap-2">
-              {activeFilter !== 'DONE' && getStatusBadge(firstSettlement)}
+            <div className="flex w-full flex-wrap items-center justify-end gap-2 pt-1 sm:col-span-2">
+              {activeFilter !== 'DONE' && activeFilter !== 'ACCOUNTED' && getStatusBadge(firstSettlement)}
               {groupAccounted && <Badge tone="success">Rozliczone</Badge>}
               {group.items.length > 1 && (
-                <Badge tone="info">{group.items.length} farby / taśmy</Badge>
+                <Badge tone="info">{group.items.length} farby / rozcieńczalniki</Badge>
               )}
             </div>
             {activeFilter === 'DETAILS_REQUIRED' && (
@@ -1469,17 +1689,19 @@ export default function PaintTapeSettlementsPage() {
         </div>
 
         <div className="mt-3 hidden overflow-x-auto md:block">
-          <table className="w-full min-w-[1120px] text-sm">
+          <table className="w-full min-w-[1280px] text-sm">
             <thead className="bg-[linear-gradient(90deg,rgba(255,122,26,0.16),rgba(255,255,255,0.03))] text-title">
               <tr>
                 {[
-                  'Farba / taśma',
+                  'Farba / rozcieńczalnik',
                   'Stan przed',
                   'Pobrane z magazynu',
                   'Stan po',
                   'Zużycie',
-                  ...(activeFilter === 'OPEN' ? [] : ['Zużycie / szt.']),
-                  ...(activeFilter === 'DONE' ? [] : ['Akcje'])
+                  ...(activeFilter === 'OPEN'
+                    ? []
+                    : ['Zużycie / szt.', 'Rozchód na zlecenia']),
+                  ...(activeFilter === 'DONE' || activeFilter === 'ACCOUNTED' ? [] : ['Akcje'])
                 ].map((column) => (
                   <th
                     key={`${group.key}-${column}`}
@@ -1497,7 +1719,7 @@ export default function PaintTapeSettlementsPage() {
                 const unit = settlement.unit || 'kg';
                 const isDone = settlement.status === 'DONE';
                 const showPerPiece = activeFilter !== 'OPEN';
-                const showActions = activeFilter !== 'DONE';
+                const showActions = activeFilter !== 'DONE' && activeFilter !== 'ACCOUNTED';
                 return (
                   <tr
                     key={settlement.id}
@@ -1526,24 +1748,30 @@ export default function PaintTapeSettlementsPage() {
                         inputMode="decimal"
                         disabled={!canOpen || isDone || activeFilter !== 'OPEN'}
                         aria-label="Stan farby po zakończeniu"
-                        className="min-w-[110px]"
+                        className="h-10 w-[170px] min-w-[170px] text-center font-black"
                       />
                     </td>
                     <td className="px-4 py-3">{formatQty(settlement.usageQty, unit)}</td>
                     {showPerPiece && (
-                      <td className="px-4 py-3">
-                        <p>{formatPerPiece(getUsagePerPiecePreview(settlement, group), unit)}</p>
-                        {getUsageAllocationPreview(settlement, group).length > 0 && (
-                          <div className="mt-2 space-y-1 text-xs font-semibold text-dim">
-                            {getUsageAllocationPreview(settlement, group).map((allocation) => (
-                              <p key={`${settlement.id}-${allocation.orderNumber}`}>
-                                <span className="text-[var(--value-purple)]">{allocation.orderNumber}</span>
-                                : {formatQty(allocation.usageQty, unit)}
-                              </p>
-                            ))}
-                          </div>
-                        )}
-                      </td>
+                      <>
+                        <td className="px-4 py-3 font-semibold">
+                          {formatPerPiece(getUsagePerPiecePreview(settlement, group), unit)}
+                        </td>
+                        <td className="min-w-[190px] px-4 py-3">
+                          {getUsageAllocationPreview(settlement, group).length > 0 ? (
+                            <div className="space-y-1 text-xs font-semibold text-dim">
+                              {getUsageAllocationPreview(settlement, group).map((allocation) => (
+                                <p key={`${settlement.id}-${allocation.orderNumber}`}>
+                                  <span className="text-[var(--value-purple)]">{allocation.orderNumber}</span>
+                                  : {formatQty(allocation.usageQty, unit)}
+                                </p>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-dim">-</span>
+                          )}
+                        </td>
+                      </>
                     )}
                     {showActions && (
                       <td className="px-4 py-3">{renderSettlementActions(settlement)}</td>
@@ -1612,17 +1840,19 @@ export default function PaintTapeSettlementsPage() {
             </Button>
           </div>
         )}
-        {activeFilter === 'DONE' && (
+        {(activeFilter === 'DONE' || activeFilter === 'ACCOUNTED') && (
           <div className="mt-4 grid gap-2 border-t border-[rgba(255,255,255,0.10)] pt-4 sm:grid-cols-2 md:flex md:justify-end">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => void handleExportGroup(group)}
-              className="min-h-[42px] w-full px-3 py-2 md:w-auto"
-            >
-              <FileSpreadsheet className="mr-2 h-4 w-4" />
-              Eksport Excel
-            </Button>
+            {activeFilter === 'ACCOUNTED' && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => void handleExportGroup(group)}
+                className="min-h-[42px] w-full px-3 py-2 md:w-auto"
+              >
+                <FileSpreadsheet className="mr-2 h-4 w-4" />
+                Eksport Excel
+              </Button>
+            )}
             <Button
               type="button"
               variant="secondary"
@@ -1636,18 +1866,20 @@ export default function PaintTapeSettlementsPage() {
               )}
             >
               <CheckCircle2 className="mr-2 h-4 w-4" />
-              Rozliczone
+              {groupAccounted ? 'Cofnij rozliczenie' : 'Rozliczone'}
             </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => handleReopenGroup(group)}
-              disabled={!canAccounting || groupBusy}
-              className="min-h-[42px] w-full px-3 py-2 md:w-auto"
-            >
-              <RotateCcw className="mr-2 h-4 w-4" />
-              Cofnij zlecenie
-            </Button>
+            {activeFilter === 'DONE' && (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => handleReopenGroup(group)}
+                disabled={!canAccounting || groupBusy}
+                className="min-h-[42px] w-full px-3 py-2 md:w-auto"
+              >
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Cofnij zlecenie
+              </Button>
+            )}
           </div>
         )}
       </article>
@@ -1679,14 +1911,13 @@ export default function PaintTapeSettlementsPage() {
           ))}
         </div>
 
-        <div className="paint-tape-teddy relative h-[250px] w-[296px] overflow-hidden rounded-2xl drop-shadow-[0_26px_54px_rgba(0,0,0,0.45)] sm:h-[300px] sm:w-[356px]">
-          <iframe
-            src="https://tenor.com/embed/23978789"
-            title="Bear Dance GIF"
-            className="h-full w-full border-0"
-            allowFullScreen
-            loading="lazy"
-          />
+        <div className="paint-tape-teddy relative flex h-[250px] w-[296px] items-center justify-center overflow-hidden rounded-[2rem] border border-[rgba(255,255,255,0.14)] bg-[radial-gradient(circle_at_50%_38%,rgba(255,196,92,0.30),transparent_34%),linear-gradient(145deg,rgba(255,122,0,0.24),rgba(124,92,255,0.28)_55%,rgba(8,10,16,0.94))] text-[128px] drop-shadow-[0_26px_54px_rgba(0,0,0,0.45)] sm:h-[300px] sm:w-[356px] sm:text-[164px]">
+          <span className="paint-tape-teddy-emoji select-none" aria-hidden="true">
+            🧸
+          </span>
+          <span className="absolute bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/10 bg-black/30 px-4 py-2 text-xs font-black uppercase tracking-[0.24em] text-white/90 backdrop-blur-sm">
+            Dobra robota!
+          </span>
         </div>
         <div className="paint-tape-celebration-text mt-4 rounded-2xl border border-[rgba(255,255,255,0.16)] bg-[rgba(9,10,14,0.82)] px-5 py-4 text-center shadow-[0_18px_60px_rgba(0,0,0,0.42)] backdrop-blur">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-success">
@@ -1705,7 +1936,7 @@ export default function PaintTapeSettlementsPage() {
 
   const statusFilters = (
     <Tabs value={activeFilter} onValueChange={(value) => setFilter(value as FilterValue)}>
-      <TabsList className="grid w-full grid-cols-2 gap-2 border-0 bg-transparent p-0 shadow-none sm:grid-cols-4">
+      <TabsList className="grid w-full grid-cols-2 gap-2 border-0 bg-transparent p-0 shadow-none sm:grid-cols-5">
         {visibleFilters.map((item) => (
           <TabsTrigger key={item.value} className={statusButtonClass} value={item.value}>
             {item.label}
@@ -1723,18 +1954,39 @@ export default function PaintTapeSettlementsPage() {
         <Card>
           <EmptyState
             title="Brak dostepu do etapow"
-            description="Administrator musi wlaczyc przynajmniej jeden etap rozliczania farb i tasm."
+            description="Administrator musi wlaczyc przynajmniej jeden etap rozliczania farb i rozcienczalnikow."
           />
         </Card>
       )}
 
       {activeFilter === 'CREATE' && visibleFilters.length > 0 && (
-      <Card className="space-y-5 border-0 bg-transparent p-0 shadow-none hover:border-transparent hover:bg-transparent md:border-border md:bg-surface md:p-6 md:shadow-[inset_0_1px_0_var(--inner-highlight)] md:hover:border-borderStrong md:hover:bg-surface2">
-        <form onSubmit={handleCreate} className="space-y-5">
-          <div className="grid gap-4 md:grid-cols-3">
+      <Card className="border-0 bg-transparent p-0 shadow-none hover:border-transparent hover:bg-transparent">
+        <form
+          onSubmit={handleCreate}
+          className="w-full overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.12)] border-t-2 border-t-[var(--accent)] bg-[rgba(15,15,18,0.96)] shadow-[0_24px_70px_rgba(0,0,0,0.28)]"
+        >
+          <div className="border-b border-[rgba(255,255,255,0.09)] bg-[linear-gradient(135deg,rgba(255,122,0,0.10),rgba(255,255,255,0.015)_55%)] px-6 py-5">
+            <h2 className="text-xl font-black text-title">Nowa produkcja</h2>
+          </div>
+
+          <div className="space-y-5 px-6 py-6 lg:px-7 lg:py-7">
+            <div className="flex items-center gap-3">
+              <span
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-sm font-black ${
+                  form.detailName.trim() && form.productionStartedAt
+                    ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-400'
+                    : 'border-[rgba(255,122,0,0.50)] bg-[rgba(255,122,0,0.10)] text-[var(--accent)]'
+                }`}
+              >
+                {form.detailName.trim() && form.productionStartedAt ? '✓' : '1'}
+              </span>
+              <p className="text-sm font-black text-title">Dane zlecenia</p>
+            </div>
             <div>
-              <label className="text-xs uppercase tracking-wide text-dim">Numery zleceń</label>
-              <div className="relative mt-1">
+              <label className="text-xs font-semibold uppercase tracking-wide text-dim">
+                Numery zleceń <span className="normal-case text-dim">(opcjonalnie)</span>
+              </label>
+              <div className="relative mt-3">
                 <Input
                   value={form.orderNumber}
                   onChange={(event) => setForm((prev) => ({ ...prev, orderNumber: event.target.value }))}
@@ -1756,8 +2008,10 @@ export default function PaintTapeSettlementsPage() {
               </div>
             </div>
             <div>
-              <label className="text-xs uppercase tracking-wide text-dim">Nazwa detalu</label>
-              <div className="relative mt-1">
+              <label className="text-xs font-semibold uppercase tracking-wide text-dim">
+                Nazwa detalu
+              </label>
+              <div className="relative mt-3">
                 <Input
                   value={form.detailName}
                   onChange={(event) => {
@@ -1807,7 +2061,7 @@ export default function PaintTapeSettlementsPage() {
               </div>
             </div>
             <div>
-              <label className="text-xs uppercase tracking-wide text-dim">
+              <label className="text-xs font-semibold uppercase tracking-wide text-dim">
                 Rozpoczęcie produkcji
               </label>
               <Input
@@ -1817,16 +2071,25 @@ export default function PaintTapeSettlementsPage() {
                   setForm((prev) => ({ ...prev, productionStartedAt: event.target.value }))
                 }
                 disabled={!canCreate}
-                className="mt-1"
+                className="mt-3"
               />
             </div>
           </div>
 
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-                Farby / taśmy
-              </p>
+          <div className="space-y-4 border-t border-[rgba(255,255,255,0.09)] bg-[rgba(255,255,255,0.018)] px-6 py-6 lg:px-7 lg:py-7">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <span
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-sm font-black ${
+                    itemDrafts.some((draft) => draft.itemName.trim())
+                      ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-400'
+                      : 'border-[rgba(255,122,0,0.50)] bg-[rgba(255,122,0,0.10)] text-[var(--accent)]'
+                  }`}
+                >
+                  {itemDrafts.some((draft) => draft.itemName.trim()) ? '✓' : '2'}
+                </span>
+                <p className="text-sm font-black text-title">Farby / rozcieńczalniki</p>
+              </div>
               <Button
                 type="button"
                 variant="secondary"
@@ -1835,7 +2098,7 @@ export default function PaintTapeSettlementsPage() {
                 className="min-h-[40px] shrink-0 px-3 py-2"
               >
                 <Plus className="mr-2 h-4 w-4" />
-                Dodaj farbę / taśmę
+                Dodaj farbę / rozcieńczalnik
               </Button>
             </div>
 
@@ -1846,11 +2109,11 @@ export default function PaintTapeSettlementsPage() {
                 return (
                   <div
                     key={draft.id}
-                    className="grid gap-3 border-b border-[rgba(255,255,255,0.10)] py-4 last:border-b-0 md:rounded-xl md:border md:border-[rgba(255,255,255,0.10)] md:bg-[rgba(255,255,255,0.03)] md:p-3 md:last:border-b md:grid-cols-[minmax(0,1fr)_180px_auto]"
+                    className="grid gap-3 border-b border-[rgba(255,255,255,0.10)] py-4 last:border-b-0 md:grid-cols-[minmax(0,1fr)_180px_auto] md:items-start md:rounded-xl md:border md:border-[rgba(255,255,255,0.10)] md:bg-[rgba(255,255,255,0.03)] md:p-4 md:last:border-b"
                   >
                     <div>
                       <label className="text-xs uppercase tracking-wide text-dim">
-                        Farba / taśma {index + 1}
+                        Farba / rozcieńczalnik {index + 1}
                       </label>
                       <div className="relative mt-1">
                         <Input
@@ -1886,7 +2149,7 @@ export default function PaintTapeSettlementsPage() {
                             }}
                             disabled={!canCreate}
                             className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-dim transition hover:bg-[rgba(255,255,255,0.08)] hover:text-title disabled:opacity-40"
-                            aria-label="Wyczyść farbę / taśmę"
+                            aria-label="Wyczyść farbę / rozcieńczalnik"
                           >
                             <X className="h-4 w-4" />
                           </button>
@@ -1955,14 +2218,14 @@ export default function PaintTapeSettlementsPage() {
                         )}
                       </div>
                     </div>
-                    <div className="flex items-end justify-end">
+                    <div className="flex justify-end md:pt-5">
                       <Button
                         type="button"
                         variant="ghost"
                         onClick={() => removeItemDraft(draft.id)}
                         disabled={!canCreate || itemDrafts.length <= 1 || createMutation.isPending}
                         className="min-h-[40px] w-11 px-0 py-2"
-                        aria-label="Usuń farbę / taśmę"
+                        aria-label="Usuń farbę / rozcieńczalnik"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -1973,14 +2236,26 @@ export default function PaintTapeSettlementsPage() {
             </div>
           </div>
 
-          <div className="border-t border-[rgba(255,255,255,0.10)] pt-4">
+          <div className="flex flex-col gap-4 border-t border-[rgba(255,255,255,0.10)] bg-[linear-gradient(90deg,rgba(255,122,0,0.07),rgba(255,122,0,0.02))] px-6 py-5 sm:flex-row sm:items-center sm:justify-between lg:px-7">
+            <div className="flex items-center gap-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[rgba(255,122,0,0.50)] bg-[rgba(255,122,0,0.10)] text-sm font-black text-[var(--accent)]">
+                3
+              </span>
+              <p className="text-sm font-black text-title">Utwórz produkcję</p>
+            </div>
             <Button
               type="submit"
-              disabled={!canCreate || createMutation.isPending}
-              className="w-full sm:w-auto"
+              disabled={
+                !canCreate ||
+                createMutation.isPending ||
+                !form.detailName.trim() ||
+                !form.productionStartedAt ||
+                !itemDrafts.some((draft) => draft.itemName.trim())
+              }
+              className="w-full sm:w-auto sm:min-w-56"
             >
               <Plus className="mr-2 h-4 w-4" />
-              Dodaj zlecenie
+              Utwórz produkcję
             </Button>
           </div>
         </form>
@@ -2016,6 +2291,35 @@ export default function PaintTapeSettlementsPage() {
             </div>
           </div>
         </div>
+
+        {(activeFilter === 'DONE' || activeFilter === 'ACCOUNTED') &&
+          groupedSettlements.length > 0 && (
+          <div className="flex flex-col gap-3 rounded-xl border border-[rgba(255,122,0,0.28)] bg-[rgba(255,122,0,0.055)] p-3 sm:flex-row sm:items-center sm:justify-between">
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-bold text-title">
+              <input
+                type="checkbox"
+                checked={
+                  groupedSettlements.length > 0 &&
+                  groupedSettlements.every((group) => selectedExportGroupKeys.has(group.key))
+                }
+                onChange={(event) => toggleAllVisibleExportGroups(event.target.checked)}
+                className="h-4 w-4 accent-[var(--accent)]"
+              />
+              Zaznacz wszystkie produkcje
+            </label>
+            <Button
+              type="button"
+              onClick={() => void handleExportSelectedGroups()}
+              disabled={!groupedSettlements.some((group) => selectedExportGroupKeys.has(group.key))}
+              className="w-full sm:w-auto"
+            >
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+              Eksportuj zaznaczone ({
+                groupedSettlements.filter((group) => selectedExportGroupKeys.has(group.key)).length
+              })
+            </Button>
+          </div>
+        )}
 
         {isLoading ? (
           <p className="text-sm text-dim">Ładowanie rozliczeń...</p>

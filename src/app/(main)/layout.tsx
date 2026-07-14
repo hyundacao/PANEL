@@ -21,7 +21,7 @@ import { getCurrentSessionUser } from '@/lib/api';
 
 const getTitle = (pathname: string) => {
   if (pathname.startsWith('/dashboard')) return 'Pulpit';
-  if (pathname.startsWith('/rozliczanie-farb-tasm')) return 'Rozliczanie farb i taśm';
+  if (pathname.startsWith('/rozliczanie-farb-rozcienczalnikow')) return 'Rozliczanie farb i rozcieńczalników';
   if (pathname.startsWith('/spis-oryginalow')) return 'Spis oryginałów';
   if (pathname.startsWith('/spis')) return 'Spis przemiałów';
   if (pathname.startsWith('/przesuniecia')) return 'Przesunięcia przemiałowe';
@@ -41,7 +41,7 @@ const getTitle = (pathname: string) => {
 };
 
 const getWarehouseFromPath = (pathname: string): WarehouseKey | null => {
-  if (pathname.startsWith('/rozliczanie-farb-tasm')) return 'FARBY_TASMY';
+  if (pathname.startsWith('/rozliczanie-farb-rozcienczalnikow')) return 'FARBY_TASMY';
   if (pathname.startsWith('/czesci')) return 'CZESCI';
   if (pathname.startsWith('/raport-zmianowy')) return 'RAPORT_ZMIANOWY';
   if (pathname.startsWith('/bilans-przezbrojen')) return 'BILANS_PRZEZBROJEN';
@@ -51,7 +51,7 @@ const getWarehouseFromPath = (pathname: string): WarehouseKey | null => {
 
 const getTabFromPath = (pathname: string): WarehouseTab | null => {
   if (pathname.startsWith('/dashboard')) return 'dashboard';
-  if (pathname.startsWith('/rozliczanie-farb-tasm')) return 'rozliczanie-farb-tasm';
+  if (pathname.startsWith('/rozliczanie-farb-rozcienczalnikow')) return 'rozliczanie-farb-tasm';
   if (pathname.startsWith('/spis-oryginalow')) return 'spis-oryginalow';
   if (pathname.startsWith('/spis')) return 'spis';
   if (pathname.startsWith('/przesuniecia')) return 'przesuniecia';
@@ -100,7 +100,7 @@ const navItemsBilans: MobileNavItem[] = [
 ];
 
 const navItemsFarbyTasmy: MobileNavItem[] = [
-  { label: 'Rozliczanie farb i taśm', href: '/rozliczanie-farb-tasm', tab: 'rozliczanie-farb-tasm' }
+  { label: 'Rozliczanie farb i rozcieńczalników', href: '/rozliczanie-farb-rozcienczalnikow', tab: 'rozliczanie-farb-tasm' }
 ];
 
 const getModuleNavItems = (warehouse: WarehouseKey | null) => {
@@ -324,8 +324,8 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     if (href === '/spis-oryginalow') {
       return pathname === '/spis-oryginalow' || pathname.startsWith('/spis-oryginalow/');
     }
-    if (href === '/rozliczanie-farb-tasm') {
-      return pathname === '/rozliczanie-farb-tasm' || pathname.startsWith('/rozliczanie-farb-tasm/');
+    if (href === '/rozliczanie-farb-rozcienczalnikow') {
+      return pathname === '/rozliczanie-farb-rozcienczalnikow' || pathname.startsWith('/rozliczanie-farb-rozcienczalnikow/');
     }
     if (href === '/przesuniecia') {
       return pathname === '/przesuniecia' || pathname.startsWith('/przesuniecia/');

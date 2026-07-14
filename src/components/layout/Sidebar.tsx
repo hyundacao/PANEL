@@ -75,8 +75,8 @@ const navItemsBilans: NavItem[] = [
 
 const navItemsFarbyTasmy: NavItem[] = [
   {
-    label: 'Rozliczanie farb i taśm',
-    href: '/rozliczanie-farb-tasm',
+    label: 'Rozliczanie farb i rozcieńczalników',
+    href: '/rozliczanie-farb-rozcienczalnikow',
     icon: Droplets,
     tab: 'rozliczanie-farb-tasm'
   }
@@ -117,8 +117,8 @@ export const Sidebar = () => {
     if (href === '/spis-oryginalow') {
       return pathname === '/spis-oryginalow' || pathname.startsWith('/spis-oryginalow/');
     }
-    if (href === '/rozliczanie-farb-tasm') {
-      return pathname === '/rozliczanie-farb-tasm' || pathname.startsWith('/rozliczanie-farb-tasm/');
+    if (href === '/rozliczanie-farb-rozcienczalnikow') {
+      return pathname === '/rozliczanie-farb-rozcienczalnikow' || pathname.startsWith('/rozliczanie-farb-rozcienczalnikow/');
     }
     if (href === '/przesuniecia') {
       return pathname === '/przesuniecia' || pathname.startsWith('/przesuniecia/');
@@ -132,7 +132,7 @@ export const Sidebar = () => {
       : warehouse === 'PRZEMIALY'
         ? 'PANEL MAGAZYNU PRZEMIAŁÓW'
         : warehouse === 'FARBY_TASMY'
-          ? 'PANEL ROZLICZANIA FARB I TAŚM'
+          ? 'PANEL ROZLICZANIA FARB I ROZCIEŃCZALNIKÓW'
         : warehouse === 'RAPORT_ZMIANOWY'
           ? 'PANEL RAPORTU ZMIANOWEGO'
           : warehouse === 'BILANS_PRZEZBROJEN'
@@ -230,28 +230,39 @@ export const Sidebar = () => {
           )}
         </nav>
 
-        <div className="rounded-xl border border-border bg-surface2 p-3 shadow-[inset_0_1px_0_var(--inner-highlight)]">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-full bg-brandSoft" />
+        <div
+          className={cn(
+            'overflow-hidden rounded-2xl border border-[rgba(255,122,0,0.22)] bg-[#0b0c10] shadow-[0_14px_32px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.08)]',
+            sidebarCollapsed ? 'p-2' : 'p-3'
+          )}
+          style={{
+            backgroundImage:
+              "linear-gradient(100deg, rgba(7,8,12,0.78), rgba(7,8,12,0.58)), url('/profil-panel-bg.png')",
+            backgroundPosition: 'left center',
+            backgroundSize: 'cover'
+          }}
+        >
+          <div className={cn('flex items-center', sidebarCollapsed ? 'justify-center' : 'gap-3')}>
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[rgba(255,122,0,0.32)] bg-[linear-gradient(145deg,rgba(255,122,0,0.22),rgba(124,92,255,0.16))] text-sm font-black uppercase text-[var(--brand)] shadow-[inset_0_1px_0_rgba(255,255,255,0.10)]">
+              {displayName.slice(0, 1) || '?'}
+            </div>
             {!sidebarCollapsed && (
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-title">{displayName}</p>
-                <p className="text-xs text-dim">{roleLabel}</p>
-                {user && (
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="mt-2 flex h-8 w-[calc(100%+3.25rem)] -ml-[3.25rem] items-center rounded-lg pr-2 text-xs text-dim transition hover:bg-[rgba(255,255,255,0.06)] hover:text-title"
-                  >
-                    <span className="flex items-center pl-[3.25rem]">
-                      <LogOut className="mr-2 h-3.5 w-3.5" />
-                      Wyloguj
-                    </span>
-                  </button>
-                )}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-bold text-[var(--brand)]">{displayName}</p>
+                <p className="mt-0.5 truncate text-[11px] font-medium text-dim">{roleLabel}</p>
               </div>
             )}
           </div>
+          {!sidebarCollapsed && user && (
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="mt-3 flex h-9 w-full items-center justify-center rounded-xl border border-[rgba(255,255,255,0.08)] bg-black/20 text-xs font-semibold text-dim transition hover:border-[rgba(255,122,0,0.28)] hover:bg-[rgba(255,122,0,0.08)] hover:text-title"
+            >
+              <LogOut className="mr-2 h-3.5 w-3.5" />
+              Wyloguj
+            </button>
+          )}
         </div>
       </div>
     </aside>

@@ -195,11 +195,12 @@ const paintTapePermissionOptions: Array<{ key: PaintTapePermissionKey; label: st
   { key: 'open', label: 'Otwarte zlecenia - pobrania i stan po' },
   { key: 'details', label: 'Wpis ilosci wykonanych sztuk' },
   { key: 'accounting', label: 'Rozliczanie zakonczonych zlecen' },
+  { key: 'accounted', label: 'Dostep do rozliczonych zlecen' },
   { key: 'celebration', label: 'Easter egg po rozliczeniu' }
 ];
 const warehouseLabels: Record<WarehouseKey, string> = {
   PRZEMIALY: 'Zarządzanie przemiałami i przygotowaniem produkcji',
-  FARBY_TASMY: 'Rozliczanie farb i taśm',
+  FARBY_TASMY: 'Rozliczanie farb i rozcieńczalników',
   CZESCI: 'Magazyn czesci zamiennych',
   RAPORT_ZMIANOWY: 'Raport zmianowy',
   BILANS_PRZEZBROJEN: 'Bilans przezbrojen i personelu',
@@ -1132,7 +1133,7 @@ export default function AdminPage() {
           </div>
           {!enabled && (
             <p className="text-xs text-dim">
-              Wlacz dostep, aby aktywowac etapy rozliczania farb i tasm.
+              Wlacz dostep, aby aktywowac etapy rozliczania farb i rozcienczalnikow.
             </p>
           )}
         </div>
@@ -2783,12 +2784,64 @@ export default function AdminPage() {
       <div className="space-y-10">
         {isHead && activeWarehouse !== 'PRZEMIALY' && (
         <section className="space-y-4">
-          <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Konta</p>
-            <h2 className="text-xl font-semibold text-title">Konta i uprawnienia</h2>
-            <p className="text-sm text-dim">
-              Tworzenie kont, przypisy magazynow i zarządzanie rolami.
-            </p>
+          <div className="overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.11)] bg-[rgba(13,14,18,0.88)] shadow-[0_18px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.05)]">
+            <div className="flex flex-col gap-5 border-b border-[rgba(255,255,255,0.09)] bg-[linear-gradient(110deg,rgba(255,122,0,0.13),rgba(255,122,0,0.025)_42%,rgba(124,92,255,0.08))] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+              <div className="space-y-1.5">
+                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--brand)]">
+                  Administracja kont
+                </p>
+                <h2 className="text-2xl font-black tracking-tight text-title">
+                  Konta i uprawnienia
+                </h2>
+                <p className="max-w-2xl text-sm leading-relaxed text-dim">
+                  Zarządzaj użytkownikami, rolami i dostępem do modułów.
+                </p>
+              </div>
+              <div className="flex min-w-[150px] items-center justify-between gap-5 rounded-xl border border-[rgba(255,255,255,0.10)] bg-black/25 px-4 py-3 sm:block sm:text-right">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-dim">Liczba kont</p>
+                <p className="text-2xl font-black leading-none text-[var(--value-purple)] sm:mt-1">
+                  {users.length}
+                </p>
+              </div>
+            </div>
+            <div className="grid gap-1.5 bg-black/15 p-2 sm:grid-cols-3">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setAccountsTab('users')}
+                className={cn(
+                  'min-h-[48px] w-full rounded-xl border border-transparent font-bold text-dim transition-all',
+                  accountsTab === 'users' &&
+                    'border-[rgba(255,122,0,0.34)] bg-[rgba(255,122,0,0.12)] text-[var(--brand)] shadow-[0_8px_24px_rgba(255,122,0,0.10)]'
+                )}
+              >
+                Użytkownicy
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setAccountsTab('add-user')}
+                className={cn(
+                  'min-h-[48px] w-full rounded-xl border border-transparent font-bold text-dim transition-all',
+                  accountsTab === 'add-user' &&
+                    'border-[rgba(255,122,0,0.34)] bg-[rgba(255,122,0,0.12)] text-[var(--brand)] shadow-[0_8px_24px_rgba(255,122,0,0.10)]'
+                )}
+              >
+                Dodaj użytkownika
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setAccountsTab('groups')}
+                className={cn(
+                  'min-h-[48px] w-full rounded-xl border border-transparent font-bold text-dim transition-all',
+                  accountsTab === 'groups' &&
+                    'border-[rgba(255,122,0,0.34)] bg-[rgba(255,122,0,0.12)] text-[var(--brand)] shadow-[0_8px_24px_rgba(255,122,0,0.10)]'
+                )}
+              >
+                Grupy uprawnień
+              </Button>
+            </div>
           </div>
           <div className="space-y-4">
               <div className={cn(accountsTab !== 'groups' && 'hidden')}>

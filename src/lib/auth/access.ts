@@ -28,6 +28,7 @@ export const PAINT_TAPE_PERMISSION_KEYS: PaintTapePermissionKey[] = [
   'open',
   'details',
   'accounting',
+  'accounted',
   'celebration'
 ];
 export const DEFAULT_PAINT_TAPE_PERMISSIONS: PaintTapePermissions = {
@@ -35,6 +36,7 @@ export const DEFAULT_PAINT_TAPE_PERMISSIONS: PaintTapePermissions = {
   open: true,
   details: true,
   accounting: true,
+  accounted: true,
   celebration: true
 };
 export const ERP_TRANSFERS_TABS: WarehouseTab[] = [
@@ -155,13 +157,27 @@ export const getPaintTapePermissions = (
   user: AppUser | null | undefined
 ): PaintTapePermissions => {
   if (!user) {
-    return { create: false, open: false, details: false, accounting: false, celebration: false };
+    return {
+      create: false,
+      open: false,
+      details: false,
+      accounting: false,
+      accounted: false,
+      celebration: false
+    };
   }
   if (isHeadAdmin(user) || isWarehouseAdmin(user, 'FARBY_TASMY')) {
     return { ...DEFAULT_PAINT_TAPE_PERMISSIONS };
   }
   if (!canSeeTab(user, 'FARBY_TASMY', 'rozliczanie-farb-tasm')) {
-    return { create: false, open: false, details: false, accounting: false, celebration: false };
+    return {
+      create: false,
+      open: false,
+      details: false,
+      accounting: false,
+      accounted: false,
+      celebration: false
+    };
   }
   const raw = user.access?.paintTapePermissions;
   if (!raw) return { ...DEFAULT_PAINT_TAPE_PERMISSIONS };
@@ -170,6 +186,7 @@ export const getPaintTapePermissions = (
     open: raw.open !== false,
     details: raw.details !== false,
     accounting: raw.accounting !== false,
+    accounted: raw.accounted ?? raw.accounting !== false,
     celebration: raw.celebration !== false
   };
 };
@@ -241,7 +258,7 @@ export const getWarehouseLabel = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'CZESCI') return 'Magazyn części zamiennych';
   if (warehouse === 'PRZEMIALY')
     return 'Zarządzanie przemiałami i przygotowaniem produkcji';
-  if (warehouse === 'FARBY_TASMY') return 'Rozliczanie farb i taśm';
+  if (warehouse === 'FARBY_TASMY') return 'Rozliczanie farb i rozcieńczalników';
   if (warehouse === 'RAPORT_ZMIANOWY') return 'Raport zmianowy';
   if (warehouse === 'BILANS_PRZEZBROJEN') return 'Bilans przezbrojeń';
   if (warehouse === 'PRZESUNIECIA_ERP') return 'Przesunięcia magazynowe ERP';

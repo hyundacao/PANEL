@@ -50,7 +50,13 @@ export type WarehouseAccess = {
   admin?: boolean;
 };
 
-export type PaintTapePermissionKey = 'create' | 'open' | 'details' | 'accounting' | 'celebration';
+export type PaintTapePermissionKey =
+  | 'create'
+  | 'open'
+  | 'details'
+  | 'accounting'
+  | 'accounted'
+  | 'celebration';
 
 export type PaintTapePermissions = Record<PaintTapePermissionKey, boolean>;
 
