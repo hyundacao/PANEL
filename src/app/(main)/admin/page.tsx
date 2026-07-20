@@ -180,6 +180,9 @@ const czesciTabOptions: Array<{ key: WarehouseTab; label: string }> = [
 const raportZmianowyTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'raport-zmianowy', label: 'Raport zmianowy' }
 ];
+const raportBrakowosciTabOptions: Array<{ key: WarehouseTab; label: string }> = [
+  { key: 'raport-brakowosci', label: 'Raport brakowosci' }
+];
 const bilansPrzezbrojenTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'bilans-przezbrojen', label: 'Bilans przezbrojen' }
 ];
@@ -203,6 +206,7 @@ const warehouseLabels: Record<WarehouseKey, string> = {
   FARBY_TASMY: 'Rozliczanie farb i rozcieńczalników',
   CZESCI: 'Magazyn czesci zamiennych',
   RAPORT_ZMIANOWY: 'Raport zmianowy',
+  RAPORT_BRAKOWOSCI: 'Raport brakowosci',
   BILANS_PRZEZBROJEN: 'Bilans przezbrojen i personelu',
   PRZESUNIECIA_ERP: 'Przesuniecia magazynowe ERP'
 };
@@ -890,9 +894,11 @@ export default function AdminPage() {
         ? przemialyTabOptions
         : warehouseKey === 'RAPORT_ZMIANOWY'
           ? raportZmianowyTabOptions
-          : warehouseKey === 'BILANS_PRZEZBROJEN'
-            ? bilansPrzezbrojenTabOptions
-            : czesciTabOptions;
+          : warehouseKey === 'RAPORT_BRAKOWOSCI'
+            ? raportBrakowosciTabOptions
+            : warehouseKey === 'BILANS_PRZEZBROJEN'
+              ? bilansPrzezbrojenTabOptions
+              : czesciTabOptions;
     const visibleTabs =
       warehouseKey === 'CZESCI' && !canSeeHistory
         ? tabOptions.filter((tab) => tab.key !== 'historia')
@@ -2928,6 +2934,12 @@ export default function AdminPage() {
                     updatePermissionGroupFormAccess,
                     'ADMIN'
                   )}
+                  {renderWarehouseAccess(
+                    'RAPORT_BRAKOWOSCI',
+                    permissionGroupForm.access,
+                    updatePermissionGroupFormAccess,
+                    'ADMIN'
+                  )}
                 </div>
               </div>
               <div className="flex justify-end">
@@ -3087,6 +3099,12 @@ export default function AdminPage() {
                             (updater) => updatePermissionGroupDraftAccess(group.id, updater),
                             'ADMIN'
                           )}
+                          {renderWarehouseAccess(
+                            'RAPORT_BRAKOWOSCI',
+                            draft.access,
+                            (updater) => updatePermissionGroupDraftAccess(group.id, updater),
+                            'ADMIN'
+                          )}
                         </div>
                         <div className="flex justify-end">
                           <Button
@@ -3170,6 +3188,10 @@ export default function AdminPage() {
                             'RAPORT_ZMIANOWY',
                             'ROZDZIELCA'
                           );
+                          nextAccess.warehouses.RAPORT_BRAKOWOSCI = getRolePreset(
+                            'RAPORT_BRAKOWOSCI',
+                            'ROZDZIELCA'
+                          );
                           nextAccess.warehouses.PRZESUNIECIA_ERP = getRolePreset(
                             'PRZESUNIECIA_ERP',
                             'ROZDZIELCA'
@@ -3244,6 +3266,12 @@ export default function AdminPage() {
                   )}
                   {renderWarehouseAccess(
                     'RAPORT_ZMIANOWY',
+                    userForm.access,
+                    updateUserFormAccess,
+                    userForm.role
+                  )}
+                  {renderWarehouseAccess(
+                    'RAPORT_BRAKOWOSCI',
                     userForm.access,
                     updateUserFormAccess,
                     userForm.role
@@ -3337,6 +3365,10 @@ export default function AdminPage() {
                               nextAccess.warehouses.CZESCI = getRolePreset('CZESCI', 'MECHANIK');
                               nextAccess.warehouses.RAPORT_ZMIANOWY = getRolePreset(
                                 'RAPORT_ZMIANOWY',
+                                'ROZDZIELCA'
+                              );
+                              nextAccess.warehouses.RAPORT_BRAKOWOSCI = getRolePreset(
+                                'RAPORT_BRAKOWOSCI',
                                 'ROZDZIELCA'
                               );
                               nextAccess.warehouses.PRZESUNIECIA_ERP = getRolePreset(
@@ -3505,6 +3537,12 @@ export default function AdminPage() {
                             )}
                             {renderWarehouseAccess(
                               'RAPORT_ZMIANOWY',
+                              draft.access,
+                              (updater) => updateUserDraftAccess(item.id, updater),
+                              draft.role
+                            )}
+                            {renderWarehouseAccess(
+                              'RAPORT_BRAKOWOSCI',
                               draft.access,
                               (updater) => updateUserDraftAccess(item.id, updater),
                               draft.role

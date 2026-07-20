@@ -14,7 +14,6 @@ export const PRZEMIALY_TABS: WarehouseTab[] = [
   'spis-oryginalow',
   'przesuniecia',
   'raporty',
-  'raport-brakowosci',
   'kartoteka',
   'wymieszane',
   'suszarki'
@@ -22,6 +21,7 @@ export const PRZEMIALY_TABS: WarehouseTab[] = [
 
 export const CZESCI_TABS: WarehouseTab[] = ['pobierz', 'uzupelnij', 'stany', 'historia'];
 export const RAPORT_ZMIANOWY_TABS: WarehouseTab[] = ['raport-zmianowy'];
+export const RAPORT_BRAKOWOSCI_TABS: WarehouseTab[] = ['raport-brakowosci'];
 export const BILANS_PRZEZBROJEN_TABS: WarehouseTab[] = ['bilans-przezbrojen'];
 export const FARBY_TASMY_TABS: WarehouseTab[] = ['rozliczanie-farb-tasm'];
 export const PAINT_TAPE_PERMISSION_KEYS: PaintTapePermissionKey[] = [
@@ -71,11 +71,21 @@ const hasLegacyPaintTapeAccess = (user: AppUser | null | undefined) => {
   return Boolean(warehouses.PRZEMIALY?.tabs?.includes('spis-oryginalow'));
 };
 
+const hasLegacyDefectReportAccess = (user: AppUser | null | undefined) => {
+  if (!user) return false;
+  if (isHeadAdmin(user)) return true;
+  const warehouses = user.access?.warehouses ?? {};
+  if (warehouses.RAPORT_BRAKOWOSCI) return true;
+  if (user.role === 'ADMIN' && warehouses.PRZEMIALY?.admin) return true;
+  return Boolean(warehouses.PRZEMIALY?.tabs?.includes('raporty'));
+};
+
 const allWarehouseKeys: WarehouseKey[] = [
   'PRZEMIALY',
   'FARBY_TASMY',
   'CZESCI',
   'RAPORT_ZMIANOWY',
+  'RAPORT_BRAKOWOSCI',
   'BILANS_PRZEZBROJEN',
   'PRZESUNIECIA_ERP'
 ];
@@ -110,6 +120,7 @@ export const getAccessibleWarehouses = (user: AppUser | null | undefined): Wareh
   if (isHeadAdmin(user)) return allWarehouseKeys;
   const keys = new Set(Object.keys(user.access?.warehouses ?? {}) as WarehouseKey[]);
   if (hasLegacyPaintTapeAccess(user)) keys.add('FARBY_TASMY');
+  if (hasLegacyDefectReportAccess(user)) keys.add('RAPORT_BRAKOWOSCI');
   return [...keys];
 };
 
@@ -120,6 +131,7 @@ export const canAccessWarehouse = (
   if (!user) return false;
   if (isHeadAdmin(user)) return true;
   if (warehouse === 'FARBY_TASMY') return hasLegacyPaintTapeAccess(user);
+  if (warehouse === 'RAPORT_BRAKOWOSCI') return hasLegacyDefectReportAccess(user);
   return Boolean(user.access?.warehouses?.[warehouse]);
 };
 
@@ -134,11 +146,11 @@ export const canSeeTab = (
     if (tab !== 'rozliczanie-farb-tasm') return false;
     return hasLegacyPaintTapeAccess(user);
   }
-  if (warehouse === 'CZESCI' && tab === 'historia') return false;
-  if (warehouse === 'PRZEMIALY' && tab === 'raport-brakowosci') {
-    const tabs = user.access?.warehouses?.[warehouse]?.tabs ?? [];
-    return tabs.includes('raport-brakowosci') || tabs.includes('raporty');
+  if (warehouse === 'RAPORT_BRAKOWOSCI') {
+    if (tab !== 'raport-brakowosci') return false;
+    return hasLegacyDefectReportAccess(user);
   }
+  if (warehouse === 'CZESCI' && tab === 'historia') return false;
   return Boolean(user.access?.warehouses?.[warehouse]?.tabs?.includes(tab));
 };
 
@@ -221,6 +233,12 @@ export const getRolePreset = (
     }
     return { role, readOnly: false, tabs: RAPORT_ZMIANOWY_TABS, admin: false };
   }
+  if (warehouse === 'RAPORT_BRAKOWOSCI') {
+    if (role === 'PODGLAD') {
+      return { role, readOnly: true, tabs: RAPORT_BRAKOWOSCI_TABS, admin: false };
+    }
+    return { role, readOnly: false, tabs: RAPORT_BRAKOWOSCI_TABS, admin: false };
+  }
   if (warehouse === 'BILANS_PRZEZBROJEN') {
     if (role === 'PODGLAD') {
       return { role, readOnly: true, tabs: BILANS_PRZEZBROJEN_TABS, admin: false };
@@ -247,14 +265,14 @@ export const getRolePreset = (
     return {
       role,
       readOnly: true,
-      tabs: ['dashboard', 'raporty', 'raport-brakowosci', 'kartoteka', 'suszarki', 'spis-oryginalow'],
+      tabs: ['dashboard', 'raporty', 'kartoteka', 'suszarki', 'spis-oryginalow'],
       admin: false
     };
   }
   return {
     role,
     readOnly: true,
-    tabs: ['dashboard', 'raporty', 'raport-brakowosci', 'kartoteka', 'wymieszane', 'suszarki', 'spis-oryginalow'],
+    tabs: ['dashboard', 'raporty', 'kartoteka', 'wymieszane', 'suszarki', 'spis-oryginalow'],
     admin: false
   };
 };
@@ -265,6 +283,7 @@ export const getWarehouseLabel = (warehouse: WarehouseKey | null) => {
     return 'Zarządzanie przemiałami i przygotowaniem produkcji';
   if (warehouse === 'FARBY_TASMY') return 'Rozliczanie farb i rozcieńczalników';
   if (warehouse === 'RAPORT_ZMIANOWY') return 'Raport zmianowy';
+  if (warehouse === 'RAPORT_BRAKOWOSCI') return 'Raport brakowości';
   if (warehouse === 'BILANS_PRZEZBROJEN') return 'Bilans przezbrojeń';
   if (warehouse === 'PRZESUNIECIA_ERP') return 'Przesunięcia magazynowe ERP';
   return 'Magazyn';

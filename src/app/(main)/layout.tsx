@@ -45,6 +45,7 @@ const getWarehouseFromPath = (pathname: string): WarehouseKey | null => {
   if (pathname.startsWith('/rozliczanie-farb-rozcienczalnikow')) return 'FARBY_TASMY';
   if (pathname.startsWith('/czesci')) return 'CZESCI';
   if (pathname.startsWith('/raport-zmianowy')) return 'RAPORT_ZMIANOWY';
+  if (pathname.startsWith('/raport-brakowosci')) return 'RAPORT_BRAKOWOSCI';
   if (pathname.startsWith('/bilans-przezbrojen')) return 'BILANS_PRZEZBROJEN';
   if (pathname.startsWith('/admin')) return null;
   return 'PRZEMIALY';
@@ -67,6 +68,7 @@ const getTabFromPath = (pathname: string): WarehouseTab | null => {
   if (pathname.startsWith('/czesci/stany')) return 'stany';
   if (pathname.startsWith('/czesci/historia')) return 'historia';
   if (pathname.startsWith('/raport-zmianowy')) return 'raport-zmianowy';
+  if (pathname.startsWith('/raport-brakowosci')) return 'raport-brakowosci';
   return null;
 };
 
@@ -82,7 +84,6 @@ const navItemsPrzemialy: MobileNavItem[] = [
   { label: 'Spis oryginałów', href: '/spis-oryginalow', tab: 'spis-oryginalow' },
   { label: 'Przesunięcia przemiałowe', href: '/przesuniecia', tab: 'przesuniecia' },
   { label: 'Raporty', href: '/raporty', tab: 'raporty' },
-  { label: 'Raport brakowości', href: '/raport-brakowosci', tab: 'raport-brakowosci' },
   { label: 'Stany magazynowe', href: '/kartoteka', tab: 'kartoteka' },
   { label: 'Suszarki', href: '/suszarki', tab: 'suszarki' },
   { label: 'Wymieszane tworzywa', href: '/wymieszane', tab: 'wymieszane' }
@@ -98,6 +99,10 @@ const navItemsRaport: MobileNavItem[] = [
   { label: 'Raport zmianowy', href: '/raport-zmianowy', tab: 'raport-zmianowy' }
 ];
 
+const navItemsRaportBrakowosci: MobileNavItem[] = [
+  { label: 'Raport brakowości', href: '/raport-brakowosci', tab: 'raport-brakowosci' }
+];
+
 const navItemsBilans: MobileNavItem[] = [
   { label: 'Bilans przezbrojeń', href: '/bilans-przezbrojen', tab: 'bilans-przezbrojen' }
 ];
@@ -109,6 +114,7 @@ const navItemsFarbyTasmy: MobileNavItem[] = [
 const getModuleNavItems = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'CZESCI') return navItemsCzesci;
   if (warehouse === 'RAPORT_ZMIANOWY') return navItemsRaport;
+  if (warehouse === 'RAPORT_BRAKOWOSCI') return navItemsRaportBrakowosci;
   if (warehouse === 'BILANS_PRZEZBROJEN') return navItemsBilans;
   if (warehouse === 'FARBY_TASMY') return navItemsFarbyTasmy;
   return navItemsPrzemialy;

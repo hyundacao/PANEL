@@ -41,6 +41,7 @@ const validWarehouseKeys: WarehouseKey[] = [
   'FARBY_TASMY',
   'CZESCI',
   'RAPORT_ZMIANOWY',
+  'RAPORT_BRAKOWOSCI',
   'BILANS_PRZEZBROJEN',
   'PRZESUNIECIA_ERP'
 ];
@@ -132,6 +133,18 @@ const normalizeAccessFromDb = (access: UserAccess | null | undefined): UserAcces
       role: przemialyAccess.role,
       readOnly: przemialyAccess.readOnly,
       tabs: ['bilans-przezbrojen'],
+      admin: Boolean(przemialyAccess.admin)
+    };
+  }
+  if (
+    (przemialyAccess?.tabs.includes('raport-brakowosci') ||
+      przemialyAccess?.tabs.includes('raporty')) &&
+    !warehouses.RAPORT_BRAKOWOSCI
+  ) {
+    warehouses.RAPORT_BRAKOWOSCI = {
+      role: przemialyAccess.role,
+      readOnly: przemialyAccess.readOnly,
+      tabs: ['raport-brakowosci'],
       admin: Boolean(przemialyAccess.admin)
     };
   }

@@ -5,6 +5,7 @@ export type WarehouseKey =
   | 'FARBY_TASMY'
   | 'CZESCI'
   | 'RAPORT_ZMIANOWY'
+  | 'RAPORT_BRAKOWOSCI'
   | 'BILANS_PRZEZBROJEN'
   | 'PRZESUNIECIA_ERP';
 
@@ -25,6 +26,8 @@ export type CzesciTab = 'pobierz' | 'uzupelnij' | 'stany' | 'historia';
 
 export type RaportZmianowyTab = 'raport-zmianowy';
 
+export type RaportBrakowosciTab = 'raport-brakowosci';
+
 export type BilansPrzezbrojenTab = 'bilans-przezbrojen';
 
 export type FarbyTasmyTab = 'rozliczanie-farb-tasm';
@@ -41,6 +44,7 @@ export type WarehouseTab =
   | FarbyTasmyTab
   | CzesciTab
   | RaportZmianowyTab
+  | RaportBrakowosciTab
   | BilansPrzezbrojenTab
   | ErpTransfersTab;
 

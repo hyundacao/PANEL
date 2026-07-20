@@ -127,6 +127,18 @@ const moduleOptions: ModuleOption[] = [
     tags: ['Raporty', 'Zmiany'],
     keywords: ['raport', 'zmiana', 'sesja', 'wpisy'],
     icon: FileText
+  },
+  {
+    id: 'raport-brakowosci',
+    key: 'RAPORT_BRAKOWOSCI',
+    requiredTabs: ['raport-brakowosci'],
+    title: 'Raport brakowości',
+    description: 'Jednorazowe porównanie braków z PDF MES i raportu brygadzisty bez zapisywania historii.',
+    action: 'Wejdź',
+    href: '/raport-brakowosci',
+    tags: ['Raporty', 'MES'],
+    keywords: ['braki', 'brakowość', 'mes', 'brygadzista', 'pdf', 'xlsx'],
+    icon: FileText
   }
 ];
 

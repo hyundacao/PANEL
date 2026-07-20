@@ -7,7 +7,6 @@ import {
   ClipboardList,
   ClipboardCheck,
   FileText,
-  BarChart3,
   Layers,
   UsersRound,
   Shield,
@@ -49,7 +48,6 @@ const navItemsPrzemialy: NavItem[] = [
     tab: 'przesuniecia'
   },
   { label: 'Raporty', href: '/raporty', icon: FileText, tab: 'raporty' },
-  { label: 'Raport brakowości', href: '/raport-brakowosci', icon: BarChart3, tab: 'raport-brakowosci' },
   { label: 'Stany magazynowe', href: '/kartoteka', icon: Layers, tab: 'kartoteka' },
   { label: 'Suszarki', href: '/suszarki', icon: Wind, tab: 'suszarki' },
   { label: 'Wymieszane tworzywa', href: '/wymieszane', icon: Shuffle, tab: 'wymieszane' },
@@ -69,6 +67,10 @@ const navItemsCzesci: NavItem[] = [
 
 const navItemsRaport: NavItem[] = [
   { label: 'Raport zmianowy', href: '/raport-zmianowy', icon: FileText, tab: 'raport-zmianowy' }
+];
+
+const navItemsRaportBrakowosci: NavItem[] = [
+  { label: 'Raport brakowości', href: '/raport-brakowosci', icon: FileText, tab: 'raport-brakowosci' }
 ];
 
 const navItemsBilans: NavItem[] = [
@@ -96,11 +98,13 @@ export const Sidebar = () => {
       ? navItemsCzesci
       : warehouse === 'RAPORT_ZMIANOWY'
         ? navItemsRaport
-        : warehouse === 'BILANS_PRZEZBROJEN'
-          ? navItemsBilans
-          : warehouse === 'FARBY_TASMY'
-            ? navItemsFarbyTasmy
-            : navItemsPrzemialy;
+        : warehouse === 'RAPORT_BRAKOWOSCI'
+          ? navItemsRaportBrakowosci
+          : warehouse === 'BILANS_PRZEZBROJEN'
+            ? navItemsBilans
+            : warehouse === 'FARBY_TASMY'
+              ? navItemsFarbyTasmy
+              : navItemsPrzemialy;
   const visibleItems = items.filter((item) => {
     if (!warehouse) return false;
     if (item.requiresAdmin && !isWarehouseAdmin(user, warehouse)) {
@@ -135,13 +139,15 @@ export const Sidebar = () => {
         ? 'PANEL MAGAZYNU PRZEMIAŁÓW'
         : warehouse === 'FARBY_TASMY'
           ? 'PANEL ROZLICZANIA FARB I ROZCIEŃCZALNIKÓW'
-        : warehouse === 'RAPORT_ZMIANOWY'
-          ? 'PANEL RAPORTU ZMIANOWEGO'
-          : warehouse === 'BILANS_PRZEZBROJEN'
-            ? 'PANEL BILANSU PRZEZBROJEŃ'
-            : warehouse === 'PRZESUNIECIA_ERP'
-              ? 'PANEL PRZESUNIĘĆ ERP'
-              : 'PANEL MODUŁU';
+          : warehouse === 'RAPORT_ZMIANOWY'
+            ? 'PANEL RAPORTU ZMIANOWEGO'
+            : warehouse === 'RAPORT_BRAKOWOSCI'
+              ? 'PANEL RAPORTU BRAKOWOŚCI'
+              : warehouse === 'BILANS_PRZEZBROJEN'
+                ? 'PANEL BILANSU PRZEZBROJEŃ'
+                : warehouse === 'PRZESUNIECIA_ERP'
+                  ? 'PANEL PRZESUNIĘĆ ERP'
+                  : 'PANEL MODUŁU';
   const headerLabel = isAdminRoute && !isPrzemialyModuleManagementRoute ? 'MODUŁY' : warehouseLabel;
   const showHeaderLabel =
     (isAdminRoute && !isPrzemialyModuleManagementRoute) ||
