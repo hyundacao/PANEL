@@ -26,6 +26,7 @@ const getTitle = (pathname: string) => {
   if (pathname.startsWith('/spis')) return 'Spis przemiałów';
   if (pathname.startsWith('/przesuniecia')) return 'Przesunięcia przemiałowe';
   if (pathname.startsWith('/wymieszane')) return 'Wymieszane tworzywa';
+  if (pathname.startsWith('/raport-brakowosci')) return 'Raport brakowości';
   if (pathname.startsWith('/raporty')) return 'Raporty';
   if (pathname.startsWith('/kartoteka')) return 'Stany magazynowe';
   if (pathname.startsWith('/bilans-przezbrojen')) return 'Bilans przezbrojeń';
@@ -55,6 +56,7 @@ const getTabFromPath = (pathname: string): WarehouseTab | null => {
   if (pathname.startsWith('/spis-oryginalow')) return 'spis-oryginalow';
   if (pathname.startsWith('/spis')) return 'spis';
   if (pathname.startsWith('/przesuniecia')) return 'przesuniecia';
+  if (pathname.startsWith('/raport-brakowosci')) return 'raport-brakowosci';
   if (pathname.startsWith('/raporty')) return 'raporty';
   if (pathname.startsWith('/kartoteka')) return 'kartoteka';
   if (pathname.startsWith('/bilans-przezbrojen')) return 'bilans-przezbrojen';
@@ -80,6 +82,7 @@ const navItemsPrzemialy: MobileNavItem[] = [
   { label: 'Spis oryginałów', href: '/spis-oryginalow', tab: 'spis-oryginalow' },
   { label: 'Przesunięcia przemiałowe', href: '/przesuniecia', tab: 'przesuniecia' },
   { label: 'Raporty', href: '/raporty', tab: 'raporty' },
+  { label: 'Raport brakowości', href: '/raport-brakowosci', tab: 'raport-brakowosci' },
   { label: 'Stany magazynowe', href: '/kartoteka', tab: 'kartoteka' },
   { label: 'Suszarki', href: '/suszarki', tab: 'suszarki' },
   { label: 'Wymieszane tworzywa', href: '/wymieszane', tab: 'wymieszane' }

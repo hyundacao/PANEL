@@ -1,0 +1,325 @@
+'use client';
+
+import { useMemo, useState, type FormEvent } from 'react';
+import { AlertTriangle, FileSpreadsheet, FileText, UploadCloud } from 'lucide-react';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { cn } from '@/lib/utils/cn';
+
+type BrakowoscRow = {
+  sheet: string;
+  machine: string;
+  detail: string;
+  index: string;
+  brigadierScrapQty: number | null;
+  brigadierScrapPct: number | null;
+  brigadierReasons: string;
+  brigadierNote: string;
+  mesScrapQty: number;
+  mesScrapPct: number;
+  mesReasons: string;
+  mesIgnoredReasons: string;
+};
+
+type BrakowoscSummary = {
+  rowCount: number;
+  machineCount: number;
+  mesScrapTotal: number;
+  brigadierScrapTotal: number;
+};
+
+const formatQty = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return '-';
+  return value.toLocaleString('pl-PL');
+};
+
+const formatPct = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return '-';
+  return `${value.toFixed(2).replace('.', ',')}%`;
+};
+
+const reasonParts = (value: string) =>
+  value
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+const ReasonChips = ({ value, muted = false }: { value: string; muted?: boolean }) => {
+  const parts = reasonParts(value);
+  if (parts.length === 0) return <p className="text-sm text-dim">Brak wpisu</p>;
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {parts.map((part) => {
+        const match = part.match(/^(.+?)\s+\((.+)\)$/);
+        const label = match?.[1] ?? part;
+        const amount = match?.[2] ?? '';
+        return (
+          <span
+            key={part}
+            className={cn(
+              'inline-flex max-w-full flex-col rounded-xl border px-3 py-2 text-sm',
+              muted
+                ? 'border-borderStrong bg-[rgba(148,163,184,0.10)]'
+                : 'border-[rgba(255,122,26,0.35)] bg-[rgba(255,122,26,0.10)]'
+            )}
+          >
+            <strong className="text-title">{label}</strong>
+            {amount && <span className="mt-1 text-xs font-semibold text-brandHover">{amount}</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+};
+
+const Metric = ({ label, value }: { label: string; value: string }) => (
+  <div className="rounded-xl border border-border bg-[rgba(255,255,255,0.045)] p-3">
+    <p className="text-xs font-semibold uppercase tracking-wide text-dim">{label}</p>
+    <p className="mt-2 text-3xl font-semibold tabular-nums text-title">{value}</p>
+  </div>
+);
+
+export default function RaportBrakowosciPage() {
+  const [mesPdf, setMesPdf] = useState<File | null>(null);
+  const [brigadierExcel, setBrigadierExcel] = useState<File | null>(null);
+  const [sheets, setSheets] = useState<string[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState('');
+  const [rows, setRows] = useState<BrakowoscRow[]>([]);
+  const [summary, setSummary] = useState<BrakowoscSummary | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const canLoadSheets = Boolean(mesPdf && brigadierExcel);
+  const canAnalyze = Boolean(mesPdf && brigadierExcel && selectedSheet);
+
+  const csvHref = useMemo(() => {
+    if (rows.length === 0) return '';
+    const headers = [
+      'Wtryskarka',
+      'Detal',
+      'Indeks',
+      'Braki brygadzisty',
+      'Brakowosc brygadzisty %',
+      'Na co braki brygadzisty',
+      'Braki MES',
+      'Brakowosc MES %',
+      'Na co braki MES',
+      'Braki ignorowane MES',
+      'Wpis brygadzisty',
+      'Arkusz'
+    ];
+    const escape = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const body = rows.map((row) =>
+      [
+        row.machine,
+        row.detail,
+        row.index,
+        row.brigadierScrapQty,
+        row.brigadierScrapPct,
+        row.brigadierReasons,
+        row.mesScrapQty,
+        row.mesScrapPct,
+        row.mesReasons,
+        row.mesIgnoredReasons,
+        row.brigadierNote,
+        row.sheet
+      ]
+        .map(escape)
+        .join(';')
+    );
+    return `data:text/csv;charset=utf-8,${encodeURIComponent([headers.map(escape).join(';'), ...body].join('\n'))}`;
+  }, [rows]);
+
+  const submit = async (event: FormEvent<HTMLFormElement>, mode: 'sheets' | 'analyze') => {
+    event.preventDefault();
+    if (!mesPdf || !brigadierExcel) return;
+    setLoading(true);
+    setError('');
+
+    const formData = new FormData();
+    formData.append('mesPdf', mesPdf);
+    formData.append('brigadierExcel', brigadierExcel);
+    if (mode === 'analyze') formData.append('sheet', selectedSheet);
+
+    try {
+      const response = await fetch('/api/raport-brakowosci', {
+        method: 'POST',
+        body: formData
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Nie udało się przetworzyć raportu.');
+      }
+      setSheets(payload.sheets ?? []);
+      setRows(payload.rows ?? []);
+      setSummary(payload.summary ?? null);
+      if (mode === 'sheets' && payload.sheets?.length) {
+        setSelectedSheet(payload.sheets[0]);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nie udało się przetworzyć raportu.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="Porównanie braków MES i raportu brygadzisty"
+        subtitle="Wgraj PDF z MES oraz XLSX z raportem brygadzisty, wybierz arkusz i sprawdź tylko wtryskarkę, detal oraz wartości braków. Dane nie są zapisywane."
+      />
+
+      <Card className="space-y-4">
+        <form className="grid gap-4 lg:grid-cols-[1fr_1fr_auto]" onSubmit={(event) => submit(event, 'sheets')}>
+          <label className="space-y-2">
+            <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-dim">
+              <FileText className="h-4 w-4" />
+              PDF MES
+            </span>
+            <input
+              type="file"
+              accept="application/pdf,.pdf"
+              onChange={(event) => {
+                setMesPdf(event.target.files?.[0] ?? null);
+                setSheets([]);
+                setRows([]);
+                setSummary(null);
+              }}
+              className="w-full rounded-xl border border-border bg-[rgba(0,0,0,0.36)] px-3 py-3 text-sm text-body file:mr-3 file:rounded-lg file:border-0 file:bg-[rgba(255,122,26,0.18)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-title"
+            />
+          </label>
+          <label className="space-y-2">
+            <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-dim">
+              <FileSpreadsheet className="h-4 w-4" />
+              Raport brygadzisty XLSX
+            </span>
+            <input
+              type="file"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={(event) => {
+                setBrigadierExcel(event.target.files?.[0] ?? null);
+                setSheets([]);
+                setRows([]);
+                setSummary(null);
+              }}
+              className="w-full rounded-xl border border-border bg-[rgba(0,0,0,0.36)] px-3 py-3 text-sm text-body file:mr-3 file:rounded-lg file:border-0 file:bg-[rgba(255,122,26,0.18)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-title"
+            />
+          </label>
+          <Button type="submit" disabled={!canLoadSheets || loading} className="self-end">
+            <UploadCloud className="mr-2 h-4 w-4" />
+            Wczytaj arkusze
+          </Button>
+        </form>
+
+        {sheets.length > 0 && (
+          <form className="flex flex-col gap-3 md:flex-row md:items-end" onSubmit={(event) => submit(event, 'analyze')}>
+            <label className="w-full space-y-2 md:max-w-sm">
+              <span className="text-xs font-semibold uppercase tracking-wide text-dim">Arkusz z Excela</span>
+              <select
+                value={selectedSheet}
+                onChange={(event) => setSelectedSheet(event.target.value)}
+                className="w-full rounded-xl border border-border bg-[rgba(0,0,0,0.40)] px-3 py-3 text-sm text-body focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                {sheets.map((sheet) => (
+                  <option key={sheet} value={sheet}>
+                    {sheet}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button type="submit" disabled={!canAnalyze || loading}>
+              Pokaż raport
+            </Button>
+          </form>
+        )}
+
+        {error && (
+          <div className="flex gap-3 rounded-xl border border-[rgba(255,82,82,0.35)] bg-[rgba(255,82,82,0.10)] p-3 text-sm text-title">
+            <AlertTriangle className="mt-0.5 h-4 w-4 text-danger" />
+            {error}
+          </div>
+        )}
+      </Card>
+
+      {summary && (
+        <div className="grid gap-3 md:grid-cols-4">
+          <Metric label="Wyniki" value={formatQty(summary.rowCount)} />
+          <Metric label="Wtryskarki" value={formatQty(summary.machineCount)} />
+          <Metric label="Braki MES" value={formatQty(summary.mesScrapTotal)} />
+          <Metric label="Braki brygadzisty" value={formatQty(summary.brigadierScrapTotal)} />
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <div className="flex justify-end">
+          <Button asChild variant="outline">
+            <a href={csvHref} download="raport-brakowosci.csv">
+              Pobierz CSV
+            </a>
+          </Button>
+        </div>
+      )}
+
+      <div className="space-y-4">
+        {rows.map((row) => (
+          <Card
+            key={`${row.sheet}-${row.machine}-${row.detail}`}
+            className="grid gap-4 border-borderStrong bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.018))] xl:grid-cols-[1fr_0.75fr_1.1fr]"
+          >
+            <div className="rounded-xl border-l-4 border-brand bg-[rgba(0,0,0,0.18)] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="rounded-xl bg-[rgba(255,122,26,0.16)] px-3 py-2 text-2xl font-black text-brandHover">
+                  {row.machine}
+                </span>
+                <span className="rounded-full border border-border px-3 py-1 text-xs font-semibold text-dim">
+                  {row.sheet}
+                </span>
+              </div>
+              <h2 className="mt-4 text-xl font-semibold leading-snug text-title">{row.detail}</h2>
+              <p className="mt-2 text-sm text-dim">
+                Indeks: <span className="font-semibold text-body">{row.index || '-'}</span>
+              </p>
+            </div>
+
+            <div className="rounded-xl border-l-4 border-[var(--success)] bg-[rgba(0,0,0,0.18)] p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Brygadzista</p>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <Metric label="Braki" value={formatQty(row.brigadierScrapQty)} />
+                <Metric label="Brakowość" value={formatPct(row.brigadierScrapPct)} />
+              </div>
+              <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-dim">Na co</p>
+              <div className="mt-2">
+                <ReasonChips value={row.brigadierReasons || row.brigadierNote} />
+              </div>
+            </div>
+
+            <div className="rounded-xl border-l-4 border-[#38bdf8] bg-[rgba(0,0,0,0.18)] p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">MES</p>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <Metric label="Braki" value={formatQty(row.mesScrapQty)} />
+                <Metric label="Brakowość" value={formatPct(row.mesScrapPct)} />
+              </div>
+              <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-dim">Na co</p>
+              <div className="mt-2">
+                <ReasonChips value={row.mesReasons} />
+              </div>
+              {row.mesIgnoredReasons && (
+                <>
+                  <p className="mt-4 border-t border-border pt-4 text-xs font-semibold uppercase tracking-wide text-dim">
+                    Ignorowane
+                  </p>
+                  <div className="mt-2">
+                    <ReasonChips value={row.mesIgnoredReasons} muted />
+                  </div>
+                </>
+              )}
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}

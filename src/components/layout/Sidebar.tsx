@@ -7,6 +7,7 @@ import {
   ClipboardList,
   ClipboardCheck,
   FileText,
+  BarChart3,
   Layers,
   UsersRound,
   Shield,
@@ -48,6 +49,7 @@ const navItemsPrzemialy: NavItem[] = [
     tab: 'przesuniecia'
   },
   { label: 'Raporty', href: '/raporty', icon: FileText, tab: 'raporty' },
+  { label: 'Raport brakowości', href: '/raport-brakowosci', icon: BarChart3, tab: 'raport-brakowosci' },
   { label: 'Stany magazynowe', href: '/kartoteka', icon: Layers, tab: 'kartoteka' },
   { label: 'Suszarki', href: '/suszarki', icon: Wind, tab: 'suszarki' },
   { label: 'Wymieszane tworzywa', href: '/wymieszane', icon: Shuffle, tab: 'wymieszane' },

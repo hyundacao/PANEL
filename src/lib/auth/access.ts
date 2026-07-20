@@ -14,6 +14,7 @@ export const PRZEMIALY_TABS: WarehouseTab[] = [
   'spis-oryginalow',
   'przesuniecia',
   'raporty',
+  'raport-brakowosci',
   'kartoteka',
   'wymieszane',
   'suszarki'
@@ -134,6 +135,10 @@ export const canSeeTab = (
     return hasLegacyPaintTapeAccess(user);
   }
   if (warehouse === 'CZESCI' && tab === 'historia') return false;
+  if (warehouse === 'PRZEMIALY' && tab === 'raport-brakowosci') {
+    const tabs = user.access?.warehouses?.[warehouse]?.tabs ?? [];
+    return tabs.includes('raport-brakowosci') || tabs.includes('raporty');
+  }
   return Boolean(user.access?.warehouses?.[warehouse]?.tabs?.includes(tab));
 };
 
@@ -242,14 +247,14 @@ export const getRolePreset = (
     return {
       role,
       readOnly: true,
-      tabs: ['dashboard', 'raporty', 'kartoteka', 'suszarki', 'spis-oryginalow'],
+      tabs: ['dashboard', 'raporty', 'raport-brakowosci', 'kartoteka', 'suszarki', 'spis-oryginalow'],
       admin: false
     };
   }
   return {
     role,
     readOnly: true,
-    tabs: ['dashboard', 'raporty', 'kartoteka', 'wymieszane', 'suszarki', 'spis-oryginalow'],
+    tabs: ['dashboard', 'raporty', 'raport-brakowosci', 'kartoteka', 'wymieszane', 'suszarki', 'spis-oryginalow'],
     admin: false
   };
 };

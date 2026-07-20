@@ -16,6 +16,7 @@ export type PrzemialyTab =
   | 'spis-oryginalow'
   | 'przesuniecia'
   | 'raporty'
+  | 'raport-brakowosci'
   | 'kartoteka'
   | 'wymieszane'
   | 'suszarki';
