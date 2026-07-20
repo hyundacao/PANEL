@@ -26,6 +26,7 @@ import { useUiStore } from '@/lib/store/ui';
 import { isReadOnly } from '@/lib/auth/access';
 import { useToastStore } from '@/components/ui/Toast';
 import { formatKg, parseQtyInput } from '@/lib/utils/format';
+import { CheckCircle2, ClipboardList, PackagePlus, Search } from 'lucide-react';
 
 type MaterialFormState = {
   materialId: string | null;
@@ -71,6 +72,7 @@ export default function LocationDetailPage() {
   const toast = useToastStore((state) => state.push);
   const queryClient = useQueryClient();
   const [showZero, setShowZero] = useState(false);
+  const [inventoryQuery, setInventoryQuery] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<MaterialFormState>(initialMaterialState);
   const [catalogQuery, setCatalogQuery] = useState('');
@@ -164,10 +166,13 @@ export default function LocationDetailPage() {
   });
 
   const visibleItems = useMemo(() => {
-    const items = detail ?? [];
+    const query = inventoryQuery.trim().toLowerCase();
+    const items = (detail ?? []).filter(
+      (item) => !query || `${item.name} ${item.code}`.toLowerCase().includes(query)
+    );
     if (showZero) return items;
     return items.filter((item) => (item.todayQty ?? item.yesterdayQty) !== 0);
-  }, [detail, showZero]);
+  }, [detail, inventoryQuery, showZero]);
 
   const getOriginalDraft = (item: { todayQty: number | null; comment?: string }): EntryDraft => ({
     qty: item.todayQty === null ? '' : String(item.todayQty),
@@ -273,30 +278,41 @@ export default function LocationDetailPage() {
   };
 
   const hasTodayEntries = (detail ?? []).some((item) => item.todayQty !== null);
+  const totalItems = (detail ?? []).length;
+  const countedItems = (detail ?? []).filter((item) => item.todayQty !== null).length;
+  const remainingItems = Math.max(totalItems - countedItems, 0);
+  const totalTodayQty = (detail ?? []).reduce((sum, item) => sum + (item.todayQty ?? 0), 0);
+  const progressPercent = totalItems === 0 ? 0 : Math.round((countedItems / totalItems) * 100);
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-4 pb-8 sm:space-y-6">
       <PageHeader
-        title={location?.name ?? 'Lokacja'}
-        subtitle={`${warehouse?.name ?? ''} | Dzień: ${today}`}
-        titleColor="var(--location-blue)"
+        title={`Spis zbiorczy: ${warehouse?.name ?? location?.name ?? 'Obszar'}`}
+        subtitle={`Stan na dzień ${today}`}
+        titleColor="var(--brand)"
         actions={
           <>
             <Button
               variant="secondary"
               onClick={handleNoChangeLocation}
               disabled={!canEdit}
-              className={glowClass}
+              className={`${glowClass} min-h-12 w-full px-3 text-xs sm:w-auto sm:text-sm`}
             >
-              Bez zmian (lokacja)
+              <CheckCircle2 className="mr-2 h-4 w-4" />
+              Zatwierdź bez zmian
             </Button>
-            <Button disabled={!canEdit} onClick={() => setDialogOpen(true)} className={glowClass}>
+            <Button
+              disabled={!canEdit}
+              onClick={() => setDialogOpen(true)}
+              className={`${glowClass} min-h-12 w-full px-3 text-xs sm:w-auto sm:text-sm`}
+            >
+              <PackagePlus className="mr-2 h-4 w-4" />
               Dodaj przemiał
             </Button>
             {dialogOpen && (
-              <div className="fixed inset-0 z-50 flex items-start justify-center px-4 py-6">
+              <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-start sm:px-4 sm:py-6">
                 <div className="absolute inset-0 bg-[var(--scrim)]" onClick={closeDialog} />
-                <div className="relative z-10 w-full max-w-2xl rounded-2xl border border-border bg-[var(--surface-1)] p-6 shadow-[inset_0_1px_0_var(--inner-highlight)] max-h-[98vh] min-h-[80vh] overflow-y-auto">
+                <div className="relative z-10 h-[100dvh] w-full overflow-y-auto border border-border bg-[var(--surface-1)] p-4 shadow-[inset_0_1px_0_var(--inner-highlight)] sm:h-auto sm:max-h-[94vh] sm:min-h-[80vh] sm:max-w-2xl sm:rounded-2xl sm:p-6">
                   <button
                     type="button"
                     onClick={closeDialog}
@@ -463,8 +479,8 @@ export default function LocationDetailPage() {
                     </div>
                   )}
 
-                  <div className="flex items-center justify-end gap-3 border-t border-border bg-surface2 px-6 py-4 -mx-6 -mb-6 rounded-b-2xl">
-                    <Button variant="outline" onClick={closeDialog} className={glowClass}>
+                  <div className="sticky bottom-0 z-20 -mx-4 -mb-4 mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-border bg-surface2 px-4 py-3 sm:-mx-6 sm:-mb-6 sm:gap-3 sm:rounded-b-2xl sm:px-6 sm:py-4">
+                    <Button variant="outline" onClick={closeDialog} className={`${glowClass} min-h-12 w-full sm:w-auto`}>
                       Anuluj
                     </Button>
                     {!form.manualMode && (
@@ -472,13 +488,13 @@ export default function LocationDetailPage() {
                         variant="outline"
                         onClick={handleRemoveMaterial}
                         disabled={!form.materialId}
-                        className="border-[rgba(170,24,24,0.65)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)]"
+                        className="min-h-12 w-full border-[rgba(170,24,24,0.65)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)] sm:w-auto"
                       >
                         Usun przemial
                       </Button>
                     )}
                     {!form.manualMode && (
-                      <Button onClick={handleAddToLocation} disabled={!form.materialId}>
+                      <Button onClick={handleAddToLocation} disabled={!form.materialId} className="min-h-12 w-full sm:w-auto">
                         Dodaj do lokacji
                       </Button>
                     )}
@@ -491,50 +507,137 @@ export default function LocationDetailPage() {
         }
       />
 
-      {!hasTodayEntries && (
-        <Card className="border-[rgba(255,106,0,0.55)] bg-brandSoft">
-          <p className="text-sm text-body">
-            Brak wpisu dziś. Pokazuję ostatni spis jako punkt odniesienia.
-          </p>
-        </Card>
-      )}
+      <Card className="space-y-4 border-[rgba(255,106,0,0.24)] bg-[linear-gradient(135deg,rgba(255,106,0,0.08),rgba(18,19,26,0.94)_42%)] sm:space-y-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <ClipboardList className="h-5 w-5 text-[var(--brand)]" />
+              <p className="text-sm font-bold uppercase tracking-[0.14em] text-title">Postęp spisu</p>
+            </div>
+            <p className="mt-1 text-sm text-muted">
+              {hasTodayEntries
+                ? 'Uzupełnij pozostałe pozycje i zatwierdź stan obszaru.'
+                : 'Rozpocznij od dodania lub przeliczenia pierwszego przemiału.'}
+            </p>
+          </div>
+          <div className="w-full rounded-xl border border-borderStrong bg-surface2 px-4 py-2 text-center text-sm font-bold text-title sm:w-auto sm:rounded-full">
+            {totalItems === 0
+              ? 'Gotowy do rozpoczęcia'
+              : remainingItems === 0
+                ? 'Spis ukończony'
+                : 'Spis w toku'}
+          </div>
+        </div>
 
-      <div className="flex justify-end">
-        <Toggle checked={showZero} onCheckedChange={setShowZero} label="Pokaż wyzerowane" />
-      </div>
+        <div className="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
+          {[
+            { label: 'Wszystkie pozycje', value: totalItems, color: 'text-title' },
+            { label: 'Spisane dzisiaj', value: countedItems, color: 'text-success' },
+            { label: 'Pozostało', value: remainingItems, color: 'text-warning' },
+            { label: 'Stan łącznie', value: formatKg(totalTodayQty), color: 'text-[var(--value-purple)]' }
+          ].map((metric) => (
+            <div key={metric.label} className="min-w-0 rounded-xl border border-border bg-surface2 px-3 py-3 sm:px-4">
+              <p className="truncate text-[10px] font-bold uppercase tracking-wide text-dim sm:text-[11px]">{metric.label}</p>
+              <p className={`mt-1 truncate text-xl font-bold tabular-nums sm:text-2xl ${metric.color}`}>{metric.value}</p>
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <div className="mb-2 flex items-center justify-between text-xs font-bold">
+            <span className="text-muted">Wykonano {countedItems} z {totalItems}</span>
+            <span className="text-title">{progressPercent}%</span>
+          </div>
+          <div className="h-2.5 overflow-hidden rounded-full bg-surface2">
+            <div
+              className="h-full rounded-full bg-[linear-gradient(90deg,var(--brand),#ff9a52)] transition-[width] duration-500"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+        </div>
+      </Card>
+
+      <Card className="flex min-w-0 flex-col gap-3 sm:gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="relative w-full lg:max-w-xl">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-dim" />
+          <Input
+            value={inventoryQuery}
+            onChange={(event) => setInventoryQuery(event.target.value)}
+            placeholder="Szukaj przemiału lub kartoteki"
+            className="pl-10"
+          />
+        </div>
+        <Toggle checked={showZero} onCheckedChange={setShowZero} label="Pokaż pozycje zerowe" />
+      </Card>
 
       {isLoading && <Card>Ładowanie danych...</Card>}
 
-      <Card className="space-y-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-dim">Pozycje w lokacji</p>
-        <div className="hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_240px] gap-3 text-xs font-semibold text-dim md:grid">
+      <Card className="min-w-0 space-y-4">
+        <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-base font-bold text-title">Lista przemiałów</p>
+            <p className="mt-1 text-xs text-dim">Widoczne pozycje: {visibleItems.length}</p>
+          </div>
+          <Button onClick={() => setDialogOpen(true)} disabled={!canEdit} variant="secondary" className="min-h-12 w-full sm:w-auto">
+            <PackagePlus className="mr-2 h-4 w-4" />
+            Dodaj pozycję
+          </Button>
+        </div>
+        {visibleItems.length > 0 && (
+        <div className="hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_240px] gap-3 px-3 text-xs font-bold uppercase tracking-wide text-dim md:grid">
           <span>Przemiał</span>
-          <span>Wczoraj</span>
+          <span>Ostatni spis</span>
           <span>Dziś</span>
           <span>Komentarz</span>
           <span>Akcje</span>
         </div>
-        <div className="space-y-3 md:hidden">
+        )}
+        {visibleItems.length === 0 && (
+          <div className="flex min-h-72 flex-col items-center justify-center rounded-2xl border border-dashed border-borderStrong bg-surface2 px-6 py-10 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-[rgba(255,106,0,0.28)] bg-brandSoft">
+              <PackagePlus className="h-7 w-7 text-[var(--brand)]" />
+            </div>
+            <p className="mt-5 text-lg font-bold text-title">
+              {inventoryQuery ? 'Brak pasujących pozycji' : 'Brak przemiałów w tym obszarze'}
+            </p>
+            <p className="mt-2 max-w-md text-sm text-muted">
+              {inventoryQuery
+                ? 'Zmień wyszukiwaną frazę albo wyczyść pole wyszukiwania.'
+                : 'Dodaj pierwszy przemiał i wpisz jego rzeczywistą ilość w kilogramach.'}
+            </p>
+            {!inventoryQuery && canEdit && (
+              <Button onClick={() => setDialogOpen(true)} className="mt-5">
+                <PackagePlus className="mr-2 h-4 w-4" />
+                Dodaj pierwszy przemiał
+              </Button>
+            )}
+          </div>
+        )}
+        <div className="min-w-0 space-y-3 md:hidden">
           {visibleItems.map((item) => (
             <div
               key={`mobile-${item.materialId}`}
-              className="space-y-3 rounded-xl border border-border bg-surface2 p-3"
+              className={`min-w-0 space-y-4 rounded-xl border p-3.5 ${
+                item.todayQty !== null
+                  ? 'border-[rgba(34,197,94,0.30)] bg-[rgba(34,197,94,0.05)]'
+                  : 'border-border bg-surface2'
+              }`}
             >
-              <div>
-                <p className="text-sm font-semibold" style={{ color: 'var(--value-purple)' }}>
+              <div className="min-w-0 border-b border-border pb-3">
+                <p className="break-words text-base font-bold leading-snug" style={{ color: 'var(--value-purple)' }}>
                   {item.name}
                 </p>
-                <p className="text-xs text-dim">{item.code}</p>
+                <p className="mt-1 break-all text-xs text-dim">{item.code}</p>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
+              <div className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3">
+                <div className="min-w-0 rounded-lg border border-border bg-[var(--surface-1)] px-3 py-2.5">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
-                    Wczoraj
+                    Ostatni spis
                   </p>
-                  <p className="text-sm text-body tabular-nums">{formatKg(item.yesterdayQty)}</p>
+                  <p className="mt-1 truncate text-base font-bold text-body tabular-nums">{formatKg(item.yesterdayQty)}</p>
                 </div>
-                <div>
+                <div className="min-w-0">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
                     Dzis
                   </p>
@@ -563,7 +666,7 @@ export default function LocationDetailPage() {
                     />
                   )}
                 </div>
-                <div className="sm:col-span-2">
+                <div className="col-span-2 min-w-0">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
                     Komentarz
                   </p>
@@ -593,7 +696,7 @@ export default function LocationDetailPage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
                 {canEdit && (
                   <>
                     <div className="grid w-full grid-cols-2 gap-2">
@@ -621,7 +724,11 @@ export default function LocationDetailPage() {
         {visibleItems.map((item) => (
           <div
             key={item.materialId}
-            className="hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_240px] items-center gap-3 rounded-xl border border-border bg-surface2 p-3 md:grid"
+            className={`hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_240px] items-center gap-3 rounded-xl border p-3 md:grid ${
+              item.todayQty !== null
+                ? 'border-[rgba(34,197,94,0.30)] bg-[rgba(34,197,94,0.05)]'
+                : 'border-border bg-surface2'
+            }`}
           >
             <div>
               <p className="text-sm font-semibold" style={{ color: 'var(--value-purple)' }}>

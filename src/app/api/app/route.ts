@@ -1725,6 +1725,7 @@ const collectConfirmedDiffs = (
     union.forEach((materialId) => {
       const todayEntry = today[materialId];
       if (!todayEntry?.confirmed) return;
+      if (todayEntry.comment?.trimStart().startsWith('Stan bazowy po ')) return;
       const label = materialMap.get(materialId)?.name ?? 'Nieznany';
       const todayQty = todayEntry.qty ?? 0;
       const delta = dayDeltas[loc.id]?.[materialId] ?? 0;
@@ -1792,6 +1793,142 @@ const fetchLocations = async () => {
   const { data, error } = await supabaseAdmin.from('locations').select('*');
   if (error) throw error;
   return (data ?? []).map(mapLocation);
+};
+
+const SIMPLIFIED_SPIS_AREAS = [
+  { warehouseId: 'hall-1', warehouseName: 'Hala 1', locationId: 'hall-1-spis', orderNo: 1, legacyWarehouseIds: [] },
+  { warehouseId: 'hall-2', warehouseName: 'Hala 2', locationId: 'hall-2-spis', orderNo: 2, legacyWarehouseIds: [] },
+  { warehouseId: 'hall-3', warehouseName: 'Hala 3', locationId: 'hall-3-spis', orderNo: 3, legacyWarehouseIds: [] },
+  {
+    warehouseId: 'mill-pp',
+    warehouseName: 'Pomieszczenie z młynem PP',
+    locationId: 'mill-pp-spis',
+    orderNo: 4,
+    legacyWarehouseIds: ['wh-1777286268671-64d70582']
+  }
+] as const;
+
+let simplifiedSpisStructurePromise: Promise<void> | null = null;
+
+const ensureSimplifiedSpisStructure = async () => {
+  if (!simplifiedSpisStructurePromise) {
+    simplifiedSpisStructurePromise = (async () => {
+      const { error: warehousesError } = await supabaseAdmin.from('warehouses').upsert(
+        SIMPLIFIED_SPIS_AREAS.map((area) => ({
+          id: area.warehouseId,
+          name: area.warehouseName,
+          order_no: area.orderNo,
+          include_in_spis: true,
+          include_in_stats: true,
+          is_active: true
+        })),
+        { onConflict: 'id' }
+      );
+      if (warehousesError) throw warehousesError;
+
+      const deactivateResults = await Promise.all(
+        SIMPLIFIED_SPIS_AREAS.flatMap((area) =>
+          [area.warehouseId, ...area.legacyWarehouseIds].map((warehouseId) =>
+            supabaseAdmin
+              .from('locations')
+              .update({ is_active: false })
+              .eq('warehouse_id', warehouseId)
+              .neq('id', area.locationId)
+          )
+        )
+      );
+      const deactivateError = deactivateResults.find((result) => result.error)?.error;
+      if (deactivateError) throw deactivateError;
+
+      const { error: locationsError } = await supabaseAdmin.from('locations').upsert(
+        SIMPLIFIED_SPIS_AREAS.map((area) => ({
+          id: area.locationId,
+          warehouse_id: area.warehouseId,
+          name: area.warehouseName,
+          order_no: 1,
+          type: 'pole',
+          is_active: true
+        })),
+        { onConflict: 'id' }
+      );
+      if (locationsError) throw locationsError;
+
+      const baselineDateKey = addDays(getTodayKey(), -1);
+      const { data: areaLocationRows, error: areaLocationsError } = await supabaseAdmin
+        .from('locations')
+        .select('id, warehouse_id')
+        .in(
+          'warehouse_id',
+          SIMPLIFIED_SPIS_AREAS.flatMap((area) => [area.warehouseId, ...area.legacyWarehouseIds])
+        );
+      if (areaLocationsError) throw areaLocationsError;
+
+      for (const area of SIMPLIFIED_SPIS_AREAS) {
+        const canonicalEntries = await fetchLatestEntriesByLocation(
+          [area.locationId],
+          baselineDateKey
+        );
+        if (Object.keys(canonicalEntries[area.locationId] ?? {}).length > 0) continue;
+
+        const legacyLocationIds = (areaLocationRows ?? [])
+          .filter(
+            (location) =>
+              [area.warehouseId, ...area.legacyWarehouseIds].includes(location.warehouse_id) &&
+              location.id !== area.locationId
+          )
+          .map((location) => String(location.id));
+        const legacyEntries = await fetchLatestEntriesByLocation(
+          legacyLocationIds,
+          baselineDateKey
+        );
+        const totalsByMaterial = new Map<string, number>();
+        Object.values(legacyEntries).forEach((entries) => {
+          Object.entries(entries).forEach(([materialId, entry]) => {
+            totalsByMaterial.set(
+              materialId,
+              (totalsByMaterial.get(materialId) ?? 0) + (entry?.qty ?? 0)
+            );
+          });
+        });
+
+        const baselineRows = [...totalsByMaterial.entries()]
+          .filter(([, qty]) => qty > 0)
+          .map(([materialId, qty]) => ({
+            date_key: baselineDateKey,
+            location_id: area.locationId,
+            material_id: materialId,
+            qty,
+            confirmed: true,
+            comment: 'Stan bazowy po przejściu na spis zbiorczy',
+            updated_at: new Date().toISOString()
+          }));
+        if (baselineRows.length > 0) {
+          const { error: baselineError } = await supabaseAdmin
+            .from('daily_entries')
+            .upsert(baselineRows, { onConflict: 'date_key,location_id,material_id' });
+          if (baselineError) throw baselineError;
+        }
+      }
+
+      const legacyWarehouseIds = SIMPLIFIED_SPIS_AREAS.flatMap(
+        (area) => area.legacyWarehouseIds
+      );
+      if (legacyWarehouseIds.length > 0) {
+        const { error: legacyWarehousesError } = await supabaseAdmin
+          .from('warehouses')
+          .update({ is_active: false, include_in_spis: false, include_in_stats: false })
+          .in('id', legacyWarehouseIds);
+        if (legacyWarehousesError) throw legacyWarehousesError;
+      }
+    })();
+  }
+
+  try {
+    await simplifiedSpisStructurePromise;
+  } catch (error) {
+    simplifiedSpisStructurePromise = null;
+    throw error;
+  }
 };
 
 const isMissingErpTargetLocationsTableError = (error: unknown) => {
@@ -2590,12 +2727,15 @@ const upsertTransferEntry = async (
 const handleAction = async (action: string, payload: any, currentUser: AppUser) => {
   switch (action) {
     case 'getDashboard': {
+      await ensureSimplifiedSpisStructure();
       const dateKey = String(payload?.date ?? getTodayKey());
-      const [warehouses, locations] = await Promise.all([
+      const [warehouses, locations, materials] = await Promise.all([
         fetchWarehouses(),
-        fetchLocations()
+        fetchLocations(),
+        fetchMaterials()
       ]);
       const activeStatsLocations = getActiveStatsLocations(warehouses, locations);
+      const activeCompanyLocations = getActiveCompanyLocations(warehouses, locations);
       const yesterdayKey = addDays(dateKey, -1);
       const [
         todayEntriesRows,
@@ -2613,7 +2753,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           fetchTransfers(dateKey, dateKey),
           fetchInventoryAdjustmentsForStats(dateKey, addDays(dateKey, 1)),
           fetchLatestEntriesByLocation(
-            activeStatsLocations.map((loc) => loc.id),
+            activeCompanyLocations.map((loc) => loc.id),
             yesterdayKey
           )
         ]);
@@ -2639,8 +2779,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       );
       const externalTotalsForDay = externalTotalsByWarehouse[dateKey] ?? {};
       const dayDeltas = transferDeltasByDate[dateKey] ?? {};
-      const inventoryDeltas = buildInventoryDeltasByDate(inventoryRows)[dateKey] ?? {};
-      return warehouses
+      const inventoryDeltasByDate = buildInventoryDeltasByDate(inventoryRows);
+      const inventoryDeltas = inventoryDeltasByDate[dateKey] ?? {};
+      const warehouseSummaries = warehouses
         .filter((warehouse) => warehouse.isActive && warehouse.includeInStats)
         .map((warehouse) => {
           const locs = activeStatsLocations.filter((loc) => loc.warehouseId === warehouse.id);
@@ -2691,8 +2832,48 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
             total: locs.length
           } satisfies DashboardSummary;
         });
+
+      const materialMap = new Map(materials.map((material) => [material.id, material]));
+      const regranulateMaterials = materials.filter(
+        (material) =>
+          material.isActive && material.name.trim().toLocaleUpperCase('pl-PL').startsWith('REGRANULAT')
+      );
+      const regranulateLabels = new Set(regranulateMaterials.map((material) => material.name));
+      const regranulateDiffs = collectConfirmedDiffs(
+        dateKey,
+        entriesByDate,
+        materialMap,
+        activeCompanyLocations,
+        transferDeltasByDate,
+        inventoryDeltasByDate,
+        latestPreviousEntries
+      );
+      const regranulateAdded = [...regranulateDiffs.addedTotals.entries()]
+        .filter(([label]) => regranulateLabels.has(label))
+        .reduce((sum, [, qty]) => sum + qty, 0);
+      const regranulateRemoved = [...regranulateDiffs.removedTotals.entries()]
+        .filter(([label]) => regranulateLabels.has(label))
+        .reduce((sum, [, qty]) => sum + qty, 0);
+      const confirmedRegranulates = regranulateMaterials.filter((material) =>
+        activeCompanyLocations.some(
+          (location) => todayEntries[location.id]?.[material.id]?.confirmed
+        )
+      ).length;
+
+      return [
+        ...warehouseSummaries,
+        {
+          warehouseId: 'regranulates-summary',
+          warehouseName: 'Regranulaty',
+          added: regranulateAdded,
+          removed: regranulateRemoved,
+          confirmed: confirmedRegranulates,
+          total: regranulateMaterials.length
+        } satisfies DashboardSummary
+      ];
     }
     case 'getLocationsOverview': {
+      await ensureSimplifiedSpisStructure();
       const warehouseId = String(payload?.warehouseId ?? '');
       const dateKey = String(payload?.date ?? getTodayKey());
       if (!warehouseId) throw new Error('WAREHOUSE_MISSING');
@@ -2780,6 +2961,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         });
     }
     case 'getLocationDetail': {
+      await ensureSimplifiedSpisStructure();
       const locationId = String(payload?.locationId ?? '');
       const dateKey = String(payload?.date ?? getTodayKey());
       if (!locationId) throw new Error('NOT_FOUND');
@@ -2794,7 +2976,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const previousEntries = Object.fromEntries(
         Object.entries(latestPreviousEntries[locationId] ?? {}).filter(([, entry]) => (entry?.qty ?? 0) > 0)
       );
-      const union = new Set([...Object.keys(todayEntries), ...Object.keys(previousEntries)]);
+      const union = new Set(materials.filter((material) => material.isActive).map((material) => material.id));
+      Object.keys(todayEntries).forEach((materialId) => union.add(materialId));
+      Object.keys(previousEntries).forEach((materialId) => union.add(materialId));
       return [...union].map((materialId) => {
         const material = materialMap.get(materialId);
         return {
@@ -2809,6 +2993,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       });
     }
     case 'upsertEntry': {
+      await ensureSimplifiedSpisStructure();
       const locationId = String(payload?.locationId ?? '');
       const materialId = String(payload?.materialId ?? '');
       const qty = toNumber(payload?.qty);
@@ -2991,6 +3176,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .sort((a, b) => a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' }));
     }
     case 'getTotalsHistory': {
+      await ensureSimplifiedSpisStructure();
       const days = Math.max(1, Number(payload?.days ?? 30));
       const todayKey = getTodayKey();
       const fromKey = addDays(todayKey, -Math.max(0, days - 1));
@@ -3100,6 +3286,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return { added, removed } satisfies MonthlyDelta;
     }
     case 'getDashboardMonthStats': {
+      await ensureSimplifiedSpisStructure();
       const todayKey = getTodayKey();
       const date = parseDateKey(todayKey);
       const defaultFrom = formatDate(new Date(date.getFullYear(), date.getMonth(), 1));
@@ -3446,6 +3633,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return { year, rows: rowsOut, totals } satisfies YearlyReport;
     }
     case 'getCurrentMaterialTotals': {
+      await ensureSimplifiedSpisStructure();
       const scope =
         payload?.scope === 'all' ? 'all' : payload?.scope === 'company' ? 'company' : 'stats';
       const [materials, warehouses, locations] = await Promise.all([
@@ -4216,6 +4404,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return enrichAuditEventsForDisplay(mapped);
     }
     case 'getLocations': {
+      await ensureSimplifiedSpisStructure();
       const [warehouses, locations] = await Promise.all([fetchWarehouses(), fetchLocations()]);
       const filteredWarehouses = warehouses.filter((warehouse) =>
         isWarehouseInScope(warehouse, 'PRZEMIALY')
@@ -7072,6 +7261,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return;
     }
     case 'getWarehouses': {
+      await ensureSimplifiedSpisStructure();
       const warehouses = await fetchWarehouses();
       return warehouses
         .filter(

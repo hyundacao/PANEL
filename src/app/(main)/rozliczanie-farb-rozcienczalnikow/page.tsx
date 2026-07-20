@@ -529,7 +529,7 @@ export default function PaintTapeSettlementsPage() {
     mutationFn: async (
       payloads: Array<Parameters<typeof updatePaintTapeSettlement>[0]>
     ) => Promise.all(payloads.map((payload) => updatePaintTapeSettlement(payload))),
-    onSuccess: (_data, payloads) => {
+    onSuccess: () => {
       setDrafts({});
       setGroupOrderQuantityDrafts({});
       setGroupCompletedAtDrafts({});

@@ -295,7 +295,7 @@ export default function DashboardPage() {
       <div className="space-y-2.5">
         <GlowPanel className="xl:h-[226px] 2xl:h-[250px]">
           <div className="flex h-full flex-col p-3 md:p-3.5">
-            <PanelTitle icon={<Building2 size={18} />} title="Dzisiaj - hale" />
+            <PanelTitle icon={<Building2 size={18} />} title="Dzisiaj - obszary i regranulaty" />
             <div className="mt-3 grid min-h-0 flex-1 auto-rows-fr gap-3 sm:grid-cols-2 xl:grid-cols-[repeat(auto-fit,minmax(260px,1fr))]">
               {isLoading &&
                 Array.from({ length: 4 }).map((_, idx) => (

@@ -828,38 +828,46 @@ insert into public.warehouses (id, name, order_no, include_in_spis, include_in_s
   ('hall-1', 'Hala 1', 1, true, true, true),
   ('hall-2', 'Hala 2', 2, true, true, true),
   ('hall-3', 'Hala 3', 3, true, true, true),
+  ('mill-pp', 'Pomieszczenie z młynem PP', 4, true, true, true),
   ('daszek-1', 'Daszek NR 1', 4, false, false, true),
   ('daszek-2', 'Daszek NR 2', 5, false, false, true)
 on conflict (id) do nothing;
 
 insert into public.locations (id, warehouse_id, name, order_no, type, is_active)
-select concat('hall-1-wtr-', gs), 'hall-1', concat('WTR ', gs), gs, 'wtr', true
+select concat('hall-1-wtr-', gs), 'hall-1', concat('WTR ', gs), gs, 'wtr', false
 from generate_series(1, 28) as gs
 on conflict (id) do nothing;
 
 insert into public.locations (id, warehouse_id, name, order_no, type, is_active) values
-  ('hall-1-pole-centralny', 'hall-1', 'Centralny zasyp', 100, 'pole', true)
+  ('hall-1-pole-centralny', 'hall-1', 'Centralny zasyp', 100, 'pole', false)
 on conflict (id) do nothing;
 
 insert into public.locations (id, warehouse_id, name, order_no, type, is_active)
-select concat('hall-2-wtr-', gs), 'hall-2', concat('WTR ', gs), gs, 'wtr', true
+select concat('hall-2-wtr-', gs), 'hall-2', concat('WTR ', gs), gs, 'wtr', false
 from generate_series(29, 52) as gs
 on conflict (id) do nothing;
 
 insert into public.locations (id, warehouse_id, name, order_no, type, is_active) values
-  ('hall-2-pole-maguire', 'hall-2', 'Pole odkladcze Maguire', 100, 'pole', true),
-  ('hall-2-pole-centralny', 'hall-2', 'Centralny zasyp', 101, 'pole', true)
+  ('hall-2-pole-maguire', 'hall-2', 'Pole odkladcze Maguire', 100, 'pole', false),
+  ('hall-2-pole-centralny', 'hall-2', 'Centralny zasyp', 101, 'pole', false)
 on conflict (id) do nothing;
 
 insert into public.locations (id, warehouse_id, name, order_no, type, is_active)
-select concat('hall-3-wtr-', gs), 'hall-3', concat('WTR ', gs), gs, 'wtr', true
+select concat('hall-3-wtr-', gs), 'hall-3', concat('WTR ', gs), gs, 'wtr', false
 from generate_series(53, 60) as gs
 on conflict (id) do nothing;
 
 insert into public.locations (id, warehouse_id, name, order_no, type, is_active) values
-  ('hall-3-pole-centralny', 'hall-3', 'Centralny zasyp', 100, 'pole', true),
+  ('hall-3-pole-centralny', 'hall-3', 'Centralny zasyp', 100, 'pole', false),
   ('daszek-1-pole', 'daszek-1', 'Pole odkladcze', 1, 'pole', true),
   ('daszek-2-pole', 'daszek-2', 'Pole odkladcze', 1, 'pole', true)
+on conflict (id) do nothing;
+
+insert into public.locations (id, warehouse_id, name, order_no, type, is_active) values
+  ('hall-1-spis', 'hall-1', 'Hala 1', 1, 'pole', true),
+  ('hall-2-spis', 'hall-2', 'Hala 2', 1, 'pole', true),
+  ('hall-3-spis', 'hall-3', 'Hala 3', 1, 'pole', true),
+  ('mill-pp-spis', 'mill-pp', 'Pomieszczenie z młynem PP', 1, 'pole', true)
 on conflict (id) do nothing;
 
 insert into public.materials (id, code, name, is_active) values
