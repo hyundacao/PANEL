@@ -1686,7 +1686,6 @@ const buildInventoryDeltasByDate = (
     if (!locationId || !materialId) return;
     const correctionDateKey = addDays(formatDate(new Date(row.at)), -1);
     const delta = toNumber(row.next_qty) - toNumber(row.prev_qty);
-    if (!delta) return;
     if (!result[correctionDateKey]) result[correctionDateKey] = {};
     if (!result[correctionDateKey][locationId]) result[correctionDateKey][locationId] = {};
     result[correctionDateKey][locationId][materialId] =
@@ -1726,6 +1725,7 @@ const collectConfirmedDiffs = (
       const todayEntry = today[materialId];
       if (!todayEntry?.confirmed) return;
       if (todayEntry.comment?.trimStart().startsWith('Stan bazowy po ')) return;
+      if (Object.prototype.hasOwnProperty.call(inventoryDeltas[loc.id] ?? {}, materialId)) return;
       const label = materialMap.get(materialId)?.name ?? 'Nieznany';
       const todayQty = todayEntry.qty ?? 0;
       const delta = dayDeltas[loc.id]?.[materialId] ?? 0;
@@ -2806,6 +2806,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
             if (!isConfirmed || union.size === 0) return;
 
             union.forEach((materialId) => {
+              if (Object.prototype.hasOwnProperty.call(inventoryDeltas[loc.id] ?? {}, materialId)) return;
               const todayQty = today[materialId]?.qty ?? 0;
               const delta = dayDeltas[loc.id]?.[materialId] ?? 0;
               const inventoryDelta = inventoryDeltas[loc.id]?.[materialId] ?? 0;
