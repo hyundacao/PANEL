@@ -5502,15 +5502,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!material) throw new Error('MATERIAL_MISSING');
       const todayKey = getTodayKey();
       const yesterdayKey = addDays(todayKey, -1);
-      const { data: yesterdayEntry, error: yesterdayError } = await supabaseAdmin
-        .from('daily_entries')
-        .select('qty')
-        .eq('date_key', yesterdayKey)
-        .eq('location_id', locationId)
-        .eq('material_id', materialId)
-        .maybeSingle();
-      if (yesterdayError) throw yesterdayError;
-      const prevQty = toNumber(yesterdayEntry?.qty);
+      const previousEntries = await fetchLatestEntriesByLocation([locationId], yesterdayKey);
+      const prevQty = toNumber(previousEntries[locationId]?.[materialId]?.qty);
       const { error: upsertError } = await supabaseAdmin
         .from('daily_entries')
         .upsert(
