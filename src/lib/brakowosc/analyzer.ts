@@ -6,6 +6,7 @@ export type BrakowoscRow = {
   machine: string;
   detail: string;
   index: string;
+  brigadierShifts: BrigadierShiftScrap[];
   brigadierScrapQty: number | null;
   brigadierScrapPct: number | null;
   brigadierReasons: string;
@@ -15,6 +16,15 @@ export type BrakowoscRow = {
   mesReasons: string;
   mesIgnoredReasons: string;
   mesProductionQty: number;
+};
+
+export type BrigadierShiftScrap = {
+  shift: 'I' | 'II' | 'III';
+  label: string;
+  scrapQty: number | null;
+  scrapPct: number | null;
+  reasons: string;
+  note: string;
 };
 
 export type BrakowoscAnalysis = {
@@ -182,6 +192,28 @@ const extractBrigadierScrapClean = (values: unknown[]) => {
   };
 };
 
+const extractBrigadierShifts = (row: unknown[], plannedQty: number | null): BrigadierShiftScrap[] => {
+  const shiftColumns: Array<{ shift: BrigadierShiftScrap['shift']; label: string; scrapColumn: number }> = [
+    { shift: 'I', label: 'I zmiana', scrapColumn: 12 },
+    { shift: 'II', label: 'II zmiana', scrapColumn: 14 },
+    { shift: 'III', label: 'III zmiana', scrapColumn: 16 }
+  ];
+
+  return shiftColumns.map(({ shift, label, scrapColumn }) => {
+    const scrap = extractBrigadierScrapClean([row[scrapColumn]]);
+    const scrapPct =
+      plannedQty && scrap.qty ? Number(((scrap.qty / plannedQty) * 100).toFixed(2)) : null;
+    return {
+      shift,
+      label,
+      scrapQty: scrap.qty,
+      scrapPct,
+      reasons: scrap.reasons,
+      note: scrap.note
+    };
+  });
+};
+
 export const extractMesMachines = (pdfText: string, thresholdPct = 2): Record<string, MesMachine> => {
   const machinePattern =
     /^\[\s*(WTR\d{2})\s*\]\s+(.+?)\s+(\d+:\d{2}:\d{2})\s+(\d+:\d{2}:\d{2})\s+(\d+:\d{2}:\d{2})\s+([\d ]+)\s+([\d ]+)\s+([\d ]+)\s+([0-9]+,[0-9]+)\s+([0-9]+,[0-9]+)\s+([0-9]+,[0-9]+)\s+([0-9]+,[0-9]+)\s+([0-9]+,[0-9]+)$/;
@@ -315,9 +347,23 @@ export const analyzeBrakowosc = ({
 
     const detail = String(row[1] ?? '').trim();
     const plannedQty = parseNumber(row[2]);
-    const brigadier = extractBrigadierScrapClean([row[11], row[12], row[13], row[14], row[15], row[16]]);
+    const brigadierShifts = extractBrigadierShifts(row, plannedQty);
+    const brigadierScrapQty = brigadierShifts.reduce(
+      (sum, shift) => sum + (shift.scrapQty ?? 0),
+      0
+    );
     const brigadierScrapPct =
-      plannedQty && brigadier.qty ? Number(((brigadier.qty / plannedQty) * 100).toFixed(2)) : null;
+      plannedQty && brigadierScrapQty ? Number(((brigadierScrapQty / plannedQty) * 100).toFixed(2)) : null;
+    const brigadierReasons = [
+      ...new Set(
+        brigadierShifts.flatMap((shift) =>
+          shift.reasons
+            .split(';')
+            .map((reason) => reason.trim())
+            .filter(Boolean)
+        )
+      )
+    ].join('; ');
     const mes = mesMachines[machine];
 
     rows.push({
@@ -326,10 +372,14 @@ export const analyzeBrakowosc = ({
       machine,
       detail,
       index: extractIndex(detail),
-      brigadierScrapQty: brigadier.qty,
+      brigadierShifts,
+      brigadierScrapQty: brigadierScrapQty || null,
       brigadierScrapPct,
-      brigadierReasons: brigadier.reasons,
-      brigadierNote: brigadier.note,
+      brigadierReasons,
+      brigadierNote: brigadierShifts
+        .filter((shift) => shift.note)
+        .map((shift) => `${shift.label}: ${shift.note}`)
+        .join('; '),
       mesScrapQty: mes.mesScrapQty,
       mesScrapPct: mes.mesScrapPct,
       mesReasons: formatReasonList(mes.mesReasons),

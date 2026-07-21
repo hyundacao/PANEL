@@ -12,6 +12,7 @@ type BrakowoscRow = {
   machine: string;
   detail: string;
   index: string;
+  brigadierShifts?: BrigadierShiftScrap[];
   brigadierScrapQty: number | null;
   brigadierScrapPct: number | null;
   brigadierReasons: string;
@@ -20,6 +21,15 @@ type BrakowoscRow = {
   mesScrapPct: number;
   mesReasons: string;
   mesIgnoredReasons: string;
+};
+
+type BrigadierShiftScrap = {
+  shift: 'I' | 'II' | 'III';
+  label: string;
+  scrapQty: number | null;
+  scrapPct: number | null;
+  reasons: string;
+  note: string;
 };
 
 type BrakowoscSummary = {
@@ -61,9 +71,22 @@ const reasonParts = (value: string) =>
     .map((part) => part.trim())
     .filter(Boolean);
 
+const stripReasonPercentages = (value: string) =>
+  reasonParts(value)
+    .map((part) => {
+      const match = part.match(/^(.+?)\s+\((.+)\)$/);
+      if (!match) return part;
+      const qty = match[2].match(/\d[\d\s]*\s*szt\.?/i)?.[0] ?? match[2];
+      return `${match[1]} (${qty})`;
+    })
+    .join('; ');
+
 const parseReasonChip = (part: string, showQty = false) => {
   const mesMatch = part.match(/^(.+?)\s+\((.+)\)$/);
-  if (mesMatch) return { label: mesMatch[1], amount: mesMatch[2] };
+  if (mesMatch) {
+    const qty = mesMatch[2].match(/\d[\d\s]*\s*szt\.?/i)?.[0] ?? mesMatch[2];
+    return { label: mesMatch[1], amount: qty };
+  }
   if (!showQty) return { label: part, amount: '' };
 
   const reasonThenQty = part.match(/^(.+?)[\s:-]+(\d{1,6})(?:\s*szt\.?)?$/i);
@@ -117,6 +140,21 @@ const Metric = ({ label, value }: { label: string; value: string }) => (
   </div>
 );
 
+const BrigadierShiftBox = ({ shift }: { shift: BrigadierShiftScrap }) => (
+  <div className="rounded-xl border border-border bg-[rgba(255,255,255,0.035)] p-3">
+    <div className="flex flex-wrap items-start justify-between gap-2">
+      <p className="text-sm font-black uppercase tracking-wide text-title">{shift.label}</p>
+      <div className="text-right">
+        <p className="text-lg font-black tabular-nums text-title">{formatQty(shift.scrapQty)}</p>
+        <p className="text-xs font-semibold text-dim">{formatPct(shift.scrapPct)}</p>
+      </div>
+    </div>
+    <div className="mt-3">
+      <ReasonChips value={shift.note || shift.reasons} showQty />
+    </div>
+  </div>
+);
+
 const readJsonResponse = async (response: Response) => {
   const contentType = response.headers.get('content-type') ?? '';
   if (!contentType.includes('application/json')) {
@@ -152,6 +190,15 @@ export default function RaportBrakowosciPage() {
       'Braki brygadzisty',
       'Brakowosc brygadzisty %',
       'Na co braki brygadzisty',
+      'I zmiana braki',
+      'I zmiana brakowosc %',
+      'I zmiana na co',
+      'II zmiana braki',
+      'II zmiana brakowosc %',
+      'II zmiana na co',
+      'III zmiana braki',
+      'III zmiana brakowosc %',
+      'III zmiana na co',
       'Braki MES',
       'Brakowosc MES %',
       'Na co braki MES',
@@ -160,6 +207,8 @@ export default function RaportBrakowosciPage() {
       'Arkusz'
     ];
     const escape = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const shiftValue = (row: BrakowoscRow, index: number, key: keyof BrigadierShiftScrap) =>
+      row.brigadierShifts?.[index]?.[key] ?? '';
     const body = rows.map((row) =>
       [
         row.machine,
@@ -168,10 +217,19 @@ export default function RaportBrakowosciPage() {
         row.brigadierScrapQty,
         row.brigadierScrapPct,
         row.brigadierReasons,
+        shiftValue(row, 0, 'scrapQty'),
+        shiftValue(row, 0, 'scrapPct'),
+        shiftValue(row, 0, 'note'),
+        shiftValue(row, 1, 'scrapQty'),
+        shiftValue(row, 1, 'scrapPct'),
+        shiftValue(row, 1, 'note'),
+        shiftValue(row, 2, 'scrapQty'),
+        shiftValue(row, 2, 'scrapPct'),
+        shiftValue(row, 2, 'note'),
         row.mesScrapQty,
         row.mesScrapPct,
-        row.mesReasons,
-        row.mesIgnoredReasons,
+        stripReasonPercentages(row.mesReasons),
+        stripReasonPercentages(row.mesIgnoredReasons),
         row.brigadierNote,
         row.sheet
       ]
@@ -364,9 +422,23 @@ export default function RaportBrakowosciPage() {
                 <Metric label="Braki" value={formatQty(row.brigadierScrapQty)} />
                 <Metric label="Brakowość" value={formatPct(row.brigadierScrapPct)} />
               </div>
-              <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-dim">Na co</p>
-              <div className="mt-2">
-                <ReasonChips value={row.brigadierNote || row.brigadierReasons} showQty />
+              <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-dim">Zmiany</p>
+              <div className="mt-2 space-y-3">
+                {(row.brigadierShifts?.length
+                  ? row.brigadierShifts
+                  : [
+                      {
+                        shift: 'I' as const,
+                        label: 'Razem',
+                        scrapQty: row.brigadierScrapQty,
+                        scrapPct: row.brigadierScrapPct,
+                        reasons: row.brigadierReasons,
+                        note: row.brigadierNote
+                      }
+                    ]
+                ).map((shift) => (
+                  <BrigadierShiftBox key={`${row.machine}-${row.detail}-${shift.shift}`} shift={shift} />
+                ))}
               </div>
             </div>
 
