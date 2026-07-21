@@ -716,6 +716,12 @@ create table if not exists public.raport_zmianowy_entries (
   edited_by_name text
 );
 
+create table if not exists public.raport_brakowosci_latest (
+  id text primary key default 'latest',
+  payload jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
 create index if not exists raport_zmianowy_entries_item_idx
   on public.raport_zmianowy_entries (item_id);
 create index if not exists raport_zmianowy_entries_created_idx
@@ -791,6 +797,7 @@ begin
         'raport_zmianowy_sessions',
         'raport_zmianowy_items',
         'raport_zmianowy_entries',
+        'raport_brakowosci_latest',
         'audit_logs',
         'push_subscriptions'
       ]::text[]

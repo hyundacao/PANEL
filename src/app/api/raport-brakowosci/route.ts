@@ -1,37 +1,77 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { NextRequest, NextResponse } from 'next/server';
-import { PDFParse } from 'pdf-parse';
 import { analyzeBrakowosc, getWorkbookSheets } from '@/lib/brakowosc/analyzer';
+import { supabaseAdmin } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const latestReportPath = path.join(process.cwd(), '.runtime', 'raport-brakowosci-latest.json');
+const latestReportId = 'latest';
 
 const readFileBuffer = async (file: File | null) => {
   if (!file) return null;
   return Buffer.from(await file.arrayBuffer());
 };
 
-const readLatestReport = async () => {
+const readPdfText = async (pdfBuffer: Buffer) => {
+  const { PDFParse } = await import('pdf-parse');
+  PDFParse.setWorker(
+    pathToFileURL(
+      path.join(process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs')
+    ).toString()
+  );
+  const parser = new PDFParse({ data: pdfBuffer });
   try {
-    const content = await readFile(latestReportPath, 'utf8');
-    return JSON.parse(content);
-  } catch {
-    return null;
+    const pdfData = await parser.getText();
+    return pdfData.text;
+  } finally {
+    await parser.destroy();
   }
 };
 
+const readLatestReport = async () => {
+  const { data, error } = await supabaseAdmin
+    .from('raport_brakowosci_latest')
+    .select('payload')
+    .eq('id', latestReportId)
+    .maybeSingle();
+
+  if (error) {
+    const missingTable =
+      error.code === '42P01' || String(error.message ?? '').includes('raport_brakowosci_latest');
+    if (missingTable) return null;
+    throw error;
+  }
+
+  return data?.payload ?? null;
+};
+
 const writeLatestReport = async (payload: unknown) => {
-  await mkdir(path.dirname(latestReportPath), { recursive: true });
-  await writeFile(latestReportPath, JSON.stringify(payload, null, 2), 'utf8');
+  const { error } = await supabaseAdmin.from('raport_brakowosci_latest').upsert({
+    id: latestReportId,
+    payload,
+    updated_at: new Date().toISOString()
+  });
+
+  if (error) {
+    const missingTable =
+      error.code === '42P01' || String(error.message ?? '').includes('raport_brakowosci_latest');
+    if (missingTable) {
+      throw new Error('Brakuje tabeli raport_brakowosci_latest. Uruchom migracje Supabase.');
+    }
+    throw error;
+  }
 };
 
 export async function GET() {
-  const latest = await readLatestReport();
-  return NextResponse.json({ latest });
+  try {
+    const latest = await readLatestReport();
+    return NextResponse.json({ latest });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Nie udalo sie pobrac raportu.';
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -59,16 +99,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ sheets, rows: [], summary: null });
     }
 
-    PDFParse.setWorker(
-      pathToFileURL(
-        path.join(process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs')
-      ).toString()
-    );
-    const parser = new PDFParse({ data: pdfBuffer });
-    const pdfData = await parser.getText();
-    await parser.destroy();
-
-    const analysis = analyzeBrakowosc({ pdfText: pdfData.text, excelBuffer, selectedSheet });
+    const pdfText = await readPdfText(pdfBuffer);
+    const analysis = analyzeBrakowosc({ pdfText, excelBuffer, selectedSheet });
     const latest = {
       ...analysis,
       selectedSheet,
