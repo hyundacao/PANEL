@@ -117,6 +117,18 @@ const Metric = ({ label, value }: { label: string; value: string }) => (
   </div>
 );
 
+const readJsonResponse = async (response: Response) => {
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    const text = await response.text();
+    if (text.includes('<!DOCTYPE')) {
+      throw new Error('Serwer zwrocil strone bledu zamiast danych. Odswiez strone i sprobuj ponownie.');
+    }
+    throw new Error(text || 'Serwer zwrocil nieprawidlowa odpowiedz.');
+  }
+  return response.json();
+};
+
 export default function RaportBrakowosciPage() {
   const [mesPdf, setMesPdf] = useState<File | null>(null);
   const [brigadierExcel, setBrigadierExcel] = useState<File | null>(null);
@@ -172,7 +184,7 @@ export default function RaportBrakowosciPage() {
   useEffect(() => {
     let cancelled = false;
     fetch('/api/raport-brakowosci')
-      .then((response) => response.json())
+      .then(readJsonResponse)
       .then((payload: { latest?: LatestBrakowoscReport | null }) => {
         if (cancelled || !payload.latest) return;
         setSheets(payload.latest.sheets ?? []);
@@ -205,7 +217,7 @@ export default function RaportBrakowosciPage() {
         method: 'POST',
         body: formData
       });
-      const payload = await response.json();
+      const payload = await readJsonResponse(response);
       if (!response.ok) {
         throw new Error(payload.error ?? 'Nie udało się przetworzyć raportu.');
       }
