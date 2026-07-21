@@ -131,16 +131,19 @@ const ReasonChips = ({
   }[muted ? 'slate' : tone];
 
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(128px,1fr))] gap-2">
       {parts.map((part) => {
         const { label, amount } = parseReasonChip(part, showQty);
         return (
           <span
             key={part}
-            className={cn('inline-flex max-w-full flex-col rounded-lg border px-2.5 py-2 text-sm', toneClass)}
+            className={cn(
+              'flex min-h-[52px] w-full max-w-full min-w-0 flex-col justify-center rounded-md border px-2 py-1.5 text-xs',
+              toneClass
+            )}
           >
-            <strong className="text-title">{label}</strong>
-            {amount && <span className="mt-1 text-xs font-black tabular-nums opacity-90">{amount}</span>}
+            <strong className="break-words text-title">{label}</strong>
+            {amount && <span className="mt-0.5 text-[11px] font-black tabular-nums opacity-90">{amount}</span>}
           </span>
         );
       })}
@@ -168,31 +171,29 @@ const Metric = ({
   }[tone];
 
   return (
-    <div className={cn('rounded-xl bg-gradient-to-br p-4 ring-1', toneClass)}>
+    <div className={cn('rounded-lg bg-gradient-to-br px-3 py-2.5 ring-1', toneClass)}>
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs font-black uppercase tracking-wide text-dim">{label}</p>
+        <p className="text-xl font-black tabular-nums text-title sm:text-2xl">{value}</p>
         {Icon && <Icon className="h-4 w-4 opacity-80" />}
       </div>
-      <p className="mt-2 text-2xl font-black tabular-nums text-title sm:mt-3 sm:text-3xl">{value}</p>
     </div>
   );
 };
 
-const MiniMetric = ({ label, value }: { label: string; value: string }) => (
-  <div>
-    <p className="text-[11px] font-black uppercase tracking-wide text-dim">{label}</p>
-    <p className="mt-1 text-2xl font-black tabular-nums text-title">{value}</p>
-  </div>
-);
-
 const BrigadierShiftBox = ({ shift }: { shift: BrigadierShiftScrap }) => (
-  <div className="border-t border-white/10 py-3 first:border-t-0 first:pt-0 last:pb-0">
-    <div className="grid gap-3 md:grid-cols-[96px_92px_92px_1fr] md:items-start">
-      <p className="rounded-md bg-emerald-400/10 px-2 py-1 text-xs font-black uppercase tracking-wide text-emerald-200">
+  <div className="border-t border-white/10 py-2 first:border-t-0 first:pt-0 last:pb-0">
+    <div className="min-w-0 rounded-lg border border-emerald-400/10 bg-black/10 p-2.5">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="rounded-md bg-emerald-400/10 px-2.5 py-1 text-[11px] font-black uppercase tracking-wide text-emerald-200">
         {shift.label}
       </p>
-      <MiniMetric label="Braki" value={formatQty(shift.scrapQty)} />
-      <MiniMetric label="Brakowosc" value={formatPct(shift.scrapPct)} />
+        <div className="inline-flex h-8 items-center gap-2 rounded-md border border-emerald-400/15 bg-emerald-400/8 px-2.5">
+          <span className="text-[10px] font-black uppercase tracking-wide text-dim">Braki</span>
+          <span className="text-lg font-black tabular-nums text-title">{formatQty(shift.scrapQty)}</span>
+          <span className="text-[11px] font-semibold text-dim">szt.</span>
+        </div>
+      </div>
       <ReasonChips value={shift.note || shift.reasons} showQty tone="green" />
     </div>
   </div>
@@ -231,16 +232,12 @@ export default function RaportBrakowosciPage() {
       'Detal',
       'Indeks',
       'Braki brygadzisty',
-      'Brakowosc brygadzisty %',
       'Na co braki brygadzisty',
       'I zmiana braki',
-      'I zmiana brakowosc %',
       'I zmiana na co',
       'II zmiana braki',
-      'II zmiana brakowosc %',
       'II zmiana na co',
       'III zmiana braki',
-      'III zmiana brakowosc %',
       'III zmiana na co',
       'Braki MES',
       'Brakowosc MES %',
@@ -258,16 +255,12 @@ export default function RaportBrakowosciPage() {
         row.detail,
         row.index,
         row.brigadierScrapQty,
-        row.brigadierScrapPct,
         row.brigadierReasons,
         shiftValue(row, 0, 'scrapQty'),
-        shiftValue(row, 0, 'scrapPct'),
         shiftValue(row, 0, 'note'),
         shiftValue(row, 1, 'scrapQty'),
-        shiftValue(row, 1, 'scrapPct'),
         shiftValue(row, 1, 'note'),
         shiftValue(row, 2, 'scrapQty'),
-        shiftValue(row, 2, 'scrapPct'),
         shiftValue(row, 2, 'note'),
         row.mesScrapQty,
         row.mesScrapPct,
@@ -371,7 +364,7 @@ export default function RaportBrakowosciPage() {
 
       <Card className="space-y-4 border-white/10 bg-[rgba(8,10,14,0.76)] p-3 sm:space-y-5 sm:p-5">
         <form className="grid gap-4 xl:grid-cols-[1fr_1fr_auto]" onSubmit={(event) => submit(event, 'sheets')}>
-          <label className="space-y-2">
+          <label className="min-w-0 space-y-2">
             <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-dim">
               <FileText className="h-4 w-4" />
               PDF MES
@@ -386,7 +379,7 @@ export default function RaportBrakowosciPage() {
               className="w-full rounded-xl border border-border bg-[rgba(0,0,0,0.36)] px-3 py-3 text-sm text-body file:mr-3 file:rounded-lg file:border-0 file:bg-[rgba(255,122,26,0.18)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-title"
             />
           </label>
-          <label className="space-y-2">
+          <label className="min-w-0 space-y-2">
             <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-dim">
               <FileSpreadsheet className="h-4 w-4" />
               Raport brygadzisty XLSX
@@ -450,33 +443,42 @@ export default function RaportBrakowosciPage() {
         {rows.map((row) => (
           <Card
             key={`${row.sheet}-${row.machine}-${row.detail}`}
-            className="grid gap-3 border-white/10 bg-[rgba(8,10,14,0.84)] p-3 sm:gap-4 sm:p-4 xl:grid-cols-[1fr_0.85fr_1fr]"
+            className="grid min-w-0 gap-2.5 border-white/10 bg-[rgba(8,10,14,0.84)] p-2.5 sm:gap-3 sm:p-3 xl:grid-cols-2"
           >
-            <div className="rounded-xl border-l-4 border-orange-400 bg-orange-400/5 p-3 sm:p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="rounded-lg bg-orange-500/18 px-3 py-2 text-xl font-black text-orange-200 sm:text-2xl">
+            <div className="min-w-0 rounded-lg border border-orange-400/20 bg-orange-400/5 p-2.5 sm:p-3 xl:col-span-2">
+              <div className="grid gap-2.5 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+                <span className="flex h-12 w-fit items-center rounded-lg bg-orange-500/18 px-3 text-lg font-black text-orange-200 sm:text-xl">
                   {row.machine}
                 </span>
-                <span className="rounded-full border border-border px-3 py-1 text-xs font-semibold text-dim">
-                  {row.sheet}
-                </span>
+                <div className="min-w-0">
+                  <h2 className="break-words text-sm font-black leading-snug text-title sm:text-base">{row.detail}</h2>
+                  <p className="mt-1 text-xs text-dim">
+                    Indeks: <span className="break-all font-semibold text-body">{row.index || '-'}</span>
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  <span className="inline-flex h-12 items-center gap-3 rounded-lg border border-red-400/45 bg-red-500/20 px-3.5 text-red-100 shadow-[0_10px_24px_-20px_rgba(248,113,113,0.9)]">
+                    <span className="text-[10px] font-black uppercase tracking-wide opacity-85">Brakowosc</span>
+                    <span className="text-xl font-black tabular-nums leading-none sm:text-[26px]">
+                      {formatPct(row.mesScrapPct)}
+                    </span>
+                  </span>
+                  <span className="inline-flex h-9 items-center rounded-full border border-border px-3 text-xs font-semibold text-dim">
+                    {row.sheet}
+                  </span>
+                </div>
               </div>
-              <h2 className="mt-3 text-base font-black leading-snug text-title sm:mt-4 sm:text-xl">{row.detail}</h2>
-              <p className="mt-2 text-sm text-dim">
-                Indeks: <span className="font-semibold text-body">{row.index || '-'}</span>
-              </p>
             </div>
 
-            <div className="rounded-xl border-l-4 border-emerald-400 bg-emerald-400/5 p-3 sm:p-4">
+            <div className="min-w-0 rounded-xl border-l-4 border-emerald-400 bg-emerald-400/5 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">Brygadzista</p>
-              <div className="mt-3 grid grid-cols-2 gap-3">
+              <div className="mt-2">
                 <Metric label="Braki" value={formatQty(row.brigadierScrapQty)} />
-                <Metric label="Brakowość" value={formatPct(row.brigadierScrapPct)} />
               </div>
-              <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-dim">Zmiany</p>
-              <div className="mt-2 space-y-3">
+              <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-dim">Zmiany</p>
+              <div className="mt-2 space-y-2">
                 {(row.brigadierShifts?.length
-                  ? row.brigadierShifts
+                  ? row.brigadierShifts.filter((shift) => shift.scrapQty || shift.note || shift.reasons)
                   : [
                       {
                         shift: 'I' as const,
@@ -486,26 +488,38 @@ export default function RaportBrakowosciPage() {
                         reasons: row.brigadierReasons,
                         note: row.brigadierNote
                       }
-                    ]
+                    ].filter((shift) => shift.scrapQty || shift.note || shift.reasons)
                 ).map((shift) => (
                   <BrigadierShiftBox key={`${row.machine}-${row.detail}-${shift.shift}`} shift={shift} />
                 ))}
+                {(row.brigadierShifts?.length
+                  ? row.brigadierShifts.filter((shift) => shift.scrapQty || shift.note || shift.reasons)
+                  : [
+                      {
+                        shift: 'I' as const,
+                        label: 'Razem',
+                        scrapQty: row.brigadierScrapQty,
+                        scrapPct: row.brigadierScrapPct,
+                        reasons: row.brigadierReasons,
+                        note: row.brigadierNote
+                      }
+                    ].filter((shift) => shift.scrapQty || shift.note || shift.reasons)
+                ).length === 0 && <p className="text-sm text-dim">Brak wpisu</p>}
               </div>
             </div>
 
-            <div className="rounded-xl border-l-4 border-cyan-400 bg-cyan-400/5 p-3 sm:p-4">
+            <div className="min-w-0 rounded-xl border-l-4 border-cyan-400 bg-cyan-400/5 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">MES</p>
-              <div className="mt-3 grid grid-cols-2 gap-3">
+              <div className="mt-2">
                 <Metric label="Braki" value={formatQty(row.mesScrapQty)} />
-                <Metric label="Brakowość" value={formatPct(row.mesScrapPct)} />
               </div>
-              <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-dim">Na co</p>
+              <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-dim">Na co</p>
               <div className="mt-2">
                 <ReasonChips value={row.mesReasons} />
               </div>
               {row.mesIgnoredReasons && (
                 <>
-                  <p className="mt-4 border-t border-border pt-4 text-xs font-semibold uppercase tracking-wide text-dim">
+                  <p className="mt-3 border-t border-border pt-3 text-xs font-semibold uppercase tracking-wide text-dim">
                     Ignorowane
                   </p>
                   <div className="mt-2">

@@ -340,8 +340,19 @@ export const analyzeBrakowosc = ({
 
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '' });
   const rows: BrakowoscRow[] = [];
+  let reachedPlannedMoldChanges = false;
 
   matrix.forEach((row, index) => {
+    if (reachedPlannedMoldChanges) return;
+    const rowText = row
+      .map((cell) => String(cell ?? '').trim())
+      .join(' ')
+      .toUpperCase();
+    if (rowText.includes('PLANOWANE ZMIANY FORM')) {
+      reachedPlannedMoldChanges = true;
+      return;
+    }
+
     const machine = normalizeMachineCode(row[3]);
     if (!machine || !mesMachines[machine]) return;
 
