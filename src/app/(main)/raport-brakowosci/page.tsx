@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { AlertTriangle, FileSpreadsheet, FileText, UploadCloud } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -29,6 +29,14 @@ type BrakowoscSummary = {
   brigadierScrapTotal: number;
 };
 
+type LatestBrakowoscReport = {
+  sheets: string[];
+  selectedSheet?: string;
+  updatedAt?: string;
+  rows: BrakowoscRow[];
+  summary: BrakowoscSummary | null;
+};
+
 const formatQty = (value: number | null | undefined) => {
   if (value === null || value === undefined) return '-';
   return value.toLocaleString('pl-PL');
@@ -39,22 +47,50 @@ const formatPct = (value: number | null | undefined) => {
   return `${value.toFixed(2).replace('.', ',')}%`;
 };
 
+const formatDateTime = (value: string) => {
+  if (!value) return '';
+  return new Intl.DateTimeFormat('pl-PL', {
+    dateStyle: 'short',
+    timeStyle: 'short'
+  }).format(new Date(value));
+};
+
 const reasonParts = (value: string) =>
   value
     .split(';')
     .map((part) => part.trim())
     .filter(Boolean);
 
-const ReasonChips = ({ value, muted = false }: { value: string; muted?: boolean }) => {
+const parseReasonChip = (part: string, showQty = false) => {
+  const mesMatch = part.match(/^(.+?)\s+\((.+)\)$/);
+  if (mesMatch) return { label: mesMatch[1], amount: mesMatch[2] };
+  if (!showQty) return { label: part, amount: '' };
+
+  const reasonThenQty = part.match(/^(.+?)[\s:-]+(\d{1,6})(?:\s*szt\.?)?$/i);
+  if (reasonThenQty) return { label: reasonThenQty[1].trim(), amount: `${reasonThenQty[2]} szt.` };
+
+  const qtyThenReason = part.match(/^(\d{1,6})\s*(?:szt\.?)\s*(.+)$/i);
+  if (qtyThenReason) return { label: qtyThenReason[2].trim(), amount: `${qtyThenReason[1]} szt.` };
+
+  return { label: part, amount: '' };
+};
+
+const ReasonChips = ({
+  value,
+  muted = false,
+  showQty = false
+}: {
+  value: string;
+  muted?: boolean;
+  showQty?: boolean;
+}) => {
   const parts = reasonParts(value);
   if (parts.length === 0) return <p className="text-sm text-dim">Brak wpisu</p>;
 
   return (
     <div className="flex flex-wrap gap-2">
       {parts.map((part) => {
-        const match = part.match(/^(.+?)\s+\((.+)\)$/);
-        const label = match?.[1] ?? part;
-        const amount = match?.[2] ?? '';
+        const { label, amount } = parseReasonChip(part, showQty);
         return (
           <span
             key={part}
@@ -88,6 +124,7 @@ export default function RaportBrakowosciPage() {
   const [selectedSheet, setSelectedSheet] = useState('');
   const [rows, setRows] = useState<BrakowoscRow[]>([]);
   const [summary, setSummary] = useState<BrakowoscSummary | null>(null);
+  const [latestUpdatedAt, setLatestUpdatedAt] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -132,6 +169,26 @@ export default function RaportBrakowosciPage() {
     return `data:text/csv;charset=utf-8,${encodeURIComponent([headers.map(escape).join(';'), ...body].join('\n'))}`;
   }, [rows]);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/raport-brakowosci')
+      .then((response) => response.json())
+      .then((payload: { latest?: LatestBrakowoscReport | null }) => {
+        if (cancelled || !payload.latest) return;
+        setSheets(payload.latest.sheets ?? []);
+        setSelectedSheet(payload.latest.selectedSheet ?? payload.latest.sheets?.[0] ?? '');
+        setRows(payload.latest.rows ?? []);
+        setSummary(payload.latest.summary ?? null);
+        setLatestUpdatedAt(payload.latest.updatedAt ?? '');
+      })
+      .catch(() => {
+        if (!cancelled) setLatestUpdatedAt('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const submit = async (event: FormEvent<HTMLFormElement>, mode: 'sheets' | 'analyze') => {
     event.preventDefault();
     if (!mesPdf || !brigadierExcel) return;
@@ -153,10 +210,13 @@ export default function RaportBrakowosciPage() {
         throw new Error(payload.error ?? 'Nie udało się przetworzyć raportu.');
       }
       setSheets(payload.sheets ?? []);
-      setRows(payload.rows ?? []);
-      setSummary(payload.summary ?? null);
       if (mode === 'sheets' && payload.sheets?.length) {
         setSelectedSheet(payload.sheets[0]);
+      }
+      if (mode === 'analyze') {
+        setRows(payload.rows ?? []);
+        setSummary(payload.summary ?? null);
+        setLatestUpdatedAt(payload.updatedAt ?? new Date().toISOString());
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nie udało się przetworzyć raportu.');
@@ -168,9 +228,15 @@ export default function RaportBrakowosciPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Porównanie braków MES i raportu brygadzisty"
-        subtitle="Wgraj PDF z MES oraz XLSX z raportem brygadzisty, wybierz arkusz i sprawdź tylko wtryskarkę, detal oraz wartości braków. Dane nie są zapisywane."
+        title="Porownanie brakow MES i raportu brygadzisty"
+        subtitle="Wgraj PDF z MES oraz XLSX z raportem brygadzisty, wybierz arkusz i sprawdz wtryskarke, detal oraz wartosci brakow. Ostatni wynik jest trzymany roboczo i nadpisuje sie przy kolejnym raporcie."
       />
+
+      {latestUpdatedAt && (
+        <div className="rounded-xl border border-border bg-[rgba(255,255,255,0.035)] px-4 py-3 text-sm text-dim">
+          Aktualny zapisany raport: <span className="font-semibold text-title">{formatDateTime(latestUpdatedAt)}</span>
+        </div>
+      )}
 
       <Card className="space-y-4">
         <form className="grid gap-4 lg:grid-cols-[1fr_1fr_auto]" onSubmit={(event) => submit(event, 'sheets')}>
@@ -185,8 +251,6 @@ export default function RaportBrakowosciPage() {
               onChange={(event) => {
                 setMesPdf(event.target.files?.[0] ?? null);
                 setSheets([]);
-                setRows([]);
-                setSummary(null);
               }}
               className="w-full rounded-xl border border-border bg-[rgba(0,0,0,0.36)] px-3 py-3 text-sm text-body file:mr-3 file:rounded-lg file:border-0 file:bg-[rgba(255,122,26,0.18)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-title"
             />
@@ -202,8 +266,6 @@ export default function RaportBrakowosciPage() {
               onChange={(event) => {
                 setBrigadierExcel(event.target.files?.[0] ?? null);
                 setSheets([]);
-                setRows([]);
-                setSummary(null);
               }}
               className="w-full rounded-xl border border-border bg-[rgba(0,0,0,0.36)] px-3 py-3 text-sm text-body file:mr-3 file:rounded-lg file:border-0 file:bg-[rgba(255,122,26,0.18)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-title"
             />
@@ -292,7 +354,7 @@ export default function RaportBrakowosciPage() {
               </div>
               <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-dim">Na co</p>
               <div className="mt-2">
-                <ReasonChips value={row.brigadierReasons || row.brigadierNote} />
+                <ReasonChips value={row.brigadierNote || row.brigadierReasons} showQty />
               </div>
             </div>
 

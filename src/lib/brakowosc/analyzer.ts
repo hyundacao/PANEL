@@ -79,6 +79,7 @@ const normalizeReason = (text: string) => {
   return cleaned.slice(0, 80);
 };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const extractBrigadierScrap = (values: unknown[]) => {
   const fragments: string[] = [];
   const reasons: string[] = [];
@@ -104,6 +105,16 @@ const extractBrigadierScrap = (values: unknown[]) => {
       fragments.push(match[0].trim().replace(/^[-;/|]+|[-;/|]+$/g, ''));
       if (reason) reasons.push(reason);
     }
+    for (const fragment of text.split(/[\n;]+/)) {
+      const match = fragment.trim().match(/^([^\d]{3,80}?)[\s:-]+(\d{1,6})(?:\s*szt\.?)?$/i);
+      if (!match) continue;
+      const reason = normalizeReason(match[1]);
+      if (!reason) continue;
+      const qty = Number(match[2]);
+      total += qty;
+      fragments.push(fragment.trim().replace(/^[-;/|]+|[-;/|]+$/g, ''));
+      reasons.push(reason);
+    }
   }
 
   return {
@@ -117,6 +128,59 @@ const formatReasonList = (reasons: MesReason[]) =>
   reasons
     .map((reason) => `${reason.reason} (${reason.qty} szt., ${reason.sharePct.toFixed(2)}%)`)
     .join('; ');
+
+const extractBrigadierScrapClean = (values: unknown[]) => {
+  const fragments: string[] = [];
+  const reasons: string[] = [];
+  const counted = new Set<string>();
+  let total = 0;
+
+  const addScrap = (qty: number, reason: string, fragment: string) => {
+    if (!qty || qty < 0) return;
+    const cleanedReason = normalizeReason(reason);
+    const cleanedFragment = fragment.trim().replace(/^[-;/|,.]+|[-;/|,.]+$/g, '');
+    const key = `${qty}:${cleanedReason || cleanedFragment.toLowerCase()}`;
+    if (counted.has(key)) return;
+    counted.add(key);
+    total += qty;
+    if (cleanedFragment) fragments.push(cleanedFragment);
+    if (cleanedReason) reasons.push(cleanedReason);
+  };
+
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const text = String(value).trim();
+    if (!text) continue;
+
+    const normalizedText = text.replace(
+      /(\d{1,6})\s+(?=[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]{3})/g,
+      '$1; '
+    );
+    const parts = normalizedText
+      .split(/[\n;,]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    for (const part of parts) {
+      const reasonThenQty = part.match(/^(.{3,90}?)[\s:-]+(\d{1,6})(?:\s*szt\.?)?$/i);
+      if (reasonThenQty && /[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]/.test(reasonThenQty[1])) {
+        addScrap(Number(reasonThenQty[2]), reasonThenQty[1], part);
+        continue;
+      }
+
+      const qtyThenReason = part.match(/^(\d{1,6})\s*(?:szt\.?|sztuk|brak(?:i|ów)?)\s*(.*)$/i);
+      if (qtyThenReason) {
+        addScrap(Number(qtyThenReason[1]), qtyThenReason[2], part);
+      }
+    }
+  }
+
+  return {
+    qty: total || null,
+    note: [...new Set(fragments.filter(Boolean))].join('; '),
+    reasons: [...new Set(reasons.filter(Boolean))].join('; ')
+  };
+};
 
 export const extractMesMachines = (pdfText: string, thresholdPct = 2): Record<string, MesMachine> => {
   const machinePattern =
@@ -164,6 +228,24 @@ export const extractMesMachines = (pdfText: string, thresholdPct = 2): Record<st
     }
 
     if (!currentMachine || !machines[currentMachine]) continue;
+    const normalizedHeader = line
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    if (
+      normalizedHeader === 'powod braku braki udzial' ||
+      normalizedHeader === 'udzial braki powod braku'
+    ) {
+      reasonSection = 'mesReasons';
+      continue;
+    }
+    if (
+      normalizedHeader === 'powod braku (ignorowane) braki udzial' ||
+      normalizedHeader === 'udzial braki (ignorowane) powod braku'
+    ) {
+      reasonSection = 'mesIgnoredReasons';
+      continue;
+    }
     if (line === 'Powód braku Braki Udział' || line === 'Udział Braki Powód braku') {
       reasonSection = 'mesReasons';
       continue;
@@ -233,7 +315,7 @@ export const analyzeBrakowosc = ({
 
     const detail = String(row[1] ?? '').trim();
     const plannedQty = parseNumber(row[2]);
-    const brigadier = extractBrigadierScrap([row[11], row[12], row[13], row[14], row[15], row[16]]);
+    const brigadier = extractBrigadierScrapClean([row[11], row[12], row[13], row[14], row[15], row[16]]);
     const brigadierScrapPct =
       plannedQty && brigadier.qty ? Number(((brigadier.qty / plannedQty) * 100).toFixed(2)) : null;
     const mes = mesMachines[machine];
