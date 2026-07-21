@@ -1,7 +1,18 @@
 'use client';
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { AlertTriangle, FileSpreadsheet, FileText, UploadCloud } from 'lucide-react';
+import { useEffect, useMemo, useState, type ComponentType, type FormEvent } from 'react';
+import {
+  AlertTriangle,
+  BarChart3,
+  CalendarClock,
+  ClipboardList,
+  Download,
+  Factory,
+  FileSpreadsheet,
+  FileText,
+  Gauge,
+  UploadCloud
+} from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -101,14 +112,23 @@ const parseReasonChip = (part: string, showQty = false) => {
 const ReasonChips = ({
   value,
   muted = false,
-  showQty = false
+  showQty = false,
+  tone = 'amber'
 }: {
   value: string;
   muted?: boolean;
   showQty?: boolean;
+  tone?: 'amber' | 'cyan' | 'green' | 'slate';
 }) => {
   const parts = reasonParts(value);
   if (parts.length === 0) return <p className="text-sm text-dim">Brak wpisu</p>;
+
+  const toneClass = {
+    amber: 'border-amber-400/25 bg-amber-400/10 text-amber-100',
+    cyan: 'border-cyan-400/25 bg-cyan-400/10 text-cyan-100',
+    green: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-100',
+    slate: 'border-slate-400/20 bg-slate-400/10 text-slate-100'
+  }[muted ? 'slate' : tone];
 
   return (
     <div className="flex flex-wrap gap-2">
@@ -117,15 +137,10 @@ const ReasonChips = ({
         return (
           <span
             key={part}
-            className={cn(
-              'inline-flex max-w-full flex-col rounded-xl border px-3 py-2 text-sm',
-              muted
-                ? 'border-borderStrong bg-[rgba(148,163,184,0.10)]'
-                : 'border-[rgba(255,122,26,0.35)] bg-[rgba(255,122,26,0.10)]'
-            )}
+            className={cn('inline-flex max-w-full flex-col rounded-lg border px-2.5 py-2 text-sm', toneClass)}
           >
             <strong className="text-title">{label}</strong>
-            {amount && <span className="mt-1 text-xs font-semibold text-brandHover">{amount}</span>}
+            {amount && <span className="mt-1 text-xs font-black tabular-nums opacity-90">{amount}</span>}
           </span>
         );
       })}
@@ -133,24 +148,52 @@ const ReasonChips = ({
   );
 };
 
-const Metric = ({ label, value }: { label: string; value: string }) => (
-  <div className="rounded-xl border border-border bg-[rgba(255,255,255,0.045)] p-3">
-    <p className="text-xs font-semibold uppercase tracking-wide text-dim">{label}</p>
-    <p className="mt-2 text-3xl font-semibold tabular-nums text-title">{value}</p>
+const Metric = ({
+  label,
+  value,
+  icon: Icon,
+  tone = 'slate'
+}: {
+  label: string;
+  value: string;
+  icon?: ComponentType<{ className?: string }>;
+  tone?: 'orange' | 'cyan' | 'emerald' | 'violet' | 'slate';
+}) => {
+  const toneClass = {
+    orange: 'from-orange-500/20 to-orange-500/5 text-orange-200 ring-orange-400/25',
+    cyan: 'from-cyan-500/20 to-cyan-500/5 text-cyan-200 ring-cyan-400/25',
+    emerald: 'from-emerald-500/20 to-emerald-500/5 text-emerald-200 ring-emerald-400/25',
+    violet: 'from-violet-500/20 to-violet-500/5 text-violet-200 ring-violet-400/25',
+    slate: 'from-slate-500/14 to-slate-500/5 text-slate-200 ring-white/10'
+  }[tone];
+
+  return (
+    <div className={cn('rounded-xl bg-gradient-to-br p-4 ring-1', toneClass)}>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-black uppercase tracking-wide text-dim">{label}</p>
+        {Icon && <Icon className="h-4 w-4 opacity-80" />}
+      </div>
+      <p className="mt-2 text-2xl font-black tabular-nums text-title sm:mt-3 sm:text-3xl">{value}</p>
+    </div>
+  );
+};
+
+const MiniMetric = ({ label, value }: { label: string; value: string }) => (
+  <div>
+    <p className="text-[11px] font-black uppercase tracking-wide text-dim">{label}</p>
+    <p className="mt-1 text-2xl font-black tabular-nums text-title">{value}</p>
   </div>
 );
 
 const BrigadierShiftBox = ({ shift }: { shift: BrigadierShiftScrap }) => (
-  <div className="rounded-xl border border-border bg-[rgba(255,255,255,0.035)] p-3">
-    <div className="flex flex-wrap items-start justify-between gap-2">
-      <p className="text-sm font-black uppercase tracking-wide text-title">{shift.label}</p>
-      <div className="text-right">
-        <p className="text-lg font-black tabular-nums text-title">{formatQty(shift.scrapQty)}</p>
-        <p className="text-xs font-semibold text-dim">{formatPct(shift.scrapPct)}</p>
-      </div>
-    </div>
-    <div className="mt-3">
-      <ReasonChips value={shift.note || shift.reasons} showQty />
+  <div className="border-t border-white/10 py-3 first:border-t-0 first:pt-0 last:pb-0">
+    <div className="grid gap-3 md:grid-cols-[96px_92px_92px_1fr] md:items-start">
+      <p className="rounded-md bg-emerald-400/10 px-2 py-1 text-xs font-black uppercase tracking-wide text-emerald-200">
+        {shift.label}
+      </p>
+      <MiniMetric label="Braki" value={formatQty(shift.scrapQty)} />
+      <MiniMetric label="Brakowosc" value={formatPct(shift.scrapPct)} />
+      <ReasonChips value={shift.note || shift.reasons} showQty tone="green" />
     </div>
   </div>
 );
@@ -296,20 +339,38 @@ export default function RaportBrakowosciPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="Porownanie brakow MES i raportu brygadzisty"
-        subtitle="Wgraj PDF z MES oraz XLSX z raportem brygadzisty, wybierz arkusz i sprawdz wtryskarke, detal oraz wartosci brakow. Ostatni wynik jest trzymany roboczo i nadpisuje sie przy kolejnym raporcie."
-      />
-
-      {latestUpdatedAt && (
-        <div className="rounded-xl border border-border bg-[rgba(255,255,255,0.035)] px-4 py-3 text-sm text-dim">
-          Aktualny zapisany raport: <span className="font-semibold text-title">{formatDateTime(latestUpdatedAt)}</span>
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(14,165,233,0.14),rgba(34,197,94,0.08)_42%,rgba(255,122,26,0.12))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+        <PageHeader
+          title="Raport brakowosci"
+          subtitle="Porownanie raportu MES z raportem brygadzisty. Jeden aktualny wynik, nadpisywany po kolejnym przeliczeniu."
+        />
+        <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-wrap items-center gap-3 text-sm text-dim">
+            <span className="inline-flex items-center gap-2 rounded-lg bg-black/20 px-3 py-2 ring-1 ring-white/10">
+              <CalendarClock className="h-4 w-4 text-cyan-200" />
+              Aktualny raport: <strong className="text-title">{latestUpdatedAt ? formatDateTime(latestUpdatedAt) : 'brak zapisu'}</strong>
+            </span>
+            {selectedSheet && (
+              <span className="inline-flex items-center gap-2 rounded-lg bg-black/20 px-3 py-2 ring-1 ring-white/10">
+                <ClipboardList className="h-4 w-4 text-emerald-200" />
+                Arkusz: <strong className="text-title">{selectedSheet}</strong>
+              </span>
+            )}
+          </div>
+          {rows.length > 0 && (
+            <Button asChild variant="outline" className="border-cyan-400/45 text-cyan-100 hover:bg-cyan-400/10">
+              <a href={csvHref} download="raport-brakowosci.csv">
+                <Download className="mr-2 h-4 w-4" />
+                Pobierz CSV
+              </a>
+            </Button>
+          )}
         </div>
-      )}
+      </div>
 
-      <Card className="space-y-4">
-        <form className="grid gap-4 lg:grid-cols-[1fr_1fr_auto]" onSubmit={(event) => submit(event, 'sheets')}>
+      <Card className="space-y-4 border-white/10 bg-[rgba(8,10,14,0.76)] p-3 sm:space-y-5 sm:p-5">
+        <form className="grid gap-4 xl:grid-cols-[1fr_1fr_auto]" onSubmit={(event) => submit(event, 'sheets')}>
           <label className="space-y-2">
             <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-dim">
               <FileText className="h-4 w-4" />
@@ -340,14 +401,14 @@ export default function RaportBrakowosciPage() {
               className="w-full rounded-xl border border-border bg-[rgba(0,0,0,0.36)] px-3 py-3 text-sm text-body file:mr-3 file:rounded-lg file:border-0 file:bg-[rgba(255,122,26,0.18)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-title"
             />
           </label>
-          <Button type="submit" disabled={!canLoadSheets || loading} className="self-end">
+          <Button type="submit" disabled={!canLoadSheets || loading} className="w-full self-end xl:w-auto">
             <UploadCloud className="mr-2 h-4 w-4" />
             Wczytaj arkusze
           </Button>
         </form>
 
         {sheets.length > 0 && (
-          <form className="flex flex-col gap-3 md:flex-row md:items-end" onSubmit={(event) => submit(event, 'analyze')}>
+          <form className="flex flex-col gap-3 border-t border-white/10 pt-4 md:flex-row md:items-end" onSubmit={(event) => submit(event, 'analyze')}>
             <label className="w-full space-y-2 md:max-w-sm">
               <span className="text-xs font-semibold uppercase tracking-wide text-dim">Arkusz z Excela</span>
               <select
@@ -362,7 +423,7 @@ export default function RaportBrakowosciPage() {
                 ))}
               </select>
             </label>
-            <Button type="submit" disabled={!canAnalyze || loading}>
+            <Button type="submit" disabled={!canAnalyze || loading} className="w-full md:w-auto">
               Pokaż raport
             </Button>
           </form>
@@ -377,21 +438,11 @@ export default function RaportBrakowosciPage() {
       </Card>
 
       {summary && (
-        <div className="grid gap-3 md:grid-cols-4">
-          <Metric label="Wyniki" value={formatQty(summary.rowCount)} />
-          <Metric label="Wtryskarki" value={formatQty(summary.machineCount)} />
-          <Metric label="Braki MES" value={formatQty(summary.mesScrapTotal)} />
-          <Metric label="Braki brygadzisty" value={formatQty(summary.brigadierScrapTotal)} />
-        </div>
-      )}
-
-      {rows.length > 0 && (
-        <div className="flex justify-end">
-          <Button asChild variant="outline">
-            <a href={csvHref} download="raport-brakowosci.csv">
-              Pobierz CSV
-            </a>
-          </Button>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Metric label="Wyniki" value={formatQty(summary.rowCount)} icon={BarChart3} tone="violet" />
+          <Metric label="Wtryskarki" value={formatQty(summary.machineCount)} icon={Factory} tone="slate" />
+          <Metric label="Braki MES" value={formatQty(summary.mesScrapTotal)} icon={Gauge} tone="cyan" />
+          <Metric label="Braki brygadzisty" value={formatQty(summary.brigadierScrapTotal)} icon={ClipboardList} tone="emerald" />
         </div>
       )}
 
@@ -399,24 +450,24 @@ export default function RaportBrakowosciPage() {
         {rows.map((row) => (
           <Card
             key={`${row.sheet}-${row.machine}-${row.detail}`}
-            className="grid gap-4 border-borderStrong bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.018))] xl:grid-cols-[1fr_0.75fr_1.1fr]"
+            className="grid gap-3 border-white/10 bg-[rgba(8,10,14,0.84)] p-3 sm:gap-4 sm:p-4 xl:grid-cols-[1fr_0.85fr_1fr]"
           >
-            <div className="rounded-xl border-l-4 border-brand bg-[rgba(0,0,0,0.18)] p-4">
+            <div className="rounded-xl border-l-4 border-orange-400 bg-orange-400/5 p-3 sm:p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="rounded-xl bg-[rgba(255,122,26,0.16)] px-3 py-2 text-2xl font-black text-brandHover">
+                <span className="rounded-lg bg-orange-500/18 px-3 py-2 text-xl font-black text-orange-200 sm:text-2xl">
                   {row.machine}
                 </span>
                 <span className="rounded-full border border-border px-3 py-1 text-xs font-semibold text-dim">
                   {row.sheet}
                 </span>
               </div>
-              <h2 className="mt-4 text-xl font-semibold leading-snug text-title">{row.detail}</h2>
+              <h2 className="mt-3 text-base font-black leading-snug text-title sm:mt-4 sm:text-xl">{row.detail}</h2>
               <p className="mt-2 text-sm text-dim">
                 Indeks: <span className="font-semibold text-body">{row.index || '-'}</span>
               </p>
             </div>
 
-            <div className="rounded-xl border-l-4 border-[var(--success)] bg-[rgba(0,0,0,0.18)] p-4">
+            <div className="rounded-xl border-l-4 border-emerald-400 bg-emerald-400/5 p-3 sm:p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">Brygadzista</p>
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <Metric label="Braki" value={formatQty(row.brigadierScrapQty)} />
@@ -442,7 +493,7 @@ export default function RaportBrakowosciPage() {
               </div>
             </div>
 
-            <div className="rounded-xl border-l-4 border-[#38bdf8] bg-[rgba(0,0,0,0.18)] p-4">
+            <div className="rounded-xl border-l-4 border-cyan-400 bg-cyan-400/5 p-3 sm:p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">MES</p>
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <Metric label="Braki" value={formatQty(row.mesScrapQty)} />
