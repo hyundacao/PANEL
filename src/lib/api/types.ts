@@ -168,6 +168,12 @@ export type LocationDetailItem = {
   todayQty: number | null;
   confirmed: boolean;
   comment?: string;
+  measurements?: Array<{
+    id: string;
+    qty: number;
+    comment?: string;
+    createdAt: string;
+  }>;
 };
 
 export type OriginalInventoryEntry = {

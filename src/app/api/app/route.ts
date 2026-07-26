@@ -883,6 +883,9 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requireAnyTabAccess(user, 'PRZEMIALY', ['spis']);
       return;
     case 'upsertEntry':
+    case 'addInventoryMeasure':
+    case 'updateInventoryMeasure':
+    case 'deleteInventoryMeasure':
     case 'confirmNoChangeEntry':
     case 'confirmNoChangeLocation':
     case 'closeSpis':
@@ -1095,6 +1098,9 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
 
 const AUDITABLE_ACTIONS = new Set<string>([
   'upsertEntry',
+  'addInventoryMeasure',
+  'updateInventoryMeasure',
+  'deleteInventoryMeasure',
   'confirmNoChangeEntry',
   'confirmNoChangeLocation',
   'closeSpis',
@@ -1201,6 +1207,9 @@ const ERP_AUDIT_ACTIONS = new Set<string>([
 
 const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   upsertEntry: 'Spis: zapis pozycji',
+  addInventoryMeasure: 'Spis: dodanie pomiaru',
+  updateInventoryMeasure: 'Spis: korekta pomiaru',
+  deleteInventoryMeasure: 'Spis: usunięcie pomiaru',
   confirmNoChangeEntry: 'Spis: potwierdzenie bez zmian',
   confirmNoChangeLocation: 'Spis: potwierdzenie lokalizacji',
   addTransfer: 'Przesuniecia: nowy ruch',
@@ -1427,6 +1436,9 @@ const getAuditQty = (action: string, payload: any, data: unknown) => {
 
   if (
     action === 'upsertEntry' ||
+    action === 'addInventoryMeasure' ||
+    action === 'updateInventoryMeasure' ||
+    action === 'deleteInventoryMeasure' ||
     action === 'addTransfer' ||
     action === 'addMixedMaterial' ||
     action === 'removeMixedMaterial' ||
@@ -2599,6 +2611,126 @@ const fetchEntries = async (fromKey: string, toKey?: string) => {
   return data ?? [];
 };
 
+const isMissingDailyMeasurementsTableError = (error: any) =>
+  error?.code === '42P01' ||
+  error?.code === 'PGRST205' ||
+  String(error?.message ?? '').includes('daily_entry_measurements');
+
+const fetchEntryMeasurements = async (dateKey: string, locationId: string) => {
+  const { data, error } = await supabaseAdmin
+    .from('daily_entry_measurements')
+    .select('id, date_key, location_id, material_id, qty, comment, created_at')
+    .eq('date_key', dateKey)
+    .eq('location_id', locationId)
+    .order('created_at', { ascending: true });
+  if (error) {
+    if (isMissingDailyMeasurementsTableError(error)) {
+      return [];
+    }
+    throw error;
+  }
+  return data ?? [];
+};
+
+const deleteEntryMeasurementsIfAvailable = async (
+  dateKey: string,
+  locationId: string,
+  materialId?: string
+) => {
+  let query = supabaseAdmin
+    .from('daily_entry_measurements')
+    .delete()
+    .eq('date_key', dateKey)
+    .eq('location_id', locationId);
+  if (materialId) {
+    query = query.eq('material_id', materialId);
+  }
+  const { error } = await query;
+  if (error && !isMissingDailyMeasurementsTableError(error)) throw error;
+};
+
+const insertEntryMeasurementsIfAvailable = async (rows: any[]) => {
+  if (rows.length === 0) return;
+  const { error } = await supabaseAdmin.from('daily_entry_measurements').insert(rows);
+  if (error && !isMissingDailyMeasurementsTableError(error)) throw error;
+};
+
+const ensureMeasurementRowsForEntry = async (
+  dateKey: string,
+  locationId: string,
+  materialId: string,
+  actorName: string
+) => {
+  const { data: measurementRows, error: measurementError } = await supabaseAdmin
+    .from('daily_entry_measurements')
+    .select('id')
+    .eq('date_key', dateKey)
+    .eq('location_id', locationId)
+    .eq('material_id', materialId)
+    .limit(1);
+  if (measurementError) {
+    if (isMissingDailyMeasurementsTableError(measurementError)) return;
+    throw measurementError;
+  }
+  if ((measurementRows ?? []).length > 0) return;
+
+  const { data: entry, error: entryError } = await supabaseAdmin
+    .from('daily_entries')
+    .select('qty, comment, confirmed')
+    .eq('date_key', dateKey)
+    .eq('location_id', locationId)
+    .eq('material_id', materialId)
+    .maybeSingle();
+  if (entryError) throw entryError;
+  if (!entry || toNumber(entry.qty) <= 0) return;
+
+  const { error: insertError } = await supabaseAdmin.from('daily_entry_measurements').insert({
+    date_key: dateKey,
+    location_id: locationId,
+    material_id: materialId,
+    qty: toNumber(entry.qty),
+    comment: entry.comment ?? null,
+    created_by: actorName
+  });
+  if (insertError && !isMissingDailyMeasurementsTableError(insertError)) throw insertError;
+};
+
+const syncEntryFromMeasurements = async (
+  dateKey: string,
+  locationId: string,
+  materialId: string
+) => {
+  const { data: measurements, error: measurementsError } = await supabaseAdmin
+    .from('daily_entry_measurements')
+    .select('qty, comment')
+    .eq('date_key', dateKey)
+    .eq('location_id', locationId)
+    .eq('material_id', materialId);
+  if (measurementsError) throw measurementsError;
+
+  const totalQty = (measurements ?? []).reduce((sum, row: any) => sum + toNumber(row.qty), 0);
+  const comments = (measurements ?? [])
+    .map((row: any) => String(row.comment ?? '').trim())
+    .filter(Boolean);
+  const combinedComment = comments.length > 0 ? comments.join(' | ') : null;
+
+  const { error } = await supabaseAdmin
+    .from('daily_entries')
+    .upsert(
+      {
+        date_key: dateKey,
+        location_id: locationId,
+        material_id: materialId,
+        qty: totalQty,
+        confirmed: true,
+        comment: combinedComment,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'date_key,location_id,material_id' }
+    );
+  if (error) throw error;
+};
+
 const fetchLatestEntriesByLocation = async (
   locationIds: string[],
   upToDateKey: string
@@ -2967,19 +3099,34 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const dateKey = String(payload?.date ?? getTodayKey());
       if (!locationId) throw new Error('NOT_FOUND');
       const yesterdayKey = addDays(dateKey, -1);
-      const [materials, todayEntriesRows, latestPreviousEntries] = await Promise.all([
+      const [materials, todayEntriesRows, latestPreviousEntries, measurementRows] = await Promise.all([
         fetchMaterials(),
         fetchEntries(dateKey),
-        fetchLatestEntriesByLocation([locationId], yesterdayKey)
+        fetchLatestEntriesByLocation([locationId], yesterdayKey),
+        fetchEntryMeasurements(dateKey, locationId)
       ]);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const todayEntries = buildEntriesByDate(todayEntriesRows)[dateKey]?.[locationId] ?? {};
+      const measurementsByMaterial = new Map<string, Array<{ id: string; qty: number; comment?: string; createdAt: string }>>();
+      measurementRows.forEach((row: any) => {
+        const materialId = String(row.material_id ?? '');
+        if (!materialId) return;
+        const bucket = measurementsByMaterial.get(materialId) ?? [];
+        bucket.push({
+          id: String(row.id),
+          qty: toNumber(row.qty),
+          comment: row.comment ?? undefined,
+          createdAt: row.created_at
+        });
+        measurementsByMaterial.set(materialId, bucket);
+      });
       const previousEntries = Object.fromEntries(
         Object.entries(latestPreviousEntries[locationId] ?? {}).filter(([, entry]) => (entry?.qty ?? 0) > 0)
       );
       const union = new Set(materials.filter((material) => material.isActive).map((material) => material.id));
       Object.keys(todayEntries).forEach((materialId) => union.add(materialId));
       Object.keys(previousEntries).forEach((materialId) => union.add(materialId));
+      measurementRows.forEach((row: any) => union.add(String(row.material_id)));
       return [...union].map((materialId) => {
         const material = materialMap.get(materialId);
         return {
@@ -2989,7 +3136,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           yesterdayQty: previousEntries[materialId]?.qty ?? 0,
           todayQty: todayEntries[materialId]?.qty ?? null,
           confirmed: todayEntries[materialId]?.confirmed ?? false,
-          comment: todayEntries[materialId]?.comment
+          comment: todayEntries[materialId]?.comment,
+          measurements: measurementsByMaterial.get(materialId) ?? []
         } satisfies LocationDetailItem;
       });
     }
@@ -3028,11 +3176,121 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           { onConflict: 'date_key,location_id,material_id' }
         );
       if (error) throw error;
+      await deleteEntryMeasurementsIfAvailable(dateKey, locationId, materialId);
+      if (qty > 0) {
+        await insertEntryMeasurementsIfAvailable([
+          {
+            date_key: dateKey,
+            location_id: locationId,
+            material_id: materialId,
+            qty,
+            comment: nextComment,
+            created_by: getActorName(currentUser)
+          }
+        ]);
+      }
       await supabaseAdmin
         .from('daily_location_status')
         .delete()
         .eq('date_key', dateKey)
         .eq('location_id', locationId);
+      return { ok: true };
+    }
+    case 'addInventoryMeasure': {
+      await ensureSimplifiedSpisStructure();
+      const locationId = String(payload?.locationId ?? '');
+      const materialId = String(payload?.materialId ?? '');
+      const qty = toNumber(payload?.qty);
+      if (!locationId || !materialId) throw new Error('NOT_FOUND');
+      if (qty <= 0) throw new Error('INVALID_QTY');
+      const dateKey = getTodayKey();
+      const trimmedComment = String(payload?.comment ?? '').trim();
+      await ensureMeasurementRowsForEntry(dateKey, locationId, materialId, getActorName(currentUser));
+      const { error: insertError } = await supabaseAdmin.from('daily_entry_measurements').insert({
+        date_key: dateKey,
+        location_id: locationId,
+        material_id: materialId,
+        qty,
+        comment: trimmedComment || null,
+        created_by: getActorName(currentUser)
+      });
+      if (insertError && !isMissingDailyMeasurementsTableError(insertError)) throw insertError;
+      if (insertError) {
+        const { data: existing, error: existingError } = await supabaseAdmin
+          .from('daily_entries')
+          .select('qty, comment')
+          .eq('date_key', dateKey)
+          .eq('location_id', locationId)
+          .eq('material_id', materialId)
+          .maybeSingle();
+        if (existingError) throw existingError;
+        const existingComment = String(existing?.comment ?? '').trim();
+        const comment = [existingComment, trimmedComment].filter(Boolean).join(' | ') || null;
+        const { error: fallbackError } = await supabaseAdmin.from('daily_entries').upsert(
+          {
+            date_key: dateKey,
+            location_id: locationId,
+            material_id: materialId,
+            qty: toNumber(existing?.qty) + qty,
+            confirmed: true,
+            comment,
+            updated_at: new Date().toISOString()
+          },
+          { onConflict: 'date_key,location_id,material_id' }
+        );
+        if (fallbackError) throw fallbackError;
+      } else {
+        await syncEntryFromMeasurements(dateKey, locationId, materialId);
+      }
+      await supabaseAdmin
+        .from('daily_location_status')
+        .delete()
+        .eq('date_key', dateKey)
+        .eq('location_id', locationId);
+      return { ok: true };
+    }
+    case 'updateInventoryMeasure': {
+      const locationId = String(payload?.locationId ?? '');
+      const materialId = String(payload?.materialId ?? '');
+      const measurementId = String(payload?.measurementId ?? '');
+      const qty = toNumber(payload?.qty);
+      if (!locationId || !materialId || !measurementId) throw new Error('NOT_FOUND');
+      if (qty <= 0) throw new Error('INVALID_QTY');
+      const dateKey = getTodayKey();
+      const comment = String(payload?.comment ?? '').trim() || null;
+      const { data: measurement, error: measurementError } = await supabaseAdmin
+        .from('daily_entry_measurements')
+        .select('id')
+        .eq('id', measurementId)
+        .eq('date_key', dateKey)
+        .eq('location_id', locationId)
+        .eq('material_id', materialId)
+        .maybeSingle();
+      if (measurementError) throw measurementError;
+      if (!measurement) throw new Error('NOT_FOUND');
+      const { error: updateError } = await supabaseAdmin
+        .from('daily_entry_measurements')
+        .update({ qty, comment })
+        .eq('id', measurementId);
+      if (updateError) throw updateError;
+      await syncEntryFromMeasurements(dateKey, locationId, materialId);
+      return { ok: true };
+    }
+    case 'deleteInventoryMeasure': {
+      const locationId = String(payload?.locationId ?? '');
+      const materialId = String(payload?.materialId ?? '');
+      const measurementId = String(payload?.measurementId ?? '');
+      if (!locationId || !materialId || !measurementId) throw new Error('NOT_FOUND');
+      const dateKey = getTodayKey();
+      const { error: deleteError } = await supabaseAdmin
+        .from('daily_entry_measurements')
+        .delete()
+        .eq('id', measurementId)
+        .eq('date_key', dateKey)
+        .eq('location_id', locationId)
+        .eq('material_id', materialId);
+      if (deleteError) throw deleteError;
+      await syncEntryFromMeasurements(dateKey, locationId, materialId);
       return { ok: true };
     }
     case 'confirmNoChangeEntry': {
@@ -3066,6 +3324,19 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           { onConflict: 'date_key,location_id,material_id' }
         );
       if (error) throw error;
+      await deleteEntryMeasurementsIfAvailable(dateKey, locationId, materialId);
+      if ((previousEntry?.qty ?? 0) > 0) {
+        await insertEntryMeasurementsIfAvailable([
+          {
+            date_key: dateKey,
+            location_id: locationId,
+            material_id: materialId,
+            qty: previousEntry?.qty ?? 0,
+            comment: existing?.comment ?? null,
+            created_by: getActorName(currentUser)
+          }
+        ]);
+      }
       return { ok: true };
     }
     case 'confirmNoChangeLocation': {
@@ -3094,6 +3365,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .delete()
         .eq('date_key', dateKey)
         .eq('location_id', locationId);
+      await deleteEntryMeasurementsIfAvailable(dateKey, locationId);
       const { error: insertError } = await supabaseAdmin.from('daily_entries').insert(
         Object.entries(previousEntries).map(([materialId, entry]) => ({
           date_key: dateKey,
@@ -3106,6 +3378,17 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         }))
       );
       if (insertError) throw insertError;
+      const previousMeasurementRows = Object.entries(previousEntries)
+        .filter(([, entry]) => (entry?.qty ?? 0) > 0)
+        .map(([materialId, entry]) => ({
+          date_key: dateKey,
+          location_id: locationId,
+          material_id: materialId,
+          qty: entry?.qty ?? 0,
+          comment: null,
+          created_by: getActorName(currentUser)
+        }));
+      await insertEntryMeasurementsIfAvailable(previousMeasurementRows);
       await supabaseAdmin
         .from('daily_location_status')
         .delete()

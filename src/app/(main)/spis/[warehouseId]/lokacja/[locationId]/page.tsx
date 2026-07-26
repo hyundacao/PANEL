@@ -1,19 +1,20 @@
-'use client';
+﻿'use client';
 
 import type { FocusEvent } from 'react';
 import { useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  addInventoryMeasure,
   addMaterial,
-  confirmNoChangeEntry,
-  confirmNoChangeLocation,
+  deleteInventoryMeasure,
   getCatalog,
   getLocations,
   getLocationDetail,
   getTodayKey,
   getWarehouses,
   removeMaterial,
+  updateInventoryMeasure,
   upsertEntry
 } from '@/lib/api';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -26,7 +27,7 @@ import { useUiStore } from '@/lib/store/ui';
 import { isReadOnly } from '@/lib/auth/access';
 import { useToastStore } from '@/components/ui/Toast';
 import { formatKg, parseQtyInput } from '@/lib/utils/format';
-import { CheckCircle2, ClipboardList, PackagePlus, Search } from 'lucide-react';
+import { ClipboardList, PackagePlus, Search, X } from 'lucide-react';
 
 type MaterialFormState = {
   materialId: string | null;
@@ -46,7 +47,7 @@ const initialMaterialState: MaterialFormState = {
   manualName: ''
 };
 
-type EntryDraft = {
+type MeasureDraft = {
   qty: string;
   comment: string;
 };
@@ -76,7 +77,11 @@ export default function LocationDetailPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<MaterialFormState>(initialMaterialState);
   const [catalogQuery, setCatalogQuery] = useState('');
-  const [drafts, setDrafts] = useState<Record<string, EntryDraft>>({});
+  const [measureDrafts, setMeasureDrafts] = useState<Record<string, MeasureDraft>>({});
+  const [measurementEdits, setMeasurementEdits] = useState<Record<string, MeasureDraft>>({});
+  const [editingMeasurementId, setEditingMeasurementId] = useState<string | null>(null);
+  const [editingTotalMaterialId, setEditingTotalMaterialId] = useState<string | null>(null);
+  const [totalEditDrafts, setTotalEditDrafts] = useState<Record<string, string>>({});
   const glowClass = 'ring-2 ring-[rgba(255,122,26,0.45)] shadow-[0_0_0_3px_rgba(255,122,26,0.18)]';
 
   const unlockInput = (event: FocusEvent<HTMLInputElement>) => {
@@ -135,6 +140,54 @@ export default function LocationDetailPage() {
     }
   });
 
+  const addMeasureMutation = useMutation({
+    mutationFn: addInventoryMeasure,
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['location-detail', warehouseId, locationId, today] });
+      queryClient.invalidateQueries({ queryKey: ['locations', warehouseId, today] });
+      invalidateDashboard();
+      setMeasureDrafts((prev) => ({
+        ...prev,
+        [variables.materialId]: { qty: '', comment: '' }
+      }));
+      toast({ title: 'Dopisano pomiar', tone: 'success' });
+    },
+    onError: () => {
+      toast({
+        title: 'Nie dopisano pomiaru',
+        description: 'Sprawdź ilość i spróbuj ponownie.',
+        tone: 'error'
+      });
+    }
+  });
+
+  const updateMeasureMutation = useMutation({
+    mutationFn: updateInventoryMeasure,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['location-detail', warehouseId, locationId, today] });
+      queryClient.invalidateQueries({ queryKey: ['locations', warehouseId, today] });
+      invalidateDashboard();
+      setEditingMeasurementId(null);
+      toast({ title: 'Poprawiono pomiar', tone: 'success' });
+    },
+    onError: () => {
+      toast({ title: 'Nie poprawiono pomiaru', description: 'Sprawdź ilość i spróbuj ponownie.', tone: 'error' });
+    }
+  });
+
+  const deleteMeasureMutation = useMutation({
+    mutationFn: deleteInventoryMeasure,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['location-detail', warehouseId, locationId, today] });
+      queryClient.invalidateQueries({ queryKey: ['locations', warehouseId, today] });
+      invalidateDashboard();
+      toast({ title: 'Usunięto pomiar', tone: 'success' });
+    },
+    onError: () => {
+      toast({ title: 'Nie usunięto pomiaru', description: 'Spróbuj ponownie.', tone: 'error' });
+    }
+  });
+
   const addMaterialMutation = useMutation({
     mutationFn: addMaterial,
     onSuccess: (material) => {
@@ -174,62 +227,91 @@ export default function LocationDetailPage() {
     return items.filter((item) => (item.todayQty ?? item.yesterdayQty) !== 0);
   }, [detail, inventoryQuery, showZero]);
 
-  const getOriginalDraft = (item: { todayQty: number | null; comment?: string }): EntryDraft => ({
-    qty: item.todayQty === null ? '' : String(item.todayQty),
-    comment: item.comment ?? ''
-  });
+  const getMeasureDraft = (materialId: string): MeasureDraft =>
+    measureDrafts[materialId] ?? { qty: '', comment: '' };
 
-  const getDraft = (item: { materialId: string; todayQty: number | null; comment?: string }) =>
-    drafts[item.materialId] ?? getOriginalDraft(item);
-
-  const updateDraft = (
-    item: { materialId: string; todayQty: number | null; comment?: string },
-    patch: Partial<EntryDraft>
-  ) => {
-    setDrafts((prev) => ({
+  const updateMeasureDraft = (materialId: string, patch: Partial<MeasureDraft>) => {
+    setMeasureDrafts((prev) => ({
       ...prev,
-      [item.materialId]: {
-        ...(prev[item.materialId] ?? getOriginalDraft(item)),
+      [materialId]: {
+        ...(prev[materialId] ?? { qty: '', comment: '' }),
         ...patch
       }
     }));
   };
 
-  const isDraftChanged = (item: { materialId: string; todayQty: number | null; comment?: string }) => {
-    const draft = getDraft(item);
-    const originalQty = item.todayQty === null ? '' : String(item.todayQty);
-    const originalComment = item.comment ?? '';
-    return draft.qty !== originalQty || draft.comment !== originalComment;
+  const getMeasurementEdit = (measurement: { id: string; qty: number; comment?: string }): MeasureDraft =>
+    measurementEdits[measurement.id] ?? { qty: String(measurement.qty), comment: measurement.comment ?? '' };
+
+  const updateMeasurementEdit = (measurementId: string, patch: Partial<MeasureDraft>) => {
+    setMeasurementEdits((prev) => ({
+      ...prev,
+      [measurementId]: { ...(prev[measurementId] ?? { qty: '', comment: '' }), ...patch }
+    }));
   };
 
-  const handleSaveDraft = async (item: { materialId: string; todayQty: number | null; comment?: string }) => {
-    const draft = getDraft(item);
+  const startEditingMeasurement = (measurement: { id: string; qty: number; comment?: string }) => {
+    setMeasurementEdits((prev) => ({
+      ...prev,
+      [measurement.id]: { qty: String(measurement.qty), comment: measurement.comment ?? '' }
+    }));
+    setEditingMeasurementId(measurement.id);
+  };
+
+  const saveMeasurementEdit = async (materialId: string, measurement: { id: string; qty: number; comment?: string }) => {
+    const draft = getMeasurementEdit(measurement);
     const qty = parseQtyInput(draft.qty);
-    if (qty === null) {
-      toast({ title: 'Nieprawidłowa ilość', description: 'Wpisz poprawną ilość w kg.', tone: 'error' });
+    if (qty === null || qty <= 0) {
+      toast({ title: 'Nieprawidłowa ilość', description: 'Wpisz ilość większą od zera.', tone: 'error' });
       return;
     }
-    await mutation.mutateAsync({ locationId, materialId: item.materialId, qty, comment: draft.comment });
-    setDrafts((prev) => {
-      const next = { ...prev };
-      delete next[item.materialId];
-      return next;
+    await updateMeasureMutation.mutateAsync({
+      locationId,
+      materialId,
+      measurementId: measurement.id,
+      qty,
+      comment: draft.comment
     });
   };
 
-  const handleNoChange = async (materialId: string) => {
-    await confirmNoChangeEntry({ locationId, materialId });
-    queryClient.invalidateQueries({ queryKey: ['location-detail', warehouseId, locationId, today] });
-    invalidateDashboard();
-    toast({ title: 'Ustawiono bez zmian', tone: 'success' });
+  const startEditingTotal = (materialId: string, currentQty: number) => {
+    setTotalEditDrafts((prev) => ({ ...prev, [materialId]: String(currentQty) }));
+    setEditingTotalMaterialId(materialId);
   };
 
-  const handleNoChangeLocation = async () => {
-    await confirmNoChangeLocation(locationId);
-    queryClient.invalidateQueries({ queryKey: ['location-detail', warehouseId, locationId, today] });
-    queryClient.invalidateQueries({ queryKey: ['locations', warehouseId, today] });
-    invalidateDashboard();
-    toast({ title: 'Zatwierdzono lokację', tone: 'success' });
+  const saveTotalEdit = async (item: { materialId: string; todayQty: number | null; comment?: string }) => {
+    const qty = parseQtyInput(totalEditDrafts[item.materialId] ?? '');
+    if (qty === null || qty < 0) {
+      toast({ title: 'Nieprawidłowa ilość', description: 'Wpisz poprawną ilość w kg.', tone: 'error' });
+      return;
+    }
+    await mutation.mutateAsync({ locationId, materialId: item.materialId, qty, comment: item.comment });
+    setEditingTotalMaterialId(null);
+  };
+
+  const deleteMeasurement = async (materialId: string, measurementId: string) => {
+    if (!window.confirm('Usunąć ten pomiar? Suma dzisiejszego spisu zostanie przeliczona.')) return;
+    await deleteMeasureMutation.mutateAsync({ locationId, materialId, measurementId });
+  };
+
+  const deleteTotal = async (item: { materialId: string; comment?: string }) => {
+    if (!window.confirm('Usunąć dzisiejszy wpis dla tego przemiału?')) return;
+    await mutation.mutateAsync({ locationId, materialId: item.materialId, qty: 0, comment: item.comment });
+  };
+
+  const handleAddMeasure = async (item: { materialId: string }) => {
+    const draft = getMeasureDraft(item.materialId);
+    const qty = parseQtyInput(draft.qty);
+    if (qty === null || qty <= 0) {
+      toast({ title: 'Nieprawidłowa ilość', description: 'Wpisz ilość większą od zera.', tone: 'error' });
+      return;
+    }
+    await addMeasureMutation.mutateAsync({
+      locationId,
+      materialId: item.materialId,
+      qty,
+      comment: draft.comment
+    });
   };
 
   const catalogList = useMemo(() => catalog ?? [], [catalog]);
@@ -293,15 +375,6 @@ export default function LocationDetailPage() {
         actions={
           <>
             <Button
-              variant="secondary"
-              onClick={handleNoChangeLocation}
-              disabled={!canEdit}
-              className={`${glowClass} min-h-12 w-full px-3 text-xs sm:w-auto sm:text-sm`}
-            >
-              <CheckCircle2 className="mr-2 h-4 w-4" />
-              Zatwierdź bez zmian
-            </Button>
-            <Button
               disabled={!canEdit}
               onClick={() => setDialogOpen(true)}
               className={`${glowClass} min-h-12 w-full px-3 text-xs sm:w-auto sm:text-sm`}
@@ -319,7 +392,7 @@ export default function LocationDetailPage() {
                     className="absolute right-4 top-4 text-dim hover:text-title"
                     aria-label="Zamknij"
                   >
-                    ×
+                    <X className="h-5 w-5" />
                   </button>
                   <div className="space-y-4">
                     <div>
@@ -516,7 +589,7 @@ export default function LocationDetailPage() {
             </div>
             <p className="mt-1 text-sm text-muted">
               {hasTodayEntries
-                ? 'Uzupełnij pozostałe pozycje i zatwierdź stan obszaru.'
+                ? 'Dopisuj kolejne miejsca i pilnuj, zeby dzisiejsza suma zgadzala sie ze spisem hali.'
                 : 'Rozpocznij od dodania lub przeliczenia pierwszego przemiału.'}
             </p>
           </div>
@@ -584,12 +657,12 @@ export default function LocationDetailPage() {
           </Button>
         </div>
         {visibleItems.length > 0 && (
-        <div className="hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_240px] gap-3 px-3 text-xs font-bold uppercase tracking-wide text-dim md:grid">
-          <span>Przemiał</span>
+        <div className="hidden grid-cols-[minmax(220px,1.7fr)_110px_150px_minmax(240px,1.7fr)_240px] gap-3 px-3 text-xs font-bold uppercase tracking-wide text-dim md:grid">
+          <span>Przemial</span>
           <span>Ostatni spis</span>
-          <span>Dziś</span>
-          <span>Komentarz</span>
-          <span>Akcje</span>
+          <span>Suma dzisiejszego spisu</span>
+          <span>Dzisiejsze pomiary</span>
+          <span>Dodaj ilosc</span>
         </div>
         )}
         {visibleItems.length === 0 && (
@@ -630,93 +703,186 @@ export default function LocationDetailPage() {
                 <p className="mt-1 break-all text-xs text-dim">{item.code}</p>
               </div>
 
-              <div className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div className="min-w-0 rounded-lg border border-border bg-[var(--surface-1)] px-3 py-2.5">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
                     Ostatni spis
                   </p>
                   <p className="mt-1 truncate text-base font-bold text-body tabular-nums">{formatKg(item.yesterdayQty)}</p>
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 rounded-lg border border-border bg-[var(--surface-1)] px-3 py-2.5">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
-                    Dzis
+                    Suma dzisiejszego spisu
                   </p>
-                  {!canEdit ? (
-                    <p className="text-sm text-body">{item.todayQty ?? '-'} kg</p>
-                  ) : (
-                    <Input
-                      readOnly
-                      value={getDraft(item).qty}
-                      placeholder="0"
-                      type="text"
-                      inputMode="decimal"
-                      autoComplete="off"
-                      autoCorrect="off"
-                      autoCapitalize="off"
-                      spellCheck={false}
-                      enterKeyHint="done"
-                      data-lpignore="true"
-                      data-1p-ignore="true"
-                      data-form-type="other"
-                      onFocus={unlockInput}
-                      onChange={(event) => updateDraft(item, { qty: event.target.value })}
-                      onBlur={(event) => {
-                        relockInput(event);
-                      }}
-                    />
-                  )}
-                </div>
-                <div className="col-span-2 min-w-0">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
-                    Komentarz
-                  </p>
-                  {!canEdit ? (
-                    <p className="text-sm text-body">{item.comment ?? '-'}</p>
-                  ) : (
-                    <Input
-                      readOnly
-                      value={getDraft(item).comment}
-                      placeholder="Komentarz"
-                      type="text"
-                      autoComplete="off"
-                      autoCorrect="off"
-                      autoCapitalize="sentences"
-                      spellCheck={false}
-                      enterKeyHint="done"
-                      data-lpignore="true"
-                      data-1p-ignore="true"
-                      data-form-type="other"
-                      onFocus={unlockInput}
-                      onChange={(event) => updateDraft(item, { comment: event.target.value })}
-                      onBlur={(event) => {
-                        relockInput(event);
-                      }}
-                    />
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {canEdit && (
-                  <>
-                    <div className="grid w-full grid-cols-2 gap-2">
+                  {editingTotalMaterialId === item.materialId ? (
+                    <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                      <Input
+                        readOnly
+                        value={totalEditDrafts[item.materialId] ?? ''}
+                        inputMode="decimal"
+                        onFocus={unlockInput}
+                        onChange={(event) => setTotalEditDrafts((prev) => ({ ...prev, [item.materialId]: event.target.value }))}
+                        onBlur={relockInput}
+                      />
                       <Button
-                        onClick={() => handleSaveDraft(item)}
-                        disabled={!isDraftChanged(item) || mutation.isPending}
-                        className={`${glowClass} h-12 min-h-12 w-full rounded-lg px-3`}
+                        onClick={() => saveTotalEdit(item)}
+                        disabled={mutation.isPending}
+                        className="h-10 min-h-10 px-3 text-xs"
                       >
                         Zapisz
                       </Button>
+                    </div>
+                  ) : (
+                    <div className="mt-1 flex items-center gap-2">
+                      <p className="truncate text-base font-bold text-title tabular-nums">{formatKg(item.todayQty ?? 0)}</p>
+                      {canEdit && (item.measurements ?? []).length === 0 && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => startEditingTotal(item.materialId, item.todayQty ?? 0)}
+                            className="text-xs font-semibold text-[var(--brand)] underline underline-offset-2"
+                          >
+                            Edytuj
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteTotal(item)}
+                            disabled={mutation.isPending}
+                            className="text-xs font-semibold text-danger underline underline-offset-2"
+                          >
+                            Usuń
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>                <div className="col-span-2 min-w-0 rounded-lg border border-border bg-[var(--surface-1)] p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
+                      Dzisiejsze pomiary
+                    </p>
+                    <p className="text-sm font-bold text-title tabular-nums">
+                      Suma: {formatKg(item.todayQty ?? 0)}
+                    </p>
+                  </div>
+                  {item.measurements && item.measurements.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {item.measurements.map((measurement, index) =>
+                        editingMeasurementId === measurement.id ? (
+                          <div key={measurement.id} className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
+                            <Input
+                              readOnly
+                              value={getMeasurementEdit(measurement).qty}
+                              inputMode="decimal"
+                              onFocus={unlockInput}
+                              onChange={(event) => updateMeasurementEdit(measurement.id, { qty: event.target.value })}
+                              onBlur={relockInput}
+                            />
+                            <Button
+                              onClick={() => saveMeasurementEdit(item.materialId, measurement)}
+                              disabled={updateMeasureMutation.isPending}
+                              className="h-10 min-h-10 px-3 text-xs"
+                            >
+                              Zapisz
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              onClick={() => setEditingMeasurementId(null)}
+                              className="h-10 min-h-10 px-3 text-xs"
+                            >
+                              Anuluj
+                            </Button>
+                          </div>
+                        ) : (
+                          <span
+                            key={measurement.id}
+                            className="inline-flex max-w-full items-center gap-1 rounded-md border border-[rgba(255,106,0,0.24)] bg-brandSoft px-2 py-1 text-xs text-title"
+                          >
+                            <span className="font-bold">{index + 1}.</span>
+                            <span className="font-bold tabular-nums">{formatKg(measurement.qty)}</span>
+                            {measurement.comment && (
+                              <span className="max-w-[11rem] truncate text-dim">- {measurement.comment}</span>
+                            )}
+                            {canEdit && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => startEditingMeasurement(measurement)}
+                                  className="ml-1 font-semibold text-[var(--brand)] underline underline-offset-2"
+                                >
+                                  Edytuj
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteMeasurement(item.materialId, measurement.id)}
+                                  disabled={deleteMeasureMutation.isPending}
+                                  className="font-semibold text-danger underline underline-offset-2"
+                                >
+                                  Usuń
+                                </button>
+                              </>
+                            )}
+                          </span>
+                        )
+                      )}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm text-dim">Brak dopisanych pomiarów.</p>
+                  )}
+                </div>
+                <div className="col-span-2 min-w-0 rounded-lg border border-[rgba(34,197,94,0.20)] bg-[rgba(34,197,94,0.05)] p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
+                    Dopisz kolejną ilość
+                  </p>
+                  {!canEdit ? (
+                    <p className="mt-2 text-sm text-dim">Brak uprawnień do edycji.</p>
+                  ) : (
+                    <div className="mt-2 grid gap-2">
+                      <Input
+                        readOnly
+                        value={getMeasureDraft(item.materialId).qty}
+                        placeholder="Ilość kg, np. 200"
+                        type="text"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        spellCheck={false}
+                        enterKeyHint="done"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
+                        data-form-type="other"
+                        onFocus={unlockInput}
+                        onChange={(event) => updateMeasureDraft(item.materialId, { qty: event.target.value })}
+                        onBlur={relockInput}
+                      />
+                      <Input
+                        readOnly
+                        value={getMeasureDraft(item.materialId).comment}
+                        placeholder="Miejsce/uwaga, np. przy WTR 04"
+                        type="text"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="sentences"
+                        spellCheck={false}
+                        enterKeyHint="done"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
+                        data-form-type="other"
+                        onFocus={unlockInput}
+                        onChange={(event) => updateMeasureDraft(item.materialId, { comment: event.target.value })}
+                        onBlur={relockInput}
+                      />
                       <Button
-                        variant="secondary"
-                        onClick={() => handleNoChange(item.materialId)}
+                        onClick={() => handleAddMeasure(item)}
+                        disabled={!getMeasureDraft(item.materialId).qty || addMeasureMutation.isPending}
                         className={`${glowClass} h-12 min-h-12 w-full rounded-lg px-3`}
                       >
-                        Bez zmian
+                        Dopisz do sumy
                       </Button>
                     </div>
-                  </>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           ))}
@@ -724,7 +890,7 @@ export default function LocationDetailPage() {
         {visibleItems.map((item) => (
           <div
             key={item.materialId}
-            className={`hidden grid-cols-[minmax(220px,1.7fr)_110px_minmax(130px,0.8fr)_minmax(240px,1.7fr)_240px] items-center gap-3 rounded-xl border p-3 md:grid ${
+            className={`hidden grid-cols-[minmax(220px,1.7fr)_110px_150px_minmax(240px,1.7fr)_240px] items-center gap-3 rounded-xl border p-3 md:grid ${
               item.todayQty !== null
                 ? 'border-[rgba(34,197,94,0.30)] bg-[rgba(34,197,94,0.05)]'
                 : 'border-border bg-surface2'
@@ -738,73 +904,162 @@ export default function LocationDetailPage() {
             </div>
             <div className="text-sm text-body tabular-nums">{formatKg(item.yesterdayQty)}</div>
             <div>
-              {!canEdit ? (
-                <p className="text-sm text-body">{item.todayQty ?? '-'} kg</p>
-              ) : (
-                <Input
-                  readOnly
-                  value={getDraft(item).qty}
-                  placeholder="0"
-                  type="text"
-                  inputMode="decimal"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  spellCheck={false}
-                  enterKeyHint="done"
-                  data-lpignore="true"
-                  data-1p-ignore="true"
-                  data-form-type="other"
-                  onFocus={unlockInput}
-                  onChange={(event) => updateDraft(item, { qty: event.target.value })}
-                  onBlur={(event) => {
-                    relockInput(event);
-                  }}
-                />
-              )}
-            </div>
-            <div>
-              {!canEdit ? (
-                <p className="text-sm text-body">{item.comment ?? '-'}</p>
-              ) : (
-                <Input
-                  readOnly
-                  value={getDraft(item).comment}
-                  placeholder="Komentarz"
-                  type="text"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="sentences"
-                  spellCheck={false}
-                  enterKeyHint="done"
-                  data-lpignore="true"
-                  data-1p-ignore="true"
-                  data-form-type="other"
-                  onFocus={unlockInput}
-                  onChange={(event) => updateDraft(item, { comment: event.target.value })}
-                  onBlur={(event) => {
-                    relockInput(event);
-                  }}
-                />
-              )}
-            </div>
-            <div>
-              {canEdit && (
-                <div className="grid grid-cols-2 gap-2">
+              {editingTotalMaterialId === item.materialId ? (
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                  <Input
+                    readOnly
+                    value={totalEditDrafts[item.materialId] ?? ''}
+                    inputMode="decimal"
+                    onFocus={unlockInput}
+                    onChange={(event) => setTotalEditDrafts((prev) => ({ ...prev, [item.materialId]: event.target.value }))}
+                    onBlur={relockInput}
+                  />
                   <Button
-                    onClick={() => handleSaveDraft(item)}
-                    disabled={!isDraftChanged(item) || mutation.isPending}
-                    className={`${glowClass} h-12 min-h-12 w-full rounded-lg px-3 text-sm`}
+                    onClick={() => saveTotalEdit(item)}
+                    disabled={mutation.isPending}
+                    className="h-10 min-h-10 px-3 text-xs"
                   >
                     Zapisz
                   </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => handleNoChange(item.materialId)}
-                    className={`${glowClass} h-12 min-h-12 w-full rounded-lg px-3 text-sm`}
-                  >
-                    Bez zmian
-                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <p className="text-base font-bold text-title tabular-nums">{formatKg(item.todayQty ?? 0)}</p>
+                  {canEdit && (item.measurements ?? []).length === 0 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => startEditingTotal(item.materialId, item.todayQty ?? 0)}
+                        className="text-xs font-semibold text-[var(--brand)] underline underline-offset-2"
+                      >
+                        Edytuj
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteTotal(item)}
+                        disabled={mutation.isPending}
+                        className="text-xs font-semibold text-danger underline underline-offset-2"
+                      >
+                        Usuń
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="flex flex-wrap gap-1.5">
+                    {(item.measurements ?? []).length > 0 ? (
+                      item.measurements?.map((measurement, index) =>
+                        editingMeasurementId === measurement.id ? (
+                          <div key={measurement.id} className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
+                            <Input
+                              readOnly
+                              value={getMeasurementEdit(measurement).qty}
+                              inputMode="decimal"
+                              onFocus={unlockInput}
+                              onChange={(event) => updateMeasurementEdit(measurement.id, { qty: event.target.value })}
+                              onBlur={relockInput}
+                            />
+                            <Button
+                              onClick={() => saveMeasurementEdit(item.materialId, measurement)}
+                              disabled={updateMeasureMutation.isPending}
+                              className="h-9 min-h-9 px-2 text-xs"
+                            >
+                              Zapisz
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              onClick={() => setEditingMeasurementId(null)}
+                              className="h-9 min-h-9 px-2 text-xs"
+                            >
+                              Anuluj
+                            </Button>
+                          </div>
+                        ) : (
+                          <span
+                            key={measurement.id}
+                            className="inline-flex max-w-full items-center gap-1 rounded-md border border-[rgba(255,106,0,0.24)] bg-brandSoft px-2 py-1 text-[11px] text-title"
+                          >
+                            <span className="font-bold">{index + 1}.</span>
+                            <span className="font-bold tabular-nums">{formatKg(measurement.qty)}</span>
+                            {measurement.comment && (
+                              <span className="max-w-[9rem] truncate text-dim">- {measurement.comment}</span>
+                            )}
+                            {canEdit && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => startEditingMeasurement(measurement)}
+                                  className="ml-1 font-semibold text-[var(--brand)] underline underline-offset-2"
+                                >
+                                  Edytuj
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteMeasurement(item.materialId, measurement.id)}
+                                  disabled={deleteMeasureMutation.isPending}
+                                  className="font-semibold text-danger underline underline-offset-2"
+                                >
+                                  Usuń
+                                </button>
+                              </>
+                            )}
+                          </span>
+                        )
+                      )
+                    ) : (
+                      <span className="text-xs text-dim">Brak pomiarów</span>
+                    )}
+              </div>
+            </div>
+            <div>
+              {canEdit && (
+                <div className="grid gap-2">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                    <Input
+                      readOnly
+                      value={getMeasureDraft(item.materialId).qty}
+                      placeholder="+ kg"
+                      type="text"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      spellCheck={false}
+                      enterKeyHint="done"
+                      data-lpignore="true"
+                      data-1p-ignore="true"
+                      data-form-type="other"
+                      onFocus={unlockInput}
+                      onChange={(event) => updateMeasureDraft(item.materialId, { qty: event.target.value })}
+                      onBlur={relockInput}
+                    />
+                    <Button
+                      onClick={() => handleAddMeasure(item)}
+                      disabled={!getMeasureDraft(item.materialId).qty || addMeasureMutation.isPending}
+                      className={`${glowClass} h-12 min-h-12 rounded-lg px-3 text-sm`}
+                    >
+                      Dodaj
+                    </Button>
+                  </div>
+                  <Input
+                    readOnly
+                    value={getMeasureDraft(item.materialId).comment}
+                    placeholder="Miejsce/uwaga"
+                    type="text"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="sentences"
+                    spellCheck={false}
+                    enterKeyHint="done"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    data-form-type="other"
+                    onFocus={unlockInput}
+                    onChange={(event) => updateMeasureDraft(item.materialId, { comment: event.target.value })}
+                    onBlur={relockInput}
+                  />
                 </div>
               )}
             </div>
@@ -814,3 +1069,6 @@ export default function LocationDetailPage() {
     </div>
   );
 }
+
+
+

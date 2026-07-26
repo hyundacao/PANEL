@@ -148,6 +148,27 @@ export const upsertEntry = async (payload: {
   comment?: string;
 }) => appRequest('upsertEntry', payload);
 
+export const addInventoryMeasure = async (payload: {
+  locationId: string;
+  materialId: string;
+  qty: number;
+  comment?: string;
+}) => appRequest('addInventoryMeasure', payload);
+
+export const updateInventoryMeasure = async (payload: {
+  locationId: string;
+  materialId: string;
+  measurementId: string;
+  qty: number;
+  comment?: string;
+}) => appRequest('updateInventoryMeasure', payload);
+
+export const deleteInventoryMeasure = async (payload: {
+  locationId: string;
+  materialId: string;
+  measurementId: string;
+}) => appRequest('deleteInventoryMeasure', payload);
+
 export const confirmNoChangeEntry = async (payload: {
   locationId: string;
   materialId: string;
