@@ -89,6 +89,31 @@ const navItemsPrzemialy: MobileNavItem[] = [
   { label: 'Wymieszane tworzywa', href: '/wymieszane', tab: 'wymieszane' }
 ];
 
+const texturedMobilePrzemialyTabs = new Set<WarehouseTab>([
+  'dashboard',
+  'spis',
+  'spis-oryginalow',
+  'przesuniecia',
+  'raporty',
+  'kartoteka',
+  'wymieszane',
+  'suszarki'
+]);
+
+const getTexturedMobileNavStyle = (active: boolean): React.CSSProperties => ({
+  backgroundImage: active
+    ? "linear-gradient(100deg, rgba(255,122,0,0.18), rgba(7,8,12,0.52)), url('/profil-panel-bg.png')"
+    : "linear-gradient(100deg, rgba(7,8,12,0.78), rgba(7,8,12,0.58)), url('/profil-panel-bg.png')",
+  backgroundPosition: 'left center',
+  backgroundSize: 'cover'
+});
+
+const mobileNavPanelClass =
+  'mb-4 rounded-[18px] border border-border bg-[var(--scrim)] p-2.5 shadow-[inset_0_1px_0_var(--inner-highlight)] backdrop-blur-[8px] md:hidden';
+
+const mobileNavLinkClass =
+  'flex min-h-[56px] items-center justify-center rounded-xl border border-border bg-[rgba(255,255,255,0.025)] px-3 py-3 text-center text-[13px] font-semibold leading-snug text-title transition hover:border-[rgba(255,122,26,0.65)] hover:bg-[rgba(255,255,255,0.045)] hover:text-title';
+
 const navItemsCzesci: MobileNavItem[] = [
   { label: 'Start', href: '/czesci' },
   { label: 'Stany magazynowe', href: '/czesci/stany', tab: 'stany' },
@@ -373,25 +398,42 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
         <main
           className={cn(
             'content-area flex-1',
-            isDashboardPath ? 'px-2 py-2 md:px-2.5 md:py-2.5' : 'px-4 py-4 md:px-6 md:py-6'
+            isDashboardPath
+              ? 'px-2 py-2 md:px-2.5 md:py-2.5'
+              : showMobileNav
+                ? 'px-2 py-3 md:px-6 md:py-6'
+                : 'px-4 py-4 md:px-6 md:py-6'
           )}
         >
           {isDashboardPath ? (
             <>
               {showMobileNav && (
-                <div className="mb-3 md:hidden">
+                <div className={mobileNavPanelClass}>
                   <div className="grid grid-cols-2 gap-2.5">
                     {mobileItems.map((item) => {
                       const active = isActivePath(item.href);
+                      const textured =
+                        activeWarehouse === 'PRZEMIALY' &&
+                        Boolean(item.tab && texturedMobilePrzemialyTabs.has(item.tab));
                       return (
                         <Link
                           key={item.href}
                           href={item.href}
                           className={cn(
-                            'flex min-h-[56px] items-center justify-center rounded-xl border border-border bg-[rgba(255,255,255,0.025)] px-3 py-3 text-center text-[13px] font-semibold leading-snug text-title shadow-[inset_0_1px_0_var(--inner-highlight)] transition hover:border-[rgba(255,122,26,0.65)] hover:bg-[rgba(255,255,255,0.045)] hover:text-title',
+                            mobileNavLinkClass,
+                            textured &&
+                              'overflow-hidden bg-[#0b0c10] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_8px_20px_rgba(0,0,0,0.18)] hover:bg-[#111318] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_24px_rgba(0,0,0,0.22)]',
                             active &&
-                              'border-[rgba(255,122,26,0.85)] bg-[linear-gradient(180deg,rgba(255,122,26,0.13),rgba(255,122,26,0.035))] shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]'
+                              'border-[rgba(255,122,26,0.85)] bg-[linear-gradient(180deg,rgba(255,122,26,0.13),rgba(255,122,26,0.035))] shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]',
+                            textured &&
+                              active &&
+                              'shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.11)]'
                           )}
+                          style={
+                            textured
+                              ? getTexturedMobileNavStyle(active)
+                              : undefined
+                          }
                         >
                           <span className="block max-w-full text-balance">{item.label}</span>
                         </Link>
@@ -403,21 +445,34 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               {children}
             </>
           ) : (
-            <ContentScrim className="min-h-full">
+            <>
               {showMobileNav && (
-              <div className="mb-4 md:hidden">
+              <div className={mobileNavPanelClass}>
                 <div className="grid grid-cols-2 gap-2.5">
                   {mobileItems.map((item) => {
                     const active = isActivePath(item.href);
+                    const textured =
+                      activeWarehouse === 'PRZEMIALY' &&
+                      Boolean(item.tab && texturedMobilePrzemialyTabs.has(item.tab));
                     return (
                       <Link
                         key={item.href}
                         href={item.href}
                         className={cn(
-                          'flex min-h-[56px] items-center justify-center rounded-xl border border-border bg-[rgba(255,255,255,0.025)] px-3 py-3 text-center text-[13px] font-semibold leading-snug text-title shadow-[inset_0_1px_0_var(--inner-highlight)] transition hover:border-[rgba(255,122,26,0.65)] hover:bg-[rgba(255,255,255,0.045)] hover:text-title',
+                          mobileNavLinkClass,
+                          textured &&
+                            'overflow-hidden bg-[#0b0c10] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_8px_20px_rgba(0,0,0,0.18)] hover:bg-[#111318] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_24px_rgba(0,0,0,0.22)]',
                           active &&
-                            'border-[rgba(255,122,26,0.85)] bg-[linear-gradient(180deg,rgba(255,122,26,0.13),rgba(255,122,26,0.035))] shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]'
+                            'border-[rgba(255,122,26,0.85)] bg-[linear-gradient(180deg,rgba(255,122,26,0.13),rgba(255,122,26,0.035))] shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]',
+                          textured &&
+                            active &&
+                            'shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.11)]'
                         )}
+                        style={
+                          textured
+                            ? getTexturedMobileNavStyle(active)
+                            : undefined
+                        }
                       >
                         <span className="block max-w-full text-balance">{item.label}</span>
                       </Link>
@@ -426,8 +481,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                 </div>
               </div>
               )}
+            <ContentScrim className="min-h-full max-md:border-0 max-md:bg-transparent max-md:p-0 max-md:shadow-none max-md:backdrop-blur-0">
               {children}
             </ContentScrim>
+            </>
           )}
         </main>
       </div>

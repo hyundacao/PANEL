@@ -67,9 +67,9 @@ export default function SpisWarehousePage() {
   });
 
 
-  const confirmedCount = (data ?? []).filter((loc) => loc.status === 'DONE').length;
+  const confirmedCount = (data ?? []).some((loc) => loc.status === 'DONE') ? 1 : 0;
 
-  const totalCount = (data ?? []).length;
+  const totalCount = data && data.length > 0 ? 1 : 0;
 
 
 
@@ -170,13 +170,13 @@ export default function SpisWarehousePage() {
 
 
 
-  const handleNoChange = async (locationId: string) => {
+  const handleNoChange = async (warehouseId: string) => {
 
-    await confirmNoChangeLocation(locationId);
+    await confirmNoChangeLocation(warehouseId);
 
     invalidateDashboard();
 
-    toast({ title: 'Zatwierdzono lokacj\u0119', description: 'Wpisy ustawione jako bez zmian.', tone: 'success' });
+    toast({ title: 'Zatwierdzono magazyn', description: 'Wpisy ustawione jako bez zmian.', tone: 'success' });
     refetch();
 
   };
@@ -225,7 +225,7 @@ export default function SpisWarehousePage() {
 
               </p>
 
-              <p className="text-sm text-dim">lokacje zatwierdzone</p>
+              <p className="text-sm text-dim">magazyn zatwierdzony</p>
 
             </div>
 
@@ -251,7 +251,7 @@ export default function SpisWarehousePage() {
 
           <div>
 
-            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Lista lokacji</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-dim">Magazyn</p>
 
             <p className="text-sm text-dim">Widoczne: {filtered.length}</p>
 
@@ -263,7 +263,7 @@ export default function SpisWarehousePage() {
 
         <div className="mt-2 space-y-4">
 
-          {isLoading && <Card>{'\u0141adowanie lokacji...'}</Card>}
+          {isLoading && <Card>{'\u0141adowanie magazynu...'}</Card>}
           {filtered.map((loc) => (
 
             <Card key={loc.id} className="flex flex-col gap-4">
@@ -297,7 +297,7 @@ export default function SpisWarehousePage() {
 
                     {loc.currentItems.map((item) => (
 
-                      <p key={item.label} className="text-sm font-semibold" style={{ color: 'var(--value-purple)' }}>
+                      <p key={item.label} className="material-label text-sm font-semibold">
 
                         -  {item.label} - {formatKg(item.qty)}
 
@@ -325,7 +325,7 @@ export default function SpisWarehousePage() {
 
                 {canEdit ? (
                   <Button asChild variant="primaryEmber">
-                    <Link href={`/spis/${warehouseId}/lokacja/${loc.id}`} onClick={markReturn}>
+                    <Link href={`/spis/${warehouseId}/lokacja/${warehouseId}`} onClick={markReturn}>
                       {'Zmie\u0144'}
                     </Link>
                   </Button>

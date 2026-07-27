@@ -2,6 +2,7 @@
 
 import type { FocusEvent } from 'react';
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -9,11 +10,9 @@ import {
   addMaterial,
   deleteInventoryMeasure,
   getCatalog,
-  getLocations,
   getLocationDetail,
   getTodayKey,
   getWarehouses,
-  removeMaterial,
   updateInventoryMeasure,
   upsertEntry
 } from '@/lib/api';
@@ -27,7 +26,7 @@ import { useUiStore } from '@/lib/store/ui';
 import { isReadOnly } from '@/lib/auth/access';
 import { useToastStore } from '@/components/ui/Toast';
 import { formatKg, parseQtyInput } from '@/lib/utils/format';
-import { ClipboardList, PackagePlus, Search, X } from 'lucide-react';
+import { Check, ChevronRight, PackagePlus, Search, X } from 'lucide-react';
 
 type MaterialFormState = {
   materialId: string | null;
@@ -53,6 +52,22 @@ type MeasureDraft = {
 };
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 
+const getNoChangeStorageKey = (dateKey: string, locationId: string) =>
+  `spis-przemialow:no-change:${dateKey}:${locationId}`;
+
+const emptyNoChangeMaterialIds = new Set<string>();
+
+const readNoChangeMaterialIds = (storageKey: string) => {
+  if (typeof window === 'undefined') return new Set<string>();
+  try {
+    const stored = window.localStorage.getItem(storageKey);
+    const materialIds = stored ? JSON.parse(stored) : [];
+    return new Set<string>(Array.isArray(materialIds) ? materialIds.filter((value) => typeof value === 'string') : []);
+  } catch {
+    return new Set<string>();
+  }
+};
+
 export default function LocationDetailPage() {
   const params = useParams();
   const warehouseId = params.warehouseId as string;
@@ -62,12 +77,7 @@ export default function LocationDetailPage() {
     queryKey: ['warehouses'],
     queryFn: getWarehouses
   });
-  const { data: locationOptions } = useQuery({
-    queryKey: ['locations-options'],
-    queryFn: getLocations
-  });
   const warehouse = warehouses?.find((item) => item.id === warehouseId);
-  const location = locationOptions?.find((item) => item.id === locationId);
   const { user } = useUiStore();
   const canEdit = !isReadOnly(user, 'PRZEMIALY');
   const toast = useToastStore((state) => state.push);
@@ -82,7 +92,15 @@ export default function LocationDetailPage() {
   const [editingMeasurementId, setEditingMeasurementId] = useState<string | null>(null);
   const [editingTotalMaterialId, setEditingTotalMaterialId] = useState<string | null>(null);
   const [totalEditDrafts, setTotalEditDrafts] = useState<Record<string, string>>({});
+  const noChangeStorageKey = getNoChangeStorageKey(today, locationId);
+  const [noChangeState, setNoChangeState] = useState<{ scope: string; materialIds: Set<string> }>(() => ({
+    scope: noChangeStorageKey,
+    materialIds: readNoChangeMaterialIds(noChangeStorageKey)
+  }));
   const glowClass = 'ring-2 ring-[rgba(255,122,26,0.45)] shadow-[0_0_0_3px_rgba(255,122,26,0.18)]';
+  const noChangeMaterialIds = noChangeState.scope === noChangeStorageKey
+    ? noChangeState.materialIds
+    : emptyNoChangeMaterialIds;
 
   const unlockInput = (event: FocusEvent<HTMLInputElement>) => {
     event.currentTarget.readOnly = false;
@@ -206,26 +224,41 @@ export default function LocationDetailPage() {
     }
   });
 
-  const removeMaterialMutation = useMutation({
-    mutationFn: removeMaterial,
-    onSuccess: (_data, materialId) => {
-      queryClient.invalidateQueries({ queryKey: ['catalog'] });
-      setForm((prev) => (prev.materialId === materialId ? { ...prev, materialId: null } : prev));
-      toast({ title: 'Usunieto przemial', tone: 'success' });
-    },
-    onError: () => {
-      toast({ title: 'Nie usunieto przemialu', tone: 'error' });
-    }
-  });
-
   const visibleItems = useMemo(() => {
     const query = inventoryQuery.trim().toLowerCase();
     const items = (detail ?? []).filter(
       (item) => !query || `${item.name} ${item.code}`.toLowerCase().includes(query)
     );
-    if (showZero) return items;
-    return items.filter((item) => (item.todayQty ?? item.yesterdayQty) !== 0);
-  }, [detail, inventoryQuery, showZero]);
+    const filtered = showZero
+      ? items
+      : items.filter((item) => (item.todayQty ?? item.yesterdayQty) !== 0);
+    return [...filtered].sort((a, b) => {
+      const skipOrder = Number(noChangeMaterialIds.has(a.materialId)) - Number(noChangeMaterialIds.has(b.materialId));
+      return skipOrder !== 0 ? skipOrder : collator.compare(a.name, b.name);
+    });
+  }, [detail, inventoryQuery, noChangeMaterialIds, showZero]);
+
+  const toggleNoChangeToday = (materialId: string) => {
+    if (!canEdit) return;
+    const currentIds = noChangeState.scope === noChangeStorageKey
+      ? noChangeState.materialIds
+      : readNoChangeMaterialIds(noChangeStorageKey);
+    const materialIds = new Set(currentIds);
+    const wasSkipped = materialIds.has(materialId);
+    if (wasSkipped) materialIds.delete(materialId);
+    else materialIds.add(materialId);
+    try {
+      window.localStorage.setItem(noChangeStorageKey, JSON.stringify([...materialIds]));
+    } catch {
+      // The marker remains available for this open view when browser storage is unavailable.
+    }
+    setNoChangeState({ scope: noChangeStorageKey, materialIds });
+    toast({
+      title: wasSkipped ? 'Przywrócono pozycję do spisu' : 'Oznaczono: bez zmian dziś',
+      description: wasSkipped ? undefined : 'Pozycja została przeniesiona na dół listy.',
+      tone: 'success'
+    });
+  };
 
   const getMeasureDraft = (materialId: string): MeasureDraft =>
     measureDrafts[materialId] ?? { qty: '', comment: '' };
@@ -324,11 +357,11 @@ export default function LocationDetailPage() {
   );
   const filteredCatalog = useMemo(() => {
     const query = catalogQuery.trim().toLowerCase();
-    if (!query) return catalogList;
+    if (!query) return [];
     return catalogList.filter(
       (item) =>
         item.name.toLowerCase().includes(query) || item.code.toLowerCase().includes(query)
-    );
+    ).slice(0, 8);
   }, [catalogList, catalogQuery]);
 
   const handleAddToLocation = async () => {
@@ -354,24 +387,13 @@ export default function LocationDetailPage() {
       name: form.manualName.trim()
     });
   };
-  const handleRemoveMaterial = async () => {
-    if (!form.materialId) return;
-    await removeMaterialMutation.mutateAsync(form.materialId);
-  };
-
-  const hasTodayEntries = (detail ?? []).some((item) => item.todayQty !== null);
-  const totalItems = (detail ?? []).length;
-  const countedItems = (detail ?? []).filter((item) => item.todayQty !== null).length;
-  const remainingItems = Math.max(totalItems - countedItems, 0);
-  const totalTodayQty = (detail ?? []).reduce((sum, item) => sum + (item.todayQty ?? 0), 0);
-  const progressPercent = totalItems === 0 ? 0 : Math.round((countedItems / totalItems) * 100);
-
   return (
     <div className="min-w-0 space-y-4 pb-8 sm:space-y-6">
       <PageHeader
-        title={`Spis zbiorczy: ${warehouse?.name ?? location?.name ?? 'Obszar'}`}
+        title={`Spis magazynu: ${warehouse?.name ?? 'Magazyn'}`}
         subtitle={`Stan na dzień ${today}`}
         titleColor="var(--brand)"
+        className="relative [&>div:first-child]:text-center [&>div:first-child>h2]:text-2xl sm:!block sm:min-h-12 sm:[&>div:first-child>h2]:text-3xl sm:[&>div:last-child]:absolute sm:[&>div:last-child]:right-0 sm:[&>div:last-child]:top-1/2 sm:[&>div:last-child]:-translate-y-1/2"
         actions={
           <>
             <Button
@@ -382,35 +404,40 @@ export default function LocationDetailPage() {
               <PackagePlus className="mr-2 h-4 w-4" />
               Dodaj przemiał
             </Button>
-            {dialogOpen && (
-              <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-start sm:px-4 sm:py-6">
+            {dialogOpen && typeof document !== 'undefined' && createPortal(
+              <div
+                className="fixed inset-0 z-50 flex items-start justify-center sm:px-4 sm:py-6"
+                style={{ position: 'fixed', inset: 0 }}
+              >
                 <div className="absolute inset-0 bg-[var(--scrim)]" onClick={closeDialog} />
-                <div className="relative z-10 h-[100dvh] w-full overflow-y-auto border border-border bg-[var(--surface-1)] p-4 shadow-[inset_0_1px_0_var(--inner-highlight)] sm:h-auto sm:max-h-[94vh] sm:min-h-[80vh] sm:max-w-2xl sm:rounded-2xl sm:p-6">
-                  <button
-                    type="button"
-                    onClick={closeDialog}
-                    className="absolute right-4 top-4 text-dim hover:text-title"
-                    aria-label="Zamknij"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                  <div className="space-y-4">
-                    <div>
-                      <p className="text-xs uppercase tracking-wide text-dim">Dodaj przemiał</p>
-                      <h3 className="text-lg font-semibold text-title">Nowy wpis do lokacji</h3>
+                <div className="relative z-10 flex h-[100dvh] w-full flex-col overflow-hidden border border-border bg-[var(--surface-1)] shadow-[inset_0_1px_0_var(--inner-highlight)] sm:h-[calc(100dvh-3rem)] sm:max-w-2xl sm:rounded-2xl">
+                  <div className="relative shrink-0 border-b border-border px-12 py-5 sm:px-16 sm:py-6">
+                    <div className="min-w-0 text-center">
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--brand)]">Dodaj nowy przemiał</p>
+                      <h3 className="mt-1 text-xl font-bold text-title sm:text-2xl">Wpis do magazynu</h3>
                     </div>
-
-                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={closeDialog}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 rounded-lg p-2 text-dim transition hover:bg-[var(--surface-3)] hover:text-title sm:right-6"
+                      aria-label="Zamknij"
+                    >
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
+                    <div className="space-y-4 pb-4">
+                  <div className="mx-auto grid w-full max-w-md grid-cols-2 rounded-xl border border-borderStrong bg-[var(--surface-2)] p-1">
                     <Button
                       variant="secondary"
-                      className={`${glowClass} ${!form.manualMode ? 'border-[rgba(255,106,0,0.55)] bg-brandSoft text-title' : ''}`}
+                      className={`min-h-11 w-full rounded-lg border-transparent bg-transparent px-3 text-sm shadow-none ring-0 hover:border-transparent hover:bg-[var(--surface-3)] ${!form.manualMode ? '!border-[rgba(255,122,26,0.75)] !bg-[linear-gradient(180deg,#FF9F52_0%,#E85F00_100%)] !text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_6px_16px_-12px_rgba(255,106,0,0.9)]' : 'text-muted'}`}
                       onClick={() => setForm((prev) => ({ ...prev, manualMode: false }))}
                     >
                       Wybierz z listy
                     </Button>
                     <Button
                       variant="secondary"
-                      className={`${glowClass} ${form.manualMode ? 'border-[rgba(255,106,0,0.55)] bg-brandSoft text-title' : ''}`}
+                      className={`min-h-11 w-full rounded-lg border-transparent bg-transparent px-3 text-sm shadow-none ring-0 hover:border-transparent hover:bg-[var(--surface-3)] ${form.manualMode ? '!border-[rgba(255,122,26,0.75)] !bg-[linear-gradient(180deg,#FF9F52_0%,#E85F00_100%)] !text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_6px_16px_-12px_rgba(255,106,0,0.9)]' : 'text-muted'}`}
                       onClick={() => setForm((prev) => ({ ...prev, manualMode: true }))}
                     >
                       Dodaj nowy
@@ -435,31 +462,104 @@ export default function LocationDetailPage() {
                         onChange={(event) => setCatalogQuery(event.target.value)}
                         placeholder="Szukaj po nazwie lub kartotece"
                       />
-                      <div className="max-h-80 min-h-[18rem] space-y-2 overflow-y-auto pr-2">
-                        {filteredCatalog.map((item) => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => setForm((prev) => ({ ...prev, materialId: item.id }))}
-                            className={`w-full rounded-xl border px-4 py-3 text-left transition ${
-                              form.materialId === item.id
-                                ? 'relative overflow-hidden border-[rgba(255,106,0,0.85)] bg-[linear-gradient(180deg,rgba(255,106,0,0.10),rgba(255,106,0,0.04))] text-body shadow-[0_0_0_1px_rgba(255,106,0,0.25),0_12px_24px_-20px_rgba(255,106,0,0.8)]'
-                                : 'border-border bg-surface2 text-muted hover:border-borderStrong'
-                            }`}
-                          >
-                            {form.materialId === item.id && (
-                              <span className="absolute left-0 top-0 h-full w-[3px] rounded-l-xl bg-brand" />
-                            )}
-                            <p className="text-sm font-semibold" style={{ color: 'var(--value-purple)' }}>
-                              {item.name}
+                      {catalogQuery.trim() && (
+                        <div className="-mt-1 overflow-hidden rounded-xl border border-borderStrong bg-[var(--surface-2)] shadow-[0_14px_28px_-22px_rgba(0,0,0,0.95)]" aria-label="Podpowiedzi materiałów">
+                          <div className="border-b border-border bg-[var(--surface-1)] px-3 py-2">
+                            <p className="text-xs font-semibold text-title">Wybierz przemiał z listy</p>
+                            <p className="text-[11px] text-dim">Kliknij cały wiersz, aby przejść do wpisania ilości.</p>
+                          </div>
+                          {filteredCatalog.map((item) => (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => {
+                                setForm((prev) => ({ ...prev, materialId: item.id }));
+                                setCatalogQuery('');
+                              }}
+                              className={`flex w-full items-center gap-3 border-b border-border px-3 py-3 text-left transition last:border-b-0 active:bg-brandSoft ${
+                                form.materialId === item.id
+                                  ? 'relative overflow-hidden bg-brandSoft text-body'
+                                  : 'bg-[var(--surface-2)] text-muted hover:bg-[var(--surface-3)] hover:text-title'
+                              }`}
+                            >
+                              {form.materialId === item.id && (
+                                <span className="absolute left-0 top-0 h-full w-[3px] bg-brand" />
+                              )}
+                              <span className="min-w-0 flex-1">
+                                <span className="material-label block text-sm font-semibold">
+                                  {item.name}
+                                </span>
+                                <span className="catalog-label mt-0.5 block text-xs font-medium">{item.code}</span>
+                              </span>
+                              <ChevronRight className="h-5 w-5 shrink-0 text-dim" aria-hidden="true" />
+                            </button>
+                          ))}
+                          {filteredCatalog.length === 0 && (
+                            <p className="px-3 py-3 text-sm text-muted">
+                              Brak materiału pasującego do tej frazy.
                             </p>
-                            <p className="text-xs text-dim">{item.code}</p>
-                          </button>
-                        ))}
-                        {filteredCatalog.length === 0 && (
-                          <p className="text-sm text-muted">Brak wynikow dla podanej frazy.</p>
-                        )}
-                      </div>
+                          )}
+                        </div>
+                      )}
+                      {form.materialId && (
+                        <div className="rounded-xl border border-[rgba(255,106,0,0.3)] bg-brandSoft p-3">
+                          <div className="mb-3 min-w-0">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">Wybrany przemiał</p>
+                            <p className="mt-1 truncate text-sm font-semibold text-title">
+                              {catalogList.find((item) => item.id === form.materialId)?.name}
+                            </p>
+                            <p className="catalog-label text-xs font-medium">
+                              {catalogList.find((item) => item.id === form.materialId)?.code}
+                            </p>
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div>
+                              <label className="text-xs uppercase tracking-wide text-dim">Ilość (kg)</label>
+                              <Input
+                                value={form.qty}
+                                readOnly
+                                type="text"
+                                inputMode="decimal"
+                                autoComplete="off"
+                                autoCorrect="off"
+                                autoCapitalize="off"
+                                spellCheck={false}
+                                data-lpignore="true"
+                                data-1p-ignore="true"
+                                data-form-type="other"
+                                onFocus={unlockInput}
+                                onBlur={relockInput}
+                                onChange={(event) => setForm((prev) => ({ ...prev, qty: event.target.value }))}
+                                placeholder="0"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs uppercase tracking-wide text-dim">Komentarz</label>
+                              <Input
+                                value={form.comment}
+                                readOnly
+                                autoComplete="off"
+                                autoCorrect="off"
+                                autoCapitalize="sentences"
+                                spellCheck={false}
+                                data-lpignore="true"
+                                data-1p-ignore="true"
+                                data-form-type="other"
+                                onFocus={unlockInput}
+                                onBlur={relockInput}
+                                onChange={(event) => setForm((prev) => ({ ...prev, comment: event.target.value }))}
+                                placeholder="Opcjonalnie"
+                              />
+                            </div>
+                          </div>
+                          <Button
+                            onClick={handleAddToLocation}
+                            className={`${glowClass} mt-3 min-h-12 w-full sm:w-auto`}
+                          >
+                            Dodaj do magazynu
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -509,159 +609,53 @@ export default function LocationDetailPage() {
                     </div>
                   )}
 
-                  {!form.manualMode && (
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div>
-                        <label className="text-xs uppercase tracking-wide text-dim">Ilość (kg)</label>
-                        <Input
-                          value={form.qty}
-                          readOnly
-                          type="text"
-                          inputMode="decimal"
-                          autoComplete="off"
-                          autoCorrect="off"
-                          autoCapitalize="off"
-                          spellCheck={false}
-                          data-lpignore="true"
-                          data-1p-ignore="true"
-                          data-form-type="other"
-                          onFocus={unlockInput}
-                          onBlur={relockInput}
-                          onChange={(event) => setForm((prev) => ({ ...prev, qty: event.target.value }))}
-                          placeholder="0"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs uppercase tracking-wide text-dim">Komentarz</label>
-                        <Input
-                          value={form.comment}
-                          readOnly
-                          autoComplete="off"
-                          autoCorrect="off"
-                          autoCapitalize="sentences"
-                          spellCheck={false}
-                          data-lpignore="true"
-                          data-1p-ignore="true"
-                          data-form-type="other"
-                          onFocus={unlockInput}
-                          onBlur={relockInput}
-                          onChange={(event) => setForm((prev) => ({ ...prev, comment: event.target.value }))}
-                          placeholder="Opcjonalnie"
-                        />
-                      </div>
                     </div>
-                  )}
-
-                  <div className="sticky bottom-0 z-20 -mx-4 -mb-4 mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-border bg-surface2 px-4 py-3 sm:-mx-6 sm:-mb-6 sm:gap-3 sm:rounded-b-2xl sm:px-6 sm:py-4">
-                    <Button variant="outline" onClick={closeDialog} className={`${glowClass} min-h-12 w-full sm:w-auto`}>
+                  </div>
+                  <div className="flex shrink-0 justify-end border-t border-border bg-surface2 px-4 py-3 sm:px-6 sm:py-4">
+                    <Button
+                      variant="primaryEmber"
+                      onClick={closeDialog}
+                      className="min-h-12 w-full px-6 text-sm font-semibold !text-white sm:w-auto"
+                    >
                       Anuluj
                     </Button>
-                    {!form.manualMode && (
-                      <Button
-                        variant="outline"
-                        onClick={handleRemoveMaterial}
-                        disabled={!form.materialId}
-                        className="min-h-12 w-full border-[rgba(170,24,24,0.65)] text-danger hover:bg-[color:color-mix(in_srgb,var(--danger)_14%,transparent)] sm:w-auto"
-                      >
-                        Usun przemial
-                      </Button>
-                    )}
-                    {!form.manualMode && (
-                      <Button onClick={handleAddToLocation} disabled={!form.materialId} className="min-h-12 w-full sm:w-auto">
-                        Dodaj do lokacji
-                      </Button>
-                    )}
                   </div>
-                </div>
               </div>
             </div>
-            )}
+            , document.body)}
           </>
         }
       />
 
-      <Card className="space-y-4 border-[rgba(255,106,0,0.24)] bg-[linear-gradient(135deg,rgba(255,106,0,0.08),rgba(18,19,26,0.94)_42%)] sm:space-y-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <ClipboardList className="h-5 w-5 text-[var(--brand)]" />
-              <p className="text-sm font-bold uppercase tracking-[0.14em] text-title">Postęp spisu</p>
-            </div>
-            <p className="mt-1 text-sm text-muted">
-              {hasTodayEntries
-                ? 'Dopisuj kolejne miejsca i pilnuj, zeby dzisiejsza suma zgadzala sie ze spisem hali.'
-                : 'Rozpocznij od dodania lub przeliczenia pierwszego przemiału.'}
-            </p>
-          </div>
-          <div className="w-full rounded-xl border border-borderStrong bg-surface2 px-4 py-2 text-center text-sm font-bold text-title sm:w-auto sm:rounded-full">
-            {totalItems === 0
-              ? 'Gotowy do rozpoczęcia'
-              : remainingItems === 0
-                ? 'Spis ukończony'
-                : 'Spis w toku'}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
-          {[
-            { label: 'Wszystkie pozycje', value: totalItems, color: 'text-title' },
-            { label: 'Spisane dzisiaj', value: countedItems, color: 'text-success' },
-            { label: 'Pozostało', value: remainingItems, color: 'text-warning' },
-            { label: 'Stan łącznie', value: formatKg(totalTodayQty), color: 'text-[var(--value-purple)]' }
-          ].map((metric) => (
-            <div key={metric.label} className="min-w-0 rounded-xl border border-border bg-surface2 px-3 py-3 sm:px-4">
-              <p className="truncate text-[10px] font-bold uppercase tracking-wide text-dim sm:text-[11px]">{metric.label}</p>
-              <p className={`mt-1 truncate text-xl font-bold tabular-nums sm:text-2xl ${metric.color}`}>{metric.value}</p>
-            </div>
-          ))}
-        </div>
-
-        <div>
-          <div className="mb-2 flex items-center justify-between text-xs font-bold">
-            <span className="text-muted">Wykonano {countedItems} z {totalItems}</span>
-            <span className="text-title">{progressPercent}%</span>
-          </div>
-          <div className="h-2.5 overflow-hidden rounded-full bg-surface2">
-            <div
-              className="h-full rounded-full bg-[linear-gradient(90deg,var(--brand),#ff9a52)] transition-[width] duration-500"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-        </div>
-      </Card>
-
-      <Card className="flex min-w-0 flex-col gap-3 sm:gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="relative w-full lg:max-w-xl">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-dim" />
-          <Input
-            value={inventoryQuery}
-            onChange={(event) => setInventoryQuery(event.target.value)}
-            placeholder="Szukaj przemiału lub kartoteki"
-            className="pl-10"
-          />
-        </div>
-        <Toggle checked={showZero} onCheckedChange={setShowZero} label="Pokaż pozycje zerowe" />
-      </Card>
-
       {isLoading && <Card>Ładowanie danych...</Card>}
 
-      <Card className="min-w-0 space-y-4">
-        <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0">
-            <p className="text-base font-bold text-title">Lista przemiałów</p>
-            <p className="mt-1 text-xs text-dim">Widoczne pozycje: {visibleItems.length}</p>
+      <section className="relative z-10 -mx-[17px] min-w-0 bg-[var(--bg-0)] px-[17px] md:mx-0 md:bg-transparent md:px-0">
+        <div className="-mx-[17px] mb-4 rounded-b-xl border border-borderStrong bg-[var(--bg-0)] px-4 py-4 md:mx-0 md:rounded-xl">
+          <div>
+            <div className="min-w-0">
+              <p className="text-base font-bold text-title">Lista przemiałów</p>
+              <p className="mt-1 text-xs text-dim">Widoczne pozycje: {visibleItems.length}</p>
+            </div>
           </div>
-          <Button onClick={() => setDialogOpen(true)} disabled={!canEdit} variant="secondary" className="min-h-12 w-full sm:w-auto">
-            <PackagePlus className="mr-2 h-4 w-4" />
-            Dodaj pozycję
-          </Button>
+          <div className="mt-4 flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="relative w-full lg:max-w-xl">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-dim" />
+              <Input
+                value={inventoryQuery}
+                onChange={(event) => setInventoryQuery(event.target.value)}
+                placeholder="Szukaj przemiału lub kartoteki"
+                className="pl-10"
+              />
+            </div>
+            <Toggle checked={showZero} onCheckedChange={setShowZero} label="Pokaż pozycje zerowe" />
+          </div>
         </div>
         {visibleItems.length > 0 && (
         <div className="hidden grid-cols-[minmax(220px,1.7fr)_110px_150px_minmax(240px,1.7fr)_240px] gap-3 px-3 text-xs font-bold uppercase tracking-wide text-dim md:grid">
           <span>Przemial</span>
           <span>Ostatni spis</span>
           <span>Suma dzisiejszego spisu</span>
-          <span>Dzisiejsze pomiary</span>
+          <span>Dzisiejszy spis</span>
           <span>Dodaj ilosc</span>
         </div>
         )}
@@ -690,27 +684,43 @@ export default function LocationDetailPage() {
           {visibleItems.map((item) => (
             <div
               key={`mobile-${item.materialId}`}
-              className={`min-w-0 space-y-4 rounded-xl border p-3.5 ${
-                item.todayQty !== null
-                  ? 'border-[rgba(34,197,94,0.30)] bg-[rgba(34,197,94,0.05)]'
-                  : 'border-border bg-surface2'
+              style={noChangeMaterialIds.has(item.materialId) ? { borderColor: '#4ade80' } : undefined}
+              className={`min-w-0 space-y-4 overflow-hidden rounded-2xl border px-4 py-4 ${
+                noChangeMaterialIds.has(item.materialId)
+                  ? 'border-[rgba(74,222,128,0.95)] bg-[linear-gradient(135deg,rgba(22,163,74,0.52),rgba(6,78,59,0.96))] shadow-[0_14px_30px_-20px_rgba(34,197,94,0.95)]'
+                  : 'border-borderStrong bg-[var(--surface-1)]'
               }`}
             >
-              <div className="min-w-0 border-b border-border pb-3">
-                <p className="break-words text-base font-bold leading-snug" style={{ color: 'var(--value-purple)' }}>
+              <div className="min-w-0 text-center">
+                <p className={`${noChangeMaterialIds.has(item.materialId) ? 'text-white' : 'material-label'} break-words text-base font-bold leading-snug`}>
                   {item.name}
                 </p>
-                <p className="mt-1 break-all text-xs text-dim">{item.code}</p>
+                <p className={`${noChangeMaterialIds.has(item.materialId) ? 'text-emerald-100' : 'catalog-label'} mt-1 break-all text-xs font-medium`}>{item.code}</p>
+                <button
+                  type="button"
+                  aria-label={`Bez zmian dziś: ${item.name}`}
+                  aria-pressed={noChangeMaterialIds.has(item.materialId)}
+                  disabled={!canEdit}
+                  onClick={() => toggleNoChangeToday(item.materialId)}
+                  className={`mt-3 inline-flex min-h-8 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                    noChangeMaterialIds.has(item.materialId)
+                      ? 'border-white/80 bg-[rgba(0,0,0,0.22)] text-white'
+                      : 'border-borderStrong bg-[var(--surface-2)] text-muted hover:border-[rgba(34,197,94,0.55)] hover:text-success'
+                  }`}
+                >
+                  <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                  Bez zmian dziś
+                </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="min-w-0 rounded-lg border border-border bg-[var(--surface-1)] px-3 py-2.5">
+              <div className="grid grid-cols-2 border-y border-borderStrong">
+                <div className="min-w-0 border-r border-border px-3 py-3 text-center">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
                     Ostatni spis
                   </p>
                   <p className="mt-1 truncate text-base font-bold text-body tabular-nums">{formatKg(item.yesterdayQty)}</p>
                 </div>
-                <div className="min-w-0 rounded-lg border border-border bg-[var(--surface-1)] px-3 py-2.5">
+                <div className="min-w-0 px-3 py-3 text-center">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
                     Suma dzisiejszego spisu
                   </p>
@@ -733,7 +743,7 @@ export default function LocationDetailPage() {
                       </Button>
                     </div>
                   ) : (
-                    <div className="mt-1 flex items-center gap-2">
+                    <div className="mt-1 flex items-center justify-center gap-2">
                       <p className="truncate text-base font-bold text-title tabular-nums">{formatKg(item.todayQty ?? 0)}</p>
                       {canEdit && (item.measurements ?? []).length === 0 && (
                         <>
@@ -756,17 +766,13 @@ export default function LocationDetailPage() {
                       )}
                     </div>
                   )}
-                </div>                <div className="col-span-2 min-w-0 rounded-lg border border-border bg-[var(--surface-1)] p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
-                      Dzisiejsze pomiary
-                    </p>
-                    <p className="text-sm font-bold text-title tabular-nums">
-                      Suma: {formatKg(item.todayQty ?? 0)}
-                    </p>
-                  </div>
+                </div>
+                <div className="col-span-2 min-w-0 border-t border-border px-3 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
+                    Dzisiejszy spis
+                  </p>
                   {item.measurements && item.measurements.length > 0 ? (
-                    <div className="mt-2 flex flex-wrap gap-2">
+                    <div className="mt-2 divide-y divide-border">
                       {item.measurements.map((measurement, index) =>
                         editingMeasurementId === measurement.id ? (
                           <div key={measurement.id} className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
@@ -794,21 +800,21 @@ export default function LocationDetailPage() {
                             </Button>
                           </div>
                         ) : (
-                          <span
+                          <div
                             key={measurement.id}
-                            className="inline-flex max-w-full items-center gap-1 rounded-md border border-[rgba(255,106,0,0.24)] bg-brandSoft px-2 py-1 text-xs text-title"
+                            className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2 first:pt-0 last:pb-0 text-xs text-title"
                           >
                             <span className="font-bold">{index + 1}.</span>
                             <span className="font-bold tabular-nums">{formatKg(measurement.qty)}</span>
                             {measurement.comment && (
-                              <span className="max-w-[11rem] truncate text-dim">- {measurement.comment}</span>
+                              <span className="min-w-0 flex-1 truncate text-dim">{measurement.comment}</span>
                             )}
                             {canEdit && (
-                              <>
+                              <span className="ml-auto inline-flex items-center gap-2">
                                 <button
                                   type="button"
                                   onClick={() => startEditingMeasurement(measurement)}
-                                  className="ml-1 font-semibold text-[var(--brand)] underline underline-offset-2"
+                                  className="font-semibold text-[var(--brand)] underline underline-offset-2"
                                 >
                                   Edytuj
                                 </button>
@@ -820,9 +826,9 @@ export default function LocationDetailPage() {
                                 >
                                   Usuń
                                 </button>
-                              </>
+                              </span>
                             )}
-                          </span>
+                          </div>
                         )
                       )}
                     </div>
@@ -830,7 +836,7 @@ export default function LocationDetailPage() {
                     <p className="mt-2 text-sm text-dim">Brak dopisanych pomiarów.</p>
                   )}
                 </div>
-                <div className="col-span-2 min-w-0 rounded-lg border border-[rgba(34,197,94,0.20)] bg-[rgba(34,197,94,0.05)] p-3">
+                <div className="col-span-2 min-w-0 border-t border-border px-3 py-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-dim">
                     Dopisz kolejną ilość
                   </p>
@@ -859,7 +865,7 @@ export default function LocationDetailPage() {
                       <Input
                         readOnly
                         value={getMeasureDraft(item.materialId).comment}
-                        placeholder="Miejsce/uwaga, np. przy WTR 04"
+                        placeholder="Uwaga, np. do przeliczenia"
                         type="text"
                         autoComplete="off"
                         autoCorrect="off"
@@ -890,17 +896,33 @@ export default function LocationDetailPage() {
         {visibleItems.map((item) => (
           <div
             key={item.materialId}
-            className={`hidden grid-cols-[minmax(220px,1.7fr)_110px_150px_minmax(240px,1.7fr)_240px] items-center gap-3 rounded-xl border p-3 md:grid ${
-              item.todayQty !== null
-                ? 'border-[rgba(34,197,94,0.30)] bg-[rgba(34,197,94,0.05)]'
-                : 'border-border bg-surface2'
+            style={noChangeMaterialIds.has(item.materialId) ? { borderColor: '#4ade80' } : undefined}
+            className={`mb-3 hidden grid-cols-[minmax(220px,1.7fr)_110px_150px_minmax(240px,1.7fr)_240px] items-center divide-x divide-border rounded-xl border py-4 last:mb-0 [&>div]:px-3 md:grid ${
+              noChangeMaterialIds.has(item.materialId)
+                ? 'border-[rgba(74,222,128,0.95)] bg-[linear-gradient(135deg,rgba(22,163,74,0.52),rgba(6,78,59,0.96))] shadow-[0_14px_30px_-20px_rgba(34,197,94,0.95)]'
+                : 'border-borderStrong bg-[var(--surface-1)]'
             }`}
           >
             <div>
-              <p className="text-sm font-semibold" style={{ color: 'var(--value-purple)' }}>
+              <p className={`${noChangeMaterialIds.has(item.materialId) ? 'text-white' : 'material-label'} text-sm font-semibold`}>
                 {item.name}
               </p>
-              <p className="text-xs text-dim">{item.code}</p>
+              <p className={`${noChangeMaterialIds.has(item.materialId) ? 'text-emerald-100' : 'catalog-label'} text-xs font-medium`}>{item.code}</p>
+              <button
+                type="button"
+                aria-label={`Bez zmian dziś: ${item.name}`}
+                aria-pressed={noChangeMaterialIds.has(item.materialId)}
+                disabled={!canEdit}
+                onClick={() => toggleNoChangeToday(item.materialId)}
+                className={`mt-2 inline-flex min-h-8 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                  noChangeMaterialIds.has(item.materialId)
+                    ? 'border-white/80 bg-[rgba(0,0,0,0.22)] text-white'
+                    : 'border-borderStrong bg-[var(--surface-2)] text-muted hover:border-[rgba(34,197,94,0.55)] hover:text-success'
+                }`}
+              >
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                Bez zmian dziś
+              </button>
             </div>
             <div className="text-sm text-body tabular-nums">{formatKg(item.yesterdayQty)}</div>
             <div>
@@ -948,7 +970,7 @@ export default function LocationDetailPage() {
               )}
             </div>
             <div>
-              <div className="flex flex-wrap gap-1.5">
+              <div className="divide-y divide-border">
                     {(item.measurements ?? []).length > 0 ? (
                       item.measurements?.map((measurement, index) =>
                         editingMeasurementId === measurement.id ? (
@@ -977,21 +999,21 @@ export default function LocationDetailPage() {
                             </Button>
                           </div>
                         ) : (
-                          <span
+                          <div
                             key={measurement.id}
-                            className="inline-flex max-w-full items-center gap-1 rounded-md border border-[rgba(255,106,0,0.24)] bg-brandSoft px-2 py-1 text-[11px] text-title"
+                            className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2 first:pt-0 last:pb-0 text-[11px] text-title"
                           >
                             <span className="font-bold">{index + 1}.</span>
                             <span className="font-bold tabular-nums">{formatKg(measurement.qty)}</span>
                             {measurement.comment && (
-                              <span className="max-w-[9rem] truncate text-dim">- {measurement.comment}</span>
+                              <span className="min-w-0 flex-1 truncate text-dim">{measurement.comment}</span>
                             )}
                             {canEdit && (
-                              <>
+                              <span className="ml-auto inline-flex items-center gap-2">
                                 <button
                                   type="button"
                                   onClick={() => startEditingMeasurement(measurement)}
-                                  className="ml-1 font-semibold text-[var(--brand)] underline underline-offset-2"
+                                  className="font-semibold text-[var(--brand)] underline underline-offset-2"
                                 >
                                   Edytuj
                                 </button>
@@ -1003,9 +1025,9 @@ export default function LocationDetailPage() {
                                 >
                                   Usuń
                                 </button>
-                              </>
+                              </span>
                             )}
-                          </span>
+                          </div>
                         )
                       )
                     ) : (
@@ -1065,7 +1087,7 @@ export default function LocationDetailPage() {
             </div>
           </div>
         ))}
-      </Card>
+      </section>
     </div>
   );
 }

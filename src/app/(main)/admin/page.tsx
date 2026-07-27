@@ -769,7 +769,6 @@ export default function AdminPage() {
     const candidate = urlTab || saved;
     if (
       candidate === 'warehouses' ||
-      candidate === 'locations' ||
       candidate === 'inventory' ||
       candidate === 'audit' ||
       candidate === 'positions' ||
@@ -1350,10 +1349,17 @@ export default function AdminPage() {
 
   const inventoryLocations = useMemo(() => {
     if (!inventoryForm.warehouseId) return [];
-    return activeLocations
-      .filter((loc) => loc.warehouseId === inventoryForm.warehouseId)
-      .sort(compareByName);
-  }, [activeLocations, inventoryForm.warehouseId]);
+    return activeWarehouses
+      .filter((warehouse) => warehouse.id === inventoryForm.warehouseId)
+      .map((warehouse) => ({
+        id: warehouse.id,
+        warehouseId: warehouse.id,
+        name: warehouse.name,
+        orderNo: warehouse.orderNo,
+        type: 'pole' as const,
+        isActive: warehouse.isActive
+      }));
+  }, [activeWarehouses, inventoryForm.warehouseId]);
 
   useEffect(() => {
     if (!inventoryForm.warehouseId) return;
@@ -1893,7 +1899,7 @@ export default function AdminPage() {
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
-        LOCATION_MISSING: 'Wybierz lokacje.',
+        LOCATION_MISSING: 'Wybierz magazyn.',
         MATERIAL_MISSING: 'Wybierz przemial.',
         INVALID_QTY: 'Podaj poprawna ilosc.'
       };
@@ -2532,7 +2538,7 @@ export default function AdminPage() {
       return;
     }
     if (!inventoryForm.locationId) {
-      toast({ title: 'Wybierz lokacje', tone: 'error' });
+      toast({ title: 'Wybierz magazyn', tone: 'error' });
       return;
     }
     if (!inventoryForm.materialId) {
@@ -2553,7 +2559,7 @@ export default function AdminPage() {
       return;
     }
     if (!inventoryForm.locationId) {
-      toast({ title: 'Wybierz lokacje', tone: 'error' });
+      toast({ title: 'Wybierz magazyn', tone: 'error' });
       return;
     }
     inventoryMutation.mutate({
@@ -3577,7 +3583,6 @@ export default function AdminPage() {
           >
             <TabsList>
               <TabsTrigger value="warehouses">Magazyny</TabsTrigger>
-              <TabsTrigger value="locations">Lokalizacje</TabsTrigger>
               <TabsTrigger value="inventory">Inwentaryzacja magazynu przemiałów</TabsTrigger>
               <TabsTrigger value="audit">Rejestr działań</TabsTrigger>
               <TabsTrigger value="positions">Kartoteki/nazwy przemiałów</TabsTrigger>
@@ -3923,7 +3928,7 @@ export default function AdminPage() {
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <label className="text-xs uppercase tracking-wide text-dim">Lokacja</label>
+                    <label className="text-xs uppercase tracking-wide text-dim">Magazyn</label>
                     <SelectField
                       value={inventoryForm.locationId}
                       onChange={(event) =>
@@ -3934,10 +3939,10 @@ export default function AdminPage() {
                       }
                       disabled={!inventoryForm.warehouseId}
                     >
-                      <option value="">Wybierz lokacje</option>
+                      <option value="">Wybierz magazyn</option>
                       {inventoryLocations.map((loc) => (
                         <option key={loc.id} value={loc.id}>
-                          {loc.name} ({loc.type.toUpperCase()})
+                          {loc.name}
                         </option>
                       ))}
                     </SelectField>
@@ -4060,7 +4065,7 @@ export default function AdminPage() {
                             }}
                           />
                           {selectedInventoryNewMaterialCatalog && (
-                            <p className="text-xs text-dim">
+                            <p className="catalog-label text-xs font-medium">
                               Wybrana kartoteka: {selectedInventoryNewMaterialCatalog.name}
                             </p>
                           )}
@@ -4090,7 +4095,7 @@ export default function AdminPage() {
                                           active && 'bg-[rgba(255,122,26,0.16)] text-title'
                                         )}
                                       >
-                                        <span>{item.name}</span>
+                                        <span className="catalog-label font-medium">{item.name}</span>
                                       </button>
                                     );
                                   })
@@ -4170,8 +4175,8 @@ export default function AdminPage() {
                 </p>
                 {inventorySuggestions.length === 0 ? (
                   <EmptyState
-                    title="Brak przemialu na lokacji"
-                    description="Dla tej lokacji nie ma dodatnich stanow w systemie."
+                    title="Brak przemialu w magazynie"
+                    description="Dla tego magazynu nie ma dodatnich stanow w systemie."
                   />
                 ) : (
                   <DataTable
@@ -4182,8 +4187,9 @@ export default function AdminPage() {
                       const diff = parsed === null ? null : parsed - row.currentQty;
                       const isDiff = diff !== null && diff !== 0;
                       return [
-                        <div key={`${row.materialId}-label`} className="text-body">
-                          {row.name} ({row.code.trim()})
+                        <div key={`${row.materialId}-label`}>
+                          <span className="material-label">{row.name}</span>{' '}
+                          <span className="catalog-label text-sm font-medium">({row.code.trim()})</span>
                         </div>,
                         <span key={`${row.materialId}-current`} className="text-body">
                           {formatKg(row.currentQty)}
@@ -4291,7 +4297,7 @@ export default function AdminPage() {
                       </SelectField>
                     </div>
                     <div>
-                      <label className="text-xs uppercase tracking-wide text-dim">Lokacja</label>
+                      <label className="text-xs uppercase tracking-wide text-dim">Magazyn</label>
                       <SelectField
                         value={inventoryFilters.locationId}
                         onChange={(event) =>
@@ -4417,7 +4423,7 @@ export default function AdminPage() {
                           className="inline-flex items-center gap-2"
                           onClick={() => handleInventorySort('location')}
                         >
-                          Lokacja
+                          Magazyn
                           <span className="text-[10px] text-dim">{sortIndicator('location')}</span>
                         </button>,
                         <button

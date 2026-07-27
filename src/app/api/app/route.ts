@@ -257,6 +257,7 @@ const mapErpTargetLocation = (row: any): ErpTargetLocation => ({
 
 const ERP_WAREHOUSE_ID_PREFIX = 'erp-wh-';
 const ERP_LOCATION_ID_PREFIX = 'erp-loc-';
+const WAREHOUSE_INVENTORY_LOCATION_PREFIX = 'warehouse-inventory-';
 const ERP_ORIGINALS_PROXY_URL = String(process.env.ERP_ORIGINALS_PROXY_URL ?? '').trim();
 const ERP_ORIGINALS_PROXY_TOKEN = String(process.env.ERP_ORIGINALS_PROXY_TOKEN ?? '').trim();
 const ERP_ORIGINALS_PROXY_TIMEOUT_MS = (() => {
@@ -274,6 +275,15 @@ const normalizeWarehouseAdminScope = (value: unknown): WarehouseAdminScope =>
 
 const isErpWarehouseId = (id: string) => id.startsWith(ERP_WAREHOUSE_ID_PREFIX);
 const isErpLocationId = (id: string) => id.startsWith(ERP_LOCATION_ID_PREFIX);
+const getWarehouseInventoryLocationId = (warehouseId: string) =>
+  `${WAREHOUSE_INVENTORY_LOCATION_PREFIX}${normalizeMaterialWarehouseId(warehouseId)}`;
+const isWarehouseInventoryLocationId = (id: string) =>
+  id.startsWith(WAREHOUSE_INVENTORY_LOCATION_PREFIX);
+const legacyMaterialWarehouseAlias: Record<string, string> = {
+  'wh-1777286268671-64d70582': 'mill-pp'
+};
+const normalizeMaterialWarehouseId = (warehouseId: string) =>
+  legacyMaterialWarehouseAlias[warehouseId] ?? warehouseId;
 
 const isWarehouseInScope = (
   warehouse: Pick<Warehouse, 'id'>,
@@ -322,6 +332,22 @@ const mapTransfer = (row: any): Transfer => ({
   partner: row.partner ?? undefined,
   note: row.note ?? undefined
 });
+
+const mapTransferForWarehouses = (row: any, locations: Location[]): Transfer => {
+  const locationWarehouseMap = new Map(
+    locations.map((loc) => [loc.id, normalizeMaterialWarehouseId(loc.warehouseId)])
+  );
+  const transfer = mapTransfer(row);
+  return {
+    ...transfer,
+    fromLocationId: transfer.fromLocationId
+      ? locationWarehouseMap.get(transfer.fromLocationId) ?? transfer.fromLocationId
+      : undefined,
+    toLocationId: transfer.toLocationId
+      ? locationWarehouseMap.get(transfer.toLocationId) ?? transfer.toLocationId
+      : undefined
+  };
+};
 
 const mapWarehouseTransferDocument = (row: any): WarehouseTransferDocument => {
   const status: WarehouseTransferDocumentStatus =
@@ -1209,7 +1235,7 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   upsertEntry: 'Spis: zapis pozycji',
   addInventoryMeasure: 'Spis: dodanie pomiaru',
   updateInventoryMeasure: 'Spis: korekta pomiaru',
-  deleteInventoryMeasure: 'Spis: usunięcie pomiaru',
+  deleteInventoryMeasure: 'Spis: usuni臋cie pomiaru',
   confirmNoChangeEntry: 'Spis: potwierdzenie bez zmian',
   confirmNoChangeLocation: 'Spis: potwierdzenie lokalizacji',
   addTransfer: 'Przesuniecia: nowy ruch',
@@ -1489,7 +1515,12 @@ const getActiveStatsLocations = (warehouses: Warehouse[], locations: Location[])
   const allowed = new Set(
     warehouses.filter((warehouse) => warehouse.isActive && warehouse.includeInStats).map((item) => item.id)
   );
-  return locations.filter((loc) => loc.isActive && allowed.has(loc.warehouseId));
+  return locations.filter(
+    (loc) =>
+      loc.isActive &&
+      isWarehouseInventoryLocationId(loc.id) &&
+      allowed.has(loc.warehouseId)
+  );
 };
 
 const getActiveCompanyLocations = (warehouses: Warehouse[], locations: Location[]) => {
@@ -1501,7 +1532,11 @@ const getActiveCompanyLocations = (warehouses: Warehouse[], locations: Location[
       .map((item) => item.id)
   );
   return locations.filter(
-    (loc) => loc.isActive && isLocationInScope(loc, 'PRZEMIALY') && allowed.has(loc.warehouseId)
+    (loc) =>
+      loc.isActive &&
+      isWarehouseInventoryLocationId(loc.id) &&
+      isLocationInScope(loc, 'PRZEMIALY') &&
+      allowed.has(loc.warehouseId)
   );
 };
 
@@ -1706,6 +1741,14 @@ const buildInventoryDeltasByDate = (
   return result;
 };
 
+const isConfirmedOrMissingPreviousZero = (
+  todayEntry: { qty: number; confirmed: boolean; comment?: string } | undefined,
+  previousEntry: { qty: number; confirmed: boolean; comment?: string } | undefined
+) => {
+  if (todayEntry) return todayEntry.confirmed;
+  return (previousEntry?.qty ?? 0) === 0;
+};
+
 const collectConfirmedDiffs = (
   dateKey: string,
   entriesByDate: EntriesByDate,
@@ -1813,7 +1856,7 @@ const SIMPLIFIED_SPIS_AREAS = [
   { warehouseId: 'hall-3', warehouseName: 'Hala 3', locationId: 'hall-3-spis', orderNo: 3, legacyWarehouseIds: [] },
   {
     warehouseId: 'mill-pp',
-    warehouseName: 'Pomieszczenie z młynem PP',
+    warehouseName: 'Pomieszczenie z m艂ynem PP',
     locationId: 'mill-pp-spis',
     orderNo: 4,
     legacyWarehouseIds: ['wh-1777286268671-64d70582']
@@ -1911,7 +1954,7 @@ const ensureSimplifiedSpisStructure = async () => {
             material_id: materialId,
             qty,
             confirmed: true,
-            comment: 'Stan bazowy po przejściu na spis zbiorczy',
+            comment: 'Stan bazowy po przej艣ciu na spis zbiorczy',
             updated_at: new Date().toISOString()
           }));
         if (baselineRows.length > 0) {
@@ -1941,6 +1984,56 @@ const ensureSimplifiedSpisStructure = async () => {
     simplifiedSpisStructurePromise = null;
     throw error;
   }
+};
+void ensureSimplifiedSpisStructure;
+
+let warehouseInventoryStructurePromise: Promise<void> | null = null;
+
+const ensureWarehouseInventoryStructure = async () => {
+  if (!warehouseInventoryStructurePromise) {
+    warehouseInventoryStructurePromise = (async () => {
+      const warehouses = (await fetchWarehouses()).filter(
+        (warehouse) => warehouse.isActive && isWarehouseInScope(warehouse, 'PRZEMIALY')
+      );
+      if (warehouses.length === 0) return;
+      const { error } = await supabaseAdmin.from('locations').upsert(
+        warehouses.map((warehouse) => ({
+          id: getWarehouseInventoryLocationId(warehouse.id),
+          warehouse_id: warehouse.id,
+          name: warehouse.name,
+          order_no: 0,
+          type: 'pole',
+          is_active: true
+        })),
+        { onConflict: 'id' }
+      );
+      if (error) throw error;
+    })();
+  }
+
+  try {
+    await warehouseInventoryStructurePromise;
+  } catch (error) {
+    warehouseInventoryStructurePromise = null;
+    throw error;
+  }
+};
+
+const resolveInventoryLocationId = async (warehouseOrLocationId: string) => {
+  const id = String(warehouseOrLocationId ?? '').trim();
+  if (!id) return '';
+  if (isWarehouseInventoryLocationId(id)) return id;
+  const warehouses = await fetchWarehouses();
+  const warehouse = warehouses.find((item) => item.id === id);
+  if (warehouse) {
+    await ensureWarehouseInventoryStructure();
+    return getWarehouseInventoryLocationId(warehouse.id);
+  }
+  const locations = await fetchLocations();
+  const location = locations.find((item) => item.id === id);
+  if (!location) return id;
+  await ensureWarehouseInventoryStructure();
+  return getWarehouseInventoryLocationId(location.warehouseId);
 };
 
 const isMissingErpTargetLocationsTableError = (error: unknown) => {
@@ -2859,7 +2952,7 @@ const upsertTransferEntry = async (
 const handleAction = async (action: string, payload: any, currentUser: AppUser) => {
   switch (action) {
     case 'getDashboard': {
-      await ensureSimplifiedSpisStructure();
+      await ensureWarehouseInventoryStructure();
       const dateKey = String(payload?.date ?? getTodayKey());
       const [warehouses, locations, materials] = await Promise.all([
         fetchWarehouses(),
@@ -2926,7 +3019,10 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
             const yesterday = previousEntries[loc.id] ?? {};
             const union = new Set([...Object.keys(yesterday), ...Object.keys(today)]);
             const allConfirmed =
-              union.size > 0 && [...union].every((id) => today[id]?.confirmed);
+              union.size > 0 &&
+              [...union].every((id) =>
+                isConfirmedOrMissingPreviousZero(today[id], yesterday[id])
+              );
             const isConfirmed =
               emptyConfirmedToday.has(loc.id) ||
               allConfirmed ||
@@ -3006,14 +3102,17 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       ];
     }
     case 'getLocationsOverview': {
-      await ensureSimplifiedSpisStructure();
+      await ensureWarehouseInventoryStructure();
       const warehouseId = String(payload?.warehouseId ?? '');
       const dateKey = String(payload?.date ?? getTodayKey());
       if (!warehouseId) throw new Error('WAREHOUSE_MISSING');
-      const [locations, materials] = await Promise.all([fetchLocations(), fetchMaterials()]);
-      const activeLocations = locations.filter(
-        (loc) => loc.warehouseId === warehouseId && loc.isActive
+      const [warehouses, locations, materials] = await Promise.all([fetchWarehouses(), fetchLocations(), fetchMaterials()]);
+      const warehouse = warehouses.find(
+        (item) => item.id === warehouseId && item.isActive && isWarehouseInScope(item, 'PRZEMIALY')
       );
+      if (!warehouse) throw new Error('WAREHOUSE_MISSING');
+      const inventoryLocationId = getWarehouseInventoryLocationId(warehouseId);
+      const activeLocations = locations.filter((loc) => loc.id === inventoryLocationId && loc.isActive);
       const yesterdayKey = addDays(dateKey, -1);
       const locationIds = activeLocations.map((loc) => loc.id);
       const [
@@ -3036,7 +3135,6 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
 
       return activeLocations
-        .sort((a, b) => a.orderNo - b.orderNo)
         .map((loc) => {
           const today = todayEntries[loc.id] ?? {};
           const latestPrevious = latestPreviousEntries[loc.id] ?? yesterdayEntries[loc.id] ?? {};
@@ -3044,7 +3142,10 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           const union = new Set([...Object.keys(today), ...Object.keys(latestPrevious)]);
           const confirmed = emptyConfirmedToday.has(loc.id)
             ? true
-            : union.size > 0 && [...union].every((id) => today[id]?.confirmed);
+            : union.size > 0 &&
+              [...union].every((id) =>
+                isConfirmedOrMissingPreviousZero(today[id], latestPrevious[id])
+              );
           const source = confirmed || Object.keys(today).length > 0 ? 'TODAY' : 'LAST';
           const hasTodayEntries = Object.keys(today).length > 0;
           const previewSource = source === 'TODAY' ? mergedCurrent : latestPrevious;
@@ -3081,8 +3182,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
               allZeroConfirmed);
 
           return {
-            id: loc.id,
-            name: loc.name,
+            id: warehouse.id,
+            name: warehouse.name,
             status: confirmed ? 'DONE' : 'PENDING',
             source,
             preview,
@@ -3094,8 +3195,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         });
     }
     case 'getLocationDetail': {
-      await ensureSimplifiedSpisStructure();
-      const locationId = String(payload?.locationId ?? '');
+      await ensureWarehouseInventoryStructure();
+      const locationId = await resolveInventoryLocationId(String(payload?.locationId ?? payload?.warehouseId ?? ''));
       const dateKey = String(payload?.date ?? getTodayKey());
       if (!locationId) throw new Error('NOT_FOUND');
       const yesterdayKey = addDays(dateKey, -1);
@@ -3142,8 +3243,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       });
     }
     case 'upsertEntry': {
-      await ensureSimplifiedSpisStructure();
-      const locationId = String(payload?.locationId ?? '');
+      await ensureWarehouseInventoryStructure();
+      const locationId = await resolveInventoryLocationId(String(payload?.locationId ?? payload?.warehouseId ?? ''));
       const materialId = String(payload?.materialId ?? '');
       const qty = toNumber(payload?.qty);
       if (!locationId || !materialId) throw new Error('NOT_FOUND');
@@ -3197,8 +3298,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return { ok: true };
     }
     case 'addInventoryMeasure': {
-      await ensureSimplifiedSpisStructure();
-      const locationId = String(payload?.locationId ?? '');
+      await ensureWarehouseInventoryStructure();
+      const locationId = await resolveInventoryLocationId(String(payload?.locationId ?? payload?.warehouseId ?? ''));
       const materialId = String(payload?.materialId ?? '');
       const qty = toNumber(payload?.qty);
       if (!locationId || !materialId) throw new Error('NOT_FOUND');
@@ -3250,7 +3351,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return { ok: true };
     }
     case 'updateInventoryMeasure': {
-      const locationId = String(payload?.locationId ?? '');
+      const locationId = await resolveInventoryLocationId(String(payload?.locationId ?? payload?.warehouseId ?? ''));
       const materialId = String(payload?.materialId ?? '');
       const measurementId = String(payload?.measurementId ?? '');
       const qty = toNumber(payload?.qty);
@@ -3277,7 +3378,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return { ok: true };
     }
     case 'deleteInventoryMeasure': {
-      const locationId = String(payload?.locationId ?? '');
+      const locationId = await resolveInventoryLocationId(String(payload?.locationId ?? payload?.warehouseId ?? ''));
       const materialId = String(payload?.materialId ?? '');
       const measurementId = String(payload?.measurementId ?? '');
       if (!locationId || !materialId || !measurementId) throw new Error('NOT_FOUND');
@@ -3294,7 +3395,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return { ok: true };
     }
     case 'confirmNoChangeEntry': {
-      const locationId = String(payload?.locationId ?? '');
+      const locationId = await resolveInventoryLocationId(String(payload?.locationId ?? payload?.warehouseId ?? ''));
       const materialId = String(payload?.materialId ?? '');
       if (!locationId || !materialId) throw new Error('NOT_FOUND');
       const dateKey = getTodayKey();
@@ -3340,7 +3441,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return { ok: true };
     }
     case 'confirmNoChangeLocation': {
-      const locationId = String(payload?.locationId ?? '');
+      const locationId = await resolveInventoryLocationId(String(payload?.locationId ?? payload?.warehouseId ?? ''));
       if (!locationId) throw new Error('NOT_FOUND');
       const dateKey = getTodayKey();
       const yesterdayKey = addDays(dateKey, -1);
@@ -3460,7 +3561,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .sort((a, b) => a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' }));
     }
     case 'getTotalsHistory': {
-      await ensureSimplifiedSpisStructure();
+      await ensureWarehouseInventoryStructure();
       const days = Math.max(1, Number(payload?.days ?? 30));
       const todayKey = getTodayKey();
       const fromKey = addDays(todayKey, -Math.max(0, days - 1));
@@ -3570,7 +3671,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return { added, removed } satisfies MonthlyDelta;
     }
     case 'getDashboardMonthStats': {
-      await ensureSimplifiedSpisStructure();
+      await ensureWarehouseInventoryStructure();
       const todayKey = getTodayKey();
       const date = parseDateKey(todayKey);
       const defaultFrom = formatDate(new Date(date.getFullYear(), date.getMonth(), 1));
@@ -3917,7 +4018,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return { year, rows: rowsOut, totals } satisfies YearlyReport;
     }
     case 'getCurrentMaterialTotals': {
-      await ensureSimplifiedSpisStructure();
+      await ensureWarehouseInventoryStructure();
       const scope =
         payload?.scope === 'all' ? 'all' : payload?.scope === 'company' ? 'company' : 'stats';
       const [materials, warehouses, locations] = await Promise.all([
@@ -3960,13 +4061,14 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .sort((a, b) => b.total - a.total) satisfies MaterialTotal[];
     }
     case 'getMaterialLocations': {
+      await ensureWarehouseInventoryStructure();
       const [materials, locations, warehouses] = await Promise.all([
         fetchMaterials(),
         fetchLocations(),
         fetchWarehouses()
       ]);
       const todayKey = getTodayKey();
-      const activeLocations = locations.filter((loc) => loc.isActive);
+      const activeLocations = getActiveCompanyLocations(warehouses, locations);
       const latestEntriesByLocation = await fetchLatestEntriesByLocation(
         activeLocations.map((loc) => loc.id),
         todayKey
@@ -3989,8 +4091,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
             result[materialId] = [];
           }
           result[materialId].push({
-            locationId: loc.id,
-            locationName: loc.name,
+            locationId: loc.warehouseId,
+            locationName: warehouseName,
             warehouseName,
             qty
           });
@@ -4002,7 +4104,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
             sensitivity: 'base'
           });
           if (warehouseCompare !== 0) return warehouseCompare;
-          return a.locationName.localeCompare(b.locationName, 'pl', { sensitivity: 'base' });
+          return a.locationId.localeCompare(b.locationId);
         });
       });
       return result;
@@ -4569,6 +4671,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     }
     case 'addLocation': {
       const scope = normalizeWarehouseAdminScope(payload?.scope);
+      if (scope === 'PRZEMIALY') throw new Error('WAREHOUSE_ONLY_INVENTORY');
       const warehouseId = String(payload?.warehouseId ?? '');
       const type = payload?.type === 'pole' ? 'pole' : 'wtr';
       const name = String(payload?.name ?? '');
@@ -4620,6 +4723,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const id = String(payload?.id ?? '').trim();
       if (!id) throw new Error('NOT_FOUND');
       const scope = normalizeWarehouseAdminScope(payload?.scope);
+      if (scope === 'PRZEMIALY') throw new Error('WAREHOUSE_ONLY_INVENTORY');
       const { data: existing, error: existingError } = await supabaseAdmin
         .from('locations')
         .select('*')
@@ -4657,6 +4761,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const id = String(payload?.id ?? '').trim();
       if (!id) throw new Error('NOT_FOUND');
       const scope = normalizeWarehouseAdminScope(payload?.scope);
+      if (scope === 'PRZEMIALY') throw new Error('WAREHOUSE_ONLY_INVENTORY');
       const { data: existing, error: existingError } = await supabaseAdmin
         .from('locations')
         .select('*')
@@ -4688,37 +4793,36 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return enrichAuditEventsForDisplay(mapped);
     }
     case 'getLocations': {
-      await ensureSimplifiedSpisStructure();
-      const [warehouses, locations] = await Promise.all([fetchWarehouses(), fetchLocations()]);
-      const filteredWarehouses = warehouses.filter((warehouse) =>
-        isWarehouseInScope(warehouse, 'PRZEMIALY')
-      );
-      const warehouseMap = new Map(filteredWarehouses.map((warehouse) => [warehouse.id, warehouse]));
-      return locations
-        .filter(
-          (loc) =>
-            loc.isActive &&
-            isLocationInScope(loc, 'PRZEMIALY') &&
-            warehouseMap.has(loc.warehouseId)
-        )
-        .map((loc) => ({
-          id: loc.id,
-          warehouseId: loc.warehouseId,
-          warehouseName: warehouseMap.get(loc.warehouseId)?.name ?? 'Nieznany magazyn',
-          name: loc.name,
-          orderNo: loc.orderNo,
-          type: loc.type
-        }))
-        .sort((a, b) => {
-          const warehouseOrder =
-            (warehouseMap.get(a.warehouseId)?.orderNo ?? 0) -
-            (warehouseMap.get(b.warehouseId)?.orderNo ?? 0);
-          if (warehouseOrder !== 0) return warehouseOrder;
-          return a.orderNo - b.orderNo;
-        }) satisfies LocationOption[];
+      await ensureWarehouseInventoryStructure();
+      const warehouses = await fetchWarehouses();
+      return warehouses
+        .filter((warehouse) => warehouse.isActive && isWarehouseInScope(warehouse, 'PRZEMIALY'))
+        .sort((a, b) => a.orderNo - b.orderNo)
+        .map((warehouse) => ({
+          id: warehouse.id,
+          warehouseId: warehouse.id,
+          warehouseName: warehouse.name,
+          name: warehouse.name,
+          orderNo: warehouse.orderNo,
+          type: 'pole' as const
+        })) satisfies LocationOption[];
     }
     case 'getLocationsAdmin': {
       const scope = normalizeWarehouseAdminScope(payload?.scope);
+      if (scope === 'PRZEMIALY') {
+        const warehouses = await fetchWarehouses();
+        return warehouses
+          .filter((warehouse) => warehouse.isActive && isWarehouseInScope(warehouse, 'PRZEMIALY'))
+          .sort((a, b) => a.orderNo - b.orderNo)
+          .map((warehouse) => ({
+            id: warehouse.id,
+            warehouseId: warehouse.id,
+            name: warehouse.name,
+            orderNo: warehouse.orderNo,
+            type: 'pole' as const,
+            isActive: warehouse.isActive
+          })) satisfies Location[];
+      }
       const [warehouses, locations] = await Promise.all([fetchWarehouses(), fetchLocations()]);
       const scopedWarehouses = warehouses.filter((warehouse) => isWarehouseInScope(warehouse, scope));
       const warehouseOrderMap = new Map(scopedWarehouses.map((warehouse) => [warehouse.id, warehouse.orderNo]));
@@ -5699,14 +5803,19 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }
       const { data, error } = await query.order('at', { ascending: false });
       if (error) throw error;
-      return (data ?? []).map(mapTransfer);
+      const locations = await fetchLocations();
+      return (data ?? []).map((row) => mapTransferForWarehouses(row, locations));
     }
     case 'addTransfer': {
       const kind = String(payload?.kind ?? '') as TransferKind;
       const materialId = String(payload?.materialId ?? '');
       const qty = toNumber(payload?.qty);
-      const fromLocationId = payload?.fromLocationId ? String(payload.fromLocationId) : undefined;
-      const toLocationId = payload?.toLocationId ? String(payload.toLocationId) : undefined;
+      const fromLocationId = payload?.fromLocationId
+        ? await resolveInventoryLocationId(String(payload.fromLocationId))
+        : undefined;
+      const toLocationId = payload?.toLocationId
+        ? await resolveInventoryLocationId(String(payload.toLocationId))
+        : undefined;
       if (!materialId) throw new Error('MATERIAL_MISSING');
       if (!qty || qty <= 0) throw new Error('INVALID_QTY');
       const materials = await fetchMaterials();
@@ -5762,7 +5871,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (toLocationId) {
         await upsertTransferEntry(dateKey, toLocationId, materialId, qty);
       }
-      return mapTransfer(data);
+      const locations = await fetchLocations();
+      return mapTransferForWarehouses(data, locations);
     }
     case 'getInventoryAdjustments': {
       const { data, error } = await supabaseAdmin
@@ -5773,7 +5883,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return (data ?? []).map(mapInventoryAdjustment);
     }
     case 'applyInventoryAdjustment': {
-      const locationId = String(payload?.locationId ?? '');
+      const locationId = await resolveInventoryLocationId(String(payload?.locationId ?? payload?.warehouseId ?? ''));
       const materialId = String(payload?.materialId ?? '');
       const qty = toNumber(payload?.qty);
       if (!locationId) throw new Error('LOCATION_MISSING');
@@ -5862,7 +5972,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'addMixedMaterial': {
       const name = String(payload?.name ?? '').trim();
       const qty = toNumber(payload?.qty);
-      const locationId = String(payload?.locationId ?? '');
+      const locationId = await resolveInventoryLocationId(String(payload?.locationId ?? payload?.warehouseId ?? ''));
       if (!name) throw new Error('NAME_REQUIRED');
       if (!locationId) throw new Error('LOCATION_REQUIRED');
       if (!qty || qty <= 0) throw new Error('INVALID_QTY');
@@ -5903,7 +6013,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'removeMixedMaterial': {
       const name = String(payload?.name ?? '').trim();
       const qty = toNumber(payload?.qty);
-      const locationId = String(payload?.locationId ?? '');
+      const locationId = await resolveInventoryLocationId(String(payload?.locationId ?? payload?.warehouseId ?? ''));
       if (!name) throw new Error('NAME_REQUIRED');
       if (!locationId) throw new Error('LOCATION_REQUIRED');
       if (!qty || qty <= 0) throw new Error('INVALID_QTY');
@@ -5946,8 +6056,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     }
     case 'transferMixedMaterial': {
       const name = String(payload?.name ?? '').trim();
-      const fromLocationId = String(payload?.fromLocationId ?? '');
-      const toLocationId = String(payload?.toLocationId ?? '');
+      const fromLocationId = await resolveInventoryLocationId(String(payload?.fromLocationId ?? payload?.fromWarehouseId ?? ''));
+      const toLocationId = await resolveInventoryLocationId(String(payload?.toLocationId ?? payload?.toWarehouseId ?? ''));
       const qty = toNumber(payload?.qty);
       if (!name) throw new Error('NAME_REQUIRED');
       if (!fromLocationId) throw new Error('FROM_REQUIRED');
@@ -7538,7 +7648,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return;
     }
     case 'getWarehouses': {
-      await ensureSimplifiedSpisStructure();
+      await ensureWarehouseInventoryStructure();
       const warehouses = await fetchWarehouses();
       return warehouses
         .filter(
@@ -7610,3 +7720,4 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ code }, { status });
   }
 }
+

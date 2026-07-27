@@ -8,12 +8,11 @@ import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/layout/PageHeader';
 
 const SPIS_AREAS = [
-  { warehouseId: 'hall-1', locationId: 'hall-1-spis', name: 'Hala 1' },
-  { warehouseId: 'hall-2', locationId: 'hall-2-spis', name: 'Hala 2' },
-  { warehouseId: 'hall-3', locationId: 'hall-3-spis', name: 'Hala 3' },
+  { warehouseId: 'hall-1', name: 'Hala 1' },
+  { warehouseId: 'hall-2', name: 'Hala 2' },
+  { warehouseId: 'hall-3', name: 'Hala 3' },
   {
     warehouseId: 'mill-pp',
-    locationId: 'mill-pp-spis',
     name: 'Pomieszczenie z młynem PP'
   }
 ] as const;
@@ -42,14 +41,14 @@ export default function SpisLandingPage() {
           availableAreas.map((area) => (
             <Card
               key={area.warehouseId}
-              className="flex min-h-40 flex-col items-start justify-between gap-6 sm:flex-row sm:items-center"
+              className="flex min-h-40 flex-col items-center justify-between gap-6 text-center sm:flex-row sm:items-center sm:text-left"
             >
-              <div>
+              <div className="w-full sm:w-auto">
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-dim">Obszar spisu</p>
                 <p className="mt-2 text-2xl font-bold text-title">{area.name}</p>
               </div>
               <Button asChild variant="primaryEmber" className="w-full sm:w-auto">
-                <Link href={`/spis/${area.warehouseId}/lokacja/${area.locationId}`}>
+                <Link href={`/spis/${area.warehouseId}/lokacja/${area.warehouseId}`}>
                   Rozpocznij spis
                 </Link>
               </Button>

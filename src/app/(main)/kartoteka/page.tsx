@@ -183,10 +183,10 @@ export default function CatalogPage() {
                           }`}
                         />
                         <div>
-                          <p className="text-base font-semibold" style={{ color: 'var(--value-purple)' }}>
+                          <p className="material-label text-base font-semibold">
                             {row.name}
                           </p>
-                          <p className="text-sm text-dim">(Kartoteka {row.code.trim()})</p>
+                          <p className="catalog-label text-sm font-medium">Kartoteka {row.code.trim()}</p>
                         </div>
                       </div>
                       <span
@@ -205,7 +205,7 @@ export default function CatalogPage() {
                             <span className="text-right">Ilość (kg)</span>
                           </div>
                           {locations.length === 0 ? (
-                            <p className="mt-2 text-xs text-dim">Brak stanu w lokacjach.</p>
+                            <p className="mt-2 text-xs text-dim">Brak stanu w magazynach.</p>
                           ) : (
                             locations.map((location) => (
                               <div
@@ -213,7 +213,6 @@ export default function CatalogPage() {
                                 className="grid gap-2 border-t border-border py-2 text-base sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px] sm:gap-4"
                               >
                                 <span className="text-body">{location.warehouseName}</span>
-                                <span className="text-body">{location.locationName}</span>
                                 <span
                                   className="text-left font-semibold tabular-nums sm:text-right"
                                   style={{ color: 'var(--value-purple)' }}
@@ -261,7 +260,7 @@ export default function CatalogPage() {
                           }`}
                         />
                         <div>
-                          <p className="text-base font-semibold" style={{ color: 'var(--brand)' }}>
+                          <p className="catalog-label text-base font-semibold">
                             KARTOTEKA WEDŁUG ERP {row.catalog}
                           </p>
                           <p className="text-sm text-dim">{row.count} przemiałów</p>
@@ -289,7 +288,7 @@ export default function CatalogPage() {
                                 key={`${row.catalog}-${item.id}`}
                                 className="grid gap-2 border-t border-border py-2 text-base sm:grid-cols-[minmax(0,1fr)_120px] sm:gap-4"
                               >
-                                <span className="text-body">{item.name}</span>
+                                <span className="material-label font-medium">{item.name}</span>
                                 <span
                                   className="text-left font-semibold tabular-nums sm:text-right"
                                   style={{ color: 'var(--value-purple)' }}

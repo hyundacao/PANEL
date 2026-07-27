@@ -12,7 +12,6 @@ import {
   getTransfers
 } from '@/lib/api';
 import { PageHeader } from '@/components/layout/PageHeader';
-import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -48,14 +47,16 @@ const kindConfig: Record<TransferKind, { label: string; tone: 'info' | 'success'
 };
 const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const materialLabel = (name: string, code: string) => `${name} (${code.trim()})`;
-const locationLabel = (warehouse: string, name: string) => `${warehouse} - ${name}`;
+const locationLabel = (warehouse: string, name?: string) => {
+  void name;
+  return warehouse;
+};
 
 export default function TransfersPage() {
   const today = getTodayKey();
   const toast = useToastStore((state) => state.push);
   const queryClient = useQueryClient();
   const [form, setForm] = useState<TransferForm>(initialForm);
-  const [selectedToWarehouseId, setSelectedToWarehouseId] = useState<string | null>(null);
   const [showMaterialSuggestions, setShowMaterialSuggestions] = useState(false);
   const [showFromSuggestions, setShowFromSuggestions] = useState(false);
   const glowClass = 'ring-2 ring-[rgba(255,122,26,0.45)] shadow-[0_0_0_3px_rgba(255,122,26,0.18)]';
@@ -118,10 +119,10 @@ export default function TransfersPage() {
       const messageMap: Record<string, string> = {
         MATERIAL_MISSING: 'Wybierz poprawny przemiał z listy.',
         INVALID_QTY: 'Podaj ilość większą od zera.',
-        MISSING_LOCATIONS: 'Wybierz lokację źródłową i docelową.',
-        SAME_LOCATION: 'Lokacje źródłowa i docelowa nie mogą być takie same.',
-        MISSING_LOCATION: 'Wybierz lokację dla przesunięcia.',
-        INSUFFICIENT_STOCK: 'Brak wystarczającego stanu w lokacji źródłowej.'
+        MISSING_LOCATIONS: 'Wybierz magazyn źródłowy i docelowy.',
+        SAME_LOCATION: 'Magazyny źródłowy i docelowy nie mogą być takie same.',
+        MISSING_LOCATION: 'Wybierz magazyn dla przesunięcia.',
+        INSUFFICIENT_STOCK: 'Brak wystarczającego stanu w magazynie źródłowym.'
       };
       toast({
         title: 'Nie zapisano przesunięcia.',
@@ -149,7 +150,7 @@ export default function TransfersPage() {
     if (!normalized) return;
     const resolved = resolveLocation(normalized, list);
     if (!resolved) {
-      toast({ title: 'Wybierz lokację z listy', tone: 'error' });
+      toast({ title: 'Wybierz magazyn z listy', tone: 'error' });
       setForm((prev) => ({ ...prev, [field]: '' }));
       return;
     }
@@ -238,35 +239,12 @@ export default function TransfersPage() {
     });
     return groups;
   }, [locations]);
-  const activeToWarehouseId = selectedToWarehouseId;
-  const activeToGroup = useMemo(
-    () => warehouseGroups.find((group) => group.id === activeToWarehouseId) ?? null,
-    [warehouseGroups, activeToWarehouseId]
-  );
-  const toWarehouseWtr = useMemo(
-    () => activeToGroup?.locations.filter((item) => item.type === 'wtr') ?? [],
-    [activeToGroup]
-  );
-  const toWarehousePole = useMemo(
-    () => activeToGroup?.locations.filter((item) => item.type === 'pole') ?? [],
-    [activeToGroup]
-  );
+  const activeToWarehouseId = resolveLocation(form.toLocation, locations)?.warehouseId ?? null;
 
-  const handleSelectToWarehouse = (warehouseId: string) => {
-    setSelectedToWarehouseId(warehouseId);
-    if (form.toLocation) {
-      const resolved = resolveLocation(form.toLocation, locations);
-      if (!resolved || resolved.warehouseId !== warehouseId) {
-        setForm((prev) => ({ ...prev, toLocation: '' }));
-      }
-    }
-  };
-
-  const handleSelectToLocation = (location: LocationOption) => {
-    setSelectedToWarehouseId(location.warehouseId);
+  const handleSelectToWarehouse = (group: { id: string; name: string }) => {
     setForm((prev) => ({
       ...prev,
-      toLocation: locationLabel(location.warehouseName, location.name)
+      toLocation: group.name
     }));
   };
 
@@ -290,16 +268,16 @@ export default function TransfersPage() {
     if (form.kind === 'INTERNAL') {
       if (!fromLocation || !toLocation) {
         toast({
-          title: 'Uzupełnij lokacje',
-          description: 'Wybierz lokację źródłową i docelową.',
+          title: 'Uzupełnij magazyny',
+          description: 'Wybierz magazyn źródłowy i docelowy.',
           tone: 'error'
         });
         return;
       }
       if (fromLocation.id === toLocation.id) {
         toast({
-          title: 'Niepoprawne lokacje',
-          description: 'Lokacje źródłowa i docelowa muszą się różnić.',
+          title: 'Niepoprawne magazyny',
+          description: 'Magazyny źródłowy i docelowy muszą się różnić.',
           tone: 'error'
         });
         return;
@@ -307,12 +285,12 @@ export default function TransfersPage() {
     }
 
     if (form.kind === 'EXTERNAL_IN' && !toLocation) {
-      toast({ title: 'Wybierz lokację docelową', tone: 'error' });
+      toast({ title: 'Wybierz magazyn docelowy', tone: 'error' });
       return;
     }
 
     if (form.kind === 'EXTERNAL_OUT' && !fromLocation) {
-      toast({ title: 'Wybierz lokację źródłową', tone: 'error' });
+      toast({ title: 'Wybierz magazyn źródłowy', tone: 'error' });
       return;
     }
 
@@ -345,7 +323,7 @@ export default function TransfersPage() {
           : transfer.fromLocationId
           ? locationLabel(
               locationMap.get(transfer.fromLocationId)?.warehouseName ?? 'Nieznany magazyn',
-              locationMap.get(transfer.fromLocationId)?.name ?? 'Nieznana lokacja'
+              locationMap.get(transfer.fromLocationId)?.name ?? 'Nieznany magazyn'
             )
           : '-';
       const toLabel =
@@ -354,7 +332,7 @@ export default function TransfersPage() {
           : transfer.toLocationId
           ? locationLabel(
               locationMap.get(transfer.toLocationId)?.warehouseName ?? 'Nieznany magazyn',
-              locationMap.get(transfer.toLocationId)?.name ?? 'Nieznana lokacja'
+              locationMap.get(transfer.toLocationId)?.name ?? 'Nieznany magazyn'
             )
           : '-';
       const noteParts = [transfer.partner && `Kontrahent: ${transfer.partner}`, transfer.note]
@@ -367,7 +345,7 @@ export default function TransfersPage() {
           {kindMeta.label}
         </Badge>,
         material ? (
-          <span style={{ color: 'var(--value-purple)' }}>{material.name}</span>
+          <span className="material-label">{material.name}</span>
         ) : (
           'Nieznany przemiał'
         ),
@@ -382,29 +360,23 @@ export default function TransfersPage() {
   }, [catalog, locations, transfers]);
 
   return (
-    <div className="space-y-6">
-      <PageHeader title="Przesunięcia przemiałowe" subtitle={`Dziś: ${today}`} />
+    <div className="space-y-8">
+      <PageHeader
+        title="Przesunięcia przemiałowe"
+        className="sm:justify-center [&>div:first-child]:text-center [&>div:first-child>h2]:text-2xl sm:[&>div:first-child>h2]:text-3xl"
+      />
 
-      <Card className="border-[rgba(255,106,0,0.35)] bg-brandSoft">
-        <p className="text-sm text-body">
-          Przesunięcia służą do rejestrowania transferów między lokacjami oraz wydań i przyjęć
-          zewnętrznych. Nie wpływają na podsumowanie &quot;Przybyło/Wyrobiono&quot;.
-        </p>
-      </Card>
-
-      <Card className="space-y-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-dim">Nowe przesunięcie</p>
-
-        <div className="flex flex-wrap gap-2">
+      <section className="space-y-5">
+        <div className="grid w-full grid-cols-1 gap-1 rounded-xl border border-borderStrong bg-[var(--surface-2)] p-1 sm:grid-cols-3">
           {(['INTERNAL', 'EXTERNAL_IN', 'EXTERNAL_OUT'] as TransferKind[]).map((kind) => (
             <Button
               key={kind}
               variant="secondary"
-              className={
+              className={`transfer-kind-button min-h-12 w-full rounded-lg border-transparent bg-transparent px-3 text-sm shadow-none ring-0 hover:border-transparent hover:bg-[var(--surface-3)] ${
                 form.kind === kind
-                  ? `${glowClass} border-[rgba(255,106,0,0.55)] bg-brandSoft text-title`
-                  : ''
-              }
+                  ? 'transfer-kind-button-active'
+                  : 'text-muted'
+              }`}
               onClick={() => handleKindChange(kind)}
             >
               {kindConfig[kind].label}
@@ -412,7 +384,7 @@ export default function TransfersPage() {
           ))}
         </div>
 
-        <div className="grid gap-4">
+        <div className="grid gap-5 lg:grid-cols-2">
           <div>
             <label className="text-xs uppercase tracking-wide text-dim">Przemiał</label>
             <div className="relative">
@@ -457,13 +429,10 @@ export default function TransfersPage() {
                           setForm((prev) => ({ ...prev, material: label }));
                           setShowMaterialSuggestions(false);
                         }}
-                        className="flex w-full items-start justify-between gap-3 px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]"
+                        className="flex w-full items-start px-3 py-2 text-left text-sm transition hover:bg-[rgba(255,255,255,0.06)]"
                       >
-                        <span className="font-semibold" style={{ color: 'var(--value-purple)' }}>
+                        <span className="material-label font-semibold">
                           {item.name}
-                        </span>
-                        <span className="text-xs font-semibold text-dim">
-                          {item.code.trim() || 'Brak kartoteki'}
                         </span>
                       </button>
                     );
@@ -474,7 +443,7 @@ export default function TransfersPage() {
           </div>
           {form.kind !== 'EXTERNAL_IN' && (
             <div>
-              <label className="text-xs uppercase tracking-wide text-dim">Z lokacji</label>
+              <label className="text-xs uppercase tracking-wide text-dim">Z magazynu</label>
               <div className="relative">
                 <Input
                   value={form.fromLocation}
@@ -487,13 +456,13 @@ export default function TransfersPage() {
                     handleLocationBlur(event.target.value, 'fromLocation', filteredLocations);
                     setTimeout(() => setShowFromSuggestions(false), 120);
                   }}
-                  placeholder="Hala 1 - WTR 1"
+                  placeholder="Hala 1"
                   className={form.fromLocation ? 'pr-10' : undefined}
                 />
                 {form.fromLocation && (
                   <button
                     type="button"
-                    aria-label="Wyczyść pole lokacji"
+                    aria-label="Wyczyść pole magazynu"
                     className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => {
@@ -535,7 +504,7 @@ export default function TransfersPage() {
               </div>
               {typeof fromLocationQty === 'number' && (
                 <p className="mt-2 text-xs text-dim">
-                  Stan w lokacji:{' '}
+                  Stan w magazynie:{' '}
                   <span className="font-semibold text-title">{formatKg(fromLocationQty)}</span>
                 </p>
               )}
@@ -543,7 +512,7 @@ export default function TransfersPage() {
           )}
         </div>
 
-        <div className="grid gap-4">
+        <div className="grid gap-5 lg:grid-cols-2">
           <div>
             <label className="text-xs uppercase tracking-wide text-dim">Ilość (kg)</label>
             <Input
@@ -555,94 +524,27 @@ export default function TransfersPage() {
           </div>
           {form.kind !== 'EXTERNAL_OUT' && (
             <div className="space-y-2">
-              <label className="text-xs uppercase tracking-wide text-dim">Do lokacji</label>
-              <Input value={form.toLocation} readOnly placeholder="Wybierz magazyn i lokacje" />
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Wybierz magazyn docelowy</p>
               <div className="space-y-2">
                 <div className="grid gap-2 sm:grid-cols-2">
                   {warehouseGroups.map((group) => {
-                    const active = selectedToWarehouseId === group.id;
+                    const active = activeToWarehouseId === group.id;
                     return (
                       <Button
                         key={group.id}
                         variant="secondary"
                         className={
                           active
-                            ? `${glowClass} w-full border-[rgba(255,106,0,0.55)] bg-brandSoft text-title`
-                            : 'w-full'
+                            ? 'warehouse-choice-button warehouse-choice-button-active w-full'
+                            : 'warehouse-choice-button w-full'
                         }
-                        onClick={() => handleSelectToWarehouse(group.id)}
+                        onClick={() => handleSelectToWarehouse(group)}
                       >
                         {group.name}
                       </Button>
                     );
                   })}
                 </div>
-
-                {!activeToGroup && (
-                  <p className="text-sm text-dim">Najpierw wybierz magazyn.</p>
-                )}
-
-                {activeToGroup && (
-                  <div className="space-y-3">
-                    <div className="rounded-2xl border border-border bg-surface2 px-4 py-3 shadow-[inset_0_1px_0_var(--inner-highlight)]">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-                        Wtryskarki
-                      </p>
-                      {toWarehouseWtr.length === 0 ? (
-                        <p className="mt-2 text-sm text-dim">Brak lokacji WTR.</p>
-                      ) : (
-                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                          {toWarehouseWtr.map((location) => {
-                            const label = locationLabel(location.warehouseName, location.name);
-                            const isSelected = form.toLocation === label;
-                            return (
-                              <button
-                                key={location.id}
-                                type="button"
-                                onClick={() => handleSelectToLocation(location)}
-                                className={`rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
-                                  isSelected
-                                    ? 'border-[rgba(255,106,0,0.55)] bg-brandSoft text-title shadow-[0_0_0_1px_rgba(255,106,0,0.25)]'
-                                    : 'border-border bg-surface text-body hover:border-borderStrong hover:bg-[rgba(255,255,255,0.04)]'
-                                }`}
-                              >
-                                {location.name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    {toWarehousePole.length > 0 && (
-                      <div className="rounded-2xl border border-border bg-surface2 px-4 py-3 shadow-[inset_0_1px_0_var(--inner-highlight)]">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-dim">
-                          Pole odkladcze
-                        </p>
-                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                          {toWarehousePole.map((location) => {
-                            const label = locationLabel(location.warehouseName, location.name);
-                            const isSelected = form.toLocation === label;
-                            return (
-                              <button
-                                key={location.id}
-                                type="button"
-                                onClick={() => handleSelectToLocation(location)}
-                                className={`rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
-                                  isSelected
-                                    ? 'border-[rgba(255,106,0,0.55)] bg-brandSoft text-title shadow-[0_0_0_1px_rgba(255,106,0,0.25)]'
-                                    : 'border-border bg-surface text-body hover:border-borderStrong hover:bg-[rgba(255,255,255,0.04)]'
-                                }`}
-                              >
-                                {location.name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             </div>
           )}
@@ -682,9 +584,9 @@ export default function TransfersPage() {
             Zapisz przesunięcie
           </Button>
         </div>
-      </Card>
+      </section>
 
-      <Card className="space-y-4">
+      <section className="space-y-4 border-t border-border pt-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-dim">Historia przesuniec</p>
           <p className="text-sm text-dim">Liczba wpisów: {transfers.length}</p>
@@ -702,7 +604,7 @@ export default function TransfersPage() {
             rows={transferRows}
           />
         )}
-      </Card>
+      </section>
     </div>
   );
 }
