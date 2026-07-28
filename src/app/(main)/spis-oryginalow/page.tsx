@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Cell } from 'exceljs';
 import {
@@ -69,6 +69,8 @@ const exportCatalogCollator = new Intl.Collator('pl', { sensitivity: 'base', num
 const dailyReportExcludePatterns = [/^ABS\s*30\//i];
 const REPORT_HISTORY_DAYS_SHORT = 4;
 const REPORT_HISTORY_DAYS_TWO_MONTHS = 60;
+const CATALOG_TABLE_INITIAL_LIMIT = 150;
+const CATALOG_TABLE_INCREMENT = 150;
 const ERP_ORIGINALS_PROXY_NOT_CONFIGURED = 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED';
 const ERP_SNAPSHOT_MIGRATION_REQUIRED = 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS';
 const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
@@ -425,6 +427,8 @@ export default function OriginalInventoryPage() {
   const [showGrindTargetSuggestions, setShowGrindTargetSuggestions] = useState(false);
   const [spisDate, setSpisDate] = useState(getLocalDateValue());
   const [catalogSearch, setCatalogSearch] = useState('');
+  const deferredCatalogSearch = useDeferredValue(catalogSearch);
+  const [catalogVisibleCount, setCatalogVisibleCount] = useState(CATALOG_TABLE_INITIAL_LIMIT);
   const [catalogImportFile, setCatalogImportFile] = useState<File | null>(null);
   const [catalogImportInputKey, setCatalogImportInputKey] = useState(0);
   const [catalogImportFileName, setCatalogImportFileName] = useState('');
@@ -616,6 +620,10 @@ export default function OriginalInventoryPage() {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(TAB_STORAGE_KEY, activeTab);
   }, [activeTab]);
+
+  useEffect(() => {
+    setCatalogVisibleCount(CATALOG_TABLE_INITIAL_LIMIT);
+  }, [deferredCatalogSearch, activeTab]);
 
   const addMutation = useMutation({
     mutationFn: addOriginalInventory,
@@ -1216,7 +1224,15 @@ export default function OriginalInventoryPage() {
         deduped.set(key, item);
       }
     });
-    return [...deduped.values()];
+    const values = [...deduped.values()];
+    const namesWithWarehouseVariant = new Set(
+      values
+        .filter((item) => Boolean(item.warehouseCode))
+        .map((item) => normalizeCatalogNameKey(item.name))
+    );
+    return values.filter(
+      (item) => Boolean(item.warehouseCode) || !namesWithWarehouseVariant.has(normalizeCatalogNameKey(item.name))
+    );
   }, [catalog, erpCatalogItems, erpSnapshotEntries, existingList]);
   const filteredNameSuggestions = useMemo(() => {
     if (!normalizeCatalogNameKey(form.name)) return [];
@@ -1250,11 +1266,28 @@ export default function OriginalInventoryPage() {
       .slice(0, 8);
   }, [existingByName, form.name, nameSuggestions]);
   const filteredCatalog = useMemo(() => {
-    if (!normalizeCatalogNameKey(catalogSearch)) return catalog;
+    if (activeTab !== 'kartoteki') return [];
+    if (!normalizeCatalogNameKey(deferredCatalogSearch)) return catalog;
     return catalog.filter((item) =>
-      matchesCatalogSearch(catalogSearch, item.name, item.indexCode, item.warehouseCode)
+      matchesCatalogSearch(deferredCatalogSearch, item.name, item.indexCode, item.warehouseCode)
     );
-  }, [catalog, catalogSearch]);
+  }, [activeTab, catalog, deferredCatalogSearch]);
+  const visibleCatalogRows = useMemo(
+    () => filteredCatalog.slice(0, catalogVisibleCount),
+    [catalogVisibleCount, filteredCatalog]
+  );
+  const catalogTableRows = useMemo(
+    () =>
+      visibleCatalogRows.map((item) => [
+        item.name,
+        item.indexCode ?? '-',
+        item.warehouseCode ?? '-',
+        item.unit,
+        new Date(item.createdAt).toLocaleString('pl-PL')
+      ]),
+    [visibleCatalogRows]
+  );
+  const hasMoreCatalogRows = catalogVisibleCount < filteredCatalog.length;
   const applyNameToForm = (rawName: string) => {
     const needle = normalizeCatalogNameKey(rawName);
     if (!needle) {
@@ -2939,14 +2972,23 @@ export default function OriginalInventoryPage() {
             />
             <DataTable
               columns={['Nazwa', 'Indeks', 'Mag.', 'Jedn.', 'Utworzono']}
-              rows={filteredCatalog.map((item) => [
-                item.name,
-                item.indexCode ?? '-',
-                item.warehouseCode ?? '-',
-                item.unit,
-                new Date(item.createdAt).toLocaleString('pl-PL')
-              ])}
+              rows={catalogTableRows}
             />
+            <div className="flex flex-col gap-2 text-xs text-dim sm:flex-row sm:items-center sm:justify-between">
+              <span>
+                Pokazano {visibleCatalogRows.length} z {filteredCatalog.length} kartotek.
+              </span>
+              {hasMoreCatalogRows && (
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    setCatalogVisibleCount((count) => count + CATALOG_TABLE_INCREMENT)
+                  }
+                >
+                  Pokaz kolejne
+                </Button>
+              )}
+            </div>
           </Card>
         </TabsContent>
 
