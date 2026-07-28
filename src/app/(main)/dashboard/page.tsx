@@ -110,12 +110,8 @@ const GlowPanel = ({
   className?: string;
 }) => (
   <Card
-    className={`relative overflow-hidden rounded-lg border-[rgba(34,76,142,0.5)] bg-[linear-gradient(145deg,rgba(6,11,22,0.98),rgba(2,5,11,0.99))] p-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_22px_rgba(20,82,160,0.08),0_16px_60px_-54px_rgba(0,102,255,0.55)] hover:border-[rgba(255,106,0,0.36)] ${className}`}
+    className={`dashboard-card-bg relative overflow-hidden rounded-lg border border-border bg-surface p-0 shadow-[inset_0_1px_0_var(--inner-highlight)] hover:border-borderStrong hover:bg-surface2 ${className}`}
   >
-    <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(60,120,255,0.028)_1px,transparent_1px),linear-gradient(90deg,rgba(255,106,0,0.018)_1px,transparent_1px)] bg-[size:30px_30px] opacity-25" />
-    <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,rgba(255,106,0,0.62),rgba(45,108,223,0.68),transparent)]" />
-    <div className="pointer-events-none absolute left-0 top-0 h-9 w-9 border-l border-t border-[rgba(255,106,0,0.38)]" />
-    <div className="pointer-events-none absolute bottom-0 right-0 h-9 w-9 border-b border-r border-[rgba(45,108,223,0.55)]" />
     <div className="relative h-full">{children}</div>
   </Card>
 );
@@ -150,10 +146,9 @@ const KpiPanel = ({
   trend: 'up' | 'down';
 }) => (
   <div
-    className="relative overflow-hidden rounded-lg border p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] 2xl:p-3"
+    className="dashboard-card-bg relative overflow-hidden rounded-lg border bg-surface2 p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] 2xl:p-3"
     style={{
-      borderColor: `${color}66`,
-      background: `linear-gradient(145deg, ${color}22, rgba(255,255,255,0.025))`
+      borderColor: `${color}66`
     }}
   >
     <div className="flex items-start justify-between gap-2">
@@ -216,7 +211,7 @@ export default function DashboardPage() {
   const maxMaterialTotal = Math.max(1, ...currentComposition.map((item) => item.total));
 
   return (
-    <div className="space-y-2 md:space-y-2.5">
+    <div className="dashboard-page space-y-2 md:space-y-2.5">
       <div className="pointer-events-none fixed inset-0 -z-10 opacity-45">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(255,106,0,0.12),transparent_28%),radial-gradient(circle_at_78%_18%,rgba(45,108,223,0.12),transparent_30%),linear-gradient(135deg,rgba(5,8,15,0.2),rgba(3,5,10,0.75))]" />
         <div className="absolute inset-0 bg-[linear-gradient(rgba(60,120,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,106,0,0.026)_1px,transparent_1px)] bg-[size:58px_58px]" />
@@ -226,12 +221,9 @@ export default function DashboardPage() {
         <GlowPanel className="min-h-[300px] xl:h-[300px] 2xl:h-[320px]">
           <div className="flex h-full flex-col p-3 md:p-3.5">
             <PanelTitle icon={<Cuboid size={19} />} title="Stan aktualny" />
-            <div className="relative mt-2 flex min-h-0 flex-1 flex-col justify-center overflow-hidden bg-[radial-gradient(circle_at_50%_42%,rgba(255,106,0,0.15),transparent_42%)] px-2 py-4 md:px-7">
-              <div className="pointer-events-none absolute inset-x-16 bottom-2 h-[2px] bg-[linear-gradient(90deg,transparent,#ff6a00,transparent)] shadow-[0_0_16px_#ff6a00]" />
-              <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,transparent_0,rgba(255,106,0,0.06)_48%,transparent_52%)]" />
+            <div className="relative mt-2 flex min-h-0 flex-1 flex-col justify-center overflow-hidden px-2 py-4 md:px-7">
               <p
                 className="text-center text-6xl font-semibold leading-[1.08] tracking-wide tabular-nums text-[var(--brand)] sm:text-7xl xl:text-[82px] 2xl:text-[104px]"
-                style={{ textShadow: '0 0 8px rgba(255,106,0,0.78), 0 0 22px rgba(255,106,0,0.38)' }}
               >
                 {currentTotal.toLocaleString('pl-PL')}{' '}
                 <span className="align-baseline text-3xl md:text-4xl">kg</span>
@@ -309,10 +301,9 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={item.warehouseId}
-                    className="relative flex h-full min-h-[118px] flex-col justify-between overflow-hidden rounded-lg border p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.09)] 2xl:min-h-[132px] 2xl:p-4"
+                    className="dashboard-card-bg relative flex h-full min-h-[118px] flex-col justify-between overflow-hidden rounded-lg border bg-surface2 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.09)] 2xl:min-h-[132px] 2xl:p-4"
                     style={{
                       borderColor: `${color}55`,
-                      background: `linear-gradient(150deg, ${color}18, rgba(255,255,255,0.018))`,
                       boxShadow: `inset 0 1px 0 rgba(255,255,255,0.08), 0 20px 42px -36px ${color}`
                     }}
                   >

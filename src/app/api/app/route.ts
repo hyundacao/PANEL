@@ -1741,14 +1741,6 @@ const buildInventoryDeltasByDate = (
   return result;
 };
 
-const isConfirmedOrMissingPreviousZero = (
-  todayEntry: { qty: number; confirmed: boolean; comment?: string } | undefined,
-  previousEntry: { qty: number; confirmed: boolean; comment?: string } | undefined
-) => {
-  if (todayEntry) return todayEntry.confirmed;
-  return (previousEntry?.qty ?? 0) === 0;
-};
-
 const collectConfirmedDiffs = (
   dateKey: string,
   entriesByDate: EntriesByDate,
@@ -3017,23 +3009,21 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           locs.forEach((loc) => {
             const today = todayEntries[loc.id] ?? {};
             const yesterday = previousEntries[loc.id] ?? {};
-            const union = new Set([...Object.keys(yesterday), ...Object.keys(today)]);
-            const allConfirmed =
-              union.size > 0 &&
-              [...union].every((id) =>
-                isConfirmedOrMissingPreviousZero(today[id], yesterday[id])
-              );
+            const todayMaterialIds = Object.keys(today);
+            const allTodayEntriesConfirmed =
+              todayMaterialIds.length > 0 &&
+              todayMaterialIds.every((id) => today[id]?.confirmed);
             const isConfirmed =
               emptyConfirmedToday.has(loc.id) ||
-              allConfirmed ||
-              (union.size === 0 && emptyConfirmedYesterday.has(loc.id));
+              allTodayEntriesConfirmed ||
+              (todayMaterialIds.length === 0 && emptyConfirmedYesterday.has(loc.id));
 
             if (isConfirmed) {
               confirmed += 1;
             }
-            if (!isConfirmed || union.size === 0) return;
 
-            union.forEach((materialId) => {
+            todayMaterialIds.forEach((materialId) => {
+              if (!today[materialId]?.confirmed) return;
               if (Object.prototype.hasOwnProperty.call(inventoryDeltas[loc.id] ?? {}, materialId)) return;
               const todayQty = today[materialId]?.qty ?? 0;
               const delta = dayDeltas[loc.id]?.[materialId] ?? 0;
@@ -3140,14 +3130,12 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           const latestPrevious = latestPreviousEntries[loc.id] ?? yesterdayEntries[loc.id] ?? {};
           const mergedCurrent = mergeEntryBuckets(latestPrevious, today);
           const union = new Set([...Object.keys(today), ...Object.keys(latestPrevious)]);
+          const hasTodayEntries = Object.keys(today).length > 0;
           const confirmed = emptyConfirmedToday.has(loc.id)
             ? true
-            : union.size > 0 &&
-              [...union].every((id) =>
-                isConfirmedOrMissingPreviousZero(today[id], latestPrevious[id])
-              );
-          const source = confirmed || Object.keys(today).length > 0 ? 'TODAY' : 'LAST';
-          const hasTodayEntries = Object.keys(today).length > 0;
+            : hasTodayEntries &&
+              Object.keys(today).every((id) => today[id]?.confirmed);
+          const source = confirmed || hasTodayEntries ? 'TODAY' : 'LAST';
           const previewSource = source === 'TODAY' ? mergedCurrent : latestPrevious;
           const preview = Object.entries(previewSource)
             .filter(([, entry]) => (entry?.qty ?? 0) > 0)

@@ -352,6 +352,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     !pathname.startsWith('/admin') &&
     activeWarehouse !== 'FARBY_TASMY' &&
     Boolean(activeWarehouse && warehouseFromPath);
+  const isReportsPath = pathname.startsWith('/raporty');
   const isActivePath = (href: string) => {
     if (href === '/czesci') return pathname === '/czesci';
     if (href === '/spis') return pathname === '/spis' || pathname.startsWith('/spis/');
@@ -481,7 +482,13 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                 </div>
               </div>
               )}
-            <ContentScrim className="min-h-full max-md:border-0 max-md:bg-transparent max-md:p-0 max-md:shadow-none max-md:backdrop-blur-0">
+            <ContentScrim
+              className={cn(
+                'min-h-full max-md:border-0 max-md:bg-transparent max-md:p-0 max-md:shadow-none max-md:backdrop-blur-0',
+                isReportsPath &&
+                  'border-0 bg-transparent p-0 shadow-none backdrop-blur-0 md:p-0'
+              )}
+            >
               {children}
             </ContentScrim>
             </>
