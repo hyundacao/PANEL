@@ -460,6 +460,142 @@ body > * {
     0 12px 26px -18px rgba(255, 106, 0, 0.95);
 }
 
+.report-action-button {
+  min-height: 46px;
+  width: 100%;
+  gap: 0.5rem;
+  border-width: 1px !important;
+  color: #fff !important;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.38);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    0 16px 34px -22px rgba(0, 0, 0, 0.95) !important;
+}
+
+.report-action-button svg {
+  flex-shrink: 0;
+  color: #fff !important;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+}
+
+.report-action-button-export {
+  border-color: rgba(110, 231, 183, 0.72) !important;
+  background-color: #047857 !important;
+  background-image: linear-gradient(135deg, #064e3b 0%, #059669 48%, #14b8a6 100%) !important;
+}
+
+.report-action-button-export:hover {
+  border-color: rgba(167, 243, 208, 0.98) !important;
+  background-image: linear-gradient(135deg, #047857 0%, #10b981 48%, #2dd4bf 100%) !important;
+}
+
+.report-action-button-export:focus-visible {
+  outline: 2px solid rgba(167, 243, 208, 0.98);
+  outline-offset: 2px;
+}
+
+.report-action-button-fullscreen {
+  border-color: rgba(196, 181, 253, 0.78) !important;
+  background-color: #4f46e5 !important;
+  background-image: linear-gradient(135deg, #312e81 0%, #6d28d9 50%, #4f46e5 100%) !important;
+}
+
+.report-action-button-fullscreen:hover {
+  border-color: rgba(221, 214, 254, 1) !important;
+  background-image: linear-gradient(135deg, #4338ca 0%, #7c3aed 50%, #6366f1 100%) !important;
+}
+
+.report-action-button-fullscreen:focus-visible {
+  outline: 2px solid rgba(221, 214, 254, 1);
+  outline-offset: 2px;
+}
+
+.original-inventory-tab {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background-color: #11151f;
+  background-image:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.025) 42%, rgba(0, 0, 0, 0.34)),
+    url('/spis-oryginalow-tabs-texture.png');
+  background-size: auto, cover;
+  background-position: center;
+  background-blend-mode: normal, soft-light;
+  color: rgba(244, 247, 251, 0.82);
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.55);
+}
+
+.original-inventory-tab::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.42)),
+    radial-gradient(circle at 20% 8%, var(--tab-accent-soft), transparent 44%),
+    radial-gradient(circle at 90% 82%, rgba(255, 255, 255, 0.10), transparent 34%);
+  opacity: 0.9;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.original-inventory-tab:hover::before {
+  opacity: 1;
+  transform: scale(1.02);
+}
+
+.original-inventory-tab[data-state='active'] {
+  background-image:
+    linear-gradient(135deg, var(--tab-accent), rgba(255, 255, 255, 0.075) 58%, rgba(0, 0, 0, 0.28)),
+    url('/spis-oryginalow-tabs-texture.png');
+  background-blend-mode: screen, soft-light;
+  color: #fff;
+  box-shadow:
+    inset 0 -3px 0 var(--tab-line),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 14px 30px rgba(0, 0, 0, 0.22);
+}
+
+.original-inventory-tab svg {
+  color: currentColor;
+  filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.42));
+}
+
+.original-inventory-tab-spis {
+  --tab-accent: rgba(255, 202, 77, 0.24);
+  --tab-accent-soft: rgba(255, 202, 77, 0.22);
+  --tab-line: rgba(255, 202, 77, 0.86);
+}
+
+.original-inventory-tab-kartoteki {
+  --tab-accent: rgba(255, 106, 0, 0.24);
+  --tab-accent-soft: rgba(255, 122, 26, 0.22);
+  --tab-line: rgba(255, 122, 26, 0.86);
+}
+
+.original-inventory-tab-stany-erp {
+  --tab-accent: rgba(196, 145, 2, 0.24);
+  --tab-accent-soft: rgba(231, 179, 40, 0.20);
+  --tab-line: rgba(231, 179, 40, 0.84);
+}
+
+.original-inventory-tab-raporty {
+  --tab-accent: rgba(168, 85, 247, 0.24);
+  --tab-accent-soft: rgba(192, 132, 252, 0.22);
+  --tab-line: rgba(192, 132, 252, 0.86);
+}
+
+.original-inventory-tab-do-zmielenia {
+  --tab-accent: rgba(34, 197, 94, 0.22);
+  --tab-accent-soft: rgba(74, 222, 128, 0.20);
+  --tab-line: rgba(74, 222, 128, 0.86);
+}
+
+@media (min-width: 640px) {
+  .report-action-button {
+    width: auto;
+  }
+}
+
 @media (max-width: 639px) {
   .transfer-kind-button {
     position: relative;

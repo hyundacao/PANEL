@@ -1,6 +1,6 @@
 'use client';
 
-import { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Cell } from 'exceljs';
 import {
@@ -40,6 +40,16 @@ import { isReadOnly } from '@/lib/auth/access';
 import { parseQtyInput } from '@/lib/utils/format';
 import { cn } from '@/lib/utils/cn';
 import {
+  BarChart3,
+  ClipboardList,
+  Database,
+  Factory,
+  FileSpreadsheet,
+  Maximize2,
+  Minimize2,
+  Search
+} from 'lucide-react';
+import {
   normalizeOriginalInventoryCatalogIdentityKey,
   parseOriginalInventoryCatalogRows
 } from '@/lib/utils/originalInventoryCatalog';
@@ -73,6 +83,9 @@ const CATALOG_TABLE_INITIAL_LIMIT = 150;
 const CATALOG_TABLE_INCREMENT = 150;
 const ERP_ORIGINALS_PROXY_NOT_CONFIGURED = 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED';
 const ERP_SNAPSHOT_MIGRATION_REQUIRED = 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS';
+const originalInventoryTabTileClassName =
+  'original-inventory-tab group flex min-h-[54px] w-full items-center justify-center gap-2.5 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-bold leading-none transition duration-200 hover:-translate-y-px hover:text-title focus-visible:ring-2 focus-visible:ring-white/30 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]';
+const originalInventoryTabIconClassName = 'h-[18px] w-[18px] shrink-0 opacity-90 transition group-hover:opacity-100';
 const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
   [
     'Source: ERP proxy API (aktywny)',
@@ -417,6 +430,9 @@ export default function OriginalInventoryPage() {
   const [showReportSuggestions, setShowReportSuggestions] = useState(false);
   const [reportQuantityMode, setReportQuantityMode] = useState<'real' | 'available'>('real');
   const [showReportUncountedItems, setShowReportUncountedItems] = useState(false);
+  const reportFullscreenRef = useRef<HTMLDivElement | null>(null);
+  const [isReportFullscreen, setIsReportFullscreen] = useState(false);
+  const [isReportFullscreenFallback, setIsReportFullscreenFallback] = useState(false);
   const [grindDialogMaterial, setGrindDialogMaterial] = useState<{
     name: string;
     unit: string;
@@ -624,6 +640,23 @@ export default function OriginalInventoryPage() {
   useEffect(() => {
     setCatalogVisibleCount(CATALOG_TABLE_INITIAL_LIMIT);
   }, [deferredCatalogSearch, activeTab]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsReportFullscreen(document.fullscreenElement === reportFullscreenRef.current);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isReportFullscreenFallback) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsReportFullscreenFallback(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isReportFullscreenFallback]);
 
   const addMutation = useMutation({
     mutationFn: addOriginalInventory,
@@ -1789,6 +1822,16 @@ export default function OriginalInventoryPage() {
     if (!selectedReportMaterialKey) return [];
     return reportRows.filter((row) => row.key === selectedReportMaterialKey);
   }, [reportRows, selectedReportMaterialKey]);
+  const pendingGrindQtyByMaterial = useMemo(() => {
+    const map = new Map<string, number>();
+    grindTasks.forEach((task) => {
+      if (task.status === 'DONE' || task.sourceReportDate !== spisDate) return;
+      const key = normalizeCatalogNameKey(task.materialName);
+      if (!key) return;
+      map.set(key, (map.get(key) ?? 0) + task.qty);
+    });
+    return map;
+  }, [grindTasks, spisDate]);
   const reportSuggestions = useMemo(() => {
     if (!normalizeCatalogNameKey(reportQuery)) return [];
     return reportOptions
@@ -2148,6 +2191,33 @@ export default function OriginalInventoryPage() {
   const handleReportAvailableQtyToggle = (checked: boolean) => {
     if (checked) setReportQuantityMode('available');
   };
+  const isReportFullscreenActive = isReportFullscreen || isReportFullscreenFallback;
+  const toggleReportFullscreen = async () => {
+    if (isReportFullscreenFallback) {
+      setIsReportFullscreenFallback(false);
+      return;
+    }
+    if (document.fullscreenElement) {
+      try {
+        await document.exitFullscreen();
+      } finally {
+        setIsReportFullscreen(false);
+      }
+      return;
+    }
+    const element = reportFullscreenRef.current;
+    if (!element) return;
+    if (element.requestFullscreen) {
+      try {
+        await element.requestFullscreen();
+        setIsReportFullscreen(true);
+        return;
+      } catch {
+        // Fall back to an in-app maximized table when browser fullscreen is blocked.
+      }
+    }
+    setIsReportFullscreenFallback(true);
+  };
   const reportColumns = [
     'Material',
     ...visibleReportModes.map((mode) => `ERP ${currentReportDateLabel} (${mode.shortLabel})`),
@@ -2158,8 +2228,34 @@ export default function OriginalInventoryPage() {
     ),
     'Jedn.'
   ];
+  const renderReportMaterialCell = (row: (typeof reportRows)[number]) => {
+    const grindQty = pendingGrindQtyByMaterial.get(row.key) ?? 0;
+    if (grindQty <= 0) return row.name;
+    return (
+      <div className="min-w-0 space-y-1">
+        <div className="break-words">{row.name}</div>
+        <div className="text-xs font-semibold text-violet-200">
+          − {formatQty(grindQty)} kg do mielenia
+        </div>
+      </div>
+    );
+  };
+  const getReportRowClassName = (row: (typeof reportRows)[number]) =>
+    (pendingGrindQtyByMaterial.get(row.key) ?? 0) > 0
+      ? 'border-[rgba(168,85,247,0.36)] bg-[linear-gradient(90deg,rgba(168,85,247,0.18),rgba(88,28,135,0.08))] hover:bg-[rgba(168,85,247,0.16)]'
+      : '';
+  const reportActionButtonBaseClassName =
+    'report-action-button rounded-xl px-4 transition active:translate-y-px disabled:translate-y-0';
+  const reportExportButtonClassName = cn(
+    reportActionButtonBaseClassName,
+    'report-action-button-export'
+  );
+  const reportFullscreenButtonClassName = cn(
+    reportActionButtonBaseClassName,
+    'report-action-button-fullscreen'
+  );
   const reportTableRows = reportRows.map((row) => [
-    row.name,
+    renderReportMaterialCell(row),
     ...visibleReportModes.map((mode) =>
       formatQty(mode.key === 'real' ? row.currentRealErpQty : row.currentAvailableErpQty)
     ),
@@ -2177,7 +2273,7 @@ export default function OriginalInventoryPage() {
     row.unit
   ]);
   const selectedReportTableRows = selectedReportRows.map((row) => [
-    row.name,
+    renderReportMaterialCell(row),
     ...visibleReportModes.map((mode) =>
       formatQty(mode.key === 'real' ? row.currentRealErpQty : row.currentAvailableErpQty)
     ),
@@ -2294,6 +2390,11 @@ export default function OriginalInventoryPage() {
   };
   const pendingGrindDocuments = buildGrindDocuments(pendingGrindTasks, 'pending');
   const doneGrindDocuments = buildGrindDocuments(doneGrindTasks, 'done');
+  const parsedGrindQty = parseQtyInput(grindQty);
+  const grindQtyLimitMessage =
+    parsedGrindQty !== null && Number.isFinite(parsedGrindQty) && parsedGrindQty > 500
+      ? `Maksymalna mo\u017cliwa ilo\u015b\u0107 do wpisania: ${formatQty(500)} kg`
+      : '';
   const openGrindDialog = (row: (typeof reportRows)[number]) => {
     setGrindDialogMaterial({
       name: row.name,
@@ -2339,36 +2440,56 @@ export default function OriginalInventoryPage() {
   return (
     <div className="space-y-4">
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="space-y-4">
-        <TabsList className="grid grid-cols-2 gap-2 p-1.5 sm:flex sm:flex-wrap">
+        <TabsList className="grid w-full grid-cols-1 gap-2 rounded-none border-0 bg-transparent p-0 shadow-none sm:grid-cols-2 xl:grid-cols-5">
           <TabsTrigger
             value="spis"
-            className="flex min-h-[42px] items-center justify-center px-2 text-center text-xs leading-tight sm:min-h-0 sm:px-3 sm:text-sm data-[state=active]:bg-[var(--brand)] data-[state=active]:text-bg"
+            className={cn(
+              originalInventoryTabTileClassName,
+              'original-inventory-tab-spis'
+            )}
           >
-            SPIS
+            <ClipboardList className={originalInventoryTabIconClassName} />
+            <span>Spis</span>
           </TabsTrigger>
           <TabsTrigger
             value="kartoteki"
-            className="flex min-h-[42px] items-center justify-center px-2 text-center text-xs leading-tight sm:min-h-0 sm:px-3 sm:text-sm data-[state=active]:bg-[#ff6a00] data-[state=active]:text-bg"
+            className={cn(
+              originalInventoryTabTileClassName,
+              'original-inventory-tab-kartoteki'
+            )}
           >
-            KARTOTEKI
+            <Search className={originalInventoryTabIconClassName} />
+            <span>Kartoteki</span>
           </TabsTrigger>
           <TabsTrigger
             value="stany-erp"
-            className="flex min-h-[42px] items-center justify-center px-2 text-center text-xs leading-tight sm:min-h-0 sm:px-3 sm:text-sm data-[state=active]:bg-[#c49102] data-[state=active]:text-bg"
+            className={cn(
+              originalInventoryTabTileClassName,
+              'original-inventory-tab-stany-erp'
+            )}
           >
-            STANY ERP
+            <Database className={originalInventoryTabIconClassName} />
+            <span>Stany ERP</span>
           </TabsTrigger>
           <TabsTrigger
             value="raporty"
-            className="flex min-h-[42px] items-center justify-center px-2 text-center text-xs leading-tight sm:min-h-0 sm:px-3 sm:text-sm data-[state=active]:bg-[var(--value-purple)] data-[state=active]:text-bg"
+            className={cn(
+              originalInventoryTabTileClassName,
+              'original-inventory-tab-raporty'
+            )}
           >
-            RAPORTY
+            <BarChart3 className={originalInventoryTabIconClassName} />
+            <span>Raporty</span>
           </TabsTrigger>
           <TabsTrigger
             value="do-zmielenia"
-            className="flex min-h-[42px] items-center justify-center px-2 text-center text-xs leading-tight sm:min-h-0 sm:px-3 sm:text-sm data-[state=active]:bg-[var(--success)] data-[state=active]:text-bg"
+            className={cn(
+              originalInventoryTabTileClassName,
+              'original-inventory-tab-do-zmielenia'
+            )}
           >
-            DO ZMIELENIA
+            <Factory className={originalInventoryTabIconClassName} />
+            <span>Do zmielenia</span>
           </TabsTrigger>
         </TabsList>
 
@@ -3207,6 +3328,7 @@ export default function OriginalInventoryPage() {
                     columns={reportColumns}
                     rows={selectedReportTableRows}
                     onRowClick={(rowIndex) => openGrindDialog(selectedReportRows[rowIndex])}
+                    getRowClassName={(rowIndex) => getReportRowClassName(selectedReportRows[rowIndex])}
                   />
                 </div>
               ) : (
@@ -3248,13 +3370,30 @@ export default function OriginalInventoryPage() {
                   className="min-h-[46px]"
                 />
               </div>
-              <div className="md:col-span-2 flex items-end justify-end">
+              <div className="md:col-span-2 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-end">
                 <Button
                   variant="secondary"
                   onClick={handleExportDaily}
                   disabled={reportRowsForExport.length === 0 || isHistoricalErpSnapshotFetching}
+                  className={reportExportButtonClassName}
                 >
-                  Eksportuj do Excel (XLSX)
+                  <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
+                  <span>Eksportuj do Excel</span>
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    void toggleReportFullscreen();
+                  }}
+                  disabled={reportRows.length === 0}
+                  className={reportFullscreenButtonClassName}
+                >
+                  {isReportFullscreenActive ? (
+                    <Minimize2 className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <Maximize2 className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  <span>{isReportFullscreenActive ? 'Wroc do normalnego widoku' : 'Pelny ekran tabeli'}</span>
                 </Button>
               </div>
             </div>
@@ -3292,13 +3431,36 @@ export default function OriginalInventoryPage() {
                 ])}
                   />
                 )}
-                <div className="[&_tbody]:font-semibold [&_tbody_td:first-child]:font-bold">
+                <div
+                  ref={reportFullscreenRef}
+                  className={cn(
+                    'space-y-3 [&_tbody]:font-semibold [&_tbody_td:first-child]:font-bold',
+                    isReportFullscreenActive && 'bg-[var(--bg-0)] p-4 md:p-5',
+                    isReportFullscreen && 'h-screen overflow-auto',
+                    isReportFullscreenFallback && 'fixed inset-0 z-50 overflow-auto'
+                  )}
+                >
+                  {isReportFullscreenActive && (
+                    <div className="flex justify-end">
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          void toggleReportFullscreen();
+                        }}
+                        className={reportFullscreenButtonClassName}
+                      >
+                        <Minimize2 className="h-4 w-4" aria-hidden="true" />
+                        <span>Wroc do normalnego widoku</span>
+                      </Button>
+                    </div>
+                  )}
                   <DataTable
                     columns={reportColumns}
                     rows={reportTableRows}
                     onRowClick={(rowIndex) => openGrindDialog(reportRows[rowIndex])}
+                    getRowClassName={(rowIndex) => getReportRowClassName(reportRows[rowIndex])}
                     stickyHeader
-                    desktopMaxHeightClassName="max-h-[82vh]"
+                    desktopMaxHeightClassName={isReportFullscreenActive ? 'max-h-[calc(100vh-104px)]' : 'max-h-[82vh]'}
                   />
                 </div>
               </>
@@ -3342,7 +3504,7 @@ export default function OriginalInventoryPage() {
         </TabsContent>
 
         <TabsContent value="do-zmielenia" className="space-y-4">
-          <Card className="space-y-4">
+          <div className="space-y-4 rounded-2xl bg-white/[0.025] p-1 sm:p-2">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-dim">
@@ -3352,13 +3514,13 @@ export default function OriginalInventoryPage() {
                   Prosta lista pozycji dodanych z raportu.
                 </p>
               </div>
-              <div className="rounded-xl border border-border bg-surface2 px-4 py-2 text-sm font-semibold text-title">
+              <div className="rounded-lg bg-white/6 px-3 py-1.5 text-sm font-semibold text-title">
                 Aktywne dokumenty: {pendingGrindDocuments.length}
               </div>
             </div>
 
             {pendingGrindDocuments.length === 0 ? (
-              <p className="rounded-xl border border-border bg-surface2 p-4 text-sm text-dim">
+              <p className="rounded-xl bg-white/5 p-4 text-sm text-dim">
                 Brak pozycji do zmielenia.
               </p>
             ) : (
@@ -3422,10 +3584,10 @@ export default function OriginalInventoryPage() {
                 ))}
               </div>
             )}
-          </Card>
+          </div>
 
           {doneGrindDocuments.length > 0 && (
-            <Card className="space-y-3">
+            <div className="space-y-3 rounded-2xl bg-white/[0.025] p-1 sm:p-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                 Zmielone
               </p>
@@ -3476,7 +3638,7 @@ export default function OriginalInventoryPage() {
                   </div>
                 ))}
               </div>
-            </Card>
+            </div>
           )}
         </TabsContent>
       </Tabs>
@@ -3512,8 +3674,14 @@ export default function OriginalInventoryPage() {
                   inputMode="decimal"
                   placeholder="np. 20"
                   className="mt-1 min-h-[54px] text-xl font-black"
+                  aria-invalid={Boolean(grindQtyLimitMessage)}
                   autoFocus
                 />
+                {grindQtyLimitMessage && (
+                  <p className="mt-2 rounded-lg bg-[rgba(239,68,68,0.12)] px-3 py-2 text-sm font-semibold text-red-300">
+                    {grindQtyLimitMessage}
+                  </p>
+                )}
                 <Button
                   type="button"
                   onClick={() => {

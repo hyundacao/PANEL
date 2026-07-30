@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import type { FocusEvent } from 'react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -55,8 +55,6 @@ const collator = new Intl.Collator('pl', { sensitivity: 'base' });
 const getNoChangeStorageKey = (dateKey: string, locationId: string) =>
   `spis-przemialow:no-change:${dateKey}:${locationId}`;
 
-const emptyNoChangeMaterialIds = new Set<string>();
-
 const readNoChangeMaterialIds = (storageKey: string) => {
   if (typeof window === 'undefined') return new Set<string>();
   try {
@@ -72,7 +70,7 @@ export default function LocationDetailPage() {
   const params = useParams();
   const warehouseId = params.warehouseId as string;
   const locationId = params.locationId as string;
-  const today = getTodayKey();
+  const [today, setToday] = useState(() => getTodayKey());
   const { data: warehouses } = useQuery({
     queryKey: ['warehouses'],
     queryFn: getWarehouses
@@ -100,7 +98,17 @@ export default function LocationDetailPage() {
   const glowClass = 'ring-2 ring-[rgba(255,122,26,0.45)] shadow-[0_0_0_3px_rgba(255,122,26,0.18)]';
   const noChangeMaterialIds = noChangeState.scope === noChangeStorageKey
     ? noChangeState.materialIds
-    : emptyNoChangeMaterialIds;
+    : readNoChangeMaterialIds(noChangeStorageKey);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setToday((current) => {
+        const next = getTodayKey();
+        return current === next ? current : next;
+      });
+    }, 60_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   const unlockInput = (event: FocusEvent<HTMLInputElement>) => {
     event.currentTarget.readOnly = false;
