@@ -208,6 +208,7 @@ const warehouseLabels: Record<WarehouseKey, string> = {
   RAPORT_ZMIANOWY: 'Raport zmianowy',
   RAPORT_BRAKOWOSCI: 'Raport brakowosci',
   BILANS_PRZEZBROJEN: 'Bilans przezbrojen i personelu',
+  PRZYGOTOWANIE_PRODUKCJI: 'Przygotowanie produkcji',
   PRZESUNIECIA_ERP: 'Przesuniecia magazynowe ERP'
 };
 
@@ -2918,6 +2919,12 @@ export default function AdminPage() {
                     updatePermissionGroupFormAccess,
                     'ADMIN'
                   )}
+                  {renderWarehouseAccess(
+                    'PRZYGOTOWANIE_PRODUKCJI',
+                    permissionGroupForm.access,
+                    updatePermissionGroupFormAccess,
+                    'ADMIN'
+                  )}
                   {renderPaintTapeAccess(
                     permissionGroupForm.access,
                     updatePermissionGroupFormAccess,
@@ -3079,6 +3086,12 @@ export default function AdminPage() {
                           )}
                           {renderWarehouseAccess(
                             'BILANS_PRZEZBROJEN',
+                            draft.access,
+                            (updater) => updatePermissionGroupDraftAccess(group.id, updater),
+                            'ADMIN'
+                          )}
+                          {renderWarehouseAccess(
+                            'PRZYGOTOWANIE_PRODUKCJI',
                             draft.access,
                             (updater) => updatePermissionGroupDraftAccess(group.id, updater),
                             'ADMIN'
@@ -3250,6 +3263,12 @@ export default function AdminPage() {
                   )}
                   {renderWarehouseAccess(
                     'BILANS_PRZEZBROJEN',
+                    userForm.access,
+                    updateUserFormAccess,
+                    userForm.role
+                  )}
+                  {renderWarehouseAccess(
+                    'PRZYGOTOWANIE_PRODUKCJI',
                     userForm.access,
                     updateUserFormAccess,
                     userForm.role
@@ -3521,6 +3540,12 @@ export default function AdminPage() {
                             )}
                             {renderWarehouseAccess(
                               'BILANS_PRZEZBROJEN',
+                              draft.access,
+                              (updater) => updateUserDraftAccess(item.id, updater),
+                              draft.role
+                            )}
+                            {renderWarehouseAccess(
+                              'PRZYGOTOWANIE_PRODUKCJI',
                               draft.access,
                               (updater) => updateUserDraftAccess(item.id, updater),
                               draft.role

@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import {
   ArrowLeftRight,
   Boxes,
+  ClipboardCheck,
   Droplets,
   FileText,
   Gauge,
@@ -87,6 +88,18 @@ const moduleOptions: ModuleOption[] = [
     tags: ['Produkcja', 'Personel'],
     keywords: ['przezbrojenia', 'personel', 'mechanicy', 'ustawiacze', 'technik uruchomienia', 'obsada'],
     icon: Gauge
+  },
+  {
+    id: 'przygotowanie-produkcji',
+    key: 'PRZYGOTOWANIE_PRODUKCJI',
+    requiredTabs: ['przygotowanie-produkcji'],
+    title: 'Przygotowanie produkcji',
+    description: 'Rozpiska materiałowa oraz plan zmian: import planu, przygotowanie stanowisk i zadania dla zespołów.',
+    action: 'Wejdź',
+    href: '/przygotowanie-produkcji',
+    tags: ['Produkcja', 'Przygotowanie'],
+    keywords: ['plan produkcji', 'rozpiska materiałowa', 'wtryskarki', 'rozruch', 'zmiana formy', 'przygotowanie stanowiska'],
+    icon: ClipboardCheck
   },
   {
     id: 'przemialy-erp',

@@ -77,6 +77,10 @@ const navItemsBilans: NavItem[] = [
   { label: 'Bilans przezbrojeń', href: '/bilans-przezbrojen', icon: UsersRound, tab: 'bilans-przezbrojen' }
 ];
 
+const navItemsPrzygotowanieProdukcji: NavItem[] = [
+  { label: 'Plan przygotowania', href: '/przygotowanie-produkcji', icon: ClipboardCheck, tab: 'przygotowanie-produkcji' }
+];
+
 const navItemsFarbyTasmy: NavItem[] = [
   {
     label: 'Rozliczanie farb i rozcieńczalników',
@@ -102,6 +106,8 @@ export const Sidebar = () => {
           ? navItemsRaportBrakowosci
           : warehouse === 'BILANS_PRZEZBROJEN'
             ? navItemsBilans
+            : warehouse === 'PRZYGOTOWANIE_PRODUKCJI'
+              ? navItemsPrzygotowanieProdukcji
             : warehouse === 'FARBY_TASMY'
               ? navItemsFarbyTasmy
               : navItemsPrzemialy;
@@ -145,6 +151,8 @@ export const Sidebar = () => {
               ? 'PANEL RAPORTU BRAKOWOŚCI'
               : warehouse === 'BILANS_PRZEZBROJEN'
                 ? 'PANEL BILANSU PRZEZBROJEŃ'
+                : warehouse === 'PRZYGOTOWANIE_PRODUKCJI'
+                  ? 'PANEL PRZYGOTOWANIA PRODUKCJI'
                 : warehouse === 'PRZESUNIECIA_ERP'
                   ? 'PANEL PRZESUNIĘĆ ERP'
                   : 'PANEL MODUŁU';

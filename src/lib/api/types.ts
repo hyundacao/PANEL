@@ -7,6 +7,7 @@ export type WarehouseKey =
   | 'RAPORT_ZMIANOWY'
   | 'RAPORT_BRAKOWOSCI'
   | 'BILANS_PRZEZBROJEN'
+  | 'PRZYGOTOWANIE_PRODUKCJI'
   | 'PRZESUNIECIA_ERP';
 
 export type WarehouseRole = 'ROZDZIELCA' | 'MECHANIK' | 'PODGLAD';
@@ -29,6 +30,8 @@ export type RaportBrakowosciTab = 'raport-brakowosci';
 
 export type BilansPrzezbrojenTab = 'bilans-przezbrojen';
 
+export type PrzygotowanieProdukcjiTab = 'przygotowanie-produkcji';
+
 export type FarbyTasmyTab = 'rozliczanie-farb-tasm';
 
 export type ErpTransfersTab =
@@ -45,6 +48,7 @@ export type WarehouseTab =
   | RaportZmianowyTab
   | RaportBrakowosciTab
   | BilansPrzezbrojenTab
+  | PrzygotowanieProdukcjiTab
   | ErpTransfersTab;
 
 export type WarehouseAccess = {

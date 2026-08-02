@@ -30,6 +30,7 @@ const getTitle = (pathname: string) => {
   if (pathname.startsWith('/raporty')) return 'Raporty';
   if (pathname.startsWith('/kartoteka')) return 'Stany magazynowe';
   if (pathname.startsWith('/bilans-przezbrojen')) return 'Bilans przezbrojeń';
+  if (pathname.startsWith('/przygotowanie-produkcji')) return 'Przygotowanie produkcji';
   if (pathname.startsWith('/suszarki')) return 'Suszarki';
   if (pathname.startsWith('/czesci/historia')) return 'Historia';
   if (pathname.startsWith('/czesci/stany')) return 'Stany magazynowe';
@@ -47,6 +48,7 @@ const getWarehouseFromPath = (pathname: string): WarehouseKey | null => {
   if (pathname.startsWith('/raport-zmianowy')) return 'RAPORT_ZMIANOWY';
   if (pathname.startsWith('/raport-brakowosci')) return 'RAPORT_BRAKOWOSCI';
   if (pathname.startsWith('/bilans-przezbrojen')) return 'BILANS_PRZEZBROJEN';
+  if (pathname.startsWith('/przygotowanie-produkcji')) return 'PRZYGOTOWANIE_PRODUKCJI';
   if (pathname.startsWith('/admin')) return null;
   return 'PRZEMIALY';
 };
@@ -61,6 +63,7 @@ const getTabFromPath = (pathname: string): WarehouseTab | null => {
   if (pathname.startsWith('/raporty')) return 'raporty';
   if (pathname.startsWith('/kartoteka')) return 'kartoteka';
   if (pathname.startsWith('/bilans-przezbrojen')) return 'bilans-przezbrojen';
+  if (pathname.startsWith('/przygotowanie-produkcji')) return 'przygotowanie-produkcji';
   if (pathname.startsWith('/wymieszane')) return 'wymieszane';
   if (pathname.startsWith('/suszarki')) return 'suszarki';
   if (pathname.startsWith('/czesci/pobierz')) return 'pobierz';
@@ -132,6 +135,10 @@ const navItemsBilans: MobileNavItem[] = [
   { label: 'Bilans przezbrojeń', href: '/bilans-przezbrojen', tab: 'bilans-przezbrojen' }
 ];
 
+const navItemsPrzygotowanieProdukcji: MobileNavItem[] = [
+  { label: 'Plan przygotowania', href: '/przygotowanie-produkcji', tab: 'przygotowanie-produkcji' }
+];
+
 const navItemsFarbyTasmy: MobileNavItem[] = [
   { label: 'Rozliczanie farb i rozcieńczalników', href: '/rozliczanie-farb-rozcienczalnikow', tab: 'rozliczanie-farb-tasm' }
 ];
@@ -141,6 +148,7 @@ const getModuleNavItems = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'RAPORT_ZMIANOWY') return navItemsRaport;
   if (warehouse === 'RAPORT_BRAKOWOSCI') return navItemsRaportBrakowosci;
   if (warehouse === 'BILANS_PRZEZBROJEN') return navItemsBilans;
+  if (warehouse === 'PRZYGOTOWANIE_PRODUKCJI') return navItemsPrzygotowanieProdukcji;
   if (warehouse === 'FARBY_TASMY') return navItemsFarbyTasmy;
   return navItemsPrzemialy;
 };

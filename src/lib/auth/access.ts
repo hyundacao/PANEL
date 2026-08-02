@@ -23,6 +23,7 @@ export const CZESCI_TABS: WarehouseTab[] = ['pobierz', 'uzupelnij', 'stany', 'hi
 export const RAPORT_ZMIANOWY_TABS: WarehouseTab[] = ['raport-zmianowy'];
 export const RAPORT_BRAKOWOSCI_TABS: WarehouseTab[] = ['raport-brakowosci'];
 export const BILANS_PRZEZBROJEN_TABS: WarehouseTab[] = ['bilans-przezbrojen'];
+export const PRZYGOTOWANIE_PRODUKCJI_TABS: WarehouseTab[] = ['przygotowanie-produkcji'];
 export const FARBY_TASMY_TABS: WarehouseTab[] = ['rozliczanie-farb-tasm'];
 export const PAINT_TAPE_PERMISSION_KEYS: PaintTapePermissionKey[] = [
   'create',
@@ -87,6 +88,7 @@ const allWarehouseKeys: WarehouseKey[] = [
   'RAPORT_ZMIANOWY',
   'RAPORT_BRAKOWOSCI',
   'BILANS_PRZEZBROJEN',
+  'PRZYGOTOWANIE_PRODUKCJI',
   'PRZESUNIECIA_ERP'
 ];
 
@@ -245,6 +247,12 @@ export const getRolePreset = (
     }
     return { role, readOnly: false, tabs: BILANS_PRZEZBROJEN_TABS, admin: false };
   }
+  if (warehouse === 'PRZYGOTOWANIE_PRODUKCJI') {
+    if (role === 'PODGLAD') {
+      return { role, readOnly: true, tabs: PRZYGOTOWANIE_PRODUKCJI_TABS, admin: false };
+    }
+    return { role, readOnly: false, tabs: PRZYGOTOWANIE_PRODUKCJI_TABS, admin: false };
+  }
   if (warehouse === 'FARBY_TASMY') {
     if (role === 'PODGLAD') {
       return { role, readOnly: true, tabs: FARBY_TASMY_TABS, admin: false };
@@ -285,6 +293,7 @@ export const getWarehouseLabel = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'RAPORT_ZMIANOWY') return 'Raport zmianowy';
   if (warehouse === 'RAPORT_BRAKOWOSCI') return 'Raport brakowości';
   if (warehouse === 'BILANS_PRZEZBROJEN') return 'Bilans przezbrojeń';
+  if (warehouse === 'PRZYGOTOWANIE_PRODUKCJI') return 'Przygotowanie produkcji';
   if (warehouse === 'PRZESUNIECIA_ERP') return 'Przesunięcia magazynowe ERP';
   return 'Magazyn';
 };
