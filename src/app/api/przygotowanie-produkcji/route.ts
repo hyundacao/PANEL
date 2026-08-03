@@ -7,6 +7,8 @@ export const dynamic = 'force-dynamic';
 
 type StoredTask = {
   id: string;
+  isCurrentPlan: boolean;
+  planGroup: string;
   station: string;
   detail: string;
   quantity: string;
@@ -60,13 +62,15 @@ const toDbTask = (task: StoredTask, sessionId: string, position: number, userNam
   session_id: sessionId,
   task_key: String(task.id),
   position_no: position,
+  is_current_plan: Boolean(task.isCurrentPlan),
+  plan_group: String(task.planGroup ?? 'standard'),
   station: String(task.station ?? ''),
   detail: String(task.detail ?? ''),
   quantity: String(task.quantity ?? ''),
   norm: String(task.norm ?? ''),
   highlighted: Boolean(task.highlighted),
-  kinds: Array.isArray(task.kinds) ? task.kinds : [],
-  teams: Array.isArray(task.teams) ? task.teams : [],
+  kinds: Array.isArray(task.kinds) ? [...new Set(task.kinds.map(String))] : [],
+  teams: Array.isArray(task.teams) ? [...new Set(task.teams.map(String))] : [],
   notes: task.notes && typeof task.notes === 'object' ? task.notes : {},
   done: Boolean(task.done),
   material: String(task.material ?? ''),
@@ -80,13 +84,15 @@ const toDbTask = (task: StoredTask, sessionId: string, position: number, userNam
 
 const fromDbTask = (row: Record<string, unknown>): StoredTask => ({
   id: String(row.task_key ?? ''),
+  isCurrentPlan: row.is_current_plan !== false,
+  planGroup: String(row.plan_group ?? 'standard'),
   station: String(row.station ?? ''),
   detail: String(row.detail ?? ''),
   quantity: String(row.quantity ?? ''),
   norm: String(row.norm ?? ''),
   highlighted: Boolean(row.highlighted),
-  kinds: Array.isArray(row.kinds) ? row.kinds.map(String) : [],
-  teams: Array.isArray(row.teams) ? row.teams.map(String) : [],
+  kinds: Array.isArray(row.kinds) ? [...new Set(row.kinds.map(String))] : [],
+  teams: Array.isArray(row.teams) ? [...new Set(row.teams.map(String))] : [],
   notes: row.notes && typeof row.notes === 'object' ? row.notes as Record<string, string> : {},
   done: Boolean(row.done),
   material: String(row.material ?? ''),

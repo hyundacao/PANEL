@@ -135,10 +135,6 @@ const navItemsBilans: MobileNavItem[] = [
   { label: 'Bilans przezbrojeń', href: '/bilans-przezbrojen', tab: 'bilans-przezbrojen' }
 ];
 
-const navItemsPrzygotowanieProdukcji: MobileNavItem[] = [
-  { label: 'Plan przygotowania', href: '/przygotowanie-produkcji', tab: 'przygotowanie-produkcji' }
-];
-
 const navItemsFarbyTasmy: MobileNavItem[] = [
   { label: 'Rozliczanie farb i rozcieńczalników', href: '/rozliczanie-farb-rozcienczalnikow', tab: 'rozliczanie-farb-tasm' }
 ];
@@ -148,7 +144,7 @@ const getModuleNavItems = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'RAPORT_ZMIANOWY') return navItemsRaport;
   if (warehouse === 'RAPORT_BRAKOWOSCI') return navItemsRaportBrakowosci;
   if (warehouse === 'BILANS_PRZEZBROJEN') return navItemsBilans;
-  if (warehouse === 'PRZYGOTOWANIE_PRODUKCJI') return navItemsPrzygotowanieProdukcji;
+  if (warehouse === 'PRZYGOTOWANIE_PRODUKCJI') return [];
   if (warehouse === 'FARBY_TASMY') return navItemsFarbyTasmy;
   return navItemsPrzemialy;
 };

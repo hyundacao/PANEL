@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Upload, Wrench } from 'lucide-react';
-import { PageHeader } from '@/components/layout/PageHeader';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -13,10 +12,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { cn } from '@/lib/utils/cn';
 
 type Team = 'mechanics' | 'process' | 'distribution' | 'graphics' | 'technician' | 'additional';
-type WorkKind = 'zmiana-formy' | 'rozruch' | 'zmiana-koloru' | 'zmiana-grafiki' | 'regulacja' | 'proby' | 'przeglad-a' | 'inne';
+type WorkKind = 'zmiana-formy' | 'forma-narzedziownia' | 'rozruch' | 'zmiana-koloru' | 'zmiana-grafiki' | 'regulacja' | 'proby' | 'przeglad-a' | 'inne';
+type PlanGroup = 'standard' | 'emergency' | 'planned';
 
 type Task = {
   id: string;
+  isCurrentPlan: boolean;
+  planGroup: PlanGroup;
   station: string;
   detail: string;
   quantity: string;
@@ -49,6 +51,7 @@ const teamOptions: Array<{ id: Team; label: string; color: string }> = [
 
 const workKinds: Array<{ id: WorkKind; label: string }> = [
   { id: 'zmiana-formy', label: 'Zmiana formy' },
+  { id: 'forma-narzedziownia', label: 'Forma na narzędziownię' },
   { id: 'rozruch', label: 'Rozruch' },
   { id: 'zmiana-koloru', label: 'Zmiana koloru' },
   { id: 'zmiana-grafiki', label: 'Zmiana grafiki' },
@@ -63,6 +66,7 @@ const automaticTeams: Partial<Record<WorkKind, Team[]>> = {
   'zmiana-koloru': ['process', 'distribution', 'technician'],
   'zmiana-grafiki': ['process', 'distribution', 'graphics'],
   'zmiana-formy': ['mechanics', 'process', 'distribution', 'technician'],
+  'forma-narzedziownia': ['mechanics', 'process'],
   regulacja: ['process'],
   proby: ['process'],
   'przeglad-a': ['process']
@@ -70,6 +74,14 @@ const automaticTeams: Partial<Record<WorkKind, Team[]>> = {
 
 const teamsWith5s: Team[] = ['mechanics', 'process', 'distribution', 'technician'];
 const standard5s = 'Po wykonanym zadaniu poprawnie ustaw tabliczkę 5S.';
+const kindsForTeam = (task: Task, team: Team) => team === 'mechanics'
+  ? task.kinds.filter((kind) => kind === 'zmiana-formy' || kind === 'forma-narzedziownia')
+  : task.kinds;
+const planGroupLabel: Record<PlanGroup, string> = {
+  standard: 'Plan bieżący',
+  emergency: 'Awaryjnie',
+  planned: 'Planowane zmiany'
+};
 
 const cellText = (value: unknown) => (value == null ? '' : String(value).replace(/\s+/g, ' ').trim());
 const normalize = (value: string) => value.replace(/\s+/g, ' ').trim().toUpperCase();
@@ -108,14 +120,24 @@ const parseTasks = (workbook: XLSX.WorkBook, sheetName: string): Task[] => {
     return merge ? sheet[XLSX.utils.encode_cell({ r: merge.s.r, c: merge.s.c })] : undefined;
   };
   const valueAt = (row: number, column: number) => cellText(cellAt(row, column)?.w ?? cellAt(row, column)?.v);
+  let planGroup: PlanGroup = 'standard';
   const rows = data.flatMap((_, row) => {
     const detail = valueAt(row, 1);
     const values = Array.from({ length: 8 }, (_, column) => valueAt(row, column));
+    const rowText = values.join(' ').toUpperCase();
+    if (rowText.includes('AWARYJNIE')) {
+      planGroup = 'emergency';
+      return [];
+    }
+    if (rowText.includes('PLANOWANE ZMIANY')) {
+      planGroup = 'planned';
+      return [];
+    }
     const station = values.find((value) => /\bWTR\s*\d+\b|\bST\.?\s*\d+\b|\bMASZYNA\b/i.test(value)) ?? valueAt(row, 3);
     const header = `${detail} ${station}`.toUpperCase();
     if (!detail || !station || header.includes('NAZWA INDEKSU') || header.includes('STÓŁ LUB MASZYNA')) return [];
     const highlighted = Array.from({ length: 8 }, (_, column) => hasYellowFill(cellAt(row, column))).some(Boolean);
-    return [{ id: `${sheetName}-${row}`, station, detail, quantity: valueAt(row, 2), norm: valueAt(row, 4), highlighted }];
+    return [{ id: `${sheetName}-${row}`, isCurrentPlan: true, planGroup, station, detail, quantity: valueAt(row, 2), norm: valueAt(row, 4), highlighted }];
   });
 
   return rows.map((row, index) => {
@@ -123,6 +145,8 @@ const parseTasks = (workbook: XLSX.WorkBook, sheetName: string): Task[] => {
     const nextOnSameStation = Boolean(previous && normalize(previous.station) === normalize(row.station) && normalize(previous.detail) !== normalize(row.detail));
     return {
       ...row,
+      isCurrentPlan: true,
+      planGroup: row.planGroup,
       highlighted: row.highlighted || nextOnSameStation,
       kinds: [],
       teams: [],
@@ -135,6 +159,34 @@ const parseTasks = (workbook: XLSX.WorkBook, sheetName: string): Task[] => {
       temperature: ''
     };
   });
+};
+
+const assignedForTheDay = (task: Task) => task.kinds.length > 0 || task.teams.length > 0 || Object.keys(task.notes).length > 0 || task.done;
+
+const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
+  const remaining = [...existingTasks];
+  const currentTasks = importedTasks.map((imported) => {
+    const matchIndex = remaining.findIndex((task) => normalize(task.station) === normalize(imported.station) && normalize(task.detail) === normalize(imported.detail));
+    if (matchIndex < 0) return imported;
+    const previous = remaining.splice(matchIndex, 1)[0];
+    return {
+      ...previous,
+      ...imported,
+      id: previous.id,
+      isCurrentPlan: true,
+      kinds: previous.kinds,
+      teams: previous.teams,
+      notes: previous.notes,
+      done: previous.done,
+      material: previous.material,
+      materialType: previous.materialType,
+      source: previous.source,
+      dryer: previous.dryer,
+      temperature: previous.temperature
+    };
+  });
+  const retainedWork = remaining.filter(assignedForTheDay).map((task) => ({ ...task, isCurrentPlan: false }));
+  return [...currentTasks, ...retainedWork];
 };
 
 export default function PrzygotowanieProdukcjiPage() {
@@ -195,7 +247,7 @@ export default function PrzygotowanieProdukcjiPage() {
 
   const selectSheet = (nextSheet: string) => {
     if (!workbook) return;
-    const nextTasks = parseTasks(workbook, nextSheet);
+    const nextTasks = mergeImportedTasks(parseTasks(workbook, nextSheet), tasks);
     setSheetName(nextSheet);
     setTasks(nextTasks);
     void savePlan(nextTasks, fileName, nextSheet);
@@ -207,7 +259,7 @@ export default function PrzygotowanieProdukcjiPage() {
     try {
       const nextWorkbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellStyles: true });
       const nextSheet = nextWorkbook.SheetNames[nextWorkbook.SheetNames.length - 1] ?? '';
-      const nextTasks = parseTasks(nextWorkbook, nextSheet);
+      const nextTasks = mergeImportedTasks(parseTasks(nextWorkbook, nextSheet), tasks);
       setWorkbook(nextWorkbook);
       setFileName(file.name);
       setSheetName(nextSheet);
@@ -226,10 +278,13 @@ export default function PrzygotowanieProdukcjiPage() {
   }));
   const toggleKind = (task: Task, kind: WorkKind) => {
     const adding = !task.kinds.includes(kind);
-    const kinds = adding ? [...task.kinds, kind] : task.kinds.filter((item) => item !== kind);
+    const kinds = [...new Set(adding ? [...task.kinds, kind] : task.kinds.filter((item) => item !== kind))];
     const addedTeams = adding ? automaticTeams[kind] ?? [] : [];
     const teams = [...new Set([...task.teams, ...addedTeams])];
-    const notes = addedTeams.includes('distribution') && !task.notes.distribution ? { ...task.notes, distribution: 'Przygotować stanowisko' } : task.notes;
+    let notes = addedTeams.includes('distribution') && !task.notes.distribution ? { ...task.notes, distribution: 'Przygotować stanowisko' } : task.notes;
+    if (adding && kind === 'forma-narzedziownia' && !notes.process) {
+      notes = { ...notes, process: 'Wznowienie procesu po powrocie z narzędziowni.' };
+    }
     updateTask(task.id, { kinds, teams, notes });
   };
   const toggleTeam = (task: Task, team: Team) => {
@@ -238,10 +293,10 @@ export default function PrzygotowanieProdukcjiPage() {
     const notes = adding && team === 'distribution' && !task.notes.distribution ? { ...task.notes, distribution: 'Przygotować stanowisko' } : task.notes;
     updateTask(task.id, { teams, notes });
   };
-  const activeTasks = useMemo(() => tasks.filter((task) => task.station), [tasks]);
+  const activeTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station), [tasks]);
 
   const copyQueueTask = async (task: Task, team: Team) => {
-    const kindLabels = task.kinds
+    const kindLabels = [...new Set(kindsForTeam(task, team))]
       .map((id) => workKinds.find((item) => item.id === id)?.label)
       .filter(Boolean)
       .join(', ');
@@ -258,59 +313,45 @@ export default function PrzygotowanieProdukcjiPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5">
-      <PageHeader title="Przygotowanie produkcji" subtitle="Import planu, rozpiska materiałowa i zadania dla zespołów." />
+    <div className="mx-auto w-full max-w-[1600px] space-y-4">
       <Tabs defaultValue="plan" className="space-y-4">
-        <TabsList className="w-full justify-start overflow-x-auto">
-          <TabsTrigger value="plan">Plan zmian</TabsTrigger>
-          <TabsTrigger value="material">Rozpiska materiałowa</TabsTrigger>
-        </TabsList>
-
-        <Card className="space-y-3">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-base font-semibold text-title">Plan produkcyjny</p>
-              <p className="text-sm text-dim">Wgraj Excel i wybierz arkusz wykorzystywany do przygotowania produkcji.</p>
-            </div>
-            <label>
-              <input className="hidden" accept=".xlsx,.xls" onChange={(event) => importPlan(event.target.files?.[0] ?? null)} type="file" />
-              <Button asChild disabled={importing} variant="primaryEmber"><span><Upload className="mr-2 h-4 w-4" />{importing ? 'Wczytywanie...' : 'Wgraj plan Excel'}</span></Button>
-            </label>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 border-t border-border pt-3 text-sm text-dim">
-            <span>Plik: <strong className="text-title">{fileName || 'brak'}</strong></span>
-            {sheetNames.length > 0 && <select className="rounded-lg border border-border bg-surface2 px-3 py-2 text-body" value={sheetName} onChange={(event) => selectSheet(event.target.value)}>
-              {sheetNames.map((name) => <option key={name} value={name}>{name}</option>)}
-            </select>}
-            {tasks.length > 0 && <Badge>{tasks.length} pozycji</Badge>}
-            <span className={cn('ml-auto text-xs font-semibold', saveState === 'error' ? 'text-red-400' : saveState === 'saving' ? 'text-[var(--brand)]' : 'text-emerald-400')}>
-              {loadingSavedPlan ? 'Odczytywanie zapisanego planu...' : saveState === 'saving' ? 'Zapisywanie...' : saveState === 'error' ? 'Błąd zapisu' : tasks.length ? 'Zapisano' : ''}
-            </span>
-          </div>
-        </Card>
+        <div className="w-full">
+          <label className="block w-full">
+            <input className="hidden" accept=".xlsx,.xls" onChange={(event) => importPlan(event.target.files?.[0] ?? null)} type="file" />
+            <Button asChild className="w-full" disabled={importing} variant="primaryEmber"><span><Upload className="mr-2 h-4 w-4" />{importing ? 'Wczytywanie...' : 'Wgraj plan Excel'}</span></Button>
+          </label>
+        </div>
 
         <TabsContent value="plan" className="space-y-4">
-          {!activeTasks.length ? <EmptyState title="Wgraj plan produkcyjny" description="Po imporcie pojawią się stanowiska, indeksy oraz zadania do przygotowania." /> : <>
+          {activeTasks.length > 0 && <>
             <Card className="p-0">
               <div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Pozycje do omówienia</p><p className="mt-1 text-sm text-dim">Wybierz rodzaj pracy, a właściwe zespoły zostaną zaznaczone automatycznie.</p></div>
               <div className="space-y-3 p-3">
-                {activeTasks.map((task) => <article className={cn('rounded-lg border border-border bg-surface2 p-4', task.highlighted && 'border-[rgba(245,197,66,0.65)] bg-[rgba(245,197,66,0.07)]', task.done && 'border-[rgba(34,197,94,0.65)] bg-[rgba(34,197,94,0.07)]')} key={task.id}>
-                  <div className="grid gap-4 xl:grid-cols-[minmax(310px,1.25fr)_minmax(250px,1fr)_minmax(360px,1.4fr)_120px] xl:items-center">
-                    <div className="grid grid-cols-[92px_1fr] gap-3">
-                      <div className="flex min-h-14 items-center justify-center rounded-lg border border-[rgba(255,122,0,0.48)] bg-[rgba(255,122,0,0.08)] px-2 text-center text-sm font-bold text-[var(--brand)]">{task.station}</div>
+                {activeTasks.map((task, index) => {
+                  const startsGroup = index === 0 || activeTasks[index - 1].planGroup !== task.planGroup;
+                  return <div className="space-y-3" key={task.id}>
+                  {startsGroup && task.planGroup !== 'standard' && <div className={cn('rounded-lg border px-3 py-2 text-sm font-bold uppercase tracking-wide', task.planGroup === 'emergency' ? 'border-[rgba(239,68,68,0.65)] bg-[rgba(239,68,68,0.12)] text-red-300' : 'border-[rgba(183,122,255,0.65)] bg-[rgba(183,122,255,0.12)] text-[#debaff]')}>{planGroupLabel[task.planGroup]}</div>}
+                <article className={cn('rounded-lg border border-border bg-surface2 p-4', task.highlighted && 'border-[rgba(245,197,66,0.65)] bg-[rgba(245,197,66,0.07)]', task.done && 'border-[rgba(34,197,94,0.65)] bg-[rgba(34,197,94,0.07)]')}>
+                  <div className="grid gap-4 xl:grid-cols-[minmax(310px,1.25fr)_minmax(250px,1fr)_minmax(360px,1.4fr)] xl:items-center">
+                    <div className="space-y-2">
+                      <div className="flex min-h-11 w-full items-center justify-center rounded-lg border border-[rgba(255,122,0,0.48)] bg-[rgba(255,122,0,0.08)] px-3 text-center text-base font-bold text-[var(--brand)]">{task.station}</div>
                       <div><textarea className="min-h-14 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm font-semibold text-title outline-none focus:border-[rgba(255,122,0,0.65)]" value={task.detail} onChange={(event) => updateTask(task.id, { detail: event.target.value })} /><p className="mt-1 text-xs text-dim">Ilość: <strong className="text-title">{task.quantity || '---'}</strong> &nbsp; Norma: <strong className="text-title">{task.norm || '---'}</strong></p></div>
                     </div>
-                    <fieldset className="rounded-lg border border-border p-2"><legend className="px-1 text-[10px] font-bold uppercase text-dim">Rodzaj pracy</legend><div className="grid grid-cols-2 gap-1.5">{workKinds.map((kind) => <label className={cn('flex min-h-8 items-center justify-center gap-1 rounded border border-border px-2 text-center text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div></fieldset>
+                    <fieldset className="rounded-lg border border-border p-2"><legend className="px-1 text-[10px] font-bold uppercase text-dim">Rodzaj pracy</legend><div className="grid grid-cols-2 gap-1.5">{workKinds.map((kind) => <label className={cn('flex min-h-8 items-center justify-start gap-2 rounded border border-border px-3 text-left text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div></fieldset>
                     <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">{teamOptions.map((team) => <label className={cn('flex min-h-10 w-full items-center gap-2 rounded-lg border border-border bg-bg px-3 text-xs font-semibold text-dim', task.teams.includes(team.id) && 'text-title')} style={task.teams.includes(team.id) ? { borderColor: `${team.color}99`, backgroundColor: `${team.color}18` } : undefined} key={team.id}><input checked={task.teams.includes(team.id)} onChange={() => toggleTeam(task, team.id)} type="checkbox" />{team.label}</label>)}</div>
-                    <label className="flex min-h-10 items-center justify-center gap-2 rounded-lg border border-[rgba(34,197,94,0.55)] bg-[rgba(34,197,94,0.06)] px-2 text-xs font-bold text-[#9ee6b8]"><input checked={task.done} onChange={(event) => updateTask(task.id, { done: event.target.checked })} type="checkbox" />Wykonane</label>
                   </div>
                   {task.teams.length > 0 && <div className="mt-3 grid gap-2 border-t border-border pt-3 md:grid-cols-2 xl:grid-cols-3">{teamOptions.filter((team) => task.teams.includes(team.id)).map((team) => <label className="text-xs text-dim" key={team.id}>{team.id === 'additional' ? 'Informacja dodatkowa' : `Uwagi dla: ${team.label}`}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTask(task.id, { notes: { ...task.notes, [team.id]: event.target.value } })} placeholder="Dodaj ustalenie" /></label>)}</div>}
-                </article>)}
+                </article>
+                  </div>;
+                })}
               </div>
             </Card>
             <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">{teamOptions.map((team) => {
-              const queue = activeTasks.filter((task) => task.teams.includes(team.id) && !(task.kinds.length === 1 && task.kinds[0] === 'przeglad-a' && ['mechanics', 'distribution', 'technician'].includes(team.id)));
-              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><Badge>{queue.filter((task) => !task.done).length}</Badge></div><div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; return <button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text rounded-lg border border-border bg-bg p-3 text-left hover:border-borderStrong', task.done && 'border-[rgba(34,197,94,0.65)]')} key={task.id} onClick={() => void copyQueueTask(task, team.id)} type="button"><p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">Ilość: {task.quantity || '---'} | Norma: {task.norm || '---'}</p><p className="mt-1 text-xs text-body">{task.kinds.map((id) => workKinds.find((item) => item.id)?.label).filter(Boolean).join(', ')}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{teamsWith5s.includes(team.id) && <p className="mt-1 text-xs text-body">{standard5s}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button>; })}</div></Card>;
+              const queue = tasks.filter((task) => {
+                if (!task.teams.includes(team.id) || kindsForTeam(task, team.id).length === 0) return false;
+                return !(task.kinds.length === 1 && task.kinds[0] === 'przeglad-a' && ['mechanics', 'distribution', 'technician'].includes(team.id));
+              });
+              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><Badge>{queue.filter((task) => !task.done).length}</Badge></div><div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); return <button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text rounded-lg border border-border bg-bg p-3 text-left hover:border-borderStrong', task.done && 'border-[rgba(34,197,94,0.65)]')} key={task.id} onClick={() => void copyQueueTask(task, team.id)} type="button"><p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">Ilość: {task.quantity || '---'} | Norma: {task.norm || '---'}</p><p className="mt-1 text-xs text-body">{kindLabels}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{teamsWith5s.includes(team.id) && <p className="mt-1 text-xs text-body">{standard5s}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button>; })}</div></Card>;
             })}</div>
           </>}
         </TabsContent>

@@ -14,6 +14,8 @@ create table if not exists public.przygotowanie_produkcji_tasks (
   session_id uuid not null references public.przygotowanie_produkcji_sessions(id) on delete cascade,
   task_key text not null,
   position_no integer not null default 0,
+  is_current_plan boolean not null default true,
+  plan_group text not null default 'standard',
   station text not null,
   detail text not null,
   quantity text,
@@ -38,6 +40,12 @@ create index if not exists przygotowanie_produkcji_sessions_date_idx
   on public.przygotowanie_produkcji_sessions (session_date desc);
 create index if not exists przygotowanie_produkcji_tasks_session_idx
   on public.przygotowanie_produkcji_tasks (session_id, position_no);
+
+alter table public.przygotowanie_produkcji_tasks
+  add column if not exists is_current_plan boolean not null default true;
+
+alter table public.przygotowanie_produkcji_tasks
+  add column if not exists plan_group text not null default 'standard';
 
 alter table public.przygotowanie_produkcji_sessions enable row level security;
 alter table public.przygotowanie_produkcji_tasks enable row level security;
