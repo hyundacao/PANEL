@@ -1,18 +1,21 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import * as XLSX from 'xlsx';
-import { Upload, Wrench } from 'lucide-react';
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Pencil, Trash2, Upload, Wrench, X } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
+import { Tabs, TabsContent } from '@/components/ui/Tabs';
 import { cn } from '@/lib/utils/cn';
 
 type Team = 'mechanics' | 'process' | 'distribution' | 'graphics' | 'technician' | 'additional';
 type WorkKind = 'zmiana-formy' | 'forma-narzedziownia' | 'rozruch' | 'zmiana-koloru' | 'zmiana-grafiki' | 'regulacja' | 'proby' | 'przeglad-a' | 'inne';
+type ReportKind = WorkKind | 'przygotowanie-stanowiska';
 type PlanGroup = 'standard' | 'emergency' | 'planned';
 
 type Task = {
@@ -40,6 +43,21 @@ type StoredPlan = {
   tasks: Task[];
 };
 
+type PlanHistory = {
+  plan_date: string;
+  file_name?: string | null;
+  plan_sheet?: string | null;
+  tasks: Array<Pick<Task, 'kinds' | 'teams' | 'notes' | 'done'>>;
+  archived_at: string;
+};
+
+type WorkKindSeries = {
+  id: ReportKind;
+  label: string;
+  total: number;
+  data: Array<{ date: string; value: number }>;
+};
+
 const teamOptions: Array<{ id: Team; label: string; color: string }> = [
   { id: 'mechanics', label: 'Mechanik', color: '#ff7900' },
   { id: 'process', label: 'Inżynier procesu', color: '#2fb5f0' },
@@ -59,6 +77,11 @@ const workKinds: Array<{ id: WorkKind; label: string }> = [
   { id: 'proby', label: 'Próby' },
   { id: 'przeglad-a', label: 'Przegląd A' },
   { id: 'inne', label: 'Inne' }
+];
+
+const reportKinds: Array<{ id: ReportKind; label: string }> = [
+  ...workKinds,
+  { id: 'przygotowanie-stanowiska', label: 'Przygotowanie stanowiska' }
 ];
 
 const automaticTeams: Partial<Record<WorkKind, Team[]>> = {
@@ -86,12 +109,85 @@ const planGroupLabel: Record<PlanGroup, string> = {
 const cellText = (value: unknown) => (value == null ? '' : String(value).replace(/\s+/g, ' ').trim());
 const normalize = (value: string) => value.replace(/\s+/g, ' ').trim().toUpperCase();
 
+const workbookDatabase = () => new Promise<IDBDatabase>((resolve, reject) => {
+  const request = indexedDB.open('przygotowanie-produkcji', 1);
+  request.onupgradeneeded = () => request.result.createObjectStore('workbooks');
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error);
+});
+
+const saveWorkbookLocally = async (buffer: ArrayBuffer, fileName: string) => {
+  const database = await workbookDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction('workbooks', 'readwrite');
+    transaction.objectStore('workbooks').put({ buffer, fileName }, 'active');
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+};
+
+const loadWorkbookLocally = async (): Promise<{ buffer: ArrayBuffer; fileName: string } | null> => {
+  const database = await workbookDatabase();
+  const item = await new Promise<{ buffer: ArrayBuffer; fileName: string } | null>((resolve, reject) => {
+    const request = database.transaction('workbooks', 'readonly').objectStore('workbooks').get('active');
+    request.onsuccess = () => resolve(request.result ?? null);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  return item;
+};
+
 const temperatureFor = (type: string) => {
   const normalized = type.trim().toUpperCase();
   if (normalized === 'PC' || normalized === 'PET') return '120';
   if (['PP', 'ABS', 'PA', 'PS', 'PMMA', 'SAN', 'PC+ABS'].includes(normalized)) return '80';
   return '';
 };
+
+const taskChoiceBackground = (active: boolean) => ({
+  backgroundImage: active
+    ? "linear-gradient(100deg, rgba(255,122,0,0.28), rgba(7,8,12,0.58)), url('/profil-panel-bg.png')"
+    : "linear-gradient(100deg, rgba(7,8,12,0.7), rgba(7,8,12,0.5)), url('/profil-panel-bg.png')",
+  backgroundPosition: 'center',
+  backgroundSize: 'cover'
+});
+
+const WorkReportDashboard = ({
+  period,
+  onPeriodChange,
+  dayCount,
+  report,
+  chart,
+  series
+}: {
+  period: 'week' | 'month' | 'all';
+  onPeriodChange: (period: 'week' | 'month' | 'all') => void;
+  dayCount: number;
+  report: Record<ReportKind, { total: number; done: number }>;
+  chart: Array<{ date: string; prace: number }>;
+  series: WorkKindSeries[];
+}) => {
+  const total = Object.values(report).reduce((sum, item) => sum + item.total, 0);
+  const done = Object.values(report).reduce((sum, item) => sum + item.done, 0);
+  const breakdown = reportKinds.map((kind) => ({ label: kind.label, value: report[kind.id].total }));
+  const maxValue = Math.max(1, ...breakdown.map((item) => item.value));
+  const periodLabel = period === 'week' ? 'Ostatnie 7 dni' : period === 'month' ? 'Ostatnie 30 dni' : 'Cała historia';
+
+  return <div className="work-report-dashboard space-y-4">
+    <section className="overflow-hidden rounded-xl border border-[rgba(255,122,0,0.3)] bg-[#0c0e13]" style={{ backgroundImage: "linear-gradient(100deg, rgba(255,122,0,0.16), rgba(7,8,12,0.72)), url('/profil-panel-bg.png')", backgroundPosition: 'center', backgroundSize: 'cover' }}>
+      <div className="flex flex-col gap-4 px-5 py-5 lg:flex-row lg:items-center lg:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-[var(--brand)]">Przygotowanie produkcji</p><h2 className="mt-1 text-2xl font-semibold text-title">Raport prac</h2><p className="mt-1 text-sm text-dim">{periodLabel}</p></div><div className="grid grid-cols-3 gap-2">{([{ id: 'week', label: 'Tydzień' }, { id: 'month', label: 'Miesiąc' }, { id: 'all', label: 'Wszystko' }] as const).map((item) => <Button className={cn('min-h-10 px-3 py-2 text-xs', period === item.id && 'bg-[rgba(255,122,0,0.18)] text-title')} key={item.id} onClick={() => onPeriodChange(item.id)} type="button" variant={period === item.id ? 'secondary' : 'outline'}>{item.label}</Button>)}</div></div>
+    </section>
+    <div className="grid gap-3 md:grid-cols-3"><div className="rounded-xl border border-[rgba(255,122,0,0.3)] bg-[linear-gradient(135deg,rgba(255,122,0,0.15),rgba(255,255,255,0.02))] p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Prace w okresie</p><p className="mt-2 text-4xl font-bold text-[var(--brand)]">{total}</p></div><div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Dni z planem</p><p className="mt-2 text-4xl font-bold text-title">{dayCount}</p></div><div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Wykonane</p><p className="mt-2 text-4xl font-bold text-title">{done}</p></div></div>
+    <div className="grid gap-4 xl:grid-cols-[1.1fr_1fr]"><section className="rounded-xl border border-border bg-surface p-5"><div className="mb-5 flex items-center justify-between"><div><p className="font-semibold text-title">Rozkład prac</p><p className="mt-1 text-sm text-dim">Najczęściej planowane działania</p></div><span className="text-sm font-semibold text-[var(--brand)]">{total}</span></div>{breakdown.length === 0 ? <p className="py-10 text-center text-sm text-dim">Brak prac w wybranym okresie.</p> : <div className="space-y-4">{breakdown.map((item) => <div key={item.label}><div className="mb-1.5 flex items-center justify-between text-sm"><span className="font-semibold text-title">{item.label}</span><span className="font-bold text-[var(--brand)]">{item.value}</span></div><div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.07)]"><div className="h-full rounded-full bg-[linear-gradient(90deg,#ff7a00,#ffad4d)]" style={{ width: `${(item.value / maxValue) * 100}%` }} /></div></div>)}</div>}</section><section className="rounded-xl border border-border bg-surface p-5"><p className="font-semibold text-title">Aktywność w czasie</p><p className="mt-1 text-sm text-dim">Liczba prac przypisanych każdego dnia</p>{chart.length < 2 ? <div className="flex h-64 flex-col items-center justify-center text-center"><p className="text-5xl font-bold text-[var(--brand)]">{total}</p><p className="mt-2 text-sm text-dim">Zbieramy kolejne dni, aby pokazać trend.</p></div> : <div className="mt-4 h-60"><ResponsiveContainer height="100%" width="100%"><BarChart data={chart} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}><CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" stroke="var(--t-dim)" tickLine={false} /><YAxis allowDecimals={false} stroke="var(--t-dim)" tickLine={false} /><Tooltip contentStyle={{ background: '#0b0c10', border: '1px solid rgba(255,122,0,0.45)', borderRadius: 8 }} cursor={{ fill: 'rgba(255,122,0,0.08)' }} /><Bar dataKey="prace" fill="var(--brand)" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer></div>}</section></div>
+    <WorkKindTrendCharts series={series} />
+  </div>;
+};
+
+const WorkKindTrendCharts = ({ series }: { series: WorkKindSeries[] }) => <section className="rounded-xl border border-border bg-surface p-5">
+  <div className="mb-5 flex flex-wrap items-center justify-between gap-2"><div><p className="font-semibold text-title">Zadania w czasie</p><p className="mt-1 text-sm text-dim">Liczba poszczególnych prac w kolejnych dniach.</p></div><span className="text-xs font-semibold text-dim">Według wybranego okresu</span></div>
+  <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">{series.map((item) => <div className="overflow-hidden rounded-lg border border-border bg-bg" key={item.id}><div className="flex items-center justify-between border-b border-border px-4 py-3"><p className="text-sm font-semibold text-title">{item.label}</p><span className="rounded border border-[rgba(255,122,0,0.55)] bg-[rgba(7,8,12,0.9)] px-2 py-0.5 text-sm font-bold text-[var(--brand)]">{item.total}</span></div><div className="h-36 px-2 py-2"><ResponsiveContainer height="100%" width="100%"><BarChart data={item.data} margin={{ top: 4, right: 2, left: -24, bottom: -4 }}><CartesianGrid stroke="rgba(255,255,255,0.07)" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" stroke="var(--t-dim)" tick={{ fontSize: 10 }} tickLine={false} /><YAxis allowDecimals={false} stroke="var(--t-dim)" tick={{ fontSize: 10 }} tickLine={false} /><Tooltip contentStyle={{ background: '#0b0c10', border: '1px solid rgba(255,122,0,0.45)', borderRadius: 8 }} cursor={{ fill: 'rgba(255,122,0,0.08)' }} /><Bar dataKey="value" fill="var(--brand)" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div></div>)}</div>
+</section>;
 
 const inferWorkKind = (value: string): WorkKind | null => {
   const text = value.toUpperCase();
@@ -190,15 +286,20 @@ const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
 };
 
 export default function PrzygotowanieProdukcjiPage() {
+  const searchParams = useSearchParams();
   const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [fileName, setFileName] = useState('');
   const [sheetName, setSheetName] = useState('');
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [history, setHistory] = useState<PlanHistory[]>([]);
+  const [reportPeriod, setReportPeriod] = useState<'week' | 'month' | 'all'>('month');
   const [importing, setImporting] = useState(false);
   const [loadingSavedPlan, setLoadingSavedPlan] = useState(true);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
   const [copiedQueueTask, setCopiedQueueTask] = useState<string | null>(null);
+  const [editingQueueTask, setEditingQueueTask] = useState<string | null>(null);
   const sheetNames = workbook?.SheetNames ?? [];
+  const activeView = searchParams.get('view') === 'material' ? 'material' : searchParams.get('view') === 'history' ? 'history' : searchParams.get('view') === 'report' ? 'report' : 'plan';
 
   const apiRequest = async <T,>(body?: unknown) => {
     const response = await fetch('/api/przygotowanie-produkcji', body ? {
@@ -222,6 +323,27 @@ export default function PrzygotowanieProdukcjiPage() {
       })
       .catch(() => undefined)
       .finally(() => { if (active) setLoadingSavedPlan(false); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/przygotowanie-produkcji?history=1')
+      .then((response) => response.ok ? response.json() as Promise<{ history: PlanHistory[] }> : Promise.reject())
+      .then((data) => setHistory(data.history ?? []))
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    loadWorkbookLocally()
+      .then((savedWorkbook) => {
+        if (!active || !savedWorkbook) return;
+        const restoredWorkbook = XLSX.read(savedWorkbook.buffer, { type: 'array', cellStyles: true });
+        setWorkbook(restoredWorkbook);
+        setFileName((current) => current || savedWorkbook.fileName);
+        setSheetName((current) => restoredWorkbook.SheetNames.includes(current) ? current : (restoredWorkbook.SheetNames[restoredWorkbook.SheetNames.length - 1] ?? ''));
+      })
+      .catch(() => undefined);
     return () => { active = false; };
   }, []);
 
@@ -257,13 +379,15 @@ export default function PrzygotowanieProdukcjiPage() {
     if (!file) return;
     setImporting(true);
     try {
-      const nextWorkbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellStyles: true });
+      const buffer = await file.arrayBuffer();
+      const nextWorkbook = XLSX.read(buffer, { type: 'array', cellStyles: true });
       const nextSheet = nextWorkbook.SheetNames[nextWorkbook.SheetNames.length - 1] ?? '';
       const nextTasks = mergeImportedTasks(parseTasks(nextWorkbook, nextSheet), tasks);
       setWorkbook(nextWorkbook);
       setFileName(file.name);
       setSheetName(nextSheet);
       setTasks(nextTasks);
+      await saveWorkbookLocally(buffer, file.name);
       await savePlan(nextTasks, file.name, nextSheet);
     } finally {
       setImporting(false);
@@ -294,6 +418,73 @@ export default function PrzygotowanieProdukcjiPage() {
     updateTask(task.id, { teams, notes });
   };
   const activeTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station), [tasks]);
+  const reportDays = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const allDays = [...history.map((entry) => ({ date: entry.plan_date, tasks: entry.tasks })), { date: today, tasks }];
+    if (reportPeriod === 'all') return allDays;
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    from.setDate(from.getDate() - (reportPeriod === 'week' ? 6 : 29));
+    return allDays.filter((entry) => new Date(`${entry.date}T12:00:00`) >= from);
+  }, [history, reportPeriod, tasks]);
+
+  const workReport = useMemo(() => {
+    const totals = Object.fromEntries(reportKinds.map((kind) => [kind.id, { total: 0, done: 0 }])) as Record<ReportKind, { total: number; done: number }>;
+    reportDays.flatMap((entry) => entry.tasks).forEach((task) => {
+      (task.kinds ?? []).forEach((kind) => {
+        if (!Object.prototype.hasOwnProperty.call(totals, kind)) return;
+        totals[kind as WorkKind].total += 1;
+        if (task.done) totals[kind as WorkKind].done += 1;
+      });
+      const preparesStation = task.teams?.includes('distribution') && task.notes?.distribution?.trim().toLocaleLowerCase().includes('przygotowa') === true;
+      if (preparesStation) {
+        totals['przygotowanie-stanowiska'].total += 1;
+        if (task.done) totals['przygotowanie-stanowiska'].done += 1;
+      }
+    });
+    return totals;
+  }, [reportDays]);
+
+  const reportChart = useMemo(() => reportDays
+    .map((entry) => ({
+      dateKey: entry.date,
+      date: new Date(`${entry.date}T12:00:00`).toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }),
+      prace: entry.tasks.reduce((total, task) => total + (task.kinds?.length ?? 0) + (task.teams?.includes('distribution') && task.notes?.distribution?.trim().toLocaleLowerCase().includes('przygotowa') ? 1 : 0), 0)
+    }))
+    .sort((left, right) => left.dateKey.localeCompare(right.dateKey)), [reportDays]);
+
+  const workKindSeries = useMemo<WorkKindSeries[]>(() => reportKinds.map((kind) => {
+    const data = reportDays
+      .map((entry) => ({
+        dateKey: entry.date,
+        date: new Date(`${entry.date}T12:00:00`).toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }),
+        value: entry.tasks.reduce((total, task) => {
+          if (kind.id === 'przygotowanie-stanowiska') {
+            return total + (task.teams?.includes('distribution') && task.notes?.distribution?.trim().toLocaleLowerCase().includes('przygotowa') ? 1 : 0);
+          }
+          return total + (task.kinds?.includes(kind.id) ? 1 : 0);
+        }, 0)
+      }))
+      .sort((left, right) => left.dateKey.localeCompare(right.dateKey));
+    return { id: kind.id, label: kind.label, total: data.reduce((sum, item) => sum + item.value, 0), data };
+  }), [reportDays]);
+
+  const removeTaskFromTeam = (task: Task, team: Team) => {
+    const notes = { ...task.notes };
+    delete notes[team];
+    updateTask(task.id, { teams: task.teams.filter((item) => item !== team), notes });
+  };
+
+  const clearTaskWork = (task: Task) => {
+    updateTask(task.id, { kinds: [], teams: [], notes: {} });
+  };
+
+  const clearAllAssignments = () => {
+    if (!window.confirm('Usunąć wszystkie przypisania, uwagi i statusy wykonania z bieżącego planu?')) return;
+    const nextTasks = tasks.map((task) => ({ ...task, kinds: [], teams: [], notes: {}, done: false }));
+    setTasks(nextTasks);
+    void savePlan(nextTasks, fileName, sheetName);
+  };
 
   const copyQueueTask = async (task: Task, team: Team) => {
     const kindLabels = [...new Set(kindsForTeam(task, team))]
@@ -313,32 +504,87 @@ export default function PrzygotowanieProdukcjiPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-4">
-      <Tabs defaultValue="plan" className="space-y-4">
-        <div className="w-full">
+    <div className="production-preparation w-full max-w-none space-y-4">
+      <style jsx>{`
+        .production-preparation article input[type='checkbox'] {
+          accent-color: #ff7a00;
+        }
+
+        .production-queues > div > div:last-child {
+          padding: 0.25rem;
+        }
+
+        .production-queues > div {
+          padding: 0 !important;
+        }
+
+        .production-queues > div > div:last-child > div > button {
+          padding: 0.75rem;
+        }
+
+        .production-queues > div > div:last-child > div {
+          border-color: rgba(255, 255, 255, 0.12);
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+        }
+
+        @media (max-width: 767px) {
+          .production-queues {
+            width: 100%;
+          }
+
+          .production-queues > div {
+            min-width: 0;
+            width: 100%;
+          }
+
+          .production-queues > div > div:last-child {
+            padding: 0.25rem;
+          }
+
+          .production-queues > div > div:last-child > div > button {
+            padding: 0.625rem;
+          }
+        }
+      `}</style>
+      <Tabs value={activeView} className="space-y-4">
+        {(activeView === 'plan' || activeView === 'material') && <div className="w-full">
           <label className="block w-full">
             <input className="hidden" accept=".xlsx,.xls" onChange={(event) => importPlan(event.target.files?.[0] ?? null)} type="file" />
             <Button asChild className="w-full" disabled={importing} variant="primaryEmber"><span><Upload className="mr-2 h-4 w-4" />{importing ? 'Wczytywanie...' : 'Wgraj plan Excel'}</span></Button>
           </label>
-        </div>
+        </div>}
+        {(activeView === 'plan' || activeView === 'material') && sheetNames.length > 0 && <label className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-semibold text-dim">
+          Arkusz planu
+          <select className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-2 font-semibold text-title outline-none focus:border-[rgba(255,122,0,0.65)]" onChange={(event) => selectSheet(event.target.value)} value={sheetName}>
+            {sheetNames.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>}
+        {saveState === 'error' && <div className="rounded-lg border border-red-500/60 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-300">Plan nie został zapisany. Sprawdź migracje w Supabase i spróbuj ponownie.</div>}
 
         <TabsContent value="plan" className="space-y-4">
           {activeTasks.length > 0 && <>
             <Card className="p-0">
-              <div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Pozycje do omówienia</p><p className="mt-1 text-sm text-dim">Wybierz rodzaj pracy, a właściwe zespoły zostaną zaznaczone automatycznie.</p></div>
+              <div className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold text-title">Pozycje do omówienia</p><p className="mt-1 text-sm text-dim">Wybierz rodzaj pracy, a właściwe zespoły zostaną zaznaczone automatycznie.</p></div><Button className="min-h-10 px-3 py-2 text-xs" onClick={clearAllAssignments} type="button" variant="ghost"><Trash2 className="mr-1.5 h-4 w-4" />Kasuj przypisania</Button></div>
               <div className="space-y-3 p-3">
                 {activeTasks.map((task, index) => {
                   const startsGroup = index === 0 || activeTasks[index - 1].planGroup !== task.planGroup;
                   return <div className="space-y-3" key={task.id}>
                   {startsGroup && task.planGroup !== 'standard' && <div className={cn('rounded-lg border px-3 py-2 text-sm font-bold uppercase tracking-wide', task.planGroup === 'emergency' ? 'border-[rgba(239,68,68,0.65)] bg-[rgba(239,68,68,0.12)] text-red-300' : 'border-[rgba(183,122,255,0.65)] bg-[rgba(183,122,255,0.12)] text-[#debaff]')}>{planGroupLabel[task.planGroup]}</div>}
                 <article className={cn('rounded-lg border border-border bg-surface2 p-4', task.highlighted && 'border-[rgba(245,197,66,0.65)] bg-[rgba(245,197,66,0.07)]', task.done && 'border-[rgba(34,197,94,0.65)] bg-[rgba(34,197,94,0.07)]')}>
-                  <div className="grid gap-4 xl:grid-cols-[minmax(310px,1.25fr)_minmax(250px,1fr)_minmax(360px,1.4fr)] xl:items-center">
-                    <div className="space-y-2">
-                      <div className="flex min-h-11 w-full items-center justify-center rounded-lg border border-[rgba(255,122,0,0.48)] bg-[rgba(255,122,0,0.08)] px-3 text-center text-base font-bold text-[var(--brand)]">{task.station}</div>
-                      <div><textarea className="min-h-14 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm font-semibold text-title outline-none focus:border-[rgba(255,122,0,0.65)]" value={task.detail} onChange={(event) => updateTask(task.id, { detail: event.target.value })} /><p className="mt-1 text-xs text-dim">Ilość: <strong className="text-title">{task.quantity || '---'}</strong> &nbsp; Norma: <strong className="text-title">{task.norm || '---'}</strong></p></div>
-                    </div>
-                    <fieldset className="rounded-lg border border-border p-2"><legend className="px-1 text-[10px] font-bold uppercase text-dim">Rodzaj pracy</legend><div className="grid grid-cols-2 gap-1.5">{workKinds.map((kind) => <label className={cn('flex min-h-8 items-center justify-start gap-2 rounded border border-border px-3 text-left text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div></fieldset>
-                    <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">{teamOptions.map((team) => <label className={cn('flex min-h-10 w-full items-center gap-2 rounded-lg border border-border bg-bg px-3 text-xs font-semibold text-dim', task.teams.includes(team.id) && 'text-title')} style={task.teams.includes(team.id) ? { borderColor: `${team.color}99`, backgroundColor: `${team.color}18` } : undefined} key={team.id}><input checked={task.teams.includes(team.id)} onChange={() => toggleTeam(task, team.id)} type="checkbox" />{team.label}</label>)}</div>
+                  <div className="grid gap-3 xl:grid-cols-[minmax(280px,1fr)_minmax(420px,1.3fr)_minmax(420px,1.3fr)]">
+                    <section className={cn('space-y-2 rounded-lg border border-[rgba(255,122,0,0.35)] bg-[rgba(255,122,0,0.045)] p-3', task.highlighted && 'border-yellow-400 bg-yellow-300')}>
+                      <p className={cn('text-[10px] font-bold uppercase tracking-wide text-[var(--brand)]', task.highlighted && 'text-zinc-800')}>Indeks</p>
+                      <div className={cn('flex min-h-11 w-full items-center justify-center rounded-lg border border-[rgba(255,122,0,0.55)] bg-bg px-3 text-center text-base font-bold text-[var(--brand)]', task.highlighted && 'border-yellow-500 bg-yellow-200 text-zinc-950')}>{task.station}</div>
+                      <div><textarea className={cn('min-h-14 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm font-semibold text-[var(--brand)] outline-none focus:border-[rgba(255,122,0,0.65)]', task.highlighted && 'border-yellow-500 bg-yellow-100 text-zinc-950 focus:border-yellow-600')} value={task.detail} onChange={(event) => updateTask(task.id, { detail: event.target.value })} /><p className={cn('mt-1 text-xs text-dim', task.highlighted && 'text-zinc-700')}>Ilość: <strong className={cn('text-title', task.highlighted && 'text-zinc-950')}>{task.quantity || '---'}</strong> &nbsp; Norma: <strong className={cn('text-title', task.highlighted && 'text-zinc-950')}>{task.norm || '---'}</strong></p></div>
+                    </section>
+                    <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(rgba(10,11,15,0.87), rgba(10,11,15,0.87)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
+                      <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[var(--brand)]">Praca</p>
+                      <div className="grid grid-cols-3 gap-1.5">{workKinds.map((kind) => <label className={cn('flex min-h-10 items-center justify-start gap-2 rounded-lg border border-border px-3 text-left text-[11px] font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={kind.id} style={taskChoiceBackground(task.kinds.includes(kind.id))}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div>
+                    </section>
+                    <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(rgba(10,11,15,0.87), rgba(10,11,15,0.87)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'right center', backgroundSize: 'cover' }}>
+                      <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[var(--brand)]">Osoby</p>
+                      <div className="grid grid-cols-2 gap-1.5">{teamOptions.map((team) => <label className={cn('flex min-h-10 w-full items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.teams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={team.id} style={taskChoiceBackground(task.teams.includes(team.id))}><input checked={task.teams.includes(team.id)} onChange={() => toggleTeam(task, team.id)} type="checkbox" />{team.label}</label>)}</div>
+                    </section>
                   </div>
                   {task.teams.length > 0 && <div className="mt-3 grid gap-2 border-t border-border pt-3 md:grid-cols-2 xl:grid-cols-3">{teamOptions.filter((team) => task.teams.includes(team.id)).map((team) => <label className="text-xs text-dim" key={team.id}>{team.id === 'additional' ? 'Informacja dodatkowa' : `Uwagi dla: ${team.label}`}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTask(task.id, { notes: { ...task.notes, [team.id]: event.target.value } })} placeholder="Dodaj ustalenie" /></label>)}</div>}
                 </article>
@@ -346,18 +592,25 @@ export default function PrzygotowanieProdukcjiPage() {
                 })}
               </div>
             </Card>
-            <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">{teamOptions.map((team) => {
+            <div className="production-queues grid w-full gap-3 text-xs md:grid-cols-3">{teamOptions.map((team) => {
               const queue = tasks.filter((task) => {
-                if (!task.teams.includes(team.id) || kindsForTeam(task, team.id).length === 0) return false;
+                if (!task.teams.includes(team.id)) return false;
                 return !(task.kinds.length === 1 && task.kinds[0] === 'przeglad-a' && ['mechanics', 'distribution', 'technician'].includes(team.id));
               });
-              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><Badge>{queue.filter((task) => !task.done).length}</Badge></div><div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); return <button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text rounded-lg border border-border bg-bg p-3 text-left hover:border-borderStrong', task.done && 'border-[rgba(34,197,94,0.65)]')} key={task.id} onClick={() => void copyQueueTask(task, team.id)} type="button"><p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">Ilość: {task.quantity || '---'} | Norma: {task.norm || '---'}</p><p className="mt-1 text-xs text-body">{kindLabels}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{teamsWith5s.includes(team.id) && <p className="mt-1 text-xs text-body">{standard5s}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button>; })}</div></Card>;
+              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><Badge>{queue.filter((task) => !task.done).length}</Badge></div><div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; return <div className="rounded-lg border border-border bg-bg" key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', task.done && 'border-[rgba(34,197,94,0.65)]')} onClick={() => void copyQueueTask(task, team.id)} type="button"><p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">Ilość: {task.quantity || '---'} | Norma: {task.norm || '---'}</p><p className="mt-1 text-xs text-body">{kindLabels}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{teamsWith5s.includes(team.id) && <p className="mt-1 text-xs text-body">{standard5s}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button><div className="flex justify-end gap-1.5 border-t border-border p-2"><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim hover:border-[rgba(255,122,0,0.65)] hover:text-title" onClick={() => setEditingQueueTask(editing ? null : copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-4 w-4" /></button><button aria-label="Usuń zadanie z tego działu" className="flex h-8 w-8 items-center justify-center rounded border border-red-500/45 text-red-300 hover:bg-red-500/10" onClick={() => { removeTaskFromTeam(task, team.id); setEditingQueueTask(null); }} title="Usuń zadanie z tego działu" type="button"><X className="h-4 w-4" /></button></div>{editing && <div className="space-y-3 border-t border-border p-3"><div className="grid grid-cols-2 gap-1.5">{workKinds.map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTask(task.id, { notes: { ...task.notes, [team.id]: event.target.value } })} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); setEditingQueueTask(null); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
             })}</div>
           </>}
         </TabsContent>
 
         <TabsContent value="material" className="space-y-4">
           {!activeTasks.length ? <EmptyState title="Brak rozpiski" description="Wgraj plan produkcyjny, aby przygotować rozpiszę materiałową." /> : <Card className="overflow-hidden p-0"><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Rozpiska materiałowa</p><p className="mt-1 text-sm text-dim">Materiał, źródło i suszarkę uzupełniasz dla pozycji z importowanego planu.</p></div><div className="overflow-x-auto"><table className="min-w-[1050px] w-full text-left text-sm"><thead className="bg-surface2 text-xs uppercase text-dim"><tr>{['Stanowisko', 'Indeks', 'Materiał', 'Rodzaj', 'Źródło', 'Suszarka', 'Temp.'].map((label) => <th className="border-b border-border px-4 py-3 font-semibold" key={label}>{label}</th>)}</tr></thead><tbody>{activeTasks.map((task) => <tr className={cn('border-b border-border/80', task.highlighted && 'bg-[rgba(245,197,66,0.06)]')} key={task.id}><td className="px-4 py-3 font-bold text-[var(--brand)]">{task.station}</td><td className="max-w-[290px] px-4 py-3 font-semibold text-title">{task.detail}</td><td className="px-2 py-2"><Input value={task.material} onChange={(event) => updateTask(task.id, { material: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.materialType} onChange={(event) => updateTask(task.id, { materialType: event.target.value, temperature: temperatureFor(event.target.value) || task.temperature })} /></td><td className="px-2 py-2"><Input value={task.source} onChange={(event) => updateTask(task.id, { source: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.dryer} onChange={(event) => updateTask(task.id, { dryer: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.temperature} onChange={(event) => updateTask(task.id, { temperature: event.target.value })} /></td></tr>)}</tbody></table></div></Card>}
+        </TabsContent>
+        <TabsContent value="history" className="space-y-4">
+          <Card className="overflow-hidden p-0"><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Historia planów</p><p className="mt-1 text-sm text-dim">Końcowe przypisania z każdego dnia, gotowe do późniejszych analiz.</p></div>{history.length === 0 ? <div className="px-5 py-8 text-sm text-dim">Brak zapisanych dni. Pierwszy snapshot pojawi się po rozpoczęciu kolejnego dnia.</div> : <div className="divide-y divide-border">{history.map((entry) => { const counts = entry.tasks.flatMap((task) => Array.isArray(task.kinds) ? task.kinds : []).reduce<Record<string, number>>((result, kind) => ({ ...result, [kind]: (result[kind] ?? 0) + 1 }), {}); return <div className="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between" key={entry.plan_date}><div><p className="font-semibold text-title">{new Date(`${entry.plan_date}T12:00:00`).toLocaleDateString('pl-PL')}</p><p className="mt-1 text-xs text-dim">{entry.file_name || 'Plan produkcyjny'}{entry.plan_sheet ? ` · arkusz ${entry.plan_sheet}` : ''} · {entry.tasks.length} przypisań</p></div><div className="flex flex-wrap gap-2">{Object.entries(counts).map(([kind, count]) => <Badge key={kind}>{workKinds.find((item) => item.id === kind)?.label ?? kind}: {count}</Badge>)}</div></div>; })}</div>}</Card>
+        </TabsContent>
+        <TabsContent value="report" className="production-report space-y-4">
+          <WorkReportDashboard chart={reportChart} dayCount={reportDays.length} onPeriodChange={setReportPeriod} period={reportPeriod} report={workReport} series={workKindSeries} />
+          <Card className="overflow-hidden p-0"><div className="border-b border-border bg-[linear-gradient(135deg,rgba(255,122,0,0.16),rgba(255,255,255,0.02))] px-5 py-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-dim">Podsumowanie przygotowania produkcji</p><p className="mt-1 text-2xl font-semibold text-title">Raport prac</p></div><div className="flex flex-wrap gap-2">{([{ id: 'week', label: 'Tydzień' }, { id: 'month', label: 'Miesiąc' }, { id: 'all', label: 'Wszystko' }] as const).map((period) => <Button className={cn('min-h-10 px-4 py-2 text-xs', reportPeriod === period.id && 'bg-[rgba(255,122,0,0.18)] text-title')} key={period.id} onClick={() => setReportPeriod(period.id)} type="button" variant={reportPeriod === period.id ? 'secondary' : 'outline'}>{period.label}</Button>)}</div></div></div><div className="grid gap-px bg-border sm:grid-cols-3"><div className="bg-surface px-5 py-4"><p className="text-xs font-semibold uppercase text-dim">Wszystkie prace</p><p className="mt-2 text-3xl font-bold text-[var(--brand)]">{Object.values(workReport).reduce((sum, item) => sum + item.total, 0)}</p></div><div className="bg-surface px-5 py-4"><p className="text-xs font-semibold uppercase text-dim">Dni w okresie</p><p className="mt-2 text-3xl font-bold text-title">{reportDays.length}</p></div><div className="bg-surface px-5 py-4"><p className="text-xs font-semibold uppercase text-dim">Wykonane</p><p className="mt-2 text-3xl font-bold text-title">{Object.values(workReport).reduce((sum, item) => sum + item.done, 0)}</p></div></div></Card><div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]"><Card className="p-4"><p className="mb-4 font-semibold text-title">Prace w czasie</p><div className="h-72"><ResponsiveContainer height="100%" width="100%"><BarChart data={reportChart}><CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" stroke="var(--t-dim)" tickLine={false} /><YAxis allowDecimals={false} stroke="var(--t-dim)" tickLine={false} width={28} /><Tooltip contentStyle={{ background: '#0b0c10', border: '1px solid rgba(255,122,0,0.45)', borderRadius: 8 }} cursor={{ fill: 'rgba(255,122,0,0.08)' }} /><Bar dataKey="prace" fill="var(--brand)" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div></Card><Card className="overflow-hidden p-0"><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Rodzaje prac</p></div><div className="divide-y divide-border">{workKinds.map((kind) => <div className="flex items-center justify-between px-5 py-3" key={kind.id}><p className="text-sm font-semibold text-title">{kind.label}</p><div className="text-right"><p className="text-xl font-bold text-[var(--brand)]">{workReport[kind.id].total}</p>{workReport[kind.id].done > 0 && <p className="text-xs text-dim">Wykonane: {workReport[kind.id].done}</p>}</div></div>)}</div></Card></div>
         </TabsContent>
       </Tabs>
     </div>

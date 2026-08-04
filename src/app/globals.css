@@ -590,6 +590,93 @@ body > * {
   --tab-line: rgba(74, 222, 128, 0.86);
 }
 
+.production-queues > div {
+  min-width: 0;
+  width: 100%;
+  padding: 0 !important;
+}
+
+.production-queues > div > div:last-child {
+  padding: 0.25rem !important;
+}
+
+.production-queues > div > div:last-child > div > button {
+  padding: 0.75rem !important;
+}
+
+.production-report > div:first-child,
+.production-report > div:nth-child(2) > div {
+  overflow: hidden;
+  border-color: rgba(255, 122, 26, 0.28);
+  background-color: #0b0d12;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 18px 42px -32px rgba(0, 0, 0, 0.9);
+}
+
+.production-report > div:first-child > div:first-child {
+  background-image: linear-gradient(100deg, rgba(255, 122, 0, 0.2), rgba(7, 8, 12, 0.7)), url('/profil-panel-bg.png');
+  background-position: center;
+  background-size: cover;
+}
+
+.production-report > div:first-child > div:last-child > div {
+  position: relative;
+  background-color: #10131a;
+  background-image: linear-gradient(135deg, rgba(255, 122, 0, 0.08), transparent 45%), url('/przygotowanie-produkcji-techniczne-tlo.png');
+  background-position: center;
+  background-size: cover;
+}
+
+.production-report .recharts-bar-rectangle path {
+  filter: drop-shadow(0 5px 8px rgba(255, 122, 0, 0.32));
+}
+
+.production-report > :not(.work-report-dashboard) {
+  display: none;
+}
+
+.work-report-dashboard > section:first-child {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none;
+}
+
+.work-report-dashboard > section:first-child > div {
+  padding: 0 0 0.9rem;
+}
+
+.work-report-dashboard > div:nth-child(2) > div,
+.work-report-dashboard > div:nth-child(3) > section {
+  background-color: #0b0d12;
+  background-image: linear-gradient(90deg, rgba(8, 10, 14, 0.86), rgba(8, 10, 14, 0.7)), url('/przygotowanie-produkcji-raport-tlo.png');
+  background-position: center;
+  background-size: cover;
+}
+
+.work-report-dashboard > div:nth-child(2) > div:first-child {
+  border-color: rgba(255, 122, 0, 0.48);
+}
+
+/* The report artwork stays visible, while numeric results retain a solid contrast base. */
+.work-report-dashboard > div:nth-child(3) > section:first-child > div:last-child > div > div:first-child > span:last-child {
+  min-width: 2rem;
+  border: 1px solid rgba(255, 122, 0, 0.72);
+  border-radius: 5px;
+  background: rgba(6, 8, 12, 0.92);
+  padding: 0.1rem 0.38rem;
+  color: #ff9a3d !important;
+  text-align: center;
+  text-shadow: 0 1px 2px #000;
+}
+
+.work-report-dashboard > div:nth-child(3) > section:first-child > div:first-child > span:last-child {
+  border-radius: 5px;
+  background: rgba(6, 8, 12, 0.92);
+  padding: 0.18rem 0.46rem;
+  color: #ff9a3d !important;
+}
+
 @media (min-width: 640px) {
   .report-action-button {
     width: auto;

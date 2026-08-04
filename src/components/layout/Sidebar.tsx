@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import {
   LayoutGrid,
   ClipboardList,
@@ -86,8 +86,16 @@ const navItemsFarbyTasmy: NavItem[] = [
   }
 ];
 
+const navItemsPrzygotowanieProdukcji: NavItem[] = [
+  { label: 'Plan zmian', href: '/przygotowanie-produkcji', icon: ClipboardList },
+  { label: 'Rozpiska materiałowa', href: '/przygotowanie-produkcji?view=material', icon: Layers },
+  { label: 'Historia planów', href: '/przygotowanie-produkcji?view=history', icon: History },
+  { label: 'Raport prac', href: '/przygotowanie-produkcji?view=report', icon: FileText }
+];
+
 export const Sidebar = () => {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse, clearActiveWarehouse } = useUiStore();
   const warehouse = activeWarehouse as WarehouseKey | null;
   const isAdminRoute = pathname.startsWith('/admin');
@@ -103,7 +111,7 @@ export const Sidebar = () => {
           : warehouse === 'BILANS_PRZEZBROJEN'
             ? navItemsBilans
             : warehouse === 'PRZYGOTOWANIE_PRODUKCJI'
-              ? []
+              ? navItemsPrzygotowanieProdukcji
             : warehouse === 'FARBY_TASMY'
               ? navItemsFarbyTasmy
               : navItemsPrzemialy;
@@ -119,6 +127,18 @@ export const Sidebar = () => {
   const warehouseLabel = getWarehouseLabel(warehouse);
   const isPrzemialyModuleManagementRoute = isAdminRoute && warehouse === 'PRZEMIALY';
   const isActivePath = (href: string) => {
+    if (href === '/przygotowanie-produkcji') {
+      return pathname === href && !searchParams.get('view');
+    }
+    if (href === '/przygotowanie-produkcji?view=material') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'material';
+    }
+    if (href === '/przygotowanie-produkcji?view=history') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'history';
+    }
+    if (href === '/przygotowanie-produkcji?view=report') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'report';
+    }
     if (href.startsWith('/admin')) return isAdminRoute;
     if (href === '/czesci') return pathname === '/czesci';
     if (href === '/spis') return pathname === '/spis' || pathname.startsWith('/spis/');

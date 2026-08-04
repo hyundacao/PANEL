@@ -41,6 +41,19 @@ create index if not exists przygotowanie_produkcji_sessions_date_idx
 create index if not exists przygotowanie_produkcji_tasks_session_idx
   on public.przygotowanie_produkcji_tasks (session_id, position_no);
 
+create table if not exists public.przygotowanie_produkcji_history (
+  id uuid primary key default gen_random_uuid(),
+  plan_date date not null unique,
+  file_name text,
+  plan_sheet text,
+  tasks jsonb not null default '[]'::jsonb,
+  archived_at timestamptz not null default now(),
+  archived_by text
+);
+
+create index if not exists przygotowanie_produkcji_history_date_idx
+  on public.przygotowanie_produkcji_history (plan_date desc);
+
 alter table public.przygotowanie_produkcji_tasks
   add column if not exists is_current_plan boolean not null default true;
 
@@ -49,3 +62,4 @@ alter table public.przygotowanie_produkcji_tasks
 
 alter table public.przygotowanie_produkcji_sessions enable row level security;
 alter table public.przygotowanie_produkcji_tasks enable row level security;
+alter table public.przygotowanie_produkcji_history enable row level security;

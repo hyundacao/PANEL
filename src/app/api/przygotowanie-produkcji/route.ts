@@ -38,12 +38,45 @@ const todayKey = () => {
 
 const unauthorized = (code: string) => NextResponse.json({ code }, { status: 401 });
 
-const removePreviousDays = async () => {
-  const { error } = await supabaseAdmin
+const hasAssignment = (task: Record<string, unknown>) => {
+  const kinds = Array.isArray(task.kinds) ? task.kinds : [];
+  const teams = Array.isArray(task.teams) ? task.teams : [];
+  const notes = task.notes && typeof task.notes === 'object' ? Object.keys(task.notes).length : 0;
+  return kinds.length > 0 || teams.length > 0 || notes > 0 || Boolean(task.done);
+};
+
+const archiveAndRemovePreviousDays = async () => {
+  const { data: previousSessions, error: sessionError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_sessions')
+    .select('id, session_date, file_name, plan_sheet, created_by')
+    .lt('session_date', todayKey());
+  if (sessionError) throw sessionError;
+
+  for (const session of previousSessions ?? []) {
+    const { data: taskRows, error: taskError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_tasks')
+      .select('*')
+      .eq('session_id', session.id)
+      .order('position_no');
+    if (taskError) throw taskError;
+    const tasks = (taskRows ?? []).filter((task) => hasAssignment(task as Record<string, unknown>));
+    const { error: historyError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_history')
+      .upsert({
+        plan_date: session.session_date,
+        file_name: session.file_name,
+        plan_sheet: session.plan_sheet,
+        tasks,
+        archived_by: session.created_by
+      }, { onConflict: 'plan_date' });
+    if (historyError) throw historyError;
+  }
+
+  const { error: deleteError } = await supabaseAdmin
     .from('przygotowanie_produkcji_sessions')
     .delete()
     .lt('session_date', todayKey());
-  if (error) throw error;
+  if (deleteError) throw deleteError;
 };
 
 const ensureAccess = async (request: NextRequest, write = false) => {
@@ -106,7 +139,15 @@ export async function GET(request: NextRequest) {
   try {
     const access = await ensureAccess(request);
     if (access.response) return access.response;
-    await removePreviousDays();
+    await archiveAndRemovePreviousDays();
+    if (request.nextUrl.searchParams.get('history') === '1') {
+      const { data: history, error: historyError } = await supabaseAdmin
+        .from('przygotowanie_produkcji_history')
+        .select('plan_date, file_name, plan_sheet, tasks, archived_at')
+        .order('plan_date', { ascending: false });
+      if (historyError) throw historyError;
+      return NextResponse.json({ history: history ?? [] });
+    }
     const { data: session, error: sessionError } = await supabaseAdmin
       .from('przygotowanie_produkcji_sessions')
       .select('id, session_date, file_name, plan_sheet, updated_at')
@@ -131,7 +172,7 @@ export async function POST(request: NextRequest) {
   try {
     const access = await ensureAccess(request, true);
     if (access.response || !access.user) return access.response;
-    await removePreviousDays();
+    await archiveAndRemovePreviousDays();
     const body = await request.json() as { action?: string; fileName?: string; sheetName?: string; tasks?: StoredTask[]; task?: StoredTask };
     const now = new Date().toISOString();
 
