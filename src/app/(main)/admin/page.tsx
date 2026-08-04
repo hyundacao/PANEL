@@ -186,6 +186,9 @@ const raportBrakowosciTabOptions: Array<{ key: WarehouseTab; label: string }> = 
 const bilansPrzezbrojenTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'bilans-przezbrojen', label: 'Bilans przezbrojen' }
 ];
+const przygotowanieProdukcjiTabOptions: Array<{ key: WarehouseTab; label: string }> = [
+  { key: 'przygotowanie-produkcji', label: 'Plan zmian, rozpiska, historia i raport' }
+];
 const erpModuleTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'erp-magazynier', label: 'Magazynier' },
   { key: 'erp-rozdzielca', label: 'Rozdzielca Wydziałowy' },
@@ -898,7 +901,9 @@ export default function AdminPage() {
             ? raportBrakowosciTabOptions
             : warehouseKey === 'BILANS_PRZEZBROJEN'
               ? bilansPrzezbrojenTabOptions
-              : czesciTabOptions;
+              : warehouseKey === 'PRZYGOTOWANIE_PRODUKCJI'
+                ? przygotowanieProdukcjiTabOptions
+                : czesciTabOptions;
     const visibleTabs =
       warehouseKey === 'CZESCI' && !canSeeHistory
         ? tabOptions.filter((tab) => tab.key !== 'historia')
@@ -1159,6 +1164,7 @@ export default function AdminPage() {
     const enabled = Boolean(warehouseAccess);
     const blockEditing = userRole === 'HEAD_ADMIN';
     const readOnlyValue = enabled && warehouseAccess ? warehouseAccess.readOnly : false;
+    const adminValue = enabled && warehouseAccess ? Boolean(warehouseAccess.admin) : false;
 
     return (
       <Card className={`space-y-3 ${blockEditing ? 'opacity-70' : ''}`}>
@@ -1200,6 +1206,22 @@ export default function AdminPage() {
           />
         </div>
         <div className={cn('grid gap-2 sm:grid-cols-2', !enabled && 'opacity-70')}>
+          {userRole === 'ADMIN' && (
+            <AdminToggle
+              checked={adminValue}
+              onCheckedChange={(value) =>
+                onChange((current) => {
+                  const next = cloneAccess(current);
+                  const currentAccess = next.warehouses.PRZESUNIECIA_ERP;
+                  if (!currentAccess) return next;
+                  currentAccess.admin = value;
+                  return next;
+                })
+              }
+              label="Administrator modulu"
+              disabled={blockEditing || !enabled}
+            />
+          )}
           <AdminToggle
             checked={readOnlyValue}
             onCheckedChange={(value) => {

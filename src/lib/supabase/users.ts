@@ -9,7 +9,7 @@ import type {
   WarehouseRole,
   WarehouseTab
 } from '@/lib/api/types';
-import { PAINT_TAPE_PERMISSION_KEYS } from '@/lib/auth/access';
+import { PAINT_TAPE_PERMISSION_KEYS, WAREHOUSE_TABS_BY_KEY } from '@/lib/auth/access';
 
 export type DbUserRow = {
   id: string;
@@ -59,25 +59,30 @@ const isWarehouseRole = (value: unknown): value is WarehouseRole =>
 const isWarehouseKey = (value: string): value is WarehouseKey =>
   validWarehouseKeys.includes(value as WarehouseKey);
 
-const toUniqueTabs = (tabs: unknown): WarehouseTab[] => {
+const toUniqueTabs = (tabs: unknown, warehouse: WarehouseKey): WarehouseTab[] => {
   if (!Array.isArray(tabs)) return [];
   const unique = new Set<WarehouseTab>();
   tabs.forEach((tab) => {
-    if (typeof tab === 'string') {
+    if (typeof tab === 'string' && WAREHOUSE_TABS_BY_KEY[warehouse].includes(tab as WarehouseTab)) {
       unique.add(tab as WarehouseTab);
     }
   });
   return Array.from(unique);
 };
 
-const normalizeWarehouseAccess = (value: unknown): WarehouseAccess | null => {
+const normalizeWarehouseAccess = (value: unknown, warehouse: WarehouseKey): WarehouseAccess | null => {
   if (!value || typeof value !== 'object') return null;
   const entry = value as Record<string, unknown>;
   const role = isWarehouseRole(entry.role) ? entry.role : 'PODGLAD';
+  const tabs = toUniqueTabs(entry.tabs, warehouse);
+  const hasOnlyLegacyTabs = Array.isArray(entry.tabs) && entry.tabs.length > 0 && tabs.length === 0;
   return {
     role,
     readOnly: entry.readOnly !== false,
-    tabs: toUniqueTabs(entry.tabs),
+    // Older versions saved the wrong tab set for Preparation Production.
+    tabs: warehouse === 'PRZYGOTOWANIE_PRODUKCJI' && hasOnlyLegacyTabs
+      ? [...WAREHOUSE_TABS_BY_KEY.PRZYGOTOWANIE_PRODUKCJI]
+      : tabs,
     admin: Boolean(entry.admin)
   };
 };
@@ -122,7 +127,7 @@ const normalizeAccessFromDb = (access: UserAccess | null | undefined): UserAcces
   const warehouses = Object.fromEntries(
     Object.entries(warehousesRaw)
       .filter(([key]) => isWarehouseKey(key))
-      .map(([key, value]) => [key, normalizeWarehouseAccess(value)])
+      .map(([key, value]) => [key, normalizeWarehouseAccess(value, key as WarehouseKey)])
       .filter(([, value]) => Boolean(value))
   ) as UserAccess['warehouses'];
   const przemialyAccess = warehouses.PRZEMIALY;

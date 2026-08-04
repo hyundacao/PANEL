@@ -49,6 +49,17 @@ export const ERP_TRANSFERS_TABS: WarehouseTab[] = [
   'erp-historia-dokumentow'
 ];
 
+export const WAREHOUSE_TABS_BY_KEY: Record<WarehouseKey, WarehouseTab[]> = {
+  PRZEMIALY: PRZEMIALY_TABS,
+  FARBY_TASMY: FARBY_TASMY_TABS,
+  CZESCI: CZESCI_TABS,
+  RAPORT_ZMIANOWY: RAPORT_ZMIANOWY_TABS,
+  RAPORT_BRAKOWOSCI: RAPORT_BRAKOWOSCI_TABS,
+  BILANS_PRZEZBROJEN: BILANS_PRZEZBROJEN_TABS,
+  PRZYGOTOWANIE_PRODUKCJI: PRZYGOTOWANIE_PRODUKCJI_TABS,
+  PRZESUNIECIA_ERP: ERP_TRANSFERS_TABS
+};
+
 export const isHeadAdmin = (user: AppUser | null | undefined) =>
   Boolean(user?.role === 'HEAD_ADMIN');
 
@@ -143,6 +154,7 @@ export const canSeeTab = (
   tab: WarehouseTab
 ) => {
   if (!user) return false;
+  if (!WAREHOUSE_TABS_BY_KEY[warehouse].includes(tab)) return false;
   if (isHeadAdmin(user) || isWarehouseAdmin(user, warehouse)) return true;
   if (warehouse === 'FARBY_TASMY') {
     if (tab !== 'rozliczanie-farb-tasm') return false;
