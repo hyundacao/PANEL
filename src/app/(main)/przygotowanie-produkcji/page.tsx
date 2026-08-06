@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Pencil, Trash2, Upload, Wrench, X } from 'lucide-react';
+import { Copy, Pencil, Trash2, Upload, Wrench, X } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -14,8 +14,8 @@ import { Tabs, TabsContent } from '@/components/ui/Tabs';
 import { cn } from '@/lib/utils/cn';
 
 type Team = 'mechanics' | 'process' | 'distribution' | 'graphics' | 'technician' | 'additional';
-type WorkKind = 'zmiana-formy' | 'forma-narzedziownia' | 'rozruch' | 'zmiana-koloru' | 'zmiana-grafiki' | 'regulacja' | 'proby' | 'przeglad-a' | 'inne';
-type ReportKind = WorkKind | 'przygotowanie-stanowiska';
+type WorkKind = 'zmiana-formy' | 'forma-narzedziownia' | 'rozruch' | 'wznowienie' | 'zmiana-koloru' | 'zmiana-grafiki' | 'regulacja' | 'proby' | 'przeglad-a' | 'inne';
+type ReportKind = WorkKind | 'przygotowanie-stanowiska' | 'wznowienie-procesu';
 type PlanGroup = 'standard' | 'emergency' | 'planned';
 
 type Task = {
@@ -47,7 +47,7 @@ type PlanHistory = {
   plan_date: string;
   file_name?: string | null;
   plan_sheet?: string | null;
-  tasks: Array<Pick<Task, 'kinds' | 'teams' | 'notes' | 'done'>>;
+  tasks: Task[];
   archived_at: string;
 };
 
@@ -71,6 +71,7 @@ const workKinds: Array<{ id: WorkKind; label: string }> = [
   { id: 'zmiana-formy', label: 'Zmiana formy' },
   { id: 'forma-narzedziownia', label: 'Forma na narzędziownię' },
   { id: 'rozruch', label: 'Rozruch' },
+  { id: 'wznowienie', label: 'Wznowienie' },
   { id: 'zmiana-koloru', label: 'Zmiana koloru' },
   { id: 'zmiana-grafiki', label: 'Zmiana grafiki' },
   { id: 'regulacja', label: 'Regulacja' },
@@ -81,11 +82,13 @@ const workKinds: Array<{ id: WorkKind; label: string }> = [
 
 const reportKinds: Array<{ id: ReportKind; label: string }> = [
   ...workKinds,
-  { id: 'przygotowanie-stanowiska', label: 'Przygotowanie stanowiska' }
+  { id: 'przygotowanie-stanowiska', label: 'Przygotowanie stanowiska' },
+  { id: 'wznowienie-procesu', label: 'Wznowienie procesu po narzędziowni' }
 ];
 
 const automaticTeams: Partial<Record<WorkKind, Team[]>> = {
   rozruch: ['process', 'distribution'],
+  wznowienie: ['process'],
   'zmiana-koloru': ['process', 'distribution', 'technician'],
   'zmiana-grafiki': ['process', 'distribution', 'graphics'],
   'zmiana-formy': ['mechanics', 'process', 'distribution', 'technician'],
@@ -97,6 +100,10 @@ const automaticTeams: Partial<Record<WorkKind, Team[]>> = {
 
 const teamsWith5s: Team[] = ['mechanics', 'process', 'distribution', 'technician'];
 const standard5s = 'Po wykonanym zadaniu poprawnie ustaw tabliczkę 5S.';
+const preparesDistributionStation = (task: Pick<Task, 'teams' | 'notes'>) =>
+  task.teams.includes('distribution') && task.notes.distribution?.trim().toLocaleLowerCase().includes('przygotowa') === true;
+const restartsProcessAfterToolroom = (task: Pick<Task, 'kinds' | 'teams' | 'notes'>) =>
+  task.kinds.includes('forma-narzedziownia') && task.teams.includes('process');
 const kindsForTeam = (task: Task, team: Team) => team === 'mechanics'
   ? task.kinds.filter((kind) => kind === 'zmiana-formy' || kind === 'forma-narzedziownia')
   : task.kinds;
@@ -188,6 +195,10 @@ const WorkKindTrendCharts = ({ series }: { series: WorkKindSeries[] }) => <secti
   <div className="mb-5 flex flex-wrap items-center justify-between gap-2"><div><p className="font-semibold text-title">Zadania w czasie</p><p className="mt-1 text-sm text-dim">Liczba poszczególnych prac w kolejnych dniach.</p></div><span className="text-xs font-semibold text-dim">Według wybranego okresu</span></div>
   <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">{series.map((item) => <div className="overflow-hidden rounded-lg border border-border bg-bg" key={item.id}><div className="flex items-center justify-between border-b border-border px-4 py-3"><p className="text-sm font-semibold text-title">{item.label}</p><span className="rounded border border-[rgba(255,122,0,0.55)] bg-[rgba(7,8,12,0.9)] px-2 py-0.5 text-sm font-bold text-[var(--brand)]">{item.total}</span></div><div className="h-36 px-2 py-2"><ResponsiveContainer height="100%" width="100%"><BarChart data={item.data} margin={{ top: 4, right: 2, left: -24, bottom: -4 }}><CartesianGrid stroke="rgba(255,255,255,0.07)" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" stroke="var(--t-dim)" tick={{ fontSize: 10 }} tickLine={false} /><YAxis allowDecimals={false} stroke="var(--t-dim)" tick={{ fontSize: 10 }} tickLine={false} /><Tooltip contentStyle={{ background: '#0b0c10', border: '1px solid rgba(255,122,0,0.45)', borderRadius: 8 }} cursor={{ fill: 'rgba(255,122,0,0.08)' }} /><Bar dataKey="value" fill="var(--brand)" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div></div>)}</div>
 </section>;
+
+const WorkHistoryDashboard = ({ history }: { history: PlanHistory[] }) => <section className="work-history-dashboard space-y-4">
+  <div className="border-b border-border pb-4"><p className="font-semibold text-title">Historia przypisanych prac</p><p className="mt-1 text-sm text-dim">Snapshoty zadań dla zespołów. Nie jest to historia plików Excel.</p></div>
+  {history.length === 0 ? <Card><p className="text-sm text-dim">Brak zapisanych prac. Snapshot pojawi się po pierwszym przypisaniu zadania.</p></Card> : history.map((entry) => <Card className="overflow-hidden p-0" key={entry.plan_date}><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">{new Date(`${entry.plan_date}T12:00:00`).toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}</p><p className="mt-1 text-sm text-dim">{entry.tasks.length} przypisanych prac</p></div><div className="grid gap-px bg-border xl:grid-cols-3">{teamOptions.map((team) => { const queue = entry.tasks.filter((task) => task.teams.includes(team.id)); return <div className="min-h-28 bg-surface p-4" key={team.id}><div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold" style={{ color: team.color }}>{team.label}</p><Badge>{queue.length}</Badge></div>{queue.length === 0 ? <p className="text-xs text-dim">Brak przypisanych prac.</p> : <div className="space-y-2">{queue.map((task, index) => { const labels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((kind) => kind.id === id)?.label).filter(Boolean).join(', '); return <div className="rounded border border-border bg-bg p-2.5" key={`${task.station}-${task.detail}-${index}`}><p className="text-xs font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">{labels || 'Zadanie'}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{task.done && <p className="mt-1 text-xs font-semibold text-emerald-400">Wykonane</p>}</div>; })}</div>}</div>; })}</div></Card>)}</section>;
 
 const inferWorkKind = (value: string): WorkKind | null => {
   const text = value.toUpperCase();
@@ -351,6 +362,11 @@ export default function PrzygotowanieProdukcjiPage() {
     setSaveState('saving');
     try {
       await apiRequest({ action: 'savePlan', tasks: nextTasks, fileName: nextFileName, sheetName: nextSheetName });
+      const historyResponse = await fetch('/api/przygotowanie-produkcji?history=1');
+      if (historyResponse.ok) {
+        const data = await historyResponse.json() as { history: PlanHistory[] };
+        setHistory(data.history ?? []);
+      }
       setSaveState('saved');
     } catch {
       setSaveState('error');
@@ -361,6 +377,11 @@ export default function PrzygotowanieProdukcjiPage() {
     setSaveState('saving');
     try {
       await apiRequest({ action: 'updateTask', task });
+      const historyResponse = await fetch('/api/przygotowanie-produkcji?history=1');
+      if (historyResponse.ok) {
+        const data = await historyResponse.json() as { history: PlanHistory[] };
+        setHistory(data.history ?? []);
+      }
       setSaveState('saved');
     } catch {
       setSaveState('error');
@@ -377,6 +398,7 @@ export default function PrzygotowanieProdukcjiPage() {
 
   const importPlan = async (file: File | null) => {
     if (!file) return;
+    if (loadingSavedPlan) return;
     setImporting(true);
     try {
       const buffer = await file.arrayBuffer();
@@ -420,7 +442,12 @@ export default function PrzygotowanieProdukcjiPage() {
   const activeTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station), [tasks]);
   const reportDays = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
-    const allDays = [...history.map((entry) => ({ date: entry.plan_date, tasks: entry.tasks })), { date: today, tasks }];
+    const allDays = [
+      ...history
+        .filter((entry) => entry.plan_date !== today)
+        .map((entry) => ({ date: entry.plan_date, tasks: entry.tasks })),
+      { date: today, tasks }
+    ];
     if (reportPeriod === 'all') return allDays;
     const from = new Date();
     from.setHours(0, 0, 0, 0);
@@ -436,10 +463,13 @@ export default function PrzygotowanieProdukcjiPage() {
         totals[kind as WorkKind].total += 1;
         if (task.done) totals[kind as WorkKind].done += 1;
       });
-      const preparesStation = task.teams?.includes('distribution') && task.notes?.distribution?.trim().toLocaleLowerCase().includes('przygotowa') === true;
-      if (preparesStation) {
+      if (preparesDistributionStation(task)) {
         totals['przygotowanie-stanowiska'].total += 1;
         if (task.done) totals['przygotowanie-stanowiska'].done += 1;
+      }
+      if (restartsProcessAfterToolroom(task)) {
+        totals['wznowienie-procesu'].total += 1;
+        if (task.done) totals['wznowienie-procesu'].done += 1;
       }
     });
     return totals;
@@ -449,7 +479,7 @@ export default function PrzygotowanieProdukcjiPage() {
     .map((entry) => ({
       dateKey: entry.date,
       date: new Date(`${entry.date}T12:00:00`).toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }),
-      prace: entry.tasks.reduce((total, task) => total + (task.kinds?.length ?? 0) + (task.teams?.includes('distribution') && task.notes?.distribution?.trim().toLocaleLowerCase().includes('przygotowa') ? 1 : 0), 0)
+      prace: entry.tasks.reduce((total, task) => total + (task.kinds?.length ?? 0) + (preparesDistributionStation(task) ? 1 : 0) + (restartsProcessAfterToolroom(task) ? 1 : 0), 0)
     }))
     .sort((left, right) => left.dateKey.localeCompare(right.dateKey)), [reportDays]);
 
@@ -460,8 +490,9 @@ export default function PrzygotowanieProdukcjiPage() {
         date: new Date(`${entry.date}T12:00:00`).toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }),
         value: entry.tasks.reduce((total, task) => {
           if (kind.id === 'przygotowanie-stanowiska') {
-            return total + (task.teams?.includes('distribution') && task.notes?.distribution?.trim().toLocaleLowerCase().includes('przygotowa') ? 1 : 0);
+            return total + (preparesDistributionStation(task) ? 1 : 0);
           }
+          if (kind.id === 'wznowienie-procesu') return total + (restartsProcessAfterToolroom(task) ? 1 : 0);
           return total + (task.kinds?.includes(kind.id) ? 1 : 0);
         }, 0)
       }))
@@ -503,6 +534,26 @@ export default function PrzygotowanieProdukcjiPage() {
     window.setTimeout(() => setCopiedQueueTask((current) => current === copyId ? null : current), 1800);
   };
 
+  const copyTeamQueue = async (team: Team, queue: Task[]) => {
+    if (!queue.length) return;
+    const rows = queue.map((task) => {
+      const kindLabels = [...new Set(kindsForTeam(task, team))]
+        .map((id) => workKinds.find((item) => item.id === id)?.label)
+        .filter(Boolean)
+        .join(', ');
+      return [
+        `- ${task.station} ${task.detail}`,
+        `Ilość: ${task.quantity || '---'} | Norma: ${task.norm || '---'}`,
+        [kindLabels, task.notes[team]].filter(Boolean).join(': '),
+        teamsWith5s.includes(team) ? standard5s : ''
+      ].filter(Boolean).join(' | ');
+    });
+    await navigator.clipboard.writeText(rows.join('\r\n'));
+    const copyId = `column-${team}`;
+    setCopiedQueueTask(copyId);
+    window.setTimeout(() => setCopiedQueueTask((current) => current === copyId ? null : current), 1800);
+  };
+
   return (
     <div className="production-preparation w-full max-w-none space-y-4">
       <style jsx>{`
@@ -528,6 +579,43 @@ export default function PrzygotowanieProdukcjiPage() {
         }
 
         @media (max-width: 767px) {
+          .production-preparation article {
+            padding: 0.75rem;
+          }
+
+          .production-preparation article > div:first-child {
+            display: block;
+          }
+
+          .production-preparation article section {
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            padding: 0.8rem 0;
+          }
+
+          .production-preparation article section + section {
+            border-top: 1px solid var(--border);
+          }
+
+          .production-preparation article section:nth-child(2) > div {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .production-preparation article section:nth-child(3) > div {
+            grid-template-columns: minmax(0, 1fr);
+          }
+
+          .production-preparation article section:nth-child(2) label,
+          .production-preparation article section:nth-child(3) label {
+            border-left: 0;
+            border-right: 0;
+            border-top: 0;
+            border-radius: 0;
+            padding-left: 0.15rem;
+            padding-right: 0.15rem;
+          }
+
           .production-queues {
             width: 100%;
           }
@@ -550,7 +638,7 @@ export default function PrzygotowanieProdukcjiPage() {
         {(activeView === 'plan' || activeView === 'material') && <div className="w-full">
           <label className="block w-full">
             <input className="hidden" accept=".xlsx,.xls" onChange={(event) => importPlan(event.target.files?.[0] ?? null)} type="file" />
-            <Button asChild className="w-full" disabled={importing} variant="primaryEmber"><span><Upload className="mr-2 h-4 w-4" />{importing ? 'Wczytywanie...' : 'Wgraj plan Excel'}</span></Button>
+            <Button asChild className="w-full" disabled={importing || loadingSavedPlan} variant="primaryEmber"><span><Upload className="mr-2 h-4 w-4" />{loadingSavedPlan ? 'Wczytywanie zapisanych danych...' : importing ? 'Wczytywanie...' : 'Wgraj plan Excel'}</span></Button>
           </label>
         </div>}
         {(activeView === 'plan' || activeView === 'material') && sheetNames.length > 0 && <label className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-semibold text-dim">
@@ -563,9 +651,9 @@ export default function PrzygotowanieProdukcjiPage() {
 
         <TabsContent value="plan" className="space-y-4">
           {activeTasks.length > 0 && <>
-            <Card className="p-0">
+            <Card className="border-0 bg-transparent p-0 shadow-none">
               <div className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold text-title">Pozycje do omówienia</p><p className="mt-1 text-sm text-dim">Wybierz rodzaj pracy, a właściwe zespoły zostaną zaznaczone automatycznie.</p></div><Button className="min-h-10 px-3 py-2 text-xs" onClick={clearAllAssignments} type="button" variant="ghost"><Trash2 className="mr-1.5 h-4 w-4" />Kasuj przypisania</Button></div>
-              <div className="space-y-3 p-3">
+              <div className="space-y-3 p-0">
                 {activeTasks.map((task, index) => {
                   const startsGroup = index === 0 || activeTasks[index - 1].planGroup !== task.planGroup;
                   return <div className="space-y-3" key={task.id}>
@@ -597,7 +685,8 @@ export default function PrzygotowanieProdukcjiPage() {
                 if (!task.teams.includes(team.id)) return false;
                 return !(task.kinds.length === 1 && task.kinds[0] === 'przeglad-a' && ['mechanics', 'distribution', 'technician'].includes(team.id));
               });
-              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><Badge>{queue.filter((task) => !task.done).length}</Badge></div><div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; return <div className="rounded-lg border border-border bg-bg" key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', task.done && 'border-[rgba(34,197,94,0.65)]')} onClick={() => void copyQueueTask(task, team.id)} type="button"><p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">Ilość: {task.quantity || '---'} | Norma: {task.norm || '---'}</p><p className="mt-1 text-xs text-body">{kindLabels}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{teamsWith5s.includes(team.id) && <p className="mt-1 text-xs text-body">{standard5s}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button><div className="flex justify-end gap-1.5 border-t border-border p-2"><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim hover:border-[rgba(255,122,0,0.65)] hover:text-title" onClick={() => setEditingQueueTask(editing ? null : copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-4 w-4" /></button><button aria-label="Usuń zadanie z tego działu" className="flex h-8 w-8 items-center justify-center rounded border border-red-500/45 text-red-300 hover:bg-red-500/10" onClick={() => { removeTaskFromTeam(task, team.id); setEditingQueueTask(null); }} title="Usuń zadanie z tego działu" type="button"><X className="h-4 w-4" /></button></div>{editing && <div className="space-y-3 border-t border-border p-3"><div className="grid grid-cols-2 gap-1.5">{workKinds.map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTask(task.id, { notes: { ...task.notes, [team.id]: event.target.value } })} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); setEditingQueueTask(null); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
+              const columnCopyId = `column-${team.id}`;
+              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><div className="flex items-center gap-2"><button aria-label={`Kopiuj wszystkie zadania: ${team.label}`} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim transition hover:border-[rgba(255,122,0,0.65)] hover:text-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40" disabled={queue.length === 0} onClick={() => void copyTeamQueue(team.id, queue)} title="Kopiuj całą kolumnę" type="button"><Copy className="h-4 w-4" /></button><Badge>{queue.filter((task) => !task.done).length}</Badge></div></div>{copiedQueueTask === columnCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-400">Skopiowano całą kolumnę.</p>}<div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; return <div className="rounded-lg border border-border bg-bg" key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', task.done && 'border-[rgba(34,197,94,0.65)]')} onClick={() => void copyQueueTask(task, team.id)} type="button"><p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">Ilość: {task.quantity || '---'} | Norma: {task.norm || '---'}</p><p className="mt-1 text-xs text-body">{kindLabels}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{teamsWith5s.includes(team.id) && <p className="mt-1 text-xs text-body">{standard5s}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button><div className="flex justify-end gap-1.5 border-t border-border p-2"><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim hover:border-[rgba(255,122,0,0.65)] hover:text-title" onClick={() => setEditingQueueTask(editing ? null : copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-4 w-4" /></button><button aria-label="Usuń zadanie z tego działu" className="flex h-8 w-8 items-center justify-center rounded border border-red-500/45 text-red-300 hover:bg-red-500/10" onClick={() => { removeTaskFromTeam(task, team.id); setEditingQueueTask(null); }} title="Usuń zadanie z tego działu" type="button"><X className="h-4 w-4" /></button></div>{editing && <div className="space-y-3 border-t border-border p-3"><div className="grid grid-cols-2 gap-1.5">{workKinds.map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTask(task.id, { notes: { ...task.notes, [team.id]: event.target.value } })} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); setEditingQueueTask(null); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
             })}</div>
           </>}
         </TabsContent>
@@ -605,7 +694,8 @@ export default function PrzygotowanieProdukcjiPage() {
         <TabsContent value="material" className="space-y-4">
           {!activeTasks.length ? <EmptyState title="Brak rozpiski" description="Wgraj plan produkcyjny, aby przygotować rozpiszę materiałową." /> : <Card className="overflow-hidden p-0"><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Rozpiska materiałowa</p><p className="mt-1 text-sm text-dim">Materiał, źródło i suszarkę uzupełniasz dla pozycji z importowanego planu.</p></div><div className="overflow-x-auto"><table className="min-w-[1050px] w-full text-left text-sm"><thead className="bg-surface2 text-xs uppercase text-dim"><tr>{['Stanowisko', 'Indeks', 'Materiał', 'Rodzaj', 'Źródło', 'Suszarka', 'Temp.'].map((label) => <th className="border-b border-border px-4 py-3 font-semibold" key={label}>{label}</th>)}</tr></thead><tbody>{activeTasks.map((task) => <tr className={cn('border-b border-border/80', task.highlighted && 'bg-[rgba(245,197,66,0.06)]')} key={task.id}><td className="px-4 py-3 font-bold text-[var(--brand)]">{task.station}</td><td className="max-w-[290px] px-4 py-3 font-semibold text-title">{task.detail}</td><td className="px-2 py-2"><Input value={task.material} onChange={(event) => updateTask(task.id, { material: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.materialType} onChange={(event) => updateTask(task.id, { materialType: event.target.value, temperature: temperatureFor(event.target.value) || task.temperature })} /></td><td className="px-2 py-2"><Input value={task.source} onChange={(event) => updateTask(task.id, { source: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.dryer} onChange={(event) => updateTask(task.id, { dryer: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.temperature} onChange={(event) => updateTask(task.id, { temperature: event.target.value })} /></td></tr>)}</tbody></table></div></Card>}
         </TabsContent>
-        <TabsContent value="history" className="space-y-4">
+        <TabsContent value="history" className="work-history space-y-4">
+          <WorkHistoryDashboard history={history} />
           <Card className="overflow-hidden p-0"><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Historia planów</p><p className="mt-1 text-sm text-dim">Końcowe przypisania z każdego dnia, gotowe do późniejszych analiz.</p></div>{history.length === 0 ? <div className="px-5 py-8 text-sm text-dim">Brak zapisanych dni. Pierwszy snapshot pojawi się po rozpoczęciu kolejnego dnia.</div> : <div className="divide-y divide-border">{history.map((entry) => { const counts = entry.tasks.flatMap((task) => Array.isArray(task.kinds) ? task.kinds : []).reduce<Record<string, number>>((result, kind) => ({ ...result, [kind]: (result[kind] ?? 0) + 1 }), {}); return <div className="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between" key={entry.plan_date}><div><p className="font-semibold text-title">{new Date(`${entry.plan_date}T12:00:00`).toLocaleDateString('pl-PL')}</p><p className="mt-1 text-xs text-dim">{entry.file_name || 'Plan produkcyjny'}{entry.plan_sheet ? ` · arkusz ${entry.plan_sheet}` : ''} · {entry.tasks.length} przypisań</p></div><div className="flex flex-wrap gap-2">{Object.entries(counts).map(([kind, count]) => <Badge key={kind}>{workKinds.find((item) => item.id === kind)?.label ?? kind}: {count}</Badge>)}</div></div>; })}</div>}</Card>
         </TabsContent>
         <TabsContent value="report" className="production-report space-y-4">

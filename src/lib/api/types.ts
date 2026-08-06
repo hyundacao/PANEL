@@ -280,6 +280,15 @@ export type PaintTapeSettlementIssue = {
   qty: number;
 };
 
+export type PaintTapeTechnologyUsage = {
+  indexCode: string;
+  itemName: string;
+  usagePerPiece: number;
+  unit: string;
+  updatedAt: string;
+  updatedBy: string;
+};
+
 export type PaintTapeSettlement = {
   id: string;
   createdAt: string;
@@ -297,6 +306,8 @@ export type PaintTapeSettlement = {
   producedQty?: number | null;
   usageQty?: number | null;
   usagePerPiece?: number | null;
+  orderNote?: string | null;
+  usageCheckNote?: string | null;
   status: PaintTapeSettlementStatus;
   productionCompletedAt?: string | null;
   accountedAt?: string | null;

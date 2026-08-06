@@ -102,6 +102,11 @@ const isErpOriginalsSourceError = (error: unknown) =>
 const isErpSnapshotMigrationError = (error: unknown) =>
   error instanceof Error && error.message === ERP_SNAPSHOT_MIGRATION_REQUIRED;
 
+const getSiloConfigIdFromSourceId = (sourceId?: string | null) => {
+  const match = /^silo:([^:]+):/.exec(sourceId ?? '');
+  return match?.[1] ?? null;
+};
+
 type OriginalInventoryTab = 'spis' | 'kartoteki' | 'stany-erp' | 'raporty' | 'do-zmielenia';
 
 const getInitialTabValue = (): OriginalInventoryTab => {
@@ -615,6 +620,35 @@ export default function OriginalInventoryPage() {
     () => new Map(siloEntries.map((entry) => [entry.configId, entry])),
     [siloEntries]
   );
+  const siloConfigIdByGeneratedEntryId = useMemo(
+    () =>
+      new Map(
+        siloEntries
+          .filter((entry) => entry.generatedEntryId)
+          .map((entry) => [entry.generatedEntryId as string, entry.configId])
+      ),
+    [siloEntries]
+  );
+  const siloMaterialNameByConfigId = useMemo(
+    () =>
+      new Map(
+        siloConfigs
+          .map((config) => [config.id, config.materialName.trim()] as const)
+          .filter(([, materialName]) => Boolean(materialName))
+      ),
+    [siloConfigs]
+  );
+  const entriesWithCurrentSiloMaterial = useMemo(
+    () =>
+      entries.map((entry) => {
+        const configId =
+          getSiloConfigIdFromSourceId(entry.sourceId) ??
+          siloConfigIdByGeneratedEntryId.get(entry.id);
+        const materialName = configId ? siloMaterialNameByConfigId.get(configId) : null;
+        return materialName && materialName !== entry.name ? { ...entry, name: materialName } : entry;
+      }),
+    [entries, siloConfigIdByGeneratedEntryId, siloMaterialNameByConfigId]
+  );
   const effectiveSelectedWarehouseId = useMemo(() => {
     if (selectedWarehouseId === SILOS_SELECT_VALUE) {
       return SILOS_SELECT_VALUE;
@@ -1106,9 +1140,9 @@ export default function OriginalInventoryPage() {
     [warehouses]
   );
   const entriesForDate = useMemo(() => {
-    if (!spisDate) return entries;
-    return entries.filter((entry) => getEntryDateKey(entry.at) === spisDate);
-  }, [entries, spisDate]);
+    if (!spisDate) return entriesWithCurrentSiloMaterial;
+    return entriesWithCurrentSiloMaterial.filter((entry) => getEntryDateKey(entry.at) === spisDate);
+  }, [entriesWithCurrentSiloMaterial, spisDate]);
 
   const existingByName = useMemo(() => {
     const map = new Map<string, { name: string; unit: string; total: number }>();
@@ -1420,7 +1454,7 @@ export default function OriginalInventoryPage() {
       string,
       Map<string, { dateKey: string; name: string; unit: string; qty: number }>
     >();
-    entries.forEach((entry) => {
+    entriesWithCurrentSiloMaterial.forEach((entry) => {
       if (dailyReportExcludePatterns.some((pattern) => pattern.test(entry.name))) return;
       const dateKey = getEntryDateKey(entry.at);
       if (dateKey > spisDate) return;
@@ -1453,7 +1487,7 @@ export default function OriginalInventoryPage() {
       );
     });
     return result;
-  }, [entries, spisDate]);
+  }, [entriesWithCurrentSiloMaterial, spisDate]);
   const reportPreviousSnapshotDates = useMemo(() => {
     const dates = new Set<string>();
     const allowedDates = new Set(getPreviousDateKeys(spisDate, REPORT_HISTORY_DAYS_TWO_MONTHS));
@@ -3462,6 +3496,131 @@ export default function OriginalInventoryPage() {
                     stickyHeader
                     desktopMaxHeightClassName={isReportFullscreenActive ? 'max-h-[calc(100vh-104px)]' : 'max-h-[82vh]'}
                   />
+                  {isReportFullscreenActive && grindDialogMaterial && (
+                    <div className="fixed inset-0 z-50">
+                      <div className="absolute inset-0 bg-[var(--scrim)]" onClick={closeGrindDialog} />
+                      <div className="fixed left-1/2 top-1/2 z-10 w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[rgba(255,122,26,0.35)] bg-[var(--surface-1)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55),inset_0_1px_0_var(--inner-highlight)]">
+                        <button
+                          type="button"
+                          onClick={closeGrindDialog}
+                          className="absolute right-4 top-4 text-dim hover:text-title"
+                          aria-label="Zamknij"
+                        >
+                          X
+                        </button>
+                        <div className="space-y-4">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                              Dodaj do zmielenia
+                            </p>
+                            <h3 className="mt-1 break-words text-lg font-black text-title">
+                              {grindDialogMaterial.name}
+                            </h3>
+                          </div>
+                          <div>
+                            <label className="text-xs uppercase tracking-wide text-dim">
+                              Ile kg do wpisania
+                            </label>
+                            <Input
+                              value={grindQty}
+                              onChange={(event) => setGrindQty(event.target.value)}
+                              inputMode="decimal"
+                              placeholder="np. 20"
+                              className="mt-1 min-h-[54px] text-xl font-black"
+                              aria-invalid={Boolean(grindQtyLimitMessage)}
+                              autoFocus
+                            />
+                            {grindQtyLimitMessage && (
+                              <p className="mt-2 rounded-lg bg-[rgba(239,68,68,0.12)] px-3 py-2 text-sm font-semibold text-red-300">
+                                {grindQtyLimitMessage}
+                              </p>
+                            )}
+                            <Button
+                              type="button"
+                              onClick={() => {
+                                if (
+                                  grindDialogMaterial.availableQty === null ||
+                                  grindDialogMaterial.availableQty <= 0
+                                ) {
+                                  toast({ title: 'Brak stanu do dyspozycji dla tej pozycji.', tone: 'error' });
+                                  return;
+                                }
+                                setGrindQty(formatQty(grindDialogMaterial.availableQty));
+                              }}
+                              disabled={
+                                grindDialogMaterial.availableQty === null ||
+                                grindDialogMaterial.availableQty <= 0
+                              }
+                              className="mt-3 flex min-h-[54px] w-full items-center justify-between gap-3 rounded-xl border border-[rgba(255,122,26,0.58)] bg-[linear-gradient(135deg,rgba(255,122,26,0.22),rgba(255,122,26,0.06)_48%,rgba(0,0,0,0.24))] px-4 text-left shadow-[0_0_24px_rgba(255,122,26,0.12),inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-[rgba(255,122,26,0.88)] hover:bg-[linear-gradient(135deg,rgba(255,122,26,0.30),rgba(255,122,26,0.08)_48%,rgba(0,0,0,0.24))] disabled:opacity-45"
+                            >
+                              <span>
+                                <span className="block text-[10px] font-black uppercase tracking-wide text-brand">
+                                  Szybkie uzupelnienie
+                                </span>
+                                <span className="block text-sm font-black text-title">
+                                  Dodaj caly stan do dyspozycji
+                                </span>
+                              </span>
+                              <span className="shrink-0 rounded-lg border border-[rgba(255,122,26,0.45)] bg-[rgba(255,122,26,0.16)] px-3 py-2 text-base font-black text-brand">
+                                {grindDialogMaterial.availableQty !== null
+                                  ? `${formatQty(grindDialogMaterial.availableQty)} ${grindDialogMaterial.unit}`
+                                  : '-'}
+                              </span>
+                            </Button>
+                          </div>
+                          <div>
+                            <label className="text-xs uppercase tracking-wide text-dim">
+                              Na jaka kartoteke zmielic
+                            </label>
+                            <div className="relative mt-1">
+                              <Input
+                                value={grindTargetMaterial}
+                                onChange={(event) => {
+                                  setGrindTargetMaterial(event.target.value);
+                                  setShowGrindTargetSuggestions(true);
+                                }}
+                                onFocus={() => setShowGrindTargetSuggestions(true)}
+                                onBlur={() => {
+                                  setTimeout(() => setShowGrindTargetSuggestions(false), 120);
+                                }}
+                                placeholder="np. PRZEMIAL PP MIX"
+                                className="min-h-[54px] font-semibold"
+                              />
+                              {showGrindTargetSuggestions && grindTargetSuggestions.length > 0 && (
+                                <div className="absolute z-30 mt-2 max-h-60 w-full overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.45)]">
+                                  {grindTargetSuggestions.map((option) => (
+                                    <button
+                                      key={option}
+                                      type="button"
+                                      onMouseDown={(event) => {
+                                        event.preventDefault();
+                                        setGrindTargetMaterial(option);
+                                        setShowGrindTargetSuggestions(false);
+                                      }}
+                                      className="block w-full px-3 py-2 text-left text-sm font-semibold text-body transition hover:bg-[rgba(255,255,255,0.06)]"
+                                    >
+                                      {option}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <Button variant="outline" onClick={closeGrindDialog}>
+                              Anuluj
+                            </Button>
+                            <Button
+                              onClick={handleAddGrindTask}
+                              disabled={readOnly || addGrindTaskMutation.isPending}
+                            >
+                              Zatwierdz
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -3643,7 +3802,7 @@ export default function OriginalInventoryPage() {
         </TabsContent>
       </Tabs>
 
-      {grindDialogMaterial && (
+      {!isReportFullscreenActive && grindDialogMaterial && (
         <div className="fixed inset-0 z-50">
           <div className="absolute inset-0 bg-[var(--scrim)]" onClick={closeGrindDialog} />
           <div className="fixed left-1/2 top-[84dvh] z-10 w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[rgba(255,122,26,0.35)] bg-[var(--surface-1)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55),inset_0_1px_0_var(--inner-highlight)]">

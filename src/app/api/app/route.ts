@@ -49,6 +49,7 @@ import type {
   OriginalInventorySiloEntry,
   PaintTapeSettlementIssue,
   PaintTapeSettlement,
+  PaintTapeTechnologyUsage,
   PaintTapePermissionKey,
   PaintTapeSettlementStatus,
   PeriodReport,
@@ -536,6 +537,15 @@ const mapPaintTapeSettlementIssue = (row: any): PaintTapeSettlementIssue => ({
   qty: toNumber(row.qty)
 });
 
+const mapPaintTapeTechnologyUsage = (row: any): PaintTapeTechnologyUsage => ({
+  indexCode: String(row.index_code ?? '').trim(),
+  itemName: String(row.item_name ?? '').trim(),
+  usagePerPiece: toNumber(row.usage_per_piece),
+  unit: String(row.unit ?? '').trim() || 'kg',
+  updatedAt: row.updated_at ?? new Date().toISOString(),
+  updatedBy: String(row.updated_by ?? '').trim() || 'nieznany'
+});
+
 const mapPaintTapeSettlement = (
   row: any,
   issueRows: any[] = []
@@ -570,6 +580,8 @@ const mapPaintTapeSettlement = (
     producedQty,
     usageQty,
     usagePerPiece,
+    orderNote: row.order_note ? String(row.order_note) : null,
+    usageCheckNote: row.usage_check_note ? String(row.usage_check_note) : null,
     status: normalizePaintTapeStatus(row.status, endQty, producedQty),
     productionCompletedAt: row.production_completed_at ?? null,
     accountedAt: row.accounted_at ?? null,
@@ -874,6 +886,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
   };
   const getPaintTapeUpdatePermission = (): PaintTapePermissionKey => {
     if (payload?.accounted !== undefined || payload?.reopen === true) return 'accounting';
+    if (payload?.orderNote !== undefined || payload?.usageCheckNote !== undefined) return 'accounting';
     if (payload?.moveToOpen === true) return 'details';
     if (payload?.producedQty !== undefined && payload?.endQty === undefined) return 'details';
     return 'open';
@@ -989,6 +1002,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'getOriginalInventorySiloEntries':
     case 'getOriginalInventoryGrindTasks':
     case 'getPaintTapeSettlements':
+    case 'getPaintTapeTechnologyUsages':
     case 'getProductionDetailSuggestions':
       requireOriginalInventoryOrPaintTapeReadAccess(user, [
         'spis-oryginalow',
@@ -1020,6 +1034,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       return;
     case 'addPaintTapeSettlementIssue':
     case 'removePaintTapeSettlement':
+    case 'upsertPaintTapeTechnologyUsages':
       requirePaintTapeWriteAccess('open');
       return;
     case 'addOriginalInventoryCatalog':
@@ -1182,6 +1197,7 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'updatePaintTapeSettlement',
   'addPaintTapeSettlementIssue',
   'removePaintTapeSettlement',
+  'upsertPaintTapeTechnologyUsages',
   'addSparePart',
   'updateSparePart',
   'removeSparePart',
@@ -1289,6 +1305,7 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   updatePaintTapeSettlement: 'Rozliczanie farb i rozcienczalnikow: aktualizacja zlecenia',
   addPaintTapeSettlementIssue: 'Rozliczanie farb i rozcienczalnikow: ruch pobrania z magazynu',
   removePaintTapeSettlement: 'Rozliczanie farb i rozcienczalnikow: usuniecie zlecenia',
+  upsertPaintTapeTechnologyUsages: 'Rozliczanie farb i rozcienczalnikow: import norm technologicznych',
   addSparePart: 'Czesci: dodanie pozycji',
   updateSparePart: 'Czesci: aktualizacja pozycji',
   removeSparePart: 'Czesci: usuniecie pozycji',
@@ -2133,6 +2150,12 @@ const isMissingPaintTapeSettlementsTableError = (error: unknown) => {
     text.includes('paint_tape_settlement_issues') ||
     text.includes('42P01')
   );
+};
+
+const isMissingPaintTapeTechnologyUsageTableError = (error: unknown) => {
+  const text =
+    error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error ?? '');
+  return text.includes('paint_tape_technology_usages') || text.includes('42P01');
 };
 
 const isMissingPaintTapeSettlementAccountingColumnsError = (error: unknown) => {
@@ -6335,6 +6358,29 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }
       if (error) throw error;
       if (!data) throw new Error('NOT_FOUND');
+      const { error: sourceEntriesSyncError } = await supabaseAdmin
+        .from('original_inventory_entries')
+        .update({ name: materialName })
+        .eq('source_type', 'SILO')
+        .like('source_id', `silo:${id}:%`);
+      if (sourceEntriesSyncError) throw sourceEntriesSyncError;
+
+      const { data: siloEntries, error: siloEntriesError } = await supabaseAdmin
+        .from('original_inventory_silo_entries')
+        .select('generated_entry_id')
+        .eq('config_id', id)
+        .not('generated_entry_id', 'is', null);
+      if (siloEntriesError) throw siloEntriesError;
+      const generatedEntryIds = (siloEntries ?? [])
+        .map((entry) => String(entry.generated_entry_id ?? '').trim())
+        .filter(Boolean);
+      if (generatedEntryIds.length > 0) {
+        const { error: linkedEntriesSyncError } = await supabaseAdmin
+          .from('original_inventory_entries')
+          .update({ name: materialName })
+          .in('id', generatedEntryIds);
+        if (linkedEntriesSyncError) throw linkedEntriesSyncError;
+      }
       return mapOriginalInventorySiloConfig(data);
     }
     case 'removeOriginalInventorySiloConfig': {
@@ -6469,6 +6515,55 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         throw error;
       }
       return (data ?? []).map(mapOriginalInventoryGrindTask);
+    }
+    case 'getPaintTapeTechnologyUsages': {
+      const { data, error } = await supabaseAdmin
+        .from('paint_tape_technology_usages')
+        .select('*')
+        .order('index_code', { ascending: true });
+      if (error) {
+        if (isMissingPaintTapeTechnologyUsageTableError(error)) return [];
+        throw error;
+      }
+      return (data ?? []).map(mapPaintTapeTechnologyUsage);
+    }
+    case 'upsertPaintTapeTechnologyUsages': {
+      const rawEntries = Array.isArray(payload?.entries) ? payload.entries : [];
+      const entriesByIndex = new Map<string, {
+        index_code: string;
+        item_name: string | null;
+        usage_per_piece: number;
+        unit: string;
+        updated_at: string;
+        updated_by: string;
+      }>();
+
+      rawEntries.forEach((rawEntry: any) => {
+        const indexCode = String(rawEntry?.indexCode ?? '').trim();
+        const usagePerPiece = Number(rawEntry?.usagePerPiece);
+        if (!indexCode || !Number.isFinite(usagePerPiece) || usagePerPiece < 0) return;
+        entriesByIndex.set(indexCode.toLowerCase(), {
+          index_code: indexCode.toUpperCase(),
+          item_name: String(rawEntry?.itemName ?? '').trim() || null,
+          usage_per_piece: usagePerPiece,
+          unit: String(rawEntry?.unit ?? '').trim() || 'kg',
+          updated_at: new Date().toISOString(),
+          updated_by: getActorName(currentUser)
+        });
+      });
+
+      const entries = [...entriesByIndex.values()];
+      if (entries.length === 0) throw new Error('TECHNOLOGY_USAGE_REQUIRED');
+      const { error } = await supabaseAdmin
+        .from('paint_tape_technology_usages')
+        .upsert(entries, { onConflict: 'index_code' });
+      if (error) {
+        if (isMissingPaintTapeTechnologyUsageTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_TECHNOLOGY_USAGES');
+        }
+        throw error;
+      }
+      return { imported: entries.length };
     }
     case 'getPaintTapeSettlements': {
       const { data, error } = await supabaseAdmin
@@ -6702,11 +6797,25 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         currentStatus === 'DONE' &&
         typeof payload?.accounted === 'boolean' &&
         Object.keys(payload ?? {}).every((key) => key === 'id' || key === 'accounted');
+      const isOrderNoteUpdate =
+        currentStatus === 'DONE' &&
+        payload?.orderNote !== undefined &&
+        Object.keys(payload ?? {}).every((key) => key === 'id' || key === 'orderNote');
+      const isUsageCheckNoteUpdate =
+        currentStatus === 'DONE' &&
+        payload?.usageCheckNote !== undefined &&
+        Object.keys(payload ?? {}).every((key) => key === 'id' || key === 'usageCheckNote');
       const isMoveToOpen =
         currentStatus !== 'DONE' &&
         payload?.moveToOpen === true &&
         Object.keys(payload ?? {}).every((key) => key === 'id' || key === 'moveToOpen' || key === 'producedQty');
-      if (currentStatus === 'DONE' && !isDoneReopen && !isAccountingUpdate) {
+      if (
+        currentStatus === 'DONE' &&
+        !isDoneReopen &&
+        !isAccountingUpdate &&
+        !isOrderNoteUpdate &&
+        !isUsageCheckNoteUpdate
+      ) {
         throw new Error('SETTLEMENT_DONE_LOCKED');
       }
 
@@ -6774,6 +6883,16 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           if (!Number.isFinite(producedQty) || producedQty < 0) throw new Error('QTY_REQUIRED');
           updates.produced_qty = producedQty;
         }
+      }
+      if (payload?.orderNote !== undefined) {
+        const orderNote = String(payload.orderNote ?? '').trim();
+        if (orderNote.length > 3000) throw new Error('ORDER_NOTE_TOO_LONG');
+        updates.order_note = orderNote || null;
+      }
+      if (payload?.usageCheckNote !== undefined) {
+        const usageCheckNote = String(payload.usageCheckNote ?? '').trim();
+        if (usageCheckNote.length > 1000) throw new Error('USAGE_CHECK_NOTE_TOO_LONG');
+        updates.usage_check_note = usageCheckNote || null;
       }
       if (payload?.accounted !== undefined) {
         if (currentStatus !== 'DONE') throw new Error('SETTLEMENT_NOT_DONE');

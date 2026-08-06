@@ -65,6 +65,24 @@ alter table if exists public.paint_tape_settlements
   add column if not exists accounted_at timestamptz,
   add column if not exists accounted_by text;
 
+alter table if exists public.paint_tape_settlements
+  add column if not exists order_note text;
+
+alter table if exists public.paint_tape_settlements
+  add column if not exists usage_check_note text;
+
+create table if not exists public.paint_tape_technology_usages (
+  index_code text primary key,
+  item_name text,
+  usage_per_piece numeric not null check (usage_per_piece >= 0),
+  unit text not null default 'kg',
+  updated_at timestamptz not null default now(),
+  updated_by text not null default 'nieznany'
+);
+
+create index if not exists paint_tape_technology_usages_name_idx
+  on public.paint_tape_technology_usages (lower(coalesce(item_name, '')));
+
 create table if not exists public.paint_tape_settlement_issues (
   id uuid primary key default gen_random_uuid(),
   settlement_id uuid not null references public.paint_tape_settlements(id) on delete cascade,
@@ -88,5 +106,6 @@ where warehouse_issued_qty <> 0
 
 alter table if exists public.paint_tape_settlements enable row level security;
 alter table if exists public.paint_tape_settlement_issues enable row level security;
+alter table if exists public.paint_tape_technology_usages enable row level security;
 
 notify pgrst, 'reload schema';

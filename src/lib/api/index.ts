@@ -31,6 +31,7 @@ import type {
   OriginalInventorySiloConfig,
   OriginalInventorySiloEntry,
   PaintTapeSettlement,
+  PaintTapeTechnologyUsage,
   PermissionGroup,
   PeriodReport,
   ReportRow,
@@ -780,6 +781,18 @@ export const removeOriginalInventoryCatalog = async (catalogId: string) =>
 export const getPaintTapeSettlements = async (): Promise<PaintTapeSettlement[]> =>
   appRequest('getPaintTapeSettlements');
 
+export const getPaintTapeTechnologyUsages = async (): Promise<PaintTapeTechnologyUsage[]> =>
+  appRequest('getPaintTapeTechnologyUsages');
+
+export const upsertPaintTapeTechnologyUsages = async (payload: {
+  entries: Array<{
+    indexCode: string;
+    itemName?: string;
+    usagePerPiece: number;
+    unit?: string;
+  }>;
+}): Promise<{ imported: number }> => appRequest('upsertPaintTapeTechnologyUsages', payload);
+
 export const getProductionDetailSuggestions = async (): Promise<string[]> =>
   appRequest('getProductionDetailSuggestions');
 
@@ -805,6 +818,8 @@ export const updatePaintTapeSettlement = async (payload: {
   warehouseIssuedQty?: number;
   endQty?: number | null;
   producedQty?: number | null;
+  orderNote?: string | null;
+  usageCheckNote?: string | null;
   productionCompletedAt?: string | null;
   completeProduction?: boolean;
   reopen?: boolean;

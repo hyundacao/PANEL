@@ -1,8 +1,8 @@
 ﻿'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, FileSpreadsheet, Minus, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, CircleHelp, FileSpreadsheet, Minus, Plus, RotateCcw, Save, Trash2, Upload, X } from 'lucide-react';
 import {
   addPaintTapeSettlementIssue,
   createPaintTapeSettlement,
@@ -10,14 +10,17 @@ import {
   getOriginalInventoryCatalogFromErp,
   getOriginalInventoryErpSnapshot,
   getPaintTapeSettlements,
+  getPaintTapeTechnologyUsages,
   getProductionDetailSuggestions,
   removePaintTapeSettlement,
+  upsertPaintTapeTechnologyUsages,
   updatePaintTapeSettlement
 } from '@/lib/api';
 import type {
   OriginalInventoryCatalogEntry,
   OriginalInventoryErpSnapshotEntry,
-  PaintTapeSettlement
+  PaintTapeSettlement,
+  PaintTapeTechnologyUsage
 } from '@/lib/api/types';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -64,6 +67,11 @@ type SettlementGroup = {
   items: PaintTapeSettlement[];
 };
 
+type TechnologyUsage = {
+  usagePerPiece: number;
+  unit: string;
+};
+
 const createEmptyPaintTapeItem = (index: number): PaintTapeItemDraft => ({
   id: `item-${index}`,
   itemName: '',
@@ -98,6 +106,45 @@ const normalizeKey = (value: unknown) =>
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+
+// Normy technologiczne z dokumentu "tech grafika.docx". Dopasowanie odbywa sie
+// wyłącznie po indeksie materialu, aby nie przypisac normy do podobnej nazwy.
+const sampleTechnologyUsageByIndex: Record<string, TechnologyUsage> = {
+  'm-51-ro-itw-9924': { usagePerPiece: 1 / 30000, unit: 'litr' },
+  'm-51-ro-itw-9720': { usagePerPiece: 1 / 30000, unit: 'litr' },
+  'm-51-fa-itw-9719': { usagePerPiece: 1 / 15000, unit: 'kg' },
+  'm-51-f-011-001': { usagePerPiece: 1 / 10000, unit: 'szt.' },
+  tp131301: { usagePerPiece: 1 / 100000, unit: 'litr' },
+  'm-51-ro-pp-10769': { usagePerPiece: 1 / 30000, unit: 'szt.' },
+  'm-51-ro-pp-10880': { usagePerPiece: 1 / 30000, unit: 'szt.' },
+  'm-51-fa-pp-10767': { usagePerPiece: 1 / 30000, unit: 'litr' },
+  'm-51-fa-pp-10768': { usagePerPiece: 1 / 30000, unit: 'litr' }
+};
+
+const getTechnologyUsage = (
+  settlement: PaintTapeSettlement,
+  technologyUsageByIndex: Map<string, TechnologyUsage>
+) => technologyUsageByIndex.get(normalizeKey(settlement.itemIndexCode));
+
+type UsageComparison = 'HIGHER' | 'LOWER' | 'MATCH' | null;
+
+const getUsageComparison = (
+  actualUsagePerPiece: number | null | undefined,
+  technicalUsagePerPiece: number | null | undefined
+): UsageComparison => {
+  if (
+    actualUsagePerPiece === null ||
+    actualUsagePerPiece === undefined ||
+    technicalUsagePerPiece === null ||
+    technicalUsagePerPiece === undefined
+  ) {
+    return null;
+  }
+  const actualRounded = Math.round(actualUsagePerPiece * 1_000_000);
+  const technicalRounded = Math.round(technicalUsagePerPiece * 1_000_000);
+  if (actualRounded === technicalRounded) return 'MATCH';
+  return actualRounded > technicalRounded ? 'HIGHER' : 'LOWER';
+};
 
 const getSearchTokens = (value: unknown) =>
   normalizeKey(value)
@@ -263,17 +310,13 @@ const serializeOrderQuantities = (
   rows: Array<{ orderNumber: string; producedQty: number }>
 ) => rows.map((row) => `${row.orderNumber} - ${numberInputValue(row.producedQty)} szt.`).join('; ');
 
-const formatOrderQuantitySummary = (orderNumber: string, producedQty?: number | null) => {
-  const rows = parseOrderQuantityDraftsFromText(orderNumber, producedQty)
-    .map((row) => {
-      const qty = parseQtyInput(row.producedQty);
-      return row.orderNumber.trim() && qty !== null && qty > 0
-        ? `${row.orderNumber.trim()}: ${formatPiecesQty(qty)}`
-        : row.orderNumber.trim();
-    })
-    .filter(Boolean);
-  return rows.length > 0 ? rows.join(' | ') : 'Bez numeru';
-};
+const getOrderQuantitySummaryRows = (orderNumber: string, producedQty?: number | null) =>
+  parseOrderQuantityDraftsFromText(orderNumber, producedQty)
+    .map((row) => ({
+      orderNumber: row.orderNumber.trim(),
+      producedQty: parseQtyInput(row.producedQty)
+    }))
+    .filter((row) => Boolean(row.orderNumber));
 
 const getStatusBadge = (settlement: PaintTapeSettlement) => {
   if (settlement.status === 'DONE') return <Badge tone="success">Zakończone</Badge>;
@@ -299,6 +342,87 @@ const buildSnapshotMap = (items: unknown) => {
   return map;
 };
 
+type TechnologyUsageImportEntry = {
+  indexCode: string;
+  itemName: string;
+  usagePerPiece: number;
+  unit: string;
+};
+
+const parseTechnologyUsageValue = (value: unknown) => {
+  const text = String(value ?? '')
+    .replace(/\s+/g, '')
+    .replace(',', '.');
+  const fraction = text.match(/^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/);
+  if (fraction) {
+    const numerator = Number(fraction[1]);
+    const denominator = Number(fraction[2]);
+    return denominator > 0 ? numerator / denominator : null;
+  }
+  const parsed = Number(text);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+};
+
+const parseTechnologyUsageRows = (rows: unknown[][]): TechnologyUsageImportEntry[] => {
+  const imports = new Map<string, TechnologyUsageImportEntry>();
+  rows.forEach((rawRow, rowIndex) => {
+    const headerRow = rawRow.map((value) => normalizeKey(value));
+    const indexColumn = headerRow.findIndex((value) => value.includes('indkes') || value.includes('indeks'));
+    const usageColumn = headerRow.findIndex(
+      (value) => value.includes('zuzycie') && (value.includes('tech') || value.includes('technolog'))
+    );
+    const unitColumn = headerRow.findIndex((value) => value.includes('jednost'));
+    const nameColumn = headerRow.findIndex((value) => value.includes('nazwa'));
+    if (indexColumn < 0 || usageColumn < 0) return;
+
+    rows.slice(rowIndex + 1).forEach((row) => {
+      const indexCode = String(row[indexColumn] ?? '').trim();
+      const usagePerPiece = parseTechnologyUsageValue(row[usageColumn]);
+      if (!indexCode || usagePerPiece === null) return;
+      imports.set(normalizeKey(indexCode), {
+        indexCode,
+        itemName: nameColumn >= 0 ? String(row[nameColumn] ?? '').trim() : '',
+        usagePerPiece,
+        unit: unitColumn >= 0 ? String(row[unitColumn] ?? '').trim() || 'kg' : 'kg'
+      });
+    });
+  });
+  return [...imports.values()];
+};
+
+const parseTechnologyUsageFile = async (file: File): Promise<TechnologyUsageImportEntry[]> => {
+  const filename = file.name.toLowerCase();
+  if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+    const XLSX = await import('xlsx');
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', raw: false });
+    const rows = workbook.SheetNames.flatMap((sheetName) => {
+      const sheet = workbook.Sheets[sheetName];
+      return sheet
+        ? (XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as unknown[][])
+        : [];
+    });
+    return parseTechnologyUsageRows(rows);
+  }
+
+  if (!filename.endsWith('.docx')) throw new Error('TECHNOLOGY_FILE_TYPE');
+  const JSZipModule = await import('jszip');
+  const archive = await JSZipModule.default.loadAsync(await file.arrayBuffer());
+  const documentXml = await archive.file('word/document.xml')?.async('string');
+  if (!documentXml) throw new Error('TECHNOLOGY_FILE_READ');
+
+  const document = new DOMParser().parseFromString(documentXml, 'application/xml');
+  const tableRows = Array.from(document.getElementsByTagName('w:tbl')).flatMap((table) =>
+    Array.from(table.getElementsByTagName('w:tr')).map((row) =>
+      Array.from(row.getElementsByTagName('w:tc')).map((cell) =>
+        Array.from(cell.getElementsByTagName('w:t'))
+          .map((node) => node.textContent ?? '')
+          .join('')
+      )
+    )
+  );
+  return parseTechnologyUsageRows(tableRows);
+};
+
 export default function PaintTapeSettlementsPage() {
   const toast = useToastStore((state) => state.push);
   const { user } = useUiStore();
@@ -313,6 +437,9 @@ export default function PaintTapeSettlementsPage() {
   const [query, setQuery] = useState('');
   const [snapshotDate, setSnapshotDate] = useState(getLocalDateValue());
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
+  const [orderNoteDrafts, setOrderNoteDrafts] = useState<Record<string, string>>({});
+  const [usageCheckNoteDrafts, setUsageCheckNoteDrafts] = useState<Record<string, string>>({});
+  const [activeUsageCheckNoteId, setActiveUsageCheckNoteId] = useState<string | null>(null);
   const [groupOrderQuantityDrafts, setGroupOrderQuantityDrafts] = useState<
     Record<string, OrderQuantityDraft[]>
   >({});
@@ -328,6 +455,7 @@ export default function PaintTapeSettlementsPage() {
     detailName: '',
     productionStartedAt: getLocalDateTimeInputValue()
   });
+  const technologyImportInputRef = useRef<HTMLInputElement>(null);
   const nextItemDraftId = useRef(2);
   const nextOrderQuantityDraftId = useRef(1000);
   const [itemDrafts, setItemDrafts] = useState<PaintTapeItemDraft[]>([
@@ -365,6 +493,22 @@ export default function PaintTapeSettlementsPage() {
     queryKey: ['paint-tape-settlements'],
     queryFn: getPaintTapeSettlements
   });
+
+  const { data: importedTechnologyUsages = [] } = useQuery({
+    queryKey: ['paint-tape-technology-usages'],
+    queryFn: getPaintTapeTechnologyUsages
+  });
+
+  const technologyUsageByIndex = useMemo(() => {
+    const values = new Map<string, TechnologyUsage>(Object.entries(sampleTechnologyUsageByIndex));
+    importedTechnologyUsages.forEach((usage: PaintTapeTechnologyUsage) => {
+      values.set(normalizeKey(usage.indexCode), {
+        usagePerPiece: usage.usagePerPiece,
+        unit: usage.unit
+      });
+    });
+    return values;
+  }, [importedTechnologyUsages]);
 
   const { data: localCatalog = [] } = useQuery({
     queryKey: ['spis-oryginalow-catalog-local'],
@@ -472,6 +616,24 @@ export default function PaintTapeSettlementsPage() {
     );
   };
 
+  const technologyImportMutation = useMutation({
+    mutationFn: upsertPaintTapeTechnologyUsages,
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ['paint-tape-technology-usages'] });
+      toast({ title: `Zaimportowano ${result.imported} norm technologicznych`, tone: 'success' });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: 'Nie udało się zaimportować norm technologicznych',
+        description:
+          error.message === 'MIGRATION_REQUIRED_PAINT_TAPE_TECHNOLOGY_USAGES'
+            ? 'Uruchom migrację supabase/migrate_paint_tape_settlements.sql.'
+            : 'Sprawdź nagłówki i wartości w pliku.',
+        tone: 'error'
+      });
+    }
+  });
+
   const detailSuggestions = useMemo(() => {
     const needle = normalizeKey(form.detailName);
     if (needle.length < 2) return [];
@@ -531,6 +693,9 @@ export default function PaintTapeSettlementsPage() {
     ) => Promise.all(payloads.map((payload) => updatePaintTapeSettlement(payload))),
     onSuccess: () => {
       setDrafts({});
+      setOrderNoteDrafts({});
+      setUsageCheckNoteDrafts({});
+      setActiveUsageCheckNoteId(null);
       setGroupOrderQuantityDrafts({});
       setGroupCompletedAtDrafts({});
       void queryClient.invalidateQueries({ queryKey: ['paint-tape-settlements'] });
@@ -650,6 +815,20 @@ export default function PaintTapeSettlementsPage() {
     );
   };
 
+  const getGroupOrderNoteDraft = (group: SettlementGroup) =>
+    orderNoteDrafts[group.key] ?? group.items[0]?.orderNote ?? '';
+
+  const setGroupOrderNoteDraft = (group: SettlementGroup, value: string) => {
+    setOrderNoteDrafts((previous) => ({ ...previous, [group.key]: value }));
+  };
+
+  const getUsageCheckNoteDraft = (settlement: PaintTapeSettlement) =>
+    usageCheckNoteDrafts[settlement.id] ?? settlement.usageCheckNote ?? '';
+
+  const setUsageCheckNoteDraft = (settlementId: string, value: string) => {
+    setUsageCheckNoteDrafts((previous) => ({ ...previous, [settlementId]: value }));
+  };
+
   const setGroupOrderQuantityDraft = (
     group: SettlementGroup,
     id: string,
@@ -762,10 +941,11 @@ export default function PaintTapeSettlementsPage() {
         { key: 'physicalUsage', width: 13 },
         { key: 'physicalUsagePerPiece', width: 15 },
         { key: 'technicalUsagePerPiece', width: 15 },
-        { key: 'technicalUsage', width: 13 }
+        { key: 'technicalUsage', width: 13 },
+        { key: 'usageDifference', width: 15 }
       ];
 
-      worksheet.mergeCells('A1:I1');
+      worksheet.mergeCells('A1:J1');
       worksheet.getCell('A1').value =
         `${group.detailName} | Rozpoczęto: ${formatDateTime(startedAt) || '-'} | ` +
         `Zakończono: ${formatDateTime(completedAt) || '-'} | Wygenerowano: ${generatedAt}`;
@@ -781,9 +961,10 @@ export default function PaintTapeSettlementsPage() {
         'ILOŚĆ SZT',
         'MATERIAŁ',
         'ZUŻYCIE FIZ',
-        'ZUŻYCIE FIZ/SZT',
+        'ZUŻYCIE RZECZ./SZT',
         'ZUŻYCIE TECH/SZT',
-        'ZUŻYCIE TECH'
+        'ZUŻYCIE TECH',
+        'RÓŻNICA FIZ.-TECH.'
       ];
       headerRow.font = { bold: true, color: { argb: 'FF111827' }, size: 10 };
       headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
@@ -813,6 +994,10 @@ export default function PaintTapeSettlementsPage() {
               : settlement.usageQty * (orderRow.producedQty / totalProduced);
           const usagePerPiece =
             usageQty !== null && orderRow.producedQty > 0 ? usageQty / orderRow.producedQty : null;
+          const technologyUsage = getTechnologyUsage(settlement, technologyUsageByIndex);
+          const technicalUsageQty = technologyUsage
+            ? technologyUsage.usagePerPiece * orderRow.producedQty
+            : null;
           worksheet.addRow({
             lp: materialIndex === 0 ? `${orderIndex + 1}.` : '',
             orderNumber: materialIndex === 0 ? orderRow.orderNumber : '',
@@ -821,8 +1006,10 @@ export default function PaintTapeSettlementsPage() {
             material: `${settlement.itemName}${settlement.itemIndexCode ? ` - ${settlement.itemIndexCode}` : ''}`,
             physicalUsage: usageQty,
             physicalUsagePerPiece: usagePerPiece,
-            technicalUsagePerPiece: '',
-            technicalUsage: ''
+            technicalUsagePerPiece: technologyUsage?.usagePerPiece ?? null,
+            technicalUsage: technicalUsageQty,
+            usageDifference:
+              usageQty !== null && technicalUsageQty !== null ? usageQty - technicalUsageQty : null
           });
         });
       });
@@ -850,11 +1037,12 @@ export default function PaintTapeSettlementsPage() {
         row.getCell(3).font = { bold: true, color: { argb: 'FF6D5DFF' } };
         row.getCell(5).font = { bold: true, color: { argb: 'FFFF6A00' } };
       });
-      worksheet.autoFilter = 'A2:I2';
+      worksheet.autoFilter = 'A2:J2';
       worksheet.getColumn(6).numFmt = '0.###';
       worksheet.getColumn(7).numFmt = '0.000000';
       worksheet.getColumn(8).numFmt = '0.000000';
       worksheet.getColumn(9).numFmt = '0.###';
+      worksheet.getColumn(10).numFmt = '0.###';
 
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], {
@@ -919,7 +1107,8 @@ export default function PaintTapeSettlementsPage() {
         { key: 'physicalUsage', width: 13 },
         { key: 'physicalUsagePerPiece', width: 15 },
         { key: 'technicalUsagePerPiece', width: 15 },
-        { key: 'technicalUsage', width: 13 }
+        { key: 'technicalUsage', width: 13 },
+        { key: 'usageDifference', width: 15 }
       ];
 
       const generatedAt = new Date().toLocaleString('pl-PL');
@@ -947,7 +1136,7 @@ export default function PaintTapeSettlementsPage() {
             : [{ orderNumber: firstSettlement.orderNumber || '', producedQty: totalProduced ?? 0 }];
 
         const titleRowNumber = worksheet.rowCount + 1;
-        worksheet.mergeCells(titleRowNumber, 1, titleRowNumber, 9);
+        worksheet.mergeCells(titleRowNumber, 1, titleRowNumber, 10);
         const titleRow = worksheet.getRow(titleRowNumber);
         titleRow.getCell(1).value =
           `${group.detailName} | Rozpoczęto: ${formatDateTime(startedAt) || '-'} | ` +
@@ -963,9 +1152,10 @@ export default function PaintTapeSettlementsPage() {
           'ILOŚĆ SZT',
           'MATERIAŁ',
           'ZUŻYCIE FIZ',
-          'ZUŻYCIE FIZ/SZT',
+          'ZUŻYCIE RZECZ./SZT',
           'ZUŻYCIE TECH/SZT',
-          'ZUŻYCIE TECH'
+          'ZUŻYCIE TECH',
+          'RÓŻNICA FIZ.-TECH.'
         ]);
         headerRow.font = { bold: true, color: { argb: 'FF111827' }, size: 10 };
         headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
@@ -993,6 +1183,10 @@ export default function PaintTapeSettlementsPage() {
               usageQty !== null && orderRow.producedQty > 0
                 ? usageQty / orderRow.producedQty
                 : null;
+            const technologyUsage = getTechnologyUsage(settlement, technologyUsageByIndex);
+            const technicalUsageQty = technologyUsage
+              ? technologyUsage.usagePerPiece * orderRow.producedQty
+              : null;
             const row = worksheet.addRow({
               lp: orderIndex === 0 && materialIndex === 0 ? `${groupIndex + 1}.` : '',
               orderNumber: materialIndex === 0 ? orderRow.orderNumber : '',
@@ -1001,8 +1195,10 @@ export default function PaintTapeSettlementsPage() {
               material: `${settlement.itemName}${settlement.itemIndexCode ? ` - ${settlement.itemIndexCode}` : ''}`,
               physicalUsage: usageQty,
               physicalUsagePerPiece: usagePerPiece,
-              technicalUsagePerPiece: '',
-              technicalUsage: ''
+              technicalUsagePerPiece: technologyUsage?.usagePerPiece ?? null,
+              technicalUsage: technicalUsageQty,
+              usageDifference:
+                usageQty !== null && technicalUsageQty !== null ? usageQty - technicalUsageQty : null
             });
             const detailLength = String(row.getCell(3).value ?? '').length;
             const materialLength = String(row.getCell(5).value ?? '').length;
@@ -1036,6 +1232,7 @@ export default function PaintTapeSettlementsPage() {
       worksheet.getColumn(7).numFmt = '0.000000';
       worksheet.getColumn(8).numFmt = '0.000000';
       worksheet.getColumn(9).numFmt = '0.###';
+      worksheet.getColumn(10).numFmt = '0.###';
 
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], {
@@ -1050,6 +1247,30 @@ export default function PaintTapeSettlementsPage() {
       setSelectedExportGroupKeys(new Set());
     } catch {
       toast({ title: 'Nie udało się wyeksportować wybranych produkcji do XLSX.', tone: 'error' });
+    }
+  };
+
+  const handleTechnologyImport = async (file: File | null) => {
+    if (!file) return;
+    try {
+      const entries = await parseTechnologyUsageFile(file);
+      if (entries.length === 0) {
+        toast({
+          title: 'Nie znaleziono norm technologicznych',
+          description: 'Plik musi zawierać indeks oraz kolumnę zużycia technologicznego na sztukę.',
+          tone: 'error'
+        });
+        return;
+      }
+      await technologyImportMutation.mutateAsync({ entries });
+    } catch {
+      toast({
+        title: 'Nie odczytano pliku z normami technologicznymi',
+        description: 'Obsługiwane są pliki DOCX, XLSX i XLS z tabelą technologii.',
+        tone: 'error'
+      });
+    } finally {
+      if (technologyImportInputRef.current) technologyImportInputRef.current.value = '';
     }
   };
 
@@ -1247,6 +1468,23 @@ export default function PaintTapeSettlementsPage() {
     );
   };
 
+  const handleSaveGroupOrderNote = (group: SettlementGroup) => {
+    if (!canAccounting) {
+      toast({ title: 'Brak uprawnien do zapisu uwag.', tone: 'error' });
+      return;
+    }
+    const orderNote = getGroupOrderNoteDraft(group);
+    updateGroupMutation.mutate(group.items.map((settlement) => ({ id: settlement.id, orderNote })));
+  };
+
+  const handleSaveUsageCheckNote = (settlement: PaintTapeSettlement) => {
+    if (!canAccounting) {
+      toast({ title: 'Brak uprawnien do zapisu notatki kontrolnej.', tone: 'error' });
+      return;
+    }
+    updateGroupMutation.mutate([{ id: settlement.id, usageCheckNote: getUsageCheckNoteDraft(settlement) }]);
+  };
+
   const handleIssueMove = (settlement: PaintTapeSettlement, direction: 1 | -1) => {
     if (!canOpen || activeFilter !== 'OPEN') return;
     setIssueDraft({ settlementId: settlement.id, direction, value: '' });
@@ -1273,9 +1511,20 @@ export default function PaintTapeSettlementsPage() {
     const draft = getDraft(settlement);
     const isDone = settlement.status === 'DONE';
     if (isDone) {
+      const orderRows = getOrderQuantitySummaryRows(settlement.orderNumber, settlement.producedQty);
       return (
-        <p className={compact ? 'mt-1 text-lg font-black leading-tight text-[var(--value-purple)]' : 'font-black text-[var(--value-purple)]'}>
-          {formatOrderQuantitySummary(settlement.orderNumber, settlement.producedQty)}
+        <p className={compact ? 'mt-1 text-lg font-black leading-tight' : 'font-black'}>
+          {orderRows.length > 0
+            ? orderRows.map((row, index) => (
+                <Fragment key={`${settlement.id}-${row.orderNumber}-${index}`}>
+                  {index > 0 && <span className="text-dim"> | </span>}
+                  <span className="text-[var(--value-purple)]">{row.orderNumber}</span>
+                  {row.producedQty !== null && row.producedQty > 0 && (
+                    <span className="text-title">: {formatPiecesQty(row.producedQty)}</span>
+                  )}
+                </Fragment>
+              ))
+            : <span className="text-dim">Bez numeru</span>}
         </p>
       );
     }
@@ -1296,14 +1545,14 @@ export default function PaintTapeSettlementsPage() {
     const activeIssueDraft =
       issueDraft?.settlementId === settlement.id ? issueDraft : null;
     return (
-      <div className="min-w-[130px]">
+      <div className={compact ? 'min-w-0' : 'mx-auto min-w-[96px]'}>
         <div className="flex items-center gap-2">
           <Button
             type="button"
             variant="ghost"
             onClick={() => handleIssueMove(settlement, -1)}
             disabled={disabled || settlement.warehouseIssuedQty <= 0}
-            className={compact ? 'h-10 w-10 px-0 py-0' : 'h-9 w-9 px-0 py-0'}
+            className={compact ? 'h-10 w-10 px-0 py-0' : 'h-8 w-8 px-0 py-0'}
             aria-label="Odejmij pobranie z magazynu"
           >
             <Minus className="h-4 w-4" />
@@ -1311,7 +1560,7 @@ export default function PaintTapeSettlementsPage() {
           <div
             className={cn(
               'flex h-10 items-center justify-center rounded-xl border border-border bg-[rgba(0,0,0,0.32)] px-3 text-sm font-black text-title',
-              compact ? 'min-w-0 flex-1' : 'w-[170px] shrink-0'
+              compact ? 'min-w-0 flex-1' : 'w-[96px] shrink-0'
             )}
           >
             {formatQty(settlement.warehouseIssuedQty, settlement.unit || 'kg')}
@@ -1321,7 +1570,7 @@ export default function PaintTapeSettlementsPage() {
             variant="secondary"
             onClick={() => handleIssueMove(settlement, 1)}
             disabled={disabled}
-            className={compact ? 'h-10 w-10 px-0 py-0' : 'h-9 w-9 px-0 py-0'}
+            className={compact ? 'h-10 w-10 px-0 py-0' : 'h-8 w-8 px-0 py-0'}
             aria-label="Dodaj pobranie z magazynu"
           >
             <Plus className="h-4 w-4" />
@@ -1420,7 +1669,7 @@ export default function PaintTapeSettlementsPage() {
               {settlement.itemName}
             </p>
             {settlement.itemIndexCode && (
-              <p className="mt-1 break-words text-xs font-semibold text-dim">
+              <p className="mt-1 break-words text-xs font-semibold text-[var(--value-purple)]">
                 {settlement.itemIndexCode}
               </p>
             )}
@@ -1486,15 +1735,15 @@ export default function PaintTapeSettlementsPage() {
             <p className="mt-1 font-black text-title">{formatQty(settlement.usageQty, unit)}</p>
           </div>
           {showPerPiece && (
-            <div className="col-span-2 flex min-h-[70px] flex-col items-center justify-center rounded-lg bg-[rgba(255,255,255,0.035)] px-3 py-2 text-center">
+            <div className="flex min-h-[70px] flex-col items-center justify-center rounded-lg bg-[rgba(255,255,255,0.035)] px-3 py-2 text-center">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
-                Zuzycie / szt.
+                Zuzycie rzecz. / szt.
               </p>
               <p className="mt-1 break-words font-black leading-tight text-title">
                 {formatPerPiece(getUsagePerPiecePreview(settlement, group), unit)}
               </p>
               {getUsageAllocationPreview(settlement, group).length > 0 && (
-                <div className="mt-2 w-full space-y-1 text-xs font-semibold text-dim">
+                <div className="mt-2 w-full space-y-1 text-xs font-semibold text-title">
                   {getUsageAllocationPreview(settlement, group).map((allocation) => (
                     <p key={`${settlement.id}-${allocation.orderNumber}`}>
                       <span className="text-[var(--value-purple)]">{allocation.orderNumber}</span>
@@ -1503,6 +1752,19 @@ export default function PaintTapeSettlementsPage() {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+          {showPerPiece && (
+            <div className="flex min-h-[70px] flex-col items-center justify-center rounded-lg bg-[rgba(109,93,255,0.09)] px-3 py-2 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
+                Zuzycie tech. / szt.
+              </p>
+              <p className="mt-1 break-words font-black leading-tight text-title">
+                {formatPerPiece(
+                  getTechnologyUsage(settlement, technologyUsageByIndex)?.usagePerPiece,
+                  getTechnologyUsage(settlement, technologyUsageByIndex)?.unit ?? unit
+                )}
+              </p>
             </div>
           )}
         </div>
@@ -1516,6 +1778,9 @@ export default function PaintTapeSettlementsPage() {
     const groupProducedQty = firstSettlement.producedQty;
     const groupBusy = updateGroupMutation.isPending;
     const groupAccounted = group.items.every((settlement) => Boolean(settlement.accountedAt));
+    const outsideTechnologyCount = group.items.filter(
+      (settlement) => (settlement.usageQty ?? 0) > 0 && !getTechnologyUsage(settlement, technologyUsageByIndex)
+    ).length;
     const startedAt = group.items
       .map((settlement) => settlement.createdAt)
       .filter(Boolean)
@@ -1593,7 +1858,7 @@ export default function PaintTapeSettlementsPage() {
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
                   Ilość wykonana
                 </p>
-                <p className="mt-1 text-[26px] font-black leading-none tracking-tight text-[var(--value-purple)] md:text-[28px]">
+                <p className="mt-1 text-[26px] font-black leading-none tracking-tight text-title md:text-[28px]">
                   {formatPiecesQty(groupProducedQty)}
                 </p>
               </div>
@@ -1603,6 +1868,9 @@ export default function PaintTapeSettlementsPage() {
               {groupAccounted && <Badge tone="success">Rozliczone</Badge>}
               {group.items.length > 1 && (
                 <Badge tone="info">{group.items.length} farby / rozcieńczalniki</Badge>
+              )}
+              {outsideTechnologyCount > 0 && (
+                <Badge tone="warning">Poza technologią: {outsideTechnologyCount}</Badge>
               )}
             </div>
             {activeFilter === 'DETAILS_REQUIRED' && (
@@ -1665,7 +1933,7 @@ export default function PaintTapeSettlementsPage() {
         </div>
 
         <div className="mt-3 hidden overflow-x-auto md:block">
-          <table className="w-full min-w-[1280px] text-sm">
+          <table className="w-full min-w-[1240px] text-sm">
             <thead className="bg-[linear-gradient(90deg,rgba(255,122,26,0.16),rgba(255,255,255,0.03))] text-title">
               <tr>
                 {[
@@ -1676,12 +1944,20 @@ export default function PaintTapeSettlementsPage() {
                   'Zużycie',
                   ...(activeFilter === 'OPEN'
                     ? []
-                    : ['Zużycie / szt.', 'Rozchód na zlecenia']),
+                    : [
+                        'Zużycie na szt. rzeczywiste',
+                        'Zużycie na szt. technologiczne',
+                        'Rozchód na zlecenia',
+                        'Kontrola'
+                      ]),
                   ...(activeFilter === 'DONE' || activeFilter === 'ACCOUNTED' ? [] : ['Akcje'])
-                ].map((column) => (
+                ].map((column, index) => (
                   <th
                     key={`${group.key}-${column}`}
-                    className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-title"
+                    className={cn(
+                      'px-2 py-3 text-center text-xs font-semibold uppercase tracking-wide text-title',
+                      index === 0 && 'text-left'
+                    )}
                   >
                     {column}
                   </th>
@@ -1693,21 +1969,28 @@ export default function PaintTapeSettlementsPage() {
                 const draft = getDraft(settlement);
                 const erp = getErpForSettlement(settlement);
                 const unit = settlement.unit || 'kg';
+                const technologyUsage = getTechnologyUsage(settlement, technologyUsageByIndex);
                 const isDone = settlement.status === 'DONE';
                 const showPerPiece = activeFilter !== 'OPEN';
                 const showActions = activeFilter !== 'DONE' && activeFilter !== 'ACCOUNTED';
+                const actualUsagePerPiece = getUsagePerPiecePreview(settlement, group);
+                const usageComparison = getUsageComparison(
+                  actualUsagePerPiece,
+                  technologyUsage?.usagePerPiece
+                );
+                const usageCheckNoteOpen = activeUsageCheckNoteId === settlement.id;
+                const tableColumnCount = showPerPiece ? 9 : 6;
+                const isOutsideTechnology = (settlement.usageQty ?? 0) > 0 && !technologyUsage;
                 return (
-                  <tr
-                    key={settlement.id}
-                    className="border-t border-[rgba(255,255,255,0.08)] text-body"
-                  >
+                  <Fragment key={settlement.id}>
+                    <tr className="border-t border-[rgba(255,255,255,0.08)] text-body">
                     <td className="px-4 py-3">
-                      <div className="min-w-[220px]">
+                      <div className="min-w-[180px]">
                         <p className="font-semibold" style={{ color: 'var(--brand)' }}>
                           {settlement.itemName}
                         </p>
                         {settlement.itemIndexCode && (
-                          <p className="mt-1 text-xs text-dim">{settlement.itemIndexCode}</p>
+                          <p className="mt-1 text-xs text-[var(--value-purple)]">{settlement.itemIndexCode}</p>
                         )}
                         <p className="mt-1 text-xs text-dim">
                           ERP {snapshotDate}:{' '}
@@ -1715,27 +1998,33 @@ export default function PaintTapeSettlementsPage() {
                         </p>
                       </div>
                     </td>
-                    <td className="px-4 py-3">{formatQty(settlement.startQty, unit)}</td>
-                    <td className="px-4 py-3">{renderIssuedControl(settlement)}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 text-center">{formatQty(settlement.startQty, unit)}</td>
+                    <td className="px-4 py-3 text-center">{renderIssuedControl(settlement)}</td>
+                    <td className="px-4 py-3 text-center">
                       <Input
                         value={draft.endQty}
                         onChange={(event) => setDraft(settlement, { endQty: event.target.value })}
                         inputMode="decimal"
                         disabled={!canOpen || isDone || activeFilter !== 'OPEN'}
                         aria-label="Stan farby po zakończeniu"
-                        className="h-10 w-[170px] min-w-[170px] text-center font-black"
+                        className="mx-auto h-10 w-[100px] min-w-[100px] text-center font-black"
                       />
                     </td>
-                    <td className="px-4 py-3">{formatQty(settlement.usageQty, unit)}</td>
+                    <td className="px-4 py-3 text-center">{formatQty(settlement.usageQty, unit)}</td>
                     {showPerPiece && (
                       <>
-                        <td className="px-4 py-3 font-semibold">
-                          {formatPerPiece(getUsagePerPiecePreview(settlement, group), unit)}
+                        <td className="px-4 py-3 text-center font-semibold">
+                          {formatPerPiece(actualUsagePerPiece, unit)}
                         </td>
-                        <td className="min-w-[190px] px-4 py-3">
+                        <td className="px-4 py-3 text-center font-semibold text-title">
+                          {formatPerPiece(
+                            technologyUsage?.usagePerPiece,
+                            technologyUsage?.unit ?? unit
+                          )}
+                        </td>
+                        <td className="min-w-[145px] px-2 py-3 text-center">
                           {getUsageAllocationPreview(settlement, group).length > 0 ? (
-                            <div className="space-y-1 text-xs font-semibold text-dim">
+                            <div className="space-y-1 text-center text-xs font-semibold text-title">
                               {getUsageAllocationPreview(settlement, group).map((allocation) => (
                                 <p key={`${settlement.id}-${allocation.orderNumber}`}>
                                   <span className="text-[var(--value-purple)]">{allocation.orderNumber}</span>
@@ -1747,12 +2036,90 @@ export default function PaintTapeSettlementsPage() {
                             <span className="text-dim">-</span>
                           )}
                         </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-center gap-2">
+                            {isOutsideTechnology && (
+                              <button
+                                type="button"
+                                onClick={() => setActiveUsageCheckNoteId(settlement.id)}
+                                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[rgba(255,122,0,0.55)] bg-[rgba(255,122,0,0.10)] text-[var(--accent)] transition hover:bg-[rgba(255,122,0,0.18)]"
+                                title="Zużyto fizycznie, ale materiał nie występuje w technologii"
+                                aria-label="Zużyto fizycznie, ale materiał nie występuje w technologii"
+                              >
+                                <AlertTriangle className="h-4 w-4" />
+                              </button>
+                            )}
+                            {usageComparison === 'HIGHER' && (
+                              <ArrowUp
+                                className="h-5 w-5 text-[var(--danger)]"
+                                aria-label="Zużycie rzeczywiste jest wyższe od technologicznego"
+                              />
+                            )}
+                            {usageComparison === 'LOWER' && (
+                              <ArrowDown
+                                className="h-5 w-5 text-[var(--accent)]"
+                                aria-label="Zużycie rzeczywiste jest niższe od technologicznego"
+                              />
+                            )}
+                            {usageComparison === 'MATCH' && (
+                              <CheckCircle2
+                                className="h-5 w-5 text-success"
+                                aria-label="Zużycie rzeczywiste jest zgodne z technologicznym"
+                              />
+                            )}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setActiveUsageCheckNoteId((current) =>
+                                  current === settlement.id ? null : settlement.id
+                                )
+                              }
+                              className={cn(
+                                'flex h-8 w-8 items-center justify-center rounded-lg border border-border text-dim transition hover:border-[rgba(255,122,0,0.6)] hover:text-[var(--accent)]',
+                                Boolean(settlement.usageCheckNote) &&
+                                  'border-[rgba(255,122,0,0.55)] bg-[rgba(255,122,0,0.10)] text-[var(--accent)]'
+                              )}
+                              title="Dodaj notatkę kontrolną"
+                              aria-label="Dodaj notatkę kontrolną"
+                            >
+                              <CircleHelp className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
                       </>
                     )}
                     {showActions && (
                       <td className="px-4 py-3">{renderSettlementActions(settlement)}</td>
                     )}
-                  </tr>
+                    </tr>
+                    {usageCheckNoteOpen && (
+                      <tr className="border-t border-[rgba(255,255,255,0.08)] bg-[rgba(255,122,0,0.035)]">
+                        <td colSpan={tableColumnCount} className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <textarea
+                              value={getUsageCheckNoteDraft(settlement)}
+                              onChange={(event) => setUsageCheckNoteDraft(settlement.id, event.target.value)}
+                              disabled={!canAccounting || groupBusy}
+                              maxLength={1000}
+                              rows={1}
+                              placeholder="Notatka kontrolna, np. sprawdzić pobranie..."
+                              className="min-h-[40px] flex-1 resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm font-semibold text-body outline-none transition focus:border-[rgba(255,122,0,0.65)] disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              onClick={() => handleSaveUsageCheckNote(settlement)}
+                              disabled={!canAccounting || groupBusy}
+                              className="min-h-[40px] shrink-0 px-3 py-2"
+                            >
+                              <Save className="mr-2 h-4 w-4" />
+                              Zapisz
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -1817,45 +2184,67 @@ export default function PaintTapeSettlementsPage() {
           </div>
         )}
         {(activeFilter === 'DONE' || activeFilter === 'ACCOUNTED') && (
-          <div className="mt-4 grid gap-2 border-t border-[rgba(255,255,255,0.10)] pt-4 sm:grid-cols-2 md:flex md:justify-end">
-            {activeFilter === 'ACCOUNTED' && (
+          <div className="mt-4 border-t border-[rgba(255,255,255,0.10)] pt-4">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+              <textarea
+                value={getGroupOrderNoteDraft(group)}
+                onChange={(event) => setGroupOrderNoteDraft(group, event.target.value)}
+                disabled={!canAccounting || groupBusy}
+                maxLength={3000}
+                rows={1}
+                aria-label="Uwagi do zlecenia"
+                placeholder="Uwagi do zlecenia..."
+                className="min-h-[42px] w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm font-semibold text-body outline-none transition focus:border-[rgba(255,122,0,0.65)] disabled:cursor-not-allowed disabled:opacity-50 md:flex-1"
+              />
               <Button
                 type="button"
                 variant="ghost"
-                onClick={() => void handleExportGroup(group)}
-                className="min-h-[42px] w-full px-3 py-2 md:w-auto"
+                onClick={() => handleSaveGroupOrderNote(group)}
+                disabled={!canAccounting || groupBusy}
+                className="min-h-[42px] w-full shrink-0 px-3 py-2 md:w-auto"
               >
-                <FileSpreadsheet className="mr-2 h-4 w-4" />
-                Eksport Excel
+                <Save className="mr-2 h-4 w-4" />
+                Zapisz uwagę
               </Button>
-            )}
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => handleAccountedGroup(group)}
-              disabled={!canAccounting || groupBusy}
-              aria-pressed={groupAccounted}
-              className={cn(
-                'min-h-[42px] w-full px-3 py-2 md:w-auto',
-                groupAccounted &&
-                  'border-[color:color-mix(in_srgb,var(--success)_65%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_16%,transparent)] text-success'
+              {activeFilter === 'ACCOUNTED' && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => void handleExportGroup(group)}
+                  className="min-h-[42px] w-full shrink-0 px-3 py-2 md:w-auto"
+                >
+                  <FileSpreadsheet className="mr-2 h-4 w-4" />
+                  Eksport Excel
+                </Button>
               )}
-            >
-              <CheckCircle2 className="mr-2 h-4 w-4" />
-              {groupAccounted ? 'Cofnij rozliczenie' : 'Rozliczone'}
-            </Button>
-            {activeFilter === 'DONE' && (
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => handleReopenGroup(group)}
+                onClick={() => handleAccountedGroup(group)}
                 disabled={!canAccounting || groupBusy}
-                className="min-h-[42px] w-full px-3 py-2 md:w-auto"
+                aria-pressed={groupAccounted}
+                className={cn(
+                  'min-h-[42px] w-full shrink-0 px-3 py-2 md:w-auto',
+                  groupAccounted &&
+                    'border-[color:color-mix(in_srgb,var(--success)_65%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_16%,transparent)] text-success'
+                )}
               >
-                <RotateCcw className="mr-2 h-4 w-4" />
-                Cofnij zlecenie
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+                {groupAccounted ? 'Cofnij rozliczenie' : 'Rozliczone'}
               </Button>
-            )}
+              {activeFilter === 'DONE' && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => handleReopenGroup(group)}
+                  disabled={!canAccounting || groupBusy}
+                  className="min-h-[42px] w-full shrink-0 px-3 py-2 md:w-auto"
+                >
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  Cofnij zlecenie
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </article>
@@ -2199,6 +2588,27 @@ export default function PaintTapeSettlementsPage() {
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
               Tabela rozliczeń
             </p>
+            {canOpen && (
+              <div>
+                <input
+                  ref={technologyImportInputRef}
+                  type="file"
+                  accept=".docx,.xlsx,.xls"
+                  className="hidden"
+                  onChange={(event) => void handleTechnologyImport(event.target.files?.[0] ?? null)}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => technologyImportInputRef.current?.click()}
+                  disabled={technologyImportMutation.isPending}
+                  className="min-h-[38px] px-3 py-2"
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  {technologyImportMutation.isPending ? 'Importowanie...' : 'Import norm technologicznych'}
+                </Button>
+              </div>
+            )}
           </div>
           <div className="grid gap-3 sm:grid-cols-[220px_180px]">
             <div>
