@@ -307,6 +307,7 @@ export default function PrzygotowanieProdukcjiPage() {
   const [importing, setImporting] = useState(false);
   const [loadingSavedPlan, setLoadingSavedPlan] = useState(true);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [copiedQueueTask, setCopiedQueueTask] = useState<string | null>(null);
   const [editingQueueTask, setEditingQueueTask] = useState<string | null>(null);
   const sheetNames = workbook?.SheetNames ?? [];
@@ -318,7 +319,10 @@ export default function PrzygotowanieProdukcjiPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     } : undefined);
-    if (!response.ok) throw new Error('Nie udało się zapisać przygotowania produkcji.');
+    if (!response.ok) {
+      const error = await response.json().catch(() => null) as { message?: string } | null;
+      throw new Error(error?.message ?? 'Nie udało się zapisać przygotowania produkcji.');
+    }
     return response.json() as Promise<T>;
   };
 
@@ -360,6 +364,7 @@ export default function PrzygotowanieProdukcjiPage() {
 
   const savePlan = async (nextTasks: Task[], nextFileName: string, nextSheetName: string) => {
     setSaveState('saving');
+    setSaveError(null);
     try {
       await apiRequest({ action: 'savePlan', tasks: nextTasks, fileName: nextFileName, sheetName: nextSheetName });
       const historyResponse = await fetch('/api/przygotowanie-produkcji?history=1');
@@ -368,13 +373,15 @@ export default function PrzygotowanieProdukcjiPage() {
         setHistory(data.history ?? []);
       }
       setSaveState('saved');
-    } catch {
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Nie udało się zapisać przygotowania produkcji.');
       setSaveState('error');
     }
   };
 
   const saveTask = async (task: Task) => {
     setSaveState('saving');
+    setSaveError(null);
     try {
       await apiRequest({ action: 'updateTask', task });
       const historyResponse = await fetch('/api/przygotowanie-produkcji?history=1');
@@ -383,7 +390,8 @@ export default function PrzygotowanieProdukcjiPage() {
         setHistory(data.history ?? []);
       }
       setSaveState('saved');
-    } catch {
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Nie udało się zapisać przygotowania produkcji.');
       setSaveState('error');
     }
   };
@@ -647,7 +655,7 @@ export default function PrzygotowanieProdukcjiPage() {
             {sheetNames.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
         </label>}
-        {saveState === 'error' && <div className="rounded-lg border border-red-500/60 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-300">Plan nie został zapisany. Sprawdź migracje w Supabase i spróbuj ponownie.</div>}
+        {saveState === 'error' && <div className="rounded-lg border border-red-500/60 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-300">Plan nie został zapisany. {saveError ?? 'Spróbuj ponownie.'}</div>}
 
         <TabsContent value="plan" className="space-y-4">
           {activeTasks.length > 0 && <>

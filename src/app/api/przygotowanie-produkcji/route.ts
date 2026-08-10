@@ -223,20 +223,33 @@ export async function POST(request: NextRequest) {
       if (new Set(taskKeys).size !== taskKeys.length) {
         throw new Error('Plan zawiera powtarzające się identyfikatory pozycji. Dane nie zostały zmienione.');
       }
-      if (tasks.length) {
-        const { error: upsertError } = await supabaseAdmin
-          .from('przygotowanie_produkcji_tasks')
-          .upsert(
-            tasks.map((task, index) => toDbTask(task, session.id, index, access.user.name)),
-            { onConflict: 'session_id,task_key' }
-          );
-        if (upsertError) throw upsertError;
-      }
       const { data: storedRows, error: storedRowsError } = await supabaseAdmin
         .from('przygotowanie_produkcji_tasks')
         .select('id, task_key')
         .eq('session_id', session.id);
       if (storedRowsError) throw storedRowsError;
+      const storedByTaskKey = new Map((storedRows ?? []).map((row) => [String(row.task_key), String(row.id)]));
+      const importedRows = tasks.map((task, index) => toDbTask(task, session.id, index, access.user.name));
+      const rowsToInsert = importedRows.filter((row) => !storedByTaskKey.has(String(row.task_key)));
+
+      // The production database may not yet have the unique index required by Supabase upsert.
+      // Updating known rows by their primary key makes repeated imports work with both schemas.
+      for (const row of importedRows) {
+        const storedId = storedByTaskKey.get(String(row.task_key));
+        if (!storedId) continue;
+        const { session_id: _sessionId, task_key: _taskKey, ...updates } = row;
+        const { error: updateError } = await supabaseAdmin
+          .from('przygotowanie_produkcji_tasks')
+          .update(updates)
+          .eq('id', storedId);
+        if (updateError) throw updateError;
+      }
+      if (rowsToInsert.length) {
+        const { error: insertError } = await supabaseAdmin
+          .from('przygotowanie_produkcji_tasks')
+          .insert(rowsToInsert);
+        if (insertError) throw insertError;
+      }
       const staleIds = (storedRows ?? [])
         .filter((row) => !taskKeys.includes(String(row.task_key)))
         .map((row) => String(row.id));
