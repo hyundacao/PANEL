@@ -88,6 +88,7 @@ const navItemsFarbyTasmy: NavItem[] = [
 
 const navItemsPrzygotowanieProdukcji: NavItem[] = [
   { label: 'Plan zmian', href: '/przygotowanie-produkcji', icon: ClipboardList },
+  { label: 'Plan pracy', href: '/przygotowanie-produkcji?view=work-plan', icon: ClipboardCheck },
   { label: 'Rozpiska materiałowa', href: '/przygotowanie-produkcji?view=material', icon: Layers },
   { label: 'Historia planów', href: '/przygotowanie-produkcji?view=history', icon: History },
   { label: 'Raport prac', href: '/przygotowanie-produkcji?view=report', icon: FileText }
@@ -132,6 +133,9 @@ export const Sidebar = () => {
     }
     if (href === '/przygotowanie-produkcji?view=material') {
       return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'material';
+    }
+    if (href === '/przygotowanie-produkcji?view=work-plan') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'work-plan';
     }
     if (href === '/przygotowanie-produkcji?view=history') {
       return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'history';
