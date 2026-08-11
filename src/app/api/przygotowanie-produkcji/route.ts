@@ -38,6 +38,14 @@ const todayKey = () => {
 
 const unauthorized = (code: string) => NextResponse.json({ code }, { status: 401 });
 
+const omitFields = <T extends object, K extends keyof T>(value: T, fields: readonly K[]): Omit<T, K> => {
+  const copy = { ...value } as Partial<T>;
+  fields.forEach((field) => {
+    delete copy[field];
+  });
+  return copy as Omit<T, K>;
+};
+
 const hasAssignment = (task: Record<string, unknown>) => {
   const kinds = Array.isArray(task.kinds) ? task.kinds : [];
   const teams = Array.isArray(task.teams) ? task.teams : [];
@@ -237,7 +245,7 @@ export async function POST(request: NextRequest) {
       for (const row of importedRows) {
         const storedId = storedByTaskKey.get(String(row.task_key));
         if (!storedId) continue;
-        const { session_id: _sessionId, task_key: _taskKey, ...updates } = row;
+        const updates = omitFields(row, ['session_id', 'task_key'] as const);
         const { error: updateError } = await supabaseAdmin
           .from('przygotowanie_produkcji_tasks')
           .update(updates)
@@ -273,7 +281,7 @@ export async function POST(request: NextRequest) {
       if (sessionError) throw sessionError;
       if (!session) return NextResponse.json({ code: 'NO_PLAN' }, { status: 409 });
       const storedTask = toDbTask(body.task, session.id, 0, access.user.name);
-      const { session_id: _sessionId, task_key: _taskKey, position_no: _positionNo, ...updates } = storedTask;
+      const updates = omitFields(storedTask, ['session_id', 'task_key', 'position_no'] as const);
       const { error: taskError } = await supabaseAdmin
         .from('przygotowanie_produkcji_tasks')
         .update(updates)

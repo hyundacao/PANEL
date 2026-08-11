@@ -67,6 +67,18 @@ type SettlementGroup = {
   items: PaintTapeSettlement[];
 };
 
+const compareSettlementItemsByName = (left: PaintTapeSettlement, right: PaintTapeSettlement) => {
+  const nameCompare = left.itemName.localeCompare(right.itemName, 'pl', {
+    sensitivity: 'base',
+    numeric: true
+  });
+  if (nameCompare !== 0) return nameCompare;
+  return (left.itemIndexCode ?? '').localeCompare(right.itemIndexCode ?? '', 'pl', {
+    sensitivity: 'base',
+    numeric: true
+  });
+};
+
 type TechnologyUsage = {
   usagePerPiece: number;
   unit: string;
@@ -772,7 +784,10 @@ export default function PaintTapeSettlementsPage() {
         items: [settlement]
       });
     });
-    return [...groups.values()];
+    return [...groups.values()].map((group) => ({
+      ...group,
+      items: [...group.items].sort(compareSettlementItemsByName)
+    }));
   }, [filteredSettlements]);
 
   const getDraft = (settlement: PaintTapeSettlement): RowDraft => {
