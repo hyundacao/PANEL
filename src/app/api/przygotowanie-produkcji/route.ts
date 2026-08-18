@@ -53,6 +53,16 @@ const hasAssignment = (task: Record<string, unknown>) => {
   return kinds.length > 0 || teams.length > 0 || notes > 0 || Boolean(task.done);
 };
 
+const historyTaskKey = (task: Record<string, unknown>) => {
+  const explicitKey = task.id ?? task.task_key;
+  if (explicitKey !== undefined && explicitKey !== null && String(explicitKey).trim()) {
+    return String(explicitKey);
+  }
+  return [task.station, task.detail, task.quantity, task.norm]
+    .map((value) => String(value ?? '').trim().toUpperCase())
+    .join('|');
+};
+
 const saveHistorySnapshot = async (
   session: { session_date: string; file_name?: string | null; plan_sheet?: string | null; created_by?: string | null },
   tasks: Array<Record<string, unknown>>
@@ -60,13 +70,27 @@ const saveHistorySnapshot = async (
   const assignedTasks = tasks.filter(hasAssignment);
   if (!assignedTasks.length) return;
   try {
+    const { data: existingHistory, error: historyReadError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_history')
+      .select('tasks')
+      .eq('plan_date', session.session_date)
+      .maybeSingle();
+    if (historyReadError) throw historyReadError;
+
+    const existingTasks = Array.isArray(existingHistory?.tasks)
+      ? existingHistory.tasks as Array<Record<string, unknown>>
+      : [];
+    const mergedTasks = new Map<string, Record<string, unknown>>();
+    existingTasks.forEach((task) => mergedTasks.set(historyTaskKey(task), task));
+    assignedTasks.forEach((task) => mergedTasks.set(historyTaskKey(task), task));
+
     const { error } = await supabaseAdmin
       .from('przygotowanie_produkcji_history')
       .upsert({
         plan_date: session.session_date,
         file_name: session.file_name ?? '',
         plan_sheet: session.plan_sheet ?? '',
-        tasks: assignedTasks,
+        tasks: [...mergedTasks.values()],
         archived_by: session.created_by ?? null
       }, { onConflict: 'plan_date' });
     if (error) throw error;

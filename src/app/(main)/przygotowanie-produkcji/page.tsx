@@ -102,6 +102,8 @@ const automaticTeams: Partial<Record<WorkKind, Team[]>> = {
 const teamsWith5s: Team[] = ['mechanics', 'process', 'distribution', 'technician'];
 const standard5s = 'Po wykonanym zadaniu poprawnie ustaw tabliczkę 5S.';
 const isManualTask = (task: Pick<Task, 'station'>) => task.station === 'ZADANIE DODATKOWE';
+const isPanelGroupHeader = (task: Pick<Task, 'station' | 'detail'>) =>
+  /^ST\s*[12]$/.test(normalize(task.station)) && /^PANELE\s+(SE|BO)$/.test(normalize(task.detail));
 const preparesDistributionStation = (task: Pick<Task, 'teams' | 'notes'>) =>
   task.teams.includes('distribution') && task.notes.distribution?.trim().toLocaleLowerCase().includes('przygotowa') === true;
 const restartsProcessAfterToolroom = (task: Pick<Task, 'kinds' | 'teams' | 'notes'>) =>
@@ -117,6 +119,24 @@ const planGroupLabel: Record<PlanGroup, string> = {
 
 const cellText = (value: unknown) => (value == null ? '' : String(value).replace(/\s+/g, ' ').trim());
 const normalize = (value: string) => value.replace(/\s+/g, ' ').trim().toUpperCase();
+
+const dateKeyFrom = (value: string) => {
+  const match = value.match(/(\d{1,2})[.-](\d{1,2})(?:[.-]\d{2,4})?/);
+  if (!match) return '';
+  return `${match[1].padStart(2, '0')}.${match[2].padStart(2, '0')}`;
+};
+
+const defaultSheetName = (sheetNames: string[], fileName: string) => {
+  const fileDate = dateKeyFrom(fileName);
+  if (fileDate) {
+    const matchingFileDate = sheetNames.find((name) => dateKeyFrom(name) === fileDate);
+    if (matchingFileDate) return matchingFileDate;
+  }
+  const todayParts = new Intl.DateTimeFormat('pl-PL', { timeZone: 'Europe/Warsaw', day: '2-digit', month: '2-digit' })
+    .formatToParts(new Date());
+  const todayKey = `${todayParts.find((part) => part.type === 'day')?.value ?? ''}.${todayParts.find((part) => part.type === 'month')?.value ?? ''}`;
+  return sheetNames.find((name) => dateKeyFrom(name) === todayKey) ?? sheetNames[sheetNames.length - 1] ?? '';
+};
 
 const workbookDatabase = () => new Promise<IDBDatabase>((resolve, reject) => {
   const request = indexedDB.open('przygotowanie-produkcji', 1);
@@ -220,23 +240,50 @@ const parseTasks = (workbook: XLSX.WorkBook, sheetName: string): Task[] => {
   };
   const valueAt = (row: number, column: number) => cellText(cellAt(row, column)?.w ?? cellAt(row, column)?.v);
   let planGroup: PlanGroup = 'standard';
+  let lastProductionStation = '';
+  let lastPanelNorm = '';
+  let lastPlannedDate = '';
   const rows = data.flatMap((_, row) => {
     const detail = valueAt(row, 1);
-    const values = Array.from({ length: 8 }, (_, column) => valueAt(row, column));
-    const rowText = values.join(' ').toUpperCase();
-    if (rowText.includes('AWARYJNIE')) {
+    const sectionLabel = normalize(detail);
+    if (sectionLabel === 'AWARYJNIE') {
       planGroup = 'emergency';
+      lastProductionStation = '';
+      lastPanelNorm = '';
       return [];
     }
-    if (rowText.includes('PLANOWANE ZMIANY')) {
+    if (sectionLabel === 'NARZĘDZIOWNIA' || sectionLabel === 'LAKIERNIA') {
+      planGroup = 'standard';
+      lastProductionStation = '';
+      lastPanelNorm = '';
+      return [];
+    }
+    if (sectionLabel.includes('PLANOWANE ZMIANY FORM')) {
       planGroup = 'planned';
+      lastProductionStation = '';
+      lastPanelNorm = '';
+      lastPlannedDate = '';
       return [];
     }
-    const station = values.find((value) => /\bWTR\s*\d+\b|\bST\.?\s*\d+\b|\bMASZYNA\b/i.test(value)) ?? valueAt(row, 3);
+    const explicitStation = valueAt(row, 3);
+    const quantity = valueAt(row, 2);
+    const explicitNorm = valueAt(row, 4);
+    const hasProductionValues = Boolean(quantity && explicitNorm);
+    const plannedDate = planGroup === 'planned' ? valueAt(row, 0) : '';
+    const continuesPlannedStation = Boolean(plannedDate && plannedDate === lastPlannedDate);
+    const continuesPanelStation = Boolean(quantity && /^ST\s*[12]$/.test(normalize(lastProductionStation)));
+    const station = explicitStation || (hasProductionValues || continuesPlannedStation || continuesPanelStation ? lastProductionStation : '');
+    const norm = explicitNorm || (continuesPanelStation ? lastPanelNorm : '');
+    if (explicitStation) {
+      lastProductionStation = explicitStation;
+      lastPanelNorm = /^ST\s*[12]$/.test(normalize(explicitStation)) ? explicitNorm : '';
+    }
+    if (plannedDate) lastPlannedDate = plannedDate;
+    if (/^PANELE\s+(SE|BO)$/.test(sectionLabel)) return [];
     const header = `${detail} ${station}`.toUpperCase();
     if (!detail || !station || header.includes('NAZWA INDEKSU') || header.includes('STÓŁ LUB MASZYNA')) return [];
     const highlighted = Array.from({ length: 8 }, (_, column) => hasYellowFill(cellAt(row, column))).some(Boolean);
-    return [{ id: `${sheetName}-${row}`, isCurrentPlan: true, planGroup, station, detail, quantity: valueAt(row, 2), norm: valueAt(row, 4), highlighted }];
+    return [{ id: `${sheetName}-${row}`, isCurrentPlan: true, planGroup, station, detail, quantity, norm, plannedDate, highlighted }];
   });
 
   return rows.map((row, index) => {
@@ -251,7 +298,8 @@ const parseTasks = (workbook: XLSX.WorkBook, sheetName: string): Task[] => {
       teams: [],
       notes: {},
       done: false,
-      material: '',
+      // Planned rows are informational and do not enter the material schedule.
+      material: row.plannedDate,
       materialType: '',
       source: '',
       dryer: '',
@@ -275,7 +323,7 @@ const ensureUniqueTaskIds = (items: Task[]) => {
 const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
   const remaining = [...existingTasks];
   const currentTasks = importedTasks.map((imported) => {
-    const matchIndex = remaining.findIndex((task) => normalize(task.station) === normalize(imported.station) && normalize(task.detail) === normalize(imported.detail));
+    const matchIndex = imported.planGroup === 'planned' ? -1 : remaining.findIndex((task) => task.planGroup !== 'planned' && normalize(task.station) === normalize(imported.station) && normalize(task.detail) === normalize(imported.detail));
     if (matchIndex < 0) return imported;
     const previous = remaining.splice(matchIndex, 1)[0];
     return {
@@ -284,7 +332,7 @@ const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
       id: previous.id,
       isCurrentPlan: true,
       highlighted: previous.highlighted || imported.highlighted,
-      kinds: previous.kinds,
+      kinds: previous.isCurrentPlan ? previous.kinds : previous.kinds.filter((kind) => kind !== 'anulowane'),
       teams: previous.teams,
       notes: previous.notes,
       done: previous.done,
@@ -295,7 +343,9 @@ const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
       temperature: previous.temperature
     };
   });
-  const retainedWork = remaining.filter(assignedForTheDay).map((task) => ({ ...task, isCurrentPlan: false }));
+  const retainedWork = remaining
+    .filter((task) => assignedForTheDay(task) && task.planGroup !== 'planned')
+    .map((task) => isManualTask(task) ? { ...task, isCurrentPlan: false } : { ...task, isCurrentPlan: false, kinds: [...new Set([...task.kinds, 'anulowane' as WorkKind])] });
   return ensureUniqueTaskIds([...currentTasks, ...retainedWork]);
 };
 
@@ -362,7 +412,7 @@ export default function PrzygotowanieProdukcjiPage() {
         const restoredWorkbook = XLSX.read(savedWorkbook.buffer, { type: 'array', cellStyles: true });
         setWorkbook(restoredWorkbook);
         setFileName((current) => current || savedWorkbook.fileName);
-        setSheetName((current) => restoredWorkbook.SheetNames.includes(current) ? current : (restoredWorkbook.SheetNames[restoredWorkbook.SheetNames.length - 1] ?? ''));
+        setSheetName((current) => restoredWorkbook.SheetNames.includes(current) ? current : defaultSheetName(restoredWorkbook.SheetNames, savedWorkbook.fileName));
       })
       .catch(() => undefined);
     return () => { active = false; };
@@ -417,7 +467,7 @@ export default function PrzygotowanieProdukcjiPage() {
     try {
       const buffer = await file.arrayBuffer();
       const nextWorkbook = XLSX.read(buffer, { type: 'array', cellStyles: true });
-      const nextSheet = nextWorkbook.SheetNames[nextWorkbook.SheetNames.length - 1] ?? '';
+      const nextSheet = defaultSheetName(nextWorkbook.SheetNames, file.name);
       const nextTasks = mergeImportedTasks(parseTasks(nextWorkbook, nextSheet), tasks);
       setWorkbook(nextWorkbook);
       setFileName(file.name);
@@ -482,7 +532,8 @@ export default function PrzygotowanieProdukcjiPage() {
     const notes = adding && team === 'distribution' && !task.notes.distribution ? { ...task.notes, distribution: 'Przygotować stanowisko' } : task.notes;
     updateTask(task.id, { teams, notes });
   };
-  const activeTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station), [tasks]);
+  const activeTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station && task.planGroup !== 'planned' && !isPanelGroupHeader(task)), [tasks]);
+  const plannedTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station && task.planGroup === 'planned'), [tasks]);
   const reportDays = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     const allDays = [
@@ -745,8 +796,8 @@ export default function PrzygotowanieProdukcjiPage() {
         {saveState === 'error' && <div className="rounded-lg border border-red-500/60 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-300">Plan nie został zapisany. {saveError ?? 'Spróbuj ponownie.'}</div>}
 
         <TabsContent value={activeView === 'work-plan' ? 'work-plan' : 'plan'} className="space-y-4">
-          {activeTasks.length > 0 && <>
-            {activeView === 'plan' && <Card className="border-0 bg-transparent p-0 shadow-none">
+          {(activeView === 'work-plan' || activeTasks.length > 0 || plannedTasks.length > 0) && <>
+            {activeView === 'plan' && activeTasks.length > 0 && <Card className="border-0 bg-transparent p-0 shadow-none">
               <div className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold text-title">Pozycje do omówienia</p><p className="mt-1 text-sm text-dim">Wybierz rodzaj pracy, a właściwe zespoły zostaną zaznaczone automatycznie.</p></div><Button className="min-h-10 px-3 py-2 text-xs" onClick={clearAllAssignments} type="button" variant="ghost"><Trash2 className="mr-1.5 h-4 w-4" />Kasuj przypisania</Button></div>
               <div className="space-y-3 p-0">
                 {activeTasks.map((task, index) => {
@@ -775,9 +826,11 @@ export default function PrzygotowanieProdukcjiPage() {
                 })}
               </div>
             </Card>}
+            {activeView === 'plan' && plannedTasks.length > 0 && <Card className="overflow-hidden border-[rgba(183,122,255,0.45)] bg-[rgba(183,122,255,0.055)] p-0"><div className="border-b border-[rgba(183,122,255,0.3)] px-4 py-3"><p className="font-semibold text-[#debaff]">Planowane zmiany form</p><p className="mt-1 text-xs text-dim">Informacja na kolejne dni. Te pozycje nie trafiają do dzisiejszego planu pracy.</p></div><div className="divide-y divide-border">{plannedTasks.map((task) => <div className="grid gap-1 px-4 py-3 sm:grid-cols-[90px_90px_minmax(0,1fr)_auto] sm:items-center" key={task.id}><p className="text-xs font-semibold text-[#debaff]">{task.material || 'Termin —'}</p><p className="text-xs font-bold text-[var(--brand)]">{task.station}</p><p className="text-sm font-semibold text-title">{task.detail}</p><p className="text-xs text-dim">Ilość: <strong className="text-title">{task.quantity || '—'}</strong>{task.norm ? <> · Norma: <strong className="text-title">{task.norm}</strong></> : null}</p></div>)}</div></Card>}
             {activeView === 'work-plan' && <Card className="border-border bg-surface2 p-3"><div className="flex items-center justify-between gap-3"><div><p className="font-semibold text-title">Zadania dodatkowe</p><p className="mt-0.5 text-xs text-dim">Dodaj pracę niezwiązaną z konkretnym planem lub maszyną.</p></div><Button className="min-h-9 shrink-0 px-3 py-2 text-xs" onClick={() => setShowManualTaskForm((current) => !current)} type="button" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" />Dodaj zadanie</Button></div>{showManualTaskForm && <div className="mt-3 grid gap-2 border-t border-border pt-3 lg:grid-cols-[minmax(0,1fr)_auto]"><textarea className="min-h-20 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm text-title outline-none focus:border-[rgba(255,122,0,0.65)]" onChange={(event) => setManualTaskText(event.target.value)} placeholder="Np. Posprzątać magazyn lub przekazać formę do narzędziowni" value={manualTaskText} /><div className="space-y-2"><div className="grid grid-cols-2 gap-1.5">{teamOptions.map((team) => <label className={cn('flex min-h-9 items-center gap-2 rounded border border-border px-2 text-xs font-semibold text-dim', manualTaskTeams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] bg-[rgba(255,122,0,0.12)] text-title')} key={team.id}><input checked={manualTaskTeams.includes(team.id)} onChange={() => setManualTaskTeams((current) => current.includes(team.id) ? current.filter((item) => item !== team.id) : [...current, team.id])} type="checkbox" />{team.label}</label>)}</div><div className="flex justify-end gap-2"><Button className="min-h-9 px-3 py-2 text-xs" onClick={() => { setShowManualTaskForm(false); setManualTaskText(''); setManualTaskTeams([]); }} type="button" variant="ghost">Anuluj</Button><Button className="min-h-9 px-3 py-2 text-xs" disabled={!manualTaskText.trim() || manualTaskTeams.length === 0} onClick={addManualTask} type="button" variant="primaryEmber">Dodaj</Button></div></div></div>}</Card>}
             {activeView === 'work-plan' && <div className="production-queues grid w-full gap-2 text-[11px] lg:grid-cols-6">{teamOptions.map((team) => {
               const queue = tasks.filter((task) => {
+                if (isPanelGroupHeader(task)) return false;
                 if (!task.teams.includes(team.id)) return false;
                 return !(task.kinds.length === 1 && task.kinds[0] === 'przeglad-a' && ['mechanics', 'distribution', 'technician'].includes(team.id));
               });
