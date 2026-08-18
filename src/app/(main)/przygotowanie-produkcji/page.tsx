@@ -234,9 +234,8 @@ const parseTasks = (workbook: XLSX.WorkBook, sheetName: string): Task[] => {
   const merges = sheet['!merges'] ?? [];
   const cellAt = (row: number, column: number) => {
     const direct = sheet[XLSX.utils.encode_cell({ r: row, c: column })];
-    if (direct) return direct;
     const merge = merges.find((item) => row >= item.s.r && row <= item.e.r && column >= item.s.c && column <= item.e.c);
-    return merge ? sheet[XLSX.utils.encode_cell({ r: merge.s.r, c: merge.s.c })] : undefined;
+    return merge ? sheet[XLSX.utils.encode_cell({ r: merge.s.r, c: merge.s.c })] : direct;
   };
   const valueAt = (row: number, column: number) => cellText(cellAt(row, column)?.w ?? cellAt(row, column)?.v);
   let planGroup: PlanGroup = 'standard';
