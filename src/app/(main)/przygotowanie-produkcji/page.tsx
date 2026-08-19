@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Copy, Pencil, Plus, Trash2, Upload, Wrench, X } from 'lucide-react';
+import { ChevronDown, Copy, Pencil, Plus, Trash2, Upload, Wrench, X } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -322,7 +322,11 @@ const ensureUniqueTaskIds = (items: Task[]) => {
 const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
   const remaining = [...existingTasks];
   const currentTasks = importedTasks.map((imported) => {
-    const matchIndex = imported.planGroup === 'planned' ? -1 : remaining.findIndex((task) => task.planGroup !== 'planned' && normalize(task.station) === normalize(imported.station) && normalize(task.detail) === normalize(imported.detail));
+    const matchIndex = remaining.findIndex((task) =>
+      normalize(task.station) === normalize(imported.station)
+      && normalize(task.detail) === normalize(imported.detail)
+      && (imported.planGroup === 'planned' ? task.planGroup === 'planned' : task.planGroup !== 'planned')
+    );
     if (matchIndex < 0) return imported;
     const previous = remaining.splice(matchIndex, 1)[0];
     return {
@@ -335,7 +339,7 @@ const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
       teams: previous.teams,
       notes: previous.notes,
       done: previous.done,
-      material: previous.material,
+      material: imported.planGroup === 'planned' ? imported.material : previous.material,
       materialType: previous.materialType,
       source: previous.source,
       dryer: previous.dryer,
@@ -343,8 +347,10 @@ const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
     };
   });
   const retainedWork = remaining
-    .filter((task) => assignedForTheDay(task) && task.planGroup !== 'planned')
-    .map((task) => isManualTask(task) ? { ...task, isCurrentPlan: false } : { ...task, isCurrentPlan: false, kinds: [...new Set([...task.kinds, 'anulowane' as WorkKind])] });
+    .filter(assignedForTheDay)
+    .map((task) => isManualTask(task) || task.planGroup === 'planned'
+      ? { ...task, isCurrentPlan: false }
+      : { ...task, isCurrentPlan: false, kinds: [...new Set([...task.kinds, 'anulowane' as WorkKind])] });
   return ensureUniqueTaskIds([...currentTasks, ...retainedWork]);
 };
 
@@ -362,6 +368,7 @@ export default function PrzygotowanieProdukcjiPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [copiedQueueTask, setCopiedQueueTask] = useState<string | null>(null);
   const [editingQueueTask, setEditingQueueTask] = useState<string | null>(null);
+  const [expandedPlannedTasks, setExpandedPlannedTasks] = useState<string[]>([]);
   const [showManualTaskForm, setShowManualTaskForm] = useState(false);
   const [manualTaskText, setManualTaskText] = useState('');
   const [manualTaskTeams, setManualTaskTeams] = useState<Team[]>([]);
@@ -454,6 +461,7 @@ export default function PrzygotowanieProdukcjiPage() {
   const selectSheet = (nextSheet: string) => {
     if (!workbook) return;
     const nextTasks = mergeImportedTasks(parseTasks(workbook, nextSheet), tasks);
+    setExpandedPlannedTasks([]);
     setSheetName(nextSheet);
     setTasks(nextTasks);
     void savePlan(nextTasks, fileName, nextSheet);
@@ -468,6 +476,7 @@ export default function PrzygotowanieProdukcjiPage() {
       const nextWorkbook = XLSX.read(buffer, { type: 'array', cellStyles: true });
       const nextSheet = defaultSheetName(nextWorkbook.SheetNames, file.name);
       const nextTasks = mergeImportedTasks(parseTasks(nextWorkbook, nextSheet), tasks);
+      setExpandedPlannedTasks([]);
       setWorkbook(nextWorkbook);
       setFileName(file.name);
       setSheetName(nextSheet);
@@ -531,6 +540,9 @@ export default function PrzygotowanieProdukcjiPage() {
     const notes = adding && team === 'distribution' && !task.notes.distribution ? { ...task.notes, distribution: 'Przygotować stanowisko' } : task.notes;
     updateTask(task.id, { teams, notes });
   };
+  const togglePlannedTask = (id: string) => setExpandedPlannedTasks((current) =>
+    current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+  );
   const activeTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station && task.planGroup !== 'planned' && !isPanelGroupHeader(task)), [tasks]);
   const plannedTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station && task.planGroup === 'planned'), [tasks]);
   const reportDays = useMemo(() => {
@@ -825,7 +837,46 @@ export default function PrzygotowanieProdukcjiPage() {
                 })}
               </div>
             </Card>}
-            {activeView === 'plan' && plannedTasks.length > 0 && <Card className="overflow-hidden border-[rgba(183,122,255,0.45)] bg-[rgba(183,122,255,0.055)] p-0"><div className="border-b border-[rgba(183,122,255,0.3)] px-4 py-3"><p className="font-semibold text-[#debaff]">Planowane zmiany form</p><p className="mt-1 text-xs text-dim">Informacja na kolejne dni. Te pozycje nie trafiają do dzisiejszego planu pracy.</p></div><div className="divide-y divide-border">{plannedTasks.map((task) => <div className="grid gap-1 px-4 py-3 sm:grid-cols-[90px_90px_minmax(0,1fr)_auto] sm:items-center" key={task.id}><p className="text-xs font-semibold text-[#debaff]">{task.material || 'Termin —'}</p><p className="text-xs font-bold text-[var(--brand)]">{task.station}</p><p className="text-sm font-semibold text-title">{task.detail}</p><p className="text-xs text-dim">Ilość: <strong className="text-title">{task.quantity || '—'}</strong>{task.norm ? <> · Norma: <strong className="text-title">{task.norm}</strong></> : null}</p></div>)}</div></Card>}
+            {activeView === 'plan' && plannedTasks.length > 0 && <Card className="overflow-hidden border-[rgba(183,122,255,0.45)] bg-[rgba(183,122,255,0.055)] p-0">
+              <div className="border-b border-[rgba(183,122,255,0.3)] px-4 py-3">
+                <p className="font-semibold text-[#debaff]">Planowane zmiany form</p>
+                <p className="mt-1 text-xs text-dim">Kliknij pozycję, aby przypisać pracę i osoby. Ponowne kliknięcie ją zwinie.</p>
+              </div>
+              <div className="divide-y divide-[rgba(183,122,255,0.22)]">{plannedTasks.map((task) => {
+                const expanded = expandedPlannedTasks.includes(task.id);
+                const assigned = assignedForTheDay(task);
+                return <div className={cn(expanded && 'bg-[rgba(183,122,255,0.055)]')} key={task.id}>
+                  <button
+                    aria-expanded={expanded}
+                    className="grid w-full gap-1 px-4 py-3 text-left transition-colors hover:bg-[rgba(183,122,255,0.09)] sm:grid-cols-[90px_90px_minmax(0,1fr)_auto_auto] sm:items-center"
+                    onClick={() => togglePlannedTask(task.id)}
+                    type="button"
+                  >
+                    <p className="text-xs font-semibold text-[#debaff]">{task.material || 'Termin —'}</p>
+                    <p className="text-xs font-bold text-[var(--brand)]">{task.station}</p>
+                    <p className="text-sm font-semibold text-title">{task.detail}</p>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-dim">
+                      <span>Ilość: <strong className="text-title">{task.quantity || '—'}</strong>{task.norm ? <> · Norma: <strong className="text-title">{task.norm}</strong></> : null}</span>
+                      {assigned && <span className="rounded border border-[rgba(183,122,255,0.55)] bg-[rgba(183,122,255,0.13)] px-2 py-1 font-semibold text-[#debaff]">Przypisano</span>}
+                    </div>
+                    <ChevronDown className={cn('h-5 w-5 justify-self-end text-[#debaff] transition-transform', expanded && 'rotate-180')} />
+                  </button>
+                  {expanded && <div className="border-t border-[rgba(183,122,255,0.22)] p-3 sm:p-4">
+                    <div className="grid gap-3 xl:grid-cols-2">
+                      <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(rgba(10,11,15,0.87), rgba(10,11,15,0.87)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
+                        <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[#debaff]">Praca</p>
+                        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">{workKinds.map((kind) => <label className={cn('flex min-h-10 items-center justify-start gap-2 rounded-lg border border-border px-3 text-left text-[11px] font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={kind.id} style={taskChoiceBackground(task.kinds.includes(kind.id))}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div>
+                      </section>
+                      <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(rgba(10,11,15,0.87), rgba(10,11,15,0.87)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'right center', backgroundSize: 'cover' }}>
+                        <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[#debaff]">Osoby</p>
+                        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">{teamOptions.map((team) => <label className={cn('flex min-h-10 w-full items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.teams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={team.id} style={taskChoiceBackground(task.teams.includes(team.id))}><input checked={task.teams.includes(team.id)} onChange={() => toggleTeam(task, team.id)} type="checkbox" />{team.label}</label>)}</div>
+                      </section>
+                    </div>
+                    {task.teams.length > 0 && <div className="mt-3 grid gap-2 border-t border-[rgba(183,122,255,0.22)] pt-3 md:grid-cols-2 xl:grid-cols-3">{teamOptions.filter((team) => task.teams.includes(team.id)).map((team) => <label className="text-xs text-dim" key={team.id}>{team.id === 'additional' ? 'Informacja dodatkowa' : `Uwagi dla: ${team.label}`}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTask(task.id, { notes: { ...task.notes, [team.id]: event.target.value } })} placeholder="Dodaj ustalenie" /></label>)}</div>}
+                  </div>}
+                </div>;
+              })}</div>
+            </Card>}
             {activeView === 'work-plan' && <Card className="border-border bg-surface2 p-3"><div className="flex items-center justify-between gap-3"><div><p className="font-semibold text-title">Zadania dodatkowe</p><p className="mt-0.5 text-xs text-dim">Dodaj pracę niezwiązaną z konkretnym planem lub maszyną.</p></div><Button className="min-h-9 shrink-0 px-3 py-2 text-xs" onClick={() => setShowManualTaskForm((current) => !current)} type="button" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" />Dodaj zadanie</Button></div>{showManualTaskForm && <div className="mt-3 grid gap-2 border-t border-border pt-3 lg:grid-cols-[minmax(0,1fr)_auto]"><textarea className="min-h-20 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm text-title outline-none focus:border-[rgba(255,122,0,0.65)]" onChange={(event) => setManualTaskText(event.target.value)} placeholder="Np. Posprzątać magazyn lub przekazać formę do narzędziowni" value={manualTaskText} /><div className="space-y-2"><div className="grid grid-cols-2 gap-1.5">{teamOptions.map((team) => <label className={cn('flex min-h-9 items-center gap-2 rounded border border-border px-2 text-xs font-semibold text-dim', manualTaskTeams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] bg-[rgba(255,122,0,0.12)] text-title')} key={team.id}><input checked={manualTaskTeams.includes(team.id)} onChange={() => setManualTaskTeams((current) => current.includes(team.id) ? current.filter((item) => item !== team.id) : [...current, team.id])} type="checkbox" />{team.label}</label>)}</div><div className="flex justify-end gap-2"><Button className="min-h-9 px-3 py-2 text-xs" onClick={() => { setShowManualTaskForm(false); setManualTaskText(''); setManualTaskTeams([]); }} type="button" variant="ghost">Anuluj</Button><Button className="min-h-9 px-3 py-2 text-xs" disabled={!manualTaskText.trim() || manualTaskTeams.length === 0} onClick={addManualTask} type="button" variant="primaryEmber">Dodaj</Button></div></div></div>}</Card>}
             {activeView === 'work-plan' && <div className="production-queues grid w-full gap-2 text-[11px] lg:grid-cols-6">{teamOptions.map((team) => {
               const queue = tasks.filter((task) => {
