@@ -1,6 +1,9 @@
--- Full Supabase setup for the app (schema + auth users + secure RLS + seed data).
--- Paste into Supabase SQL Editor and run once. Safe to re-run.
-
+-- APKA DLA KAMILA - complete Supabase setup (warehouse-only material inventory).
+-- Expected use: paste/upload this whole file into the Supabase SQL Editor for the target project and run it once as the authoritative full setup.
+-- Safe after the previous failed attempt at the warehouse-only normalization do $ syntax error: earlier setup/seed statements are written to be safe to re-run.
+-- This is the complete A-to-Z script, not a suffix/retry fragment and not an old setup followed by duplicate overlays; warehouse-only inventory is integrated into the schema, seed data, RLS scope, and normalization block below.
+-- Warehouses are the only active operational inventory units. Legacy WTR/storage-field/location rows are preserved for data/audit and marked inactive; inventory activity is normalized onto one hidden warehouse anchor location per warehouse.
+-- Safe re-run caveat: the setup uses IF EXISTS/IF NOT EXISTS/upserts/guarded DO blocks where practical. Re-running the warehouse normalization appends a new audit/report run, but it recalculates from legacy non-anchor rows only to avoid double-counting warehouse anchors.
 create schema if not exists extensions;
 create extension if not exists "pgcrypto" with schema extensions;
 
@@ -30,8 +33,25 @@ alter table if exists public.app_users
   add constraint app_users_role_check
   check (role in ('VIEWER', 'USER', 'ADMIN', 'HEAD_ADMIN'));
 
-create unique index if not exists app_users_username_lower_idx
-  on public.app_users (lower(username));
+do $$
+begin
+  if not exists (
+    select 1
+    from public.app_users
+    group by lower(username)
+    having count(*) > 1
+  ) then
+    execute $ddl$
+      create unique index if not exists app_users_username_lower_idx
+        on public.app_users (lower(username))
+    $ddl$;
+  else
+    execute $ddl$
+      create index if not exists app_users_username_lower_lookup_idx
+        on public.app_users (lower(username))
+    $ddl$;
+  end if;
+end $$;
 
 create or replace function public.list_app_users()
 returns table (
@@ -313,8 +333,25 @@ create table if not exists public.material_catalogs (
   is_active boolean not null default true
 );
 
-create unique index if not exists material_catalogs_name_idx
-  on public.material_catalogs (lower(name));
+do $$
+begin
+  if not exists (
+    select 1
+    from public.material_catalogs
+    group by lower(name)
+    having count(*) > 1
+  ) then
+    execute $ddl$
+      create unique index if not exists material_catalogs_name_idx
+        on public.material_catalogs (lower(name))
+    $ddl$;
+  else
+    execute $ddl$
+      create index if not exists material_catalogs_name_lookup_idx
+        on public.material_catalogs (lower(name))
+    $ddl$;
+  end if;
+end $$;
 
 create table if not exists public.materials (
   id text primary key,
@@ -330,8 +367,25 @@ alter table if exists public.materials
 alter table if exists public.materials
   add column if not exists catalog_id text references public.material_catalogs(id) on delete set null;
 
-create unique index if not exists materials_code_name_idx
-  on public.materials (lower(code), lower(name));
+do $$
+begin
+  if not exists (
+    select 1
+    from public.materials
+    group by lower(code), lower(name)
+    having count(*) > 1
+  ) then
+    execute $ddl$
+      create unique index if not exists materials_code_name_idx
+        on public.materials (lower(code), lower(name))
+    $ddl$;
+  else
+    execute $ddl$
+      create index if not exists materials_code_name_lookup_idx
+        on public.materials (lower(code), lower(name))
+    $ddl$;
+  end if;
+end $$;
 
 create index if not exists materials_catalog_idx
   on public.materials (catalog_id);
@@ -381,9 +435,15 @@ create table if not exists public.transfers (
   qty numeric not null,
   from_location_id text references public.locations(id) on delete set null,
   to_location_id text references public.locations(id) on delete set null,
+  legacy_from_location_id text,
+  legacy_to_location_id text,
   partner text,
   note text
 );
+
+alter table if exists public.transfers
+  add column if not exists legacy_from_location_id text,
+  add column if not exists legacy_to_location_id text;
 
 create index if not exists transfers_date_idx on public.transfers (at);
 create index if not exists transfers_material_idx on public.transfers (material_id);
@@ -492,8 +552,12 @@ create table if not exists public.inventory_adjustments (
   material_id text not null references public.materials(id) on delete restrict,
   prev_qty numeric not null,
   next_qty numeric not null,
-  note text
+  note text,
+  legacy_location_id text
 );
+
+alter table if exists public.inventory_adjustments
+  add column if not exists legacy_location_id text;
 
 create index if not exists inventory_adjustments_date_idx on public.inventory_adjustments (at);
 
@@ -501,8 +565,12 @@ create table if not exists public.mixed_materials (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   qty numeric not null,
-  location_id text not null references public.locations(id) on delete cascade
+  location_id text not null references public.locations(id) on delete cascade,
+  legacy_location_id text
 );
+
+alter table if exists public.mixed_materials
+  add column if not exists legacy_location_id text;
 
 create index if not exists mixed_materials_name_idx on public.mixed_materials (lower(name));
 create index if not exists mixed_materials_location_idx on public.mixed_materials (location_id);
@@ -527,8 +595,42 @@ create table if not exists public.spare_parts (
   location text
 );
 
-create unique index if not exists spare_parts_code_idx on public.spare_parts (lower(code));
-create unique index if not exists spare_parts_name_idx on public.spare_parts (lower(name));
+do $$
+begin
+  if not exists (
+    select 1
+    from public.spare_parts
+    group by lower(code)
+    having count(*) > 1
+  ) then
+    execute $ddl$
+      create unique index if not exists spare_parts_code_idx
+        on public.spare_parts (lower(code))
+    $ddl$;
+  else
+    execute $ddl$
+      create index if not exists spare_parts_code_lookup_idx
+        on public.spare_parts (lower(code))
+    $ddl$;
+  end if;
+
+  if not exists (
+    select 1
+    from public.spare_parts
+    group by lower(name)
+    having count(*) > 1
+  ) then
+    execute $ddl$
+      create unique index if not exists spare_parts_name_idx
+        on public.spare_parts (lower(name))
+    $ddl$;
+  else
+    execute $ddl$
+      create index if not exists spare_parts_name_lookup_idx
+        on public.spare_parts (lower(name))
+    $ddl$;
+  end if;
+end $$;
 
 create table if not exists public.spare_part_history (
   id uuid primary key default gen_random_uuid(),
@@ -572,9 +674,6 @@ alter table if exists public.original_inventory_catalog
 alter table if exists public.original_inventory_catalog
   add column if not exists warehouse_code text;
 
-delete from public.original_inventory_catalog
-where coalesce(trim(index_code), '') = '';
-
 update public.original_inventory_catalog
 set warehouse_code =
   upper(regexp_replace(substring(index_code from '(?i)M[- ]?\d+'), '\s+', '-', 'g'))
@@ -582,28 +681,33 @@ where coalesce(trim(warehouse_code), '') = ''
   and coalesce(trim(index_code), '') <> ''
   and substring(index_code from '(?i)M[- ]?\d+') is not null;
 
-delete from public.original_inventory_catalog
-where id in (
-  select id
-  from (
-    select
-      id,
-      row_number() over (
-        partition by lower(name), coalesce(lower(index_code), '')
-        order by created_at asc, id asc
-      ) as row_no
-    from public.original_inventory_catalog
-  ) duplicates
-  where row_no > 1
-);
-
 drop index if exists original_inventory_catalog_name_idx;
 
-create unique index if not exists original_inventory_catalog_name_index_idx
-  on public.original_inventory_catalog (
-    lower(name),
-    coalesce(lower(index_code), '')
-  );
+do $$
+begin
+  if not exists (
+    select 1
+    from public.original_inventory_catalog
+    group by lower(name), coalesce(lower(index_code), '')
+    having count(*) > 1
+  ) then
+    execute $ddl$
+      create unique index if not exists original_inventory_catalog_name_index_idx
+        on public.original_inventory_catalog (
+          lower(name),
+          coalesce(lower(index_code), '')
+        )
+    $ddl$;
+  else
+    execute $ddl$
+      create index if not exists original_inventory_catalog_name_index_lookup_idx
+        on public.original_inventory_catalog (
+          lower(name),
+          coalesce(lower(index_code), '')
+        )
+    $ddl$;
+  end if;
+end $$;
 
 create table if not exists public.original_inventory_erp_snapshots (
   id uuid primary key default gen_random_uuid(),
@@ -680,12 +784,33 @@ create index if not exists original_inventory_erp_snapshots_date_idx
 
 drop index if exists original_inventory_erp_snapshots_date_name_idx;
 
-create unique index if not exists original_inventory_erp_snapshots_date_name_index_idx
-  on public.original_inventory_erp_snapshots (
-    snapshot_date,
-    lower(name),
-    coalesce(lower(index_code), '')
-  );
+do $$
+begin
+  if not exists (
+    select 1
+    from public.original_inventory_erp_snapshots
+    group by snapshot_date, lower(name), coalesce(lower(index_code), '')
+    having count(*) > 1
+  ) then
+    execute $ddl$
+      create unique index if not exists original_inventory_erp_snapshots_date_name_index_idx
+        on public.original_inventory_erp_snapshots (
+          snapshot_date,
+          lower(name),
+          coalesce(lower(index_code), '')
+        )
+    $ddl$;
+  else
+    execute $ddl$
+      create index if not exists original_inventory_erp_snapshots_date_name_index_lookup_idx
+        on public.original_inventory_erp_snapshots (
+          snapshot_date,
+          lower(name),
+          coalesce(lower(index_code), '')
+        )
+    $ddl$;
+  end if;
+end $$;
 
 -- =========================
 -- RAPORT ZMIANOWY
@@ -769,14 +894,62 @@ create table if not exists public.push_subscriptions (
   last_seen_at timestamptz not null default now()
 );
 
-create unique index if not exists push_subscriptions_endpoint_uq
-  on public.push_subscriptions (endpoint);
+do $$
+begin
+  if not exists (
+    select 1
+    from public.push_subscriptions
+    group by endpoint
+    having count(*) > 1
+  ) then
+    execute $ddl$
+      create unique index if not exists push_subscriptions_endpoint_uq
+        on public.push_subscriptions (endpoint)
+    $ddl$;
+  else
+    execute $ddl$
+      create index if not exists push_subscriptions_endpoint_lookup_idx
+        on public.push_subscriptions (endpoint)
+    $ddl$;
+  end if;
+end $$;
 
 create index if not exists push_subscriptions_user_idx
   on public.push_subscriptions (user_id);
 
 create index if not exists push_subscriptions_last_seen_idx
   on public.push_subscriptions (last_seen_at desc);
+-- Warehouse-only inventory audit/report tables. These preserve legacy location state instead of deleting it blindly.
+create table if not exists public.material_inventory_warehouse_migration_runs (
+  id uuid primary key default gen_random_uuid(),
+  started_at timestamptz not null default now(),
+  note text not null
+);
+
+create table if not exists public.material_inventory_warehouse_migration_report (
+  run_id uuid not null references public.material_inventory_warehouse_migration_runs(id) on delete cascade,
+  section text not null,
+  warehouse_id text,
+  material_id text,
+  qty_before numeric not null default 0,
+  qty_after numeric not null default 0,
+  diff numeric not null default 0,
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists material_inventory_warehouse_migration_report_run_idx
+  on public.material_inventory_warehouse_migration_report (run_id, section);
+
+create table if not exists public.material_inventory_legacy_location_backup (
+  run_id uuid not null references public.material_inventory_warehouse_migration_runs(id) on delete cascade,
+  table_name text not null,
+  row_data jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists material_inventory_legacy_location_backup_run_idx
+  on public.material_inventory_legacy_location_backup (run_id, table_name);
 
 -- =========================
 -- SECURE RLS (server only)
@@ -814,7 +987,10 @@ begin
         'raport_zmianowy_entries',
         'raport_brakowosci_latest',
         'audit_logs',
-        'push_subscriptions'
+        'push_subscriptions',
+        'material_inventory_warehouse_migration_runs',
+        'material_inventory_warehouse_migration_report',
+        'material_inventory_legacy_location_backup'
       ]::text[]
     )
   loop
@@ -855,43 +1031,48 @@ insert into public.warehouses (id, name, order_no, include_in_spis, include_in_s
   ('daszek-2', 'Daszek NR 2', 5, false, false, true)
 on conflict (id) do nothing;
 
+with target_warehouses as (
+  select w.id, w.name
+  from public.warehouses w
+  where w.is_active is true
+    and not w.id like 'erp-wh-%'
+  union
+  select w.id, w.name
+  from public.locations l
+  join public.warehouses w on w.id = l.warehouse_id
+  where not w.id like 'erp-wh-%'
+    and not l.id like 'erp-loc-%'
+    and not l.id like 'warehouse-inventory-%'
+    and (
+      exists (select 1 from public.daily_entries de where de.location_id = l.id)
+      or exists (select 1 from public.daily_entry_measurements dm where dm.location_id = l.id)
+      or exists (select 1 from public.daily_location_status ds where ds.location_id = l.id)
+      or exists (select 1 from public.transfers t where t.from_location_id = l.id or t.to_location_id = l.id)
+      or exists (select 1 from public.inventory_adjustments a where a.location_id = l.id)
+      or exists (select 1 from public.mixed_materials m where m.location_id = l.id)
+    )
+)
 insert into public.locations (id, warehouse_id, name, order_no, type, is_active)
-select concat('hall-1-wtr-', gs), 'hall-1', concat('WTR ', gs), gs, 'wtr', false
-from generate_series(1, 28) as gs
-on conflict (id) do nothing;
+select
+  'warehouse-inventory-' || tw.id,
+  tw.id,
+  tw.name,
+  0,
+  'pole',
+  true
+from target_warehouses tw
+on conflict (id) do update set
+  warehouse_id = excluded.warehouse_id,
+  name = excluded.name,
+  order_no = excluded.order_no,
+  type = excluded.type,
+  is_active = true;
 
-insert into public.locations (id, warehouse_id, name, order_no, type, is_active) values
-  ('hall-1-pole-centralny', 'hall-1', 'Centralny zasyp', 100, 'pole', false)
-on conflict (id) do nothing;
-
-insert into public.locations (id, warehouse_id, name, order_no, type, is_active)
-select concat('hall-2-wtr-', gs), 'hall-2', concat('WTR ', gs), gs, 'wtr', false
-from generate_series(29, 52) as gs
-on conflict (id) do nothing;
-
-insert into public.locations (id, warehouse_id, name, order_no, type, is_active) values
-  ('hall-2-pole-maguire', 'hall-2', 'Pole odkladcze Maguire', 100, 'pole', false),
-  ('hall-2-pole-centralny', 'hall-2', 'Centralny zasyp', 101, 'pole', false)
-on conflict (id) do nothing;
-
-insert into public.locations (id, warehouse_id, name, order_no, type, is_active)
-select concat('hall-3-wtr-', gs), 'hall-3', concat('WTR ', gs), gs, 'wtr', false
-from generate_series(53, 60) as gs
-on conflict (id) do nothing;
-
-insert into public.locations (id, warehouse_id, name, order_no, type, is_active) values
-  ('hall-3-pole-centralny', 'hall-3', 'Centralny zasyp', 100, 'pole', false),
-  ('daszek-1-pole', 'daszek-1', 'Pole odkladcze', 1, 'pole', true),
-  ('daszek-2-pole', 'daszek-2', 'Pole odkladcze', 1, 'pole', true)
-on conflict (id) do nothing;
-
-insert into public.locations (id, warehouse_id, name, order_no, type, is_active) values
-  ('hall-1-spis', 'hall-1', 'Hala 1', 1, 'pole', true),
-  ('hall-2-spis', 'hall-2', 'Hala 2', 1, 'pole', true),
-  ('hall-3-spis', 'hall-3', 'Hala 3', 1, 'pole', true),
-  ('mill-pp-spis', 'mill-pp', 'Pomieszczenie z młynem PP', 1, 'pole', true)
-on conflict (id) do nothing;
-
+-- Preserve any legacy WTR/storage-field/location rows already present, but keep them out of user-facing inventory workflows.
+update public.locations l
+set is_active = false
+where not l.id like 'warehouse-inventory-%'
+  and not l.id like 'erp-loc-%';
 insert into public.materials (id, code, name, is_active) values
   ('mat-abs-9203', 'PRZEMIAL ABS', 'ABS 9203', true),
   ('mat-pp-310', 'PRZEMIAL PP', 'PP 310', true),
@@ -944,6 +1125,286 @@ insert into public.spare_parts (id, code, name, unit, qty, location) values
   ('part-filtr-pp', 'FIL-PP', 'Filtr PP', 'szt', 16, 'Szafka A3'),
   ('part-czujnik-temp', 'TEMP-01', 'Czujnik temperatury', 'szt', 7, 'Regal B2')
 on conflict (id) do nothing;
+-- =========================
+-- WAREHOUSE-ONLY INVENTORY NORMALIZATION
+-- =========================
+-- Converts existing legacy location-based inventory references to warehouse anchor locations.
+-- Legacy rows stay in place for audit/back-reference and are not deleted.
+do $$
+declare
+  v_run_id uuid;
+begin
+  insert into public.material_inventory_warehouse_migration_runs(note)
+  values ('Warehouse-only material inventory migration: aggregate legacy locations into hidden warehouse anchors; no legacy rows deleted.')
+  returning id into v_run_id;
+
+  insert into public.material_inventory_legacy_location_backup(run_id, table_name, row_data)
+  select v_run_id, 'locations', to_jsonb(l)
+  from public.locations l
+  where not l.id like 'erp-loc-%'
+    and not l.id like 'warehouse-inventory-%';
+
+  insert into public.material_inventory_legacy_location_backup(run_id, table_name, row_data)
+  select v_run_id, 'daily_entries', to_jsonb(de)
+  from public.daily_entries de
+  join public.locations l on l.id = de.location_id
+  where not l.id like 'erp-loc-%'
+    and not l.id like 'warehouse-inventory-%';
+
+  insert into public.material_inventory_legacy_location_backup(run_id, table_name, row_data)
+  select v_run_id, 'daily_entry_measurements', to_jsonb(dm)
+  from public.daily_entry_measurements dm
+  join public.locations l on l.id = dm.location_id
+  where not l.id like 'erp-loc-%'
+    and not l.id like 'warehouse-inventory-%';
+
+  insert into public.material_inventory_legacy_location_backup(run_id, table_name, row_data)
+  select v_run_id, 'daily_location_status', to_jsonb(ds)
+  from public.daily_location_status ds
+  join public.locations l on l.id = ds.location_id
+  where not l.id like 'erp-loc-%'
+    and not l.id like 'warehouse-inventory-%';
+
+  insert into public.material_inventory_legacy_location_backup(run_id, table_name, row_data)
+  select v_run_id, 'transfers', to_jsonb(t)
+  from public.transfers t
+  where t.from_location_id is not null or t.to_location_id is not null;
+
+  insert into public.material_inventory_legacy_location_backup(run_id, table_name, row_data)
+  select v_run_id, 'inventory_adjustments', to_jsonb(a)
+  from public.inventory_adjustments a;
+
+  with target_warehouses as (
+    select w.id, w.name
+    from public.warehouses w
+    where w.is_active is true
+      and not w.id like 'erp-wh-%'
+    union
+    select w.id, w.name
+    from public.locations l
+    join public.warehouses w on w.id = l.warehouse_id
+    where not w.id like 'erp-wh-%'
+      and not l.id like 'erp-loc-%'
+      and not l.id like 'warehouse-inventory-%'
+      and (
+        exists (select 1 from public.daily_entries de where de.location_id = l.id)
+        or exists (select 1 from public.daily_entry_measurements dm where dm.location_id = l.id)
+        or exists (select 1 from public.daily_location_status ds where ds.location_id = l.id)
+        or exists (select 1 from public.transfers t where t.from_location_id = l.id or t.to_location_id = l.id)
+        or exists (select 1 from public.inventory_adjustments a where a.location_id = l.id)
+        or exists (select 1 from public.mixed_materials m where m.location_id = l.id)
+      )
+  )
+  insert into public.locations(id, warehouse_id, name, order_no, type, is_active)
+  select
+    'warehouse-inventory-' || tw.id,
+    tw.id,
+    tw.name,
+    0,
+    'pole',
+    true
+  from target_warehouses tw
+  on conflict (id) do update set
+    warehouse_id = excluded.warehouse_id,
+    name = excluded.name,
+    order_no = excluded.order_no,
+    type = excluded.type,
+    is_active = true;
+
+  insert into public.material_inventory_warehouse_migration_report(
+    run_id, section, warehouse_id, material_id, qty_before, details
+  )
+  select
+    v_run_id,
+    'daily_entries_by_warehouse_material_before',
+    l.warehouse_id,
+    de.material_id,
+    sum(de.qty),
+    jsonb_build_object('date_count', count(distinct de.date_key))
+  from public.daily_entries de
+  join public.locations l on l.id = de.location_id
+  join public.warehouses w on w.id = l.warehouse_id
+  where not w.id like 'erp-wh-%'
+    and not l.id like 'erp-loc-%'
+    and not l.id like 'warehouse-inventory-%'
+  group by l.warehouse_id, de.material_id;
+
+  with aggregated as (
+    select
+      de.date_key,
+      l.warehouse_id,
+      de.material_id,
+      sum(de.qty) as qty,
+      bool_and(de.confirmed) as confirmed,
+      string_agg(distinct nullif(trim(de.comment), ''), ' | ') as comment
+    from public.daily_entries de
+    join public.locations l on l.id = de.location_id
+    join public.warehouses w on w.id = l.warehouse_id
+    where not w.id like 'erp-wh-%'
+    and not l.id like 'erp-loc-%'
+    and not l.id like 'warehouse-inventory-%'
+    group by de.date_key, l.warehouse_id, de.material_id
+  )
+  insert into public.daily_entries(date_key, location_id, material_id, qty, confirmed, comment, updated_at)
+  select
+    date_key,
+    'warehouse-inventory-' || warehouse_id,
+    material_id,
+    qty,
+    confirmed,
+    nullif(trim(coalesce(comment, '')), ''),
+    now()
+  from aggregated
+  on conflict (date_key, location_id, material_id) do update set
+    qty = excluded.qty,
+    confirmed = excluded.confirmed,
+    comment = excluded.comment,
+    updated_at = excluded.updated_at;
+
+  update public.daily_entry_measurements dm
+  set location_id = 'warehouse-inventory-' || l.warehouse_id
+  from public.locations l
+  join public.warehouses w on w.id = l.warehouse_id
+  where dm.location_id = l.id
+    and not w.id like 'erp-wh-%'
+    and not l.id like 'erp-loc-%'
+    and not l.id like 'warehouse-inventory-%'
+    and dm.location_id <> 'warehouse-inventory-' || l.warehouse_id;
+
+  insert into public.daily_location_status(date_key, location_id, is_confirmed, created_at)
+  select
+    ds.date_key,
+    'warehouse-inventory-' || l.warehouse_id,
+    bool_and(ds.is_confirmed),
+    min(ds.created_at)
+  from public.daily_location_status ds
+  join public.locations l on l.id = ds.location_id
+  join public.warehouses w on w.id = l.warehouse_id
+  where not w.id like 'erp-wh-%'
+    and not l.id like 'erp-loc-%'
+    and not l.id like 'warehouse-inventory-%'
+  group by ds.date_key, l.warehouse_id
+  on conflict (date_key, location_id) do update set
+    is_confirmed = excluded.is_confirmed;
+
+  update public.transfers t
+  set
+    legacy_from_location_id = coalesce(t.legacy_from_location_id, t.from_location_id),
+    from_location_id = 'warehouse-inventory-' || lf.warehouse_id
+  from public.locations lf
+  join public.warehouses wf on wf.id = lf.warehouse_id
+  where t.from_location_id = lf.id
+    and not wf.id like 'erp-wh-%'
+    and not lf.id like 'erp-loc-%'
+    and not lf.id like 'warehouse-inventory-%'
+    and t.from_location_id is distinct from 'warehouse-inventory-' || lf.warehouse_id;
+
+  update public.transfers t
+  set
+    legacy_to_location_id = coalesce(t.legacy_to_location_id, t.to_location_id),
+    to_location_id = 'warehouse-inventory-' || lt.warehouse_id
+  from public.locations lt
+  join public.warehouses wt on wt.id = lt.warehouse_id
+  where t.to_location_id = lt.id
+    and not wt.id like 'erp-wh-%'
+    and not lt.id like 'erp-loc-%'
+    and not lt.id like 'warehouse-inventory-%'
+    and t.to_location_id is distinct from 'warehouse-inventory-' || lt.warehouse_id;
+
+  update public.inventory_adjustments a
+  set
+    legacy_location_id = coalesce(a.legacy_location_id, a.location_id),
+    location_id = 'warehouse-inventory-' || l.warehouse_id
+  from public.locations l
+  join public.warehouses w on w.id = l.warehouse_id
+  where a.location_id = l.id
+    and not w.id like 'erp-wh-%'
+    and not l.id like 'erp-loc-%'
+    and not l.id like 'warehouse-inventory-%'
+    and a.location_id is distinct from 'warehouse-inventory-' || l.warehouse_id;
+
+  update public.mixed_materials m
+  set
+    legacy_location_id = coalesce(m.legacy_location_id, m.location_id),
+    location_id = 'warehouse-inventory-' || l.warehouse_id
+  from public.locations l
+  join public.warehouses w on w.id = l.warehouse_id
+  where m.location_id = l.id
+    and not w.id like 'erp-wh-%'
+    and not l.id like 'erp-loc-%'
+    and not l.id like 'warehouse-inventory-%'
+    and m.location_id is distinct from 'warehouse-inventory-' || l.warehouse_id;
+
+  update public.locations l
+  set is_active = case
+    when l.id like 'warehouse-inventory-%' then true
+    when l.id like 'erp-loc-%' then l.is_active
+    else false
+  end
+  where not l.id like 'erp-loc-%';
+
+  insert into public.material_inventory_warehouse_migration_report(
+    run_id, section, warehouse_id, material_id, qty_after, details
+  )
+  select
+    v_run_id,
+    'daily_entries_by_warehouse_material_after',
+    l.warehouse_id,
+    de.material_id,
+    sum(de.qty),
+    jsonb_build_object('date_count', count(distinct de.date_key))
+  from public.daily_entries de
+  join public.locations l on l.id = de.location_id
+  where l.id like 'warehouse-inventory-%'
+  group by l.warehouse_id, de.material_id;
+
+  insert into public.material_inventory_warehouse_migration_report(
+    run_id, section, qty_before, qty_after, diff, details
+  )
+  select
+    v_run_id,
+    'global_daily_entries_total_check',
+    coalesce(sum(case when section = 'daily_entries_by_warehouse_material_before' then qty_before else 0 end), 0),
+    coalesce(sum(case when section = 'daily_entries_by_warehouse_material_after' then qty_after else 0 end), 0),
+    coalesce(sum(case when section = 'daily_entries_by_warehouse_material_after' then qty_after else 0 end), 0) -
+      coalesce(sum(case when section = 'daily_entries_by_warehouse_material_before' then qty_before else 0 end), 0),
+    jsonb_build_object('expected_diff', 0)
+  from public.material_inventory_warehouse_migration_report
+  where run_id = v_run_id
+    and section in ('daily_entries_by_warehouse_material_before', 'daily_entries_by_warehouse_material_after');
+
+  insert into public.material_inventory_warehouse_migration_report(
+    run_id, section, warehouse_id, material_id, qty_before, qty_after, diff, details
+  )
+  select
+    v_run_id,
+    'transfer_balance_by_warehouse_material',
+    coalesce(src.warehouse_id, dst.warehouse_id),
+    coalesce(src.material_id, dst.material_id),
+    coalesce(src.qty, 0),
+    coalesce(dst.qty, 0),
+    coalesce(dst.qty, 0) - coalesce(src.qty, 0),
+    jsonb_build_object('qty_before_out', coalesce(src.qty, 0), 'qty_after_in', coalesce(dst.qty, 0))
+  from (
+    select lf.warehouse_id, t.material_id, sum(t.qty) as qty
+    from public.transfers t
+    join public.locations lf on lf.id = t.from_location_id
+    where t.from_location_id is not null
+    group by lf.warehouse_id, t.material_id
+  ) src
+  full join (
+    select lt.warehouse_id, t.material_id, sum(t.qty) as qty
+    from public.transfers t
+    join public.locations lt on lt.id = t.to_location_id
+    where t.to_location_id is not null
+    group by lt.warehouse_id, t.material_id
+  ) dst
+    on src.warehouse_id = dst.warehouse_id
+   and src.material_id = dst.material_id;
+end $$;
+
+notify pgrst, 'reload schema';
+
 
 -- =========================
 -- ERP ACCESS DECOUPLE (safe re-run)
@@ -1057,8 +1518,25 @@ create table if not exists public.permission_groups (
   created_at timestamptz not null default now()
 );
 
-create unique index if not exists permission_groups_name_lower_idx
-  on public.permission_groups (lower(name));
+do $$
+begin
+  if not exists (
+    select 1
+    from public.permission_groups
+    group by lower(name)
+    having count(*) > 1
+  ) then
+    execute $ddl$
+      create unique index if not exists permission_groups_name_lower_idx
+        on public.permission_groups (lower(name))
+    $ddl$;
+  else
+    execute $ddl$
+      create index if not exists permission_groups_name_lower_lookup_idx
+        on public.permission_groups (lower(name))
+    $ddl$;
+  end if;
+end $$;
 
 create table if not exists public.user_permission_groups (
   user_id uuid not null references public.app_users(id) on delete cascade,
@@ -1238,43 +1716,87 @@ create table if not exists public.erp_target_locations (
   updated_at timestamptz not null default now()
 );
 
-create unique index if not exists erp_target_locations_name_lower_uq
-  on public.erp_target_locations (lower(name));
+do $$
+begin
+  if not exists (
+    select 1
+    from public.erp_target_locations
+    group by lower(name)
+    having count(*) > 1
+  ) then
+    execute $ddl$
+      create unique index if not exists erp_target_locations_name_lower_uq
+        on public.erp_target_locations (lower(name))
+    $ddl$;
+  else
+    execute $ddl$
+      create index if not exists erp_target_locations_name_lower_lookup_idx
+        on public.erp_target_locations (lower(name))
+    $ddl$;
+  end if;
+end $$;
 
 create index if not exists erp_target_locations_active_order_idx
   on public.erp_target_locations (is_active, order_no, name);
 
 alter table if exists public.erp_target_locations enable row level security;
 
+with erp_target_location_seed(name, order_no, is_active) as (
+  values
+    ('HALA 1', 1, true),
+    ('HALA 2', 2, true),
+    ('HALA 3', 3, true),
+    ('BAKOMA', 4, true),
+    ('PACZKA', 5, true),
+    ('LAKIERNIA', 6, true),
+    ('INNA LOKALIZACJA', 999, true)
+)
 insert into public.erp_target_locations (name, order_no, is_active)
-values
-  ('HALA 1', 1, true),
-  ('HALA 2', 2, true),
-  ('HALA 3', 3, true),
-  ('BAKOMA', 4, true),
-  ('PACZKA', 5, true),
-  ('LAKIERNIA', 6, true),
-  ('INNA LOKALIZACJA', 999, true)
-on conflict do nothing;
+select seed.name, seed.order_no, seed.is_active
+from erp_target_location_seed seed
+where not exists (
+  select 1
+  from public.erp_target_locations existing
+  where lower(existing.name) = lower(seed.name)
+);
 
 commit;
 
 notify pgrst, 'reload schema';
 
-alter table original_inventory_entries
+alter table if exists public.original_inventory_entries
   add column if not exists source_type text,
   add column if not exists source_id text;
 
-create unique index if not exists original_inventory_entries_source_idx
-  on original_inventory_entries(source_type, source_id)
-  where source_type is not null and source_id is not null;
+do $$
+begin
+  if not exists (
+    select 1
+    from public.original_inventory_entries
+    where source_type is not null and source_id is not null
+    group by source_type, source_id
+    having count(*) > 1
+  ) then
+    execute $ddl$
+      create unique index if not exists original_inventory_entries_source_idx
+        on public.original_inventory_entries(source_type, source_id)
+        where source_type is not null and source_id is not null
+    $ddl$;
+  else
+    execute $ddl$
+      create index if not exists original_inventory_entries_source_lookup_idx
+        on public.original_inventory_entries(source_type, source_id)
+        where source_type is not null and source_id is not null
+    $ddl$;
+  end if;
+end $$;
 
-create table if not exists original_inventory_silos (
+create table if not exists public.original_inventory_silos (
   id uuid primary key,
   name text not null,
   chamber text not null,
   material_name text not null,
-  warehouse_id text not null references warehouses(id) on delete restrict,
+  warehouse_id text not null references public.warehouses(id) on delete restrict,
   percent_kg numeric not null default 0,
   hopper_kg numeric not null default 0,
   is_active boolean not null default true,
@@ -1282,14 +1804,14 @@ create table if not exists original_inventory_silos (
   updated_at timestamptz not null default now()
 );
 
-create table if not exists original_inventory_silo_entries (
+create table if not exists public.original_inventory_silo_entries (
   id uuid primary key,
-  config_id uuid not null references original_inventory_silos(id) on delete cascade,
+  config_id uuid not null references public.original_inventory_silos(id) on delete cascade,
   date_key text not null,
   percent numeric not null default 0,
   hopper_present boolean not null default false,
   calculated_qty numeric not null default 0,
-  generated_entry_id uuid references original_inventory_entries(id) on delete set null,
+  generated_entry_id uuid references public.original_inventory_entries(id) on delete set null,
   user_name text not null default 'nieznany',
   updated_at timestamptz not null default now(),
   unique(config_id, date_key)
@@ -1407,5 +1929,255 @@ where warehouse_issued_qty <> 0
 
 alter table if exists public.paint_tape_settlements enable row level security;
 alter table if exists public.paint_tape_settlement_issues enable row level security;
+
+notify pgrst, 'reload schema';
+
+-- ============================================================
+-- CURRENT MIGRATION: migrate_przygotowanie_produkcji.sql
+-- ============================================================
+
+create table if not exists public.przygotowanie_produkcji_sessions (
+  id uuid primary key default gen_random_uuid(),
+  session_date date not null default current_date,
+  file_name text,
+  plan_sheet text,
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (session_date)
+);
+
+create table if not exists public.przygotowanie_produkcji_tasks (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references public.przygotowanie_produkcji_sessions(id) on delete cascade,
+  task_key text not null,
+  position_no integer not null default 0,
+  is_current_plan boolean not null default true,
+  plan_group text not null default 'standard',
+  station text not null,
+  detail text not null,
+  quantity text,
+  norm text,
+  highlighted boolean not null default false,
+  kinds jsonb not null default '[]'::jsonb,
+  teams jsonb not null default '[]'::jsonb,
+  notes jsonb not null default '{}'::jsonb,
+  done boolean not null default false,
+  material text not null default '',
+  material_type text not null default '',
+  source text not null default '',
+  dryer text not null default '',
+  temperature text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  updated_by text,
+  unique (session_id, task_key)
+);
+
+create index if not exists przygotowanie_produkcji_sessions_date_idx
+  on public.przygotowanie_produkcji_sessions (session_date desc);
+create index if not exists przygotowanie_produkcji_tasks_session_idx
+  on public.przygotowanie_produkcji_tasks (session_id, position_no);
+
+create table if not exists public.przygotowanie_produkcji_history (
+  id uuid primary key default gen_random_uuid(),
+  plan_date date not null unique,
+  file_name text,
+  plan_sheet text,
+  tasks jsonb not null default '[]'::jsonb,
+  archived_at timestamptz not null default now(),
+  archived_by text
+);
+
+create index if not exists przygotowanie_produkcji_history_date_idx
+  on public.przygotowanie_produkcji_history (plan_date desc);
+
+alter table public.przygotowanie_produkcji_tasks
+  add column if not exists is_current_plan boolean not null default true;
+
+alter table public.przygotowanie_produkcji_tasks
+  add column if not exists plan_group text not null default 'standard';
+
+alter table public.przygotowanie_produkcji_sessions enable row level security;
+alter table public.przygotowanie_produkcji_tasks enable row level security;
+alter table public.przygotowanie_produkcji_history enable row level security;
+
+-- ============================================================
+-- CURRENT MIGRATION: migrate_paint_tape_settlements.sql
+-- ============================================================
+
+create table if not exists public.paint_tape_settlements (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by text not null default 'nieznany',
+  order_number text,
+  detail_name text not null,
+  item_name text not null,
+  item_index_code text,
+  unit text not null default 'kg',
+  start_qty numeric not null default 0 check (start_qty >= 0),
+  warehouse_issued_qty numeric not null default 0 check (warehouse_issued_qty >= 0),
+  end_qty numeric check (end_qty is null or end_qty >= 0),
+  produced_qty numeric check (produced_qty is null or produced_qty >= 0),
+  production_completed_at timestamptz,
+  status text not null default 'OPEN' check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE'))
+);
+
+create index if not exists paint_tape_settlements_status_idx
+  on public.paint_tape_settlements (status, created_at desc);
+
+create index if not exists paint_tape_settlements_order_idx
+  on public.paint_tape_settlements (lower(order_number));
+
+create index if not exists paint_tape_settlements_item_idx
+  on public.paint_tape_settlements (lower(item_name), lower(coalesce(item_index_code, '')));
+
+alter table if exists public.paint_tape_settlements
+  add column if not exists status text not null default 'OPEN';
+
+alter table if exists public.paint_tape_settlements
+  alter column status set default 'OPEN';
+
+alter table if exists public.paint_tape_settlements
+  drop constraint if exists paint_tape_settlements_status_check;
+
+update public.paint_tape_settlements
+set status = case
+  when end_qty is null then 'OPEN'
+  when produced_qty is null or produced_qty <= 0 then 'DETAILS_REQUIRED'
+  else 'DONE'
+end
+where status is null
+  or status not in ('OPEN', 'DETAILS_REQUIRED', 'DONE')
+  or status is distinct from case
+    when end_qty is null then 'OPEN'
+    when produced_qty is null or produced_qty <= 0 then 'DETAILS_REQUIRED'
+    else 'DONE'
+  end;
+
+alter table if exists public.paint_tape_settlements
+  alter column status set not null;
+
+alter table if exists public.paint_tape_settlements
+  add constraint paint_tape_settlements_status_check
+  check (status in ('OPEN', 'DETAILS_REQUIRED', 'DONE'));
+
+alter table if exists public.paint_tape_settlements
+  alter column order_number drop not null;
+
+alter table if exists public.paint_tape_settlements
+  add column if not exists production_completed_at timestamptz;
+
+alter table if exists public.paint_tape_settlements
+  add column if not exists accounted_at timestamptz,
+  add column if not exists accounted_by text;
+
+alter table if exists public.paint_tape_settlements
+  add column if not exists order_note text;
+
+alter table if exists public.paint_tape_settlements
+  add column if not exists usage_check_note text;
+
+create table if not exists public.paint_tape_technology_usages (
+  index_code text primary key,
+  item_name text,
+  usage_per_piece numeric not null check (usage_per_piece >= 0),
+  unit text not null default 'kg',
+  updated_at timestamptz not null default now(),
+  updated_by text not null default 'nieznany'
+);
+
+create index if not exists paint_tape_technology_usages_name_idx
+  on public.paint_tape_technology_usages (lower(coalesce(item_name, '')));
+
+create table if not exists public.paint_tape_settlement_issues (
+  id uuid primary key default gen_random_uuid(),
+  settlement_id uuid not null references public.paint_tape_settlements(id) on delete cascade,
+  qty numeric not null check (qty <> 0),
+  created_at timestamptz not null default now(),
+  created_by text not null default 'nieznany'
+);
+
+create index if not exists paint_tape_settlement_issues_settlement_idx
+  on public.paint_tape_settlement_issues (settlement_id, created_at);
+
+insert into public.paint_tape_settlement_issues (settlement_id, qty, created_at, created_by)
+select id, warehouse_issued_qty, created_at, created_by
+from public.paint_tape_settlements settlement
+where warehouse_issued_qty <> 0
+  and not exists (
+    select 1
+    from public.paint_tape_settlement_issues issue
+    where issue.settlement_id = settlement.id
+  );
+
+alter table if exists public.paint_tape_settlements enable row level security;
+alter table if exists public.paint_tape_settlement_issues enable row level security;
+alter table if exists public.paint_tape_technology_usages enable row level security;
+
+notify pgrst, 'reload schema';
+
+-- ============================================================
+-- CURRENT MIGRATION: migrate_paint_tape_inventory.sql
+-- ============================================================
+
+create table if not exists public.paint_tape_inventory_catalog (
+  id uuid primary key default gen_random_uuid(),
+  item_index text not null unique,
+  item_code text,
+  name text not null,
+  category text not null default 'INNE',
+  unit text not null default 'szt.',
+  sort_order integer not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  created_by text not null default 'system'
+);
+
+create index if not exists paint_tape_inventory_catalog_active_order_idx
+  on public.paint_tape_inventory_catalog (is_active, sort_order, name);
+
+create table if not exists public.paint_tape_inventory_sessions (
+  id uuid primary key default gen_random_uuid(),
+  inventory_date date not null unique,
+  status text not null default 'OPEN' check (status in ('OPEN', 'CLOSED')),
+  expected_count integer not null default 0,
+  checked_count integer not null default 0,
+  created_at timestamptz not null default now(),
+  created_by text not null default 'nieznany',
+  completed_at timestamptz,
+  completed_by text
+);
+
+create index if not exists paint_tape_inventory_sessions_date_idx
+  on public.paint_tape_inventory_sessions (inventory_date desc);
+
+create table if not exists public.paint_tape_inventory_entries (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references public.paint_tape_inventory_sessions(id) on delete cascade,
+  catalog_item_id uuid not null references public.paint_tape_inventory_catalog(id) on delete restrict,
+  qty numeric not null check (qty >= 0),
+  location text,
+  note text,
+  checked_at timestamptz not null default now(),
+  checked_by text not null default 'nieznany'
+);
+
+alter table if exists public.paint_tape_inventory_entries
+  add column if not exists location text;
+
+alter table if exists public.paint_tape_inventory_entries
+  drop constraint if exists paint_tape_inventory_entries_session_id_catalog_item_id_key;
+
+create index if not exists paint_tape_inventory_entries_session_idx
+  on public.paint_tape_inventory_entries (session_id, checked_at);
+
+create index if not exists paint_tape_inventory_entries_item_idx
+  on public.paint_tape_inventory_entries (session_id, catalog_item_id, checked_at);
+
+alter table if exists public.paint_tape_inventory_catalog enable row level security;
+alter table if exists public.paint_tape_inventory_sessions enable row level security;
+alter table if exists public.paint_tape_inventory_entries enable row level security;
 
 notify pgrst, 'reload schema';

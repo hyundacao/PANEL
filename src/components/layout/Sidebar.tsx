@@ -83,6 +83,12 @@ const navItemsFarbyTasmy: NavItem[] = [
     href: '/rozliczanie-farb-rozcienczalnikow',
     icon: Droplets,
     tab: 'rozliczanie-farb-tasm'
+  },
+  {
+    label: 'Spis farb i taśm',
+    href: '/spis-farb-tasm',
+    icon: ClipboardCheck,
+    tab: 'rozliczanie-farb-tasm'
   }
 ];
 
@@ -151,6 +157,9 @@ export const Sidebar = () => {
     }
     if (href === '/rozliczanie-farb-rozcienczalnikow') {
       return pathname === '/rozliczanie-farb-rozcienczalnikow' || pathname.startsWith('/rozliczanie-farb-rozcienczalnikow/');
+    }
+    if (href === '/spis-farb-tasm') {
+      return pathname === '/spis-farb-tasm' || pathname.startsWith('/spis-farb-tasm/');
     }
     if (href === '/przesuniecia') {
       return pathname === '/przesuniecia' || pathname.startsWith('/przesuniecia/');

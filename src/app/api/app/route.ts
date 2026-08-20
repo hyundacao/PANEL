@@ -13,6 +13,7 @@ import {
 } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { normalizeOriginalInventoryCatalogIdentityKey } from '@/lib/utils/originalInventoryCatalog';
+import { PAINT_TAPE_INVENTORY_SEED } from '@/lib/data/paintTapeInventorySeed';
 import {
   sendWarehouseTransferDocumentCreatedPush,
   sendWarehouseTransferDocumentIssuedPush,
@@ -50,6 +51,10 @@ import type {
   PaintTapeSettlementIssue,
   PaintTapeSettlement,
   PaintTapeTechnologyUsage,
+  PaintTapeInventoryCatalogItem,
+  PaintTapeInventoryCategory,
+  PaintTapeInventoryEntry,
+  PaintTapeInventorySession,
   PaintTapePermissionKey,
   PaintTapeSettlementStatus,
   PeriodReport,
@@ -546,6 +551,57 @@ const mapPaintTapeTechnologyUsage = (row: any): PaintTapeTechnologyUsage => ({
   updatedBy: String(row.updated_by ?? '').trim() || 'nieznany'
 });
 
+const paintTapeInventoryCategories: PaintTapeInventoryCategory[] = [
+  'FARBY',
+  'FOLIE',
+  'ROZCIENCZALNIKI',
+  'TASMY',
+  'DODATKI'
+];
+
+const normalizePaintTapeInventoryCategory = (value: unknown): PaintTapeInventoryCategory => {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return paintTapeInventoryCategories.includes(normalized as PaintTapeInventoryCategory)
+    ? (normalized as PaintTapeInventoryCategory)
+    : 'DODATKI';
+};
+
+const mapPaintTapeInventoryCatalogItem = (row: any): PaintTapeInventoryCatalogItem => ({
+  id: String(row.id),
+  itemIndex: String(row.item_index ?? '').trim(),
+  itemCode: row.item_code ? String(row.item_code).trim() : null,
+  name: String(row.name ?? '').trim(),
+  category: normalizePaintTapeInventoryCategory(row.category),
+  unit: String(row.unit ?? '').trim() || 'szt.',
+  sortOrder: toNumber(row.sort_order),
+  isActive: row.is_active !== false,
+  createdAt: row.created_at ?? new Date().toISOString(),
+  createdBy: String(row.created_by ?? '').trim() || 'nieznany'
+});
+
+const mapPaintTapeInventorySession = (row: any): PaintTapeInventorySession => ({
+  id: String(row.id),
+  inventoryDate: String(row.inventory_date),
+  status: row.status === 'CLOSED' ? 'CLOSED' : 'OPEN',
+  expectedCount: toNumber(row.expected_count),
+  checkedCount: toNumber(row.checked_count),
+  createdAt: row.created_at ?? new Date().toISOString(),
+  createdBy: String(row.created_by ?? '').trim() || 'nieznany',
+  completedAt: row.completed_at ?? null,
+  completedBy: row.completed_by ? String(row.completed_by).trim() : null
+});
+
+const mapPaintTapeInventoryEntry = (row: any): PaintTapeInventoryEntry => ({
+  id: String(row.id),
+  sessionId: String(row.session_id),
+  catalogItemId: String(row.catalog_item_id),
+  qty: toNumber(row.qty),
+  location: row.location ? String(row.location) : null,
+  note: row.note ? String(row.note) : null,
+  checkedAt: row.checked_at ?? new Date().toISOString(),
+  checkedBy: String(row.checked_by ?? '').trim() || 'nieznany'
+});
+
 const mapPaintTapeSettlement = (
   row: any,
   issueRows: any[] = []
@@ -1003,6 +1059,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'getOriginalInventoryGrindTasks':
     case 'getPaintTapeSettlements':
     case 'getPaintTapeTechnologyUsages':
+    case 'getPaintTapeInventory':
     case 'getProductionDetailSuggestions':
       requireOriginalInventoryOrPaintTapeReadAccess(user, [
         'spis-oryginalow',
@@ -1035,6 +1092,11 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'addPaintTapeSettlementIssue':
     case 'removePaintTapeSettlement':
     case 'upsertPaintTapeTechnologyUsages':
+    case 'savePaintTapeInventoryEntry':
+    case 'removePaintTapeInventoryEntry':
+    case 'addPaintTapeInventoryCatalogItem':
+    case 'closePaintTapeInventorySession':
+    case 'reopenPaintTapeInventorySession':
       requirePaintTapeWriteAccess('open');
       return;
     case 'addOriginalInventoryCatalog':
@@ -1198,6 +1260,11 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'addPaintTapeSettlementIssue',
   'removePaintTapeSettlement',
   'upsertPaintTapeTechnologyUsages',
+  'savePaintTapeInventoryEntry',
+  'removePaintTapeInventoryEntry',
+  'addPaintTapeInventoryCatalogItem',
+  'closePaintTapeInventorySession',
+  'reopenPaintTapeInventorySession',
   'addSparePart',
   'updateSparePart',
   'removeSparePart',
@@ -1228,6 +1295,19 @@ const RAPORT_ZMIANOWY_AUDIT_ACTIONS = new Set<string>([
   'addRaportZmianowyEntry',
   'updateRaportZmianowyEntry',
   'removeRaportZmianowyEntry'
+]);
+
+const PAINT_TAPE_AUDIT_ACTIONS = new Set<string>([
+  'createPaintTapeSettlement',
+  'updatePaintTapeSettlement',
+  'addPaintTapeSettlementIssue',
+  'removePaintTapeSettlement',
+  'upsertPaintTapeTechnologyUsages',
+  'savePaintTapeInventoryEntry',
+  'removePaintTapeInventoryEntry',
+  'addPaintTapeInventoryCatalogItem',
+  'closePaintTapeInventorySession',
+  'reopenPaintTapeInventorySession'
 ]);
 
 const ERP_AUDIT_ACTIONS = new Set<string>([
@@ -1306,6 +1386,11 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   addPaintTapeSettlementIssue: 'Rozliczanie farb i rozcienczalnikow: ruch pobrania z magazynu',
   removePaintTapeSettlement: 'Rozliczanie farb i rozcienczalnikow: usuniecie zlecenia',
   upsertPaintTapeTechnologyUsages: 'Rozliczanie farb i rozcienczalnikow: import norm technologicznych',
+  savePaintTapeInventoryEntry: 'Spis farb i tasm: zapis pozycji',
+  removePaintTapeInventoryEntry: 'Spis farb i tasm: usuniecie pomiaru',
+  addPaintTapeInventoryCatalogItem: 'Spis farb i tasm: nowa kartoteka',
+  closePaintTapeInventorySession: 'Spis farb i tasm: zamkniecie spisu',
+  reopenPaintTapeInventorySession: 'Spis farb i tasm: ponowne otwarcie spisu',
   addSparePart: 'Czesci: dodanie pozycji',
   updateSparePart: 'Czesci: aktualizacja pozycji',
   removeSparePart: 'Czesci: usuniecie pozycji',
@@ -1343,6 +1428,7 @@ const getAuditWarehouse = (action: string, payload: any): WarehouseKey => {
   }
   if (CZESCI_AUDIT_ACTIONS.has(action)) return 'CZESCI';
   if (RAPORT_ZMIANOWY_AUDIT_ACTIONS.has(action)) return 'RAPORT_ZMIANOWY';
+  if (PAINT_TAPE_AUDIT_ACTIONS.has(action)) return 'FARBY_TASMY';
   if (ERP_AUDIT_ACTIONS.has(action)) return 'PRZESUNIECIA_ERP';
   return 'PRZEMIALY';
 };
@@ -2156,6 +2242,75 @@ const isMissingPaintTapeTechnologyUsageTableError = (error: unknown) => {
   const text =
     error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error ?? '');
   return text.includes('paint_tape_technology_usages') || text.includes('42P01');
+};
+
+const isMissingPaintTapeInventoryTableError = (error: unknown) => {
+  const text =
+    error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error) : String(error ?? '');
+  return (
+    text.includes('paint_tape_inventory_catalog') ||
+    text.includes('paint_tape_inventory_sessions') ||
+    text.includes('paint_tape_inventory_entries') ||
+    text.includes('42P01') ||
+    text.includes('PGRST205')
+  );
+};
+
+const ensurePaintTapeInventorySeeded = async () => {
+  const { data, error } = await supabaseAdmin
+    .from('paint_tape_inventory_catalog')
+    .select('item_index');
+  if (error) {
+    if (isMissingPaintTapeInventoryTableError(error)) {
+      throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY');
+    }
+    throw error;
+  }
+
+  const existing = new Set((data ?? []).map((row: any) => String(row.item_index ?? '').toLowerCase()));
+  const missing = PAINT_TAPE_INVENTORY_SEED.filter(
+    (item) => !existing.has(item.itemIndex.toLowerCase())
+  ).map((item) => ({
+    item_index: item.itemIndex,
+    item_code: item.itemCode || null,
+    name: item.name,
+    category: item.category,
+    unit: item.unit,
+    sort_order: item.sortOrder,
+    is_active: true,
+    created_by: 'import: grafika lista.xlsx'
+  }));
+
+  if (missing.length === 0) return;
+  const { error: insertError } = await supabaseAdmin
+    .from('paint_tape_inventory_catalog')
+    .upsert(missing, { onConflict: 'item_index', ignoreDuplicates: true });
+  if (insertError) throw insertError;
+};
+
+const refreshPaintTapeInventorySessionCount = async (
+  sessionId: string,
+  expectedCount?: number
+) => {
+  const { data: entryRows, error: entryError } = await supabaseAdmin
+    .from('paint_tape_inventory_entries')
+    .select('catalog_item_id')
+    .eq('session_id', sessionId);
+  if (entryError) throw entryError;
+  const checkedCount = new Set(
+    (entryRows ?? []).map((row: any) => String(row.catalog_item_id ?? '')).filter(Boolean)
+  ).size;
+  const updates: Record<string, number> = { checked_count: checkedCount };
+  if (expectedCount !== undefined) updates.expected_count = expectedCount;
+  const { data, error } = await supabaseAdmin
+    .from('paint_tape_inventory_sessions')
+    .update(updates)
+    .eq('id', sessionId)
+    .select('*')
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('NOT_FOUND');
+  return data;
 };
 
 const isMissingPaintTapeSettlementAccountingColumnsError = (error: unknown) => {
@@ -6564,6 +6719,247 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         throw error;
       }
       return { imported: entries.length };
+    }
+    case 'getPaintTapeInventory': {
+      const dateKey = String(payload?.dateKey ?? '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) throw new Error('DATE_REQUIRED');
+      await ensurePaintTapeInventorySeeded();
+
+      const [catalogResult, sessionsResult, sessionResult] = await Promise.all([
+        supabaseAdmin
+          .from('paint_tape_inventory_catalog')
+          .select('*')
+          .eq('is_active', true)
+          .order('sort_order', { ascending: true })
+          .order('name', { ascending: true }),
+        supabaseAdmin
+          .from('paint_tape_inventory_sessions')
+          .select('*')
+          .order('inventory_date', { ascending: false })
+          .limit(120),
+        supabaseAdmin
+          .from('paint_tape_inventory_sessions')
+          .select('*')
+          .eq('inventory_date', dateKey)
+          .maybeSingle()
+      ]);
+
+      const firstError = catalogResult.error ?? sessionsResult.error ?? sessionResult.error;
+      if (firstError) {
+        if (isMissingPaintTapeInventoryTableError(firstError)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY');
+        }
+        throw firstError;
+      }
+
+      const sessionRow = sessionResult.data;
+      let entryRows: any[] = [];
+      if (sessionRow?.id) {
+        const { data, error } = await supabaseAdmin
+          .from('paint_tape_inventory_entries')
+          .select('*')
+          .eq('session_id', sessionRow.id)
+          .order('checked_at', { ascending: true });
+        if (error) {
+          if (isMissingPaintTapeInventoryTableError(error)) {
+            throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY');
+          }
+          throw error;
+        }
+        entryRows = data ?? [];
+      }
+
+      return {
+        catalog: (catalogResult.data ?? []).map(mapPaintTapeInventoryCatalogItem),
+        sessions: (sessionsResult.data ?? []).map(mapPaintTapeInventorySession),
+        session: sessionRow ? mapPaintTapeInventorySession(sessionRow) : null,
+        entries: entryRows.map(mapPaintTapeInventoryEntry)
+      };
+    }
+    case 'savePaintTapeInventoryEntry': {
+      const dateKey = String(payload?.dateKey ?? '').trim();
+      const catalogItemId = String(payload?.catalogItemId ?? '').trim();
+      const qty = Number(payload?.qty);
+      const location = String(payload?.location ?? '').trim();
+      const note = String(payload?.note ?? '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) throw new Error('DATE_REQUIRED');
+      if (!catalogItemId) throw new Error('NOT_FOUND');
+      if (!Number.isFinite(qty) || qty < 0) throw new Error('QTY_REQUIRED');
+      if (location.length > 300) throw new Error('LOCATION_TOO_LONG');
+      if (note.length > 1000) throw new Error('NOTE_TOO_LONG');
+      await ensurePaintTapeInventorySeeded();
+
+      const { data: catalogItem, error: catalogError } = await supabaseAdmin
+        .from('paint_tape_inventory_catalog')
+        .select('id')
+        .eq('id', catalogItemId)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (catalogError) throw catalogError;
+      if (!catalogItem) throw new Error('NOT_FOUND');
+
+      const { count: catalogCount, error: countError } = await supabaseAdmin
+        .from('paint_tape_inventory_catalog')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_active', true);
+      if (countError) throw countError;
+
+      const { data: initialSessionRow, error: sessionError } = await supabaseAdmin
+        .from('paint_tape_inventory_sessions')
+        .select('*')
+        .eq('inventory_date', dateKey)
+        .maybeSingle();
+      if (sessionError) throw sessionError;
+      let sessionRow = initialSessionRow;
+      if (!sessionRow) {
+        const created = await supabaseAdmin
+          .from('paint_tape_inventory_sessions')
+          .insert({
+            inventory_date: dateKey,
+            expected_count: catalogCount ?? 0,
+            checked_count: 0,
+            created_by: getActorName(currentUser)
+          })
+          .select('*')
+          .maybeSingle();
+        if (created.error) {
+          if (String((created.error as any).code ?? '') === '23505') {
+            const retry = await supabaseAdmin
+              .from('paint_tape_inventory_sessions')
+              .select('*')
+              .eq('inventory_date', dateKey)
+              .maybeSingle();
+            if (retry.error) throw retry.error;
+            sessionRow = retry.data;
+          } else {
+            throw created.error;
+          }
+        } else {
+          sessionRow = created.data;
+        }
+      }
+      if (!sessionRow) throw new Error('NOT_FOUND');
+      if (sessionRow.status === 'CLOSED') throw new Error('INVENTORY_SESSION_CLOSED');
+
+      const now = new Date().toISOString();
+      const { data: entryRow, error: entryError } = await supabaseAdmin
+        .from('paint_tape_inventory_entries')
+        .insert({
+          session_id: sessionRow.id,
+          catalog_item_id: catalogItemId,
+          qty,
+          location: location || null,
+          note: note || null,
+          checked_at: now,
+          checked_by: getActorName(currentUser)
+        })
+        .select('*')
+        .maybeSingle();
+      if (entryError) throw entryError;
+      if (!entryRow) throw new Error('NOT_FOUND');
+
+      const updatedSession = await refreshPaintTapeInventorySessionCount(
+        String(sessionRow.id),
+        catalogCount ?? sessionRow.expected_count ?? 0
+      );
+      return {
+        entry: mapPaintTapeInventoryEntry(entryRow),
+        session: mapPaintTapeInventorySession(updatedSession)
+      };
+    }
+    case 'removePaintTapeInventoryEntry': {
+      const entryId = String(payload?.entryId ?? '').trim();
+      if (!entryId) throw new Error('NOT_FOUND');
+      const { data: entryRow, error: entryError } = await supabaseAdmin
+        .from('paint_tape_inventory_entries')
+        .select('id, session_id')
+        .eq('id', entryId)
+        .maybeSingle();
+      if (entryError) throw entryError;
+      if (!entryRow) throw new Error('NOT_FOUND');
+
+      const { data: sessionRow, error: sessionError } = await supabaseAdmin
+        .from('paint_tape_inventory_sessions')
+        .select('*')
+        .eq('id', entryRow.session_id)
+        .maybeSingle();
+      if (sessionError) throw sessionError;
+      if (!sessionRow) throw new Error('NOT_FOUND');
+      if (sessionRow.status === 'CLOSED') throw new Error('INVENTORY_SESSION_CLOSED');
+
+      const { error: deleteError } = await supabaseAdmin
+        .from('paint_tape_inventory_entries')
+        .delete()
+        .eq('id', entryId);
+      if (deleteError) throw deleteError;
+      const updatedSession = await refreshPaintTapeInventorySessionCount(String(sessionRow.id));
+      return { session: mapPaintTapeInventorySession(updatedSession) };
+    }
+    case 'addPaintTapeInventoryCatalogItem': {
+      const itemIndex = String(payload?.itemIndex ?? '').trim();
+      const itemCode = String(payload?.itemCode ?? '').trim();
+      const name = String(payload?.name ?? '').trim();
+      const category = normalizePaintTapeInventoryCategory(payload?.category);
+      const unit = String(payload?.unit ?? '').trim() || 'szt.';
+      if (!itemIndex || !name) throw new Error('ITEM_REQUIRED');
+      if (itemIndex.length > 120 || itemCode.length > 120 || name.length > 500 || unit.length > 30) {
+        throw new Error('VALUE_TOO_LONG');
+      }
+      await ensurePaintTapeInventorySeeded();
+
+      const { data: lastRow, error: lastError } = await supabaseAdmin
+        .from('paint_tape_inventory_catalog')
+        .select('sort_order')
+        .order('sort_order', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (lastError) throw lastError;
+      const { data, error } = await supabaseAdmin
+        .from('paint_tape_inventory_catalog')
+        .insert({
+          item_index: itemIndex,
+          item_code: itemCode || null,
+          name,
+          category,
+          unit,
+          sort_order: toNumber(lastRow?.sort_order) + 1,
+          created_by: getActorName(currentUser)
+        })
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (String((error as any).code ?? '') === '23505') throw new Error('ITEM_INDEX_EXISTS');
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      return mapPaintTapeInventoryCatalogItem(data);
+    }
+    case 'closePaintTapeInventorySession':
+    case 'reopenPaintTapeInventorySession': {
+      const dateKey = String(payload?.dateKey ?? '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) throw new Error('DATE_REQUIRED');
+      const closing = action === 'closePaintTapeInventorySession';
+      const updates = closing
+        ? {
+            status: 'CLOSED',
+            completed_at: new Date().toISOString(),
+            completed_by: getActorName(currentUser)
+          }
+        : { status: 'OPEN', completed_at: null, completed_by: null };
+      const { data, error } = await supabaseAdmin
+        .from('paint_tape_inventory_sessions')
+        .update(updates)
+        .eq('inventory_date', dateKey)
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (isMissingPaintTapeInventoryTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY');
+        }
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      return mapPaintTapeInventorySession(data);
     }
     case 'getPaintTapeSettlements': {
       const { data, error } = await supabaseAdmin

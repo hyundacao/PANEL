@@ -1143,6 +1143,51 @@ export default function OriginalInventoryPage() {
     if (!spisDate) return entriesWithCurrentSiloMaterial;
     return entriesWithCurrentSiloMaterial.filter((entry) => getEntryDateKey(entry.at) === spisDate);
   }, [entriesWithCurrentSiloMaterial, spisDate]);
+  const inventoryExportRows = useMemo(() => {
+    const rows = new Map<
+      string,
+      {
+        materialName: string;
+        locationName: string;
+        locationType: 'Silos' | 'Hala / miejsce';
+        qty: number;
+        unit: string;
+      }
+    >();
+
+    entriesForDate.forEach((entry) => {
+      const isSilo = entry.sourceType === 'SILO';
+      const locationName =
+        entry.location?.trim() ||
+        warehouseNameMap.get(entry.warehouseId)?.trim() ||
+        entry.warehouseId?.trim() ||
+        'Nieznana lokalizacja';
+      const unit = entry.unit.trim() || 'kg';
+      const key = [
+        normalizeCatalogNameKey(entry.name),
+        normalizeCatalogNameKey(locationName),
+        unit.toLowerCase()
+      ].join('|');
+      const current = rows.get(key);
+      if (current) {
+        current.qty += entry.qty;
+        return;
+      }
+      rows.set(key, {
+        materialName: entry.name,
+        locationName,
+        locationType: isSilo ? 'Silos' : 'Hala / miejsce',
+        qty: entry.qty,
+        unit
+      });
+    });
+
+    return [...rows.values()].sort((left, right) => {
+      const materialCompare = exportCatalogCollator.compare(left.materialName, right.materialName);
+      if (materialCompare !== 0) return materialCompare;
+      return exportCatalogCollator.compare(left.locationName, right.locationName);
+    });
+  }, [entriesForDate, warehouseNameMap]);
 
   const existingByName = useMemo(() => {
     const map = new Map<string, { name: string; unit: string; total: number }>();
@@ -2156,6 +2201,59 @@ export default function OriginalInventoryPage() {
       toast({ title: 'Nie udalo sie wyeksportowac raportu XLSX.', tone: 'error' });
     }
   };
+  const handleExportInventoryByLocation = async () => {
+    if (!spisDate || inventoryExportRows.length === 0) return;
+    try {
+      const ExcelJSModule = await import('exceljs');
+      const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'APKA DLA KAMILA';
+      workbook.created = new Date();
+      const worksheet = workbook.addWorksheet('Spis wg lokalizacji', {
+        views: [{ state: 'frozen', ySplit: 1 }]
+      });
+      worksheet.columns = [
+        { header: 'Data spisu', key: 'date', width: 14 },
+        { header: 'Tworzywo', key: 'material', width: 48 },
+        { header: 'Lokalizacja', key: 'location', width: 30 },
+        { header: 'Typ lokalizacji', key: 'locationType', width: 18 },
+        { header: 'Ilość', key: 'qty', width: 14 },
+        { header: 'Jednostka', key: 'unit', width: 12 }
+      ];
+      worksheet.autoFilter = 'A1:F1';
+      const headerRow = worksheet.getRow(1);
+      headerRow.height = 24;
+      headerRow.eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB45309' } };
+        cell.alignment = { vertical: 'middle' };
+      });
+      inventoryExportRows.forEach((row) => {
+        const excelRow = worksheet.addRow({
+          date: spisDate,
+          material: row.materialName,
+          location: row.locationName,
+          locationType: row.locationType,
+          qty: Math.round(row.qty * 1000) / 1000,
+          unit: row.unit
+        });
+        excelRow.getCell('qty').numFmt = '0.###';
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `spis-oryginalow-lokalizacje-${spisDate}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ title: 'Nie udalo sie wyeksportowac spisu XLSX.', tone: 'error' });
+    }
+  };
   const materialGroupList = useMemo(() => {
     const list = [...materialGroups.values()].map((group) => {
       const total = group.entries.reduce((sum, entry) => sum + entry.qty, 0);
@@ -2798,7 +2896,22 @@ export default function OriginalInventoryPage() {
           ) : isLoading ? (
             <p className="text-sm text-dim">Wczytywanie...</p>
           ) : (
-            <Card>
+            <Card className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-dim">
+                  Spis dnia {spisDate}
+                </p>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    void handleExportInventoryByLocation();
+                  }}
+                  disabled={inventoryExportRows.length === 0}
+                >
+                  <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
+                  <span>Eksportuj spis do Excel</span>
+                </Button>
+              </div>
               <DataTable
                 columns={['Nazwa', 'Suma', 'ERP rzecz.', 'ERP dysp.', 'Jedn.', 'Hale', 'Kto']}
                 rows={materialGroupList.map((group) => {

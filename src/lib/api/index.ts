@@ -30,6 +30,11 @@ import type {
   OriginalInventoryGrindTask,
   OriginalInventorySiloConfig,
   OriginalInventorySiloEntry,
+  PaintTapeInventoryCatalogItem,
+  PaintTapeInventoryCategory,
+  PaintTapeInventoryData,
+  PaintTapeInventoryEntry,
+  PaintTapeInventorySession,
   PaintTapeSettlement,
   PaintTapeTechnologyUsage,
   PermissionGroup,
@@ -780,6 +785,44 @@ export const removeOriginalInventoryCatalog = async (catalogId: string) =>
 
 export const getPaintTapeSettlements = async (): Promise<PaintTapeSettlement[]> =>
   appRequest('getPaintTapeSettlements');
+
+export const getPaintTapeInventory = async (
+  dateKey: string
+): Promise<PaintTapeInventoryData> => appRequest('getPaintTapeInventory', { dateKey });
+
+export const savePaintTapeInventoryEntry = async (payload: {
+  dateKey: string;
+  catalogItemId: string;
+  qty: number;
+  location?: string;
+  note?: string;
+}): Promise<{
+  entry: PaintTapeInventoryEntry;
+  session: PaintTapeInventorySession;
+}> => appRequest('savePaintTapeInventoryEntry', payload);
+
+export const removePaintTapeInventoryEntry = async (entryId: string): Promise<{
+  session: PaintTapeInventorySession;
+}> => appRequest('removePaintTapeInventoryEntry', { entryId });
+
+export const addPaintTapeInventoryCatalogItem = async (payload: {
+  itemIndex: string;
+  itemCode?: string;
+  name: string;
+  category: PaintTapeInventoryCategory;
+  unit: string;
+}): Promise<PaintTapeInventoryCatalogItem> =>
+  appRequest('addPaintTapeInventoryCatalogItem', payload);
+
+export const closePaintTapeInventorySession = async (
+  dateKey: string
+): Promise<PaintTapeInventorySession> =>
+  appRequest('closePaintTapeInventorySession', { dateKey });
+
+export const reopenPaintTapeInventorySession = async (
+  dateKey: string
+): Promise<PaintTapeInventorySession> =>
+  appRequest('reopenPaintTapeInventorySession', { dateKey });
 
 export const getPaintTapeTechnologyUsages = async (): Promise<PaintTapeTechnologyUsage[]> =>
   appRequest('getPaintTapeTechnologyUsages');

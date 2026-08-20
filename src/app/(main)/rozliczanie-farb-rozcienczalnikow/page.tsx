@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import { Fragment, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, CircleHelp, FileSpreadsheet, Minus, Plus, RotateCcw, Save, Trash2, Upload, X } from 'lucide-react';
 import {
   addPaintTapeSettlementIssue,
@@ -104,6 +104,39 @@ const getLocalDateTimeInputValue = (date = new Date()) => {
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
   return `${year}-${month}-${day}T${hours}:${minutes}`;
+};
+
+const getWarsawDateValue = (value: string | null | undefined) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Warsaw',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+};
+
+const formatSnapshotDate = (value: string) => {
+  const [year, month, day] = value.split('-');
+  return year && month && day ? `${day}.${month}.${year}` : value;
+};
+
+const loadErpSnapshot = async (date: string) => {
+  try {
+    const snapshot = await getOriginalInventoryErpSnapshot(date);
+    return Array.isArray(snapshot) ? snapshot : [];
+  } catch (error) {
+    const code = error instanceof Error ? error.message : '';
+    if (code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS') {
+      return [] as OriginalInventoryErpSnapshotEntry[];
+    }
+    throw error;
+  }
 };
 
 const toIsoFromDateTimeInput = (value: string) => {
@@ -553,18 +586,7 @@ export default function PaintTapeSettlementsPage() {
 
   const { data: erpSnapshot = [], error: erpSnapshotError } = useQuery({
     queryKey: ['spis-oryginalow-erp-snapshot', snapshotDate],
-    queryFn: async () => {
-      try {
-        const snapshot = await getOriginalInventoryErpSnapshot(snapshotDate);
-        return Array.isArray(snapshot) ? snapshot : [];
-      } catch (error) {
-        const code = error instanceof Error ? error.message : '';
-        if (code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS') {
-          return [] as OriginalInventoryErpSnapshotEntry[];
-        }
-        throw error;
-      }
-    },
+    queryFn: () => loadErpSnapshot(snapshotDate),
     enabled: Boolean(snapshotDate),
     retry: false
   });
@@ -613,11 +635,6 @@ export default function PaintTapeSettlementsPage() {
   };
 
   const snapshotMap = useMemo(() => buildSnapshotMap(erpSnapshot), [erpSnapshot]);
-
-  const getErpForSettlement = (settlement: PaintTapeSettlement) =>
-    snapshotMap.get(normalizeKey(settlement.itemIndexCode)) ??
-    snapshotMap.get(normalizeKey(settlement.itemName)) ??
-    null;
 
   const getFormErpSnapshot = (itemName: string) => {
     const selectedItem = getSelectedItem(itemName);
@@ -789,6 +806,50 @@ export default function PaintTapeSettlementsPage() {
       items: [...group.items].sort(compareSettlementItemsByName)
     }));
   }, [filteredSettlements]);
+
+  const completedSnapshotDates = useMemo(() => [...new Set(
+    filteredSettlements
+      .map((settlement) => getWarsawDateValue(settlement.productionCompletedAt))
+      .filter(Boolean)
+  )], [filteredSettlements]);
+
+  const completedSnapshotQueries = useQueries({
+    queries: completedSnapshotDates.map((date) => ({
+      queryKey: ['spis-oryginalow-erp-snapshot', date],
+      queryFn: () => loadErpSnapshot(date),
+      retry: false
+    }))
+  });
+
+  const completedSnapshotStates = useMemo(() => {
+    const states = new Map<string, {
+      map: Map<string, OriginalInventoryErpSnapshotEntry>;
+      loading: boolean;
+    }>();
+    completedSnapshotDates.forEach((date, index) => {
+      const queryResult = completedSnapshotQueries[index];
+      states.set(date, {
+        map: buildSnapshotMap(queryResult?.data ?? []),
+        loading: Boolean(queryResult?.isPending)
+      });
+    });
+    return states;
+  }, [completedSnapshotDates, completedSnapshotQueries]);
+
+  const getErpSnapshotForSettlement = (settlement: PaintTapeSettlement) => {
+    const completedDate = getWarsawDateValue(settlement.productionCompletedAt);
+    const state = completedDate ? completedSnapshotStates.get(completedDate) : null;
+    const map = completedDate ? state?.map : snapshotMap;
+    const entry = map?.get(normalizeKey(settlement.itemIndexCode)) ??
+      map?.get(normalizeKey(settlement.itemName)) ??
+      null;
+    return {
+      date: completedDate || snapshotDate,
+      entry,
+      historical: Boolean(completedDate),
+      loading: completedDate ? (state?.loading ?? true) : false
+    };
+  };
 
   const getDraft = (settlement: PaintTapeSettlement): RowDraft => {
     const draft = drafts[settlement.id];
@@ -1662,11 +1723,14 @@ export default function PaintTapeSettlementsPage() {
 
   const renderMobileSettlementItem = (settlement: PaintTapeSettlement, group: SettlementGroup) => {
     const draft = getDraft(settlement);
-    const erp = getErpForSettlement(settlement);
+    const erpSnapshotInfo = getErpSnapshotForSettlement(settlement);
+    const erp = erpSnapshotInfo.entry;
     const unit = settlement.unit || 'kg';
     const isDone = settlement.status === 'DONE';
     const showPerPiece = activeFilter !== 'OPEN';
-    const erpText = erp
+    const erpText = erpSnapshotInfo.loading
+      ? 'wczytywanie...'
+      : erp
       ? `${formatQty(erp.realQty, erp.unit)} rzecz. / ${formatQty(erp.availableQty, erp.unit)} dysp.`
       : 'brak';
 
@@ -1693,7 +1757,7 @@ export default function PaintTapeSettlementsPage() {
         </div>
 
         <p className="mt-2 text-xs font-semibold leading-snug text-dim">
-          ERP {snapshotDate}: {erpText}
+          {erpSnapshotInfo.historical ? 'ERP na zakończenie' : 'ERP'} {formatSnapshotDate(erpSnapshotInfo.date)}: {erpText}
         </p>
 
         {activeFilter === 'OPEN' && (
@@ -1982,7 +2046,8 @@ export default function PaintTapeSettlementsPage() {
             <tbody>
               {group.items.map((settlement) => {
                 const draft = getDraft(settlement);
-                const erp = getErpForSettlement(settlement);
+                const erpSnapshotInfo = getErpSnapshotForSettlement(settlement);
+                const erp = erpSnapshotInfo.entry;
                 const unit = settlement.unit || 'kg';
                 const technologyUsage = getTechnologyUsage(settlement, technologyUsageByIndex);
                 const isDone = settlement.status === 'DONE';
@@ -2008,8 +2073,13 @@ export default function PaintTapeSettlementsPage() {
                           <p className="mt-1 text-xs text-[var(--value-purple)]">{settlement.itemIndexCode}</p>
                         )}
                         <p className="mt-1 text-xs text-dim">
-                          ERP {snapshotDate}:{' '}
-                          {erp ? `${formatQty(erp.realQty, erp.unit)} rzecz. / ${formatQty(erp.availableQty, erp.unit)} dysp.` : 'brak'}
+                          {erpSnapshotInfo.historical ? 'ERP na zakończenie' : 'ERP'}{' '}
+                          {formatSnapshotDate(erpSnapshotInfo.date)}:{' '}
+                          {erpSnapshotInfo.loading
+                            ? 'wczytywanie...'
+                            : erp
+                              ? `${formatQty(erp.realQty, erp.unit)} rzecz. / ${formatQty(erp.availableQty, erp.unit)} dysp.`
+                              : 'brak'}
                         </p>
                       </div>
                     </td>
@@ -2636,7 +2706,7 @@ export default function PaintTapeSettlementsPage() {
               />
             </div>
             <div>
-              <label className="text-xs uppercase tracking-wide text-dim">Dzień stanu ERP</label>
+              <label className="text-xs uppercase tracking-wide text-dim">ERP dla zleceń bez zakończenia</label>
               <Input
                 type="date"
                 value={snapshotDate}

@@ -289,6 +289,56 @@ export type PaintTapeTechnologyUsage = {
   updatedBy: string;
 };
 
+export type PaintTapeInventoryCategory =
+  | 'FARBY'
+  | 'FOLIE'
+  | 'ROZCIENCZALNIKI'
+  | 'TASMY'
+  | 'DODATKI';
+
+export type PaintTapeInventoryCatalogItem = {
+  id: string;
+  itemIndex: string;
+  itemCode?: string | null;
+  name: string;
+  category: PaintTapeInventoryCategory;
+  unit: string;
+  sortOrder: number;
+  isActive: boolean;
+  createdAt: string;
+  createdBy: string;
+};
+
+export type PaintTapeInventorySession = {
+  id: string;
+  inventoryDate: string;
+  status: 'OPEN' | 'CLOSED';
+  expectedCount: number;
+  checkedCount: number;
+  createdAt: string;
+  createdBy: string;
+  completedAt?: string | null;
+  completedBy?: string | null;
+};
+
+export type PaintTapeInventoryEntry = {
+  id: string;
+  sessionId: string;
+  catalogItemId: string;
+  qty: number;
+  location?: string | null;
+  note?: string | null;
+  checkedAt: string;
+  checkedBy: string;
+};
+
+export type PaintTapeInventoryData = {
+  catalog: PaintTapeInventoryCatalogItem[];
+  sessions: PaintTapeInventorySession[];
+  session: PaintTapeInventorySession | null;
+  entries: PaintTapeInventoryEntry[];
+};
+
 export type PaintTapeSettlement = {
   id: string;
   createdAt: string;
