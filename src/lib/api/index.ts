@@ -814,6 +814,25 @@ export const addPaintTapeInventoryCatalogItem = async (payload: {
 }): Promise<PaintTapeInventoryCatalogItem> =>
   appRequest('addPaintTapeInventoryCatalogItem', payload);
 
+export const getPaintTapeInventoryCatalogAdmin = async (): Promise<
+  PaintTapeInventoryCatalogItem[]
+> => appRequest('getPaintTapeInventoryCatalogAdmin');
+
+export const getPaintTapeInventorySessionsAdmin = async (): Promise<
+  PaintTapeInventorySession[]
+> => appRequest('getPaintTapeInventorySessionsAdmin');
+
+export const setPaintTapeInventoryCatalogItemActive = async (payload: {
+  id: string;
+  isActive: boolean;
+}): Promise<PaintTapeInventoryCatalogItem> =>
+  appRequest('setPaintTapeInventoryCatalogItemActive', payload);
+
+export const removePaintTapeInventorySession = async (
+  sessionId: string
+): Promise<{ id: string; inventoryDate: string }> =>
+  appRequest('removePaintTapeInventorySession', { sessionId });
+
 export const closePaintTapeInventorySession = async (
   dateKey: string
 ): Promise<PaintTapeInventorySession> =>

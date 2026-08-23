@@ -2,14 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { Bell, Cog, KeyRound, LogOut, Menu, X } from 'lucide-react';
+import { ArrowLeftRight, Bell, Cog, KeyRound, LogOut, Menu, X } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useUiStore } from '@/lib/store/ui';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { canSeeTab } from '@/lib/auth/access';
+import { canSeeTab, getAccessibleWarehouses } from '@/lib/auth/access';
 import { changeOwnPassword, logoutUser } from '@/lib/api';
 import { useToastStore } from '@/components/ui/Toast';
+import { cn } from '@/lib/utils/cn';
 import {
   disableErpPushNotifications,
   enableErpPushNotifications,
@@ -25,11 +26,13 @@ import {
 export const Topbar = ({
   title,
   breadcrumb,
-  showSidebarToggle = true
+  showSidebarToggle = true,
+  className
 }: {
   title: string;
   breadcrumb?: string;
   showSidebarToggle?: boolean;
+  className?: string;
 }) => {
   const router = useRouter();
   const pathname = usePathname();
@@ -40,6 +43,7 @@ export const Topbar = ({
     user,
     setUser,
     logout,
+    clearActiveWarehouse,
     activeWarehouse,
     erpDocumentNotificationsEnabled,
     setErpDocumentNotificationsEnabled,
@@ -60,6 +64,7 @@ export const Topbar = ({
   const isErpDocumentsPage = pathname.startsWith('/przesuniecia-magazynowe');
   const canManageErpDocumentPush = isErpModule && isErpDocumentsPage && hasErpDocumentPushRole;
   const mustChangePassword = Boolean(user?.mustChangePassword);
+  const canSwitchModule = getAccessibleWarehouses(user).length > 1;
   const [erpNotificationsBusy, setErpNotificationsBusy] = useState(false);
   const [erpPreferencesDialogOpen, setErpPreferencesDialogOpen] = useState(false);
   const [erpPreferencesBusy, setErpPreferencesBusy] = useState(false);
@@ -341,7 +346,12 @@ export const Topbar = ({
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-surface px-3 py-2 backdrop-blur md:gap-6 md:px-6 md:py-4">
+      <header
+        className={cn(
+          'sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-surface px-3 py-2 backdrop-blur md:gap-6 md:px-6 md:py-4',
+          className
+        )}
+      >
       <div className="flex min-w-0 flex-1 items-center gap-2 md:gap-3">
         <Button
           variant="ghost"
@@ -369,8 +379,9 @@ export const Topbar = ({
           <Button
             variant="ghost"
             onClick={handleLogout}
-            className="ml-auto md:hidden"
+            className="ml-auto h-10 min-h-10 w-10 px-0 py-0 md:hidden"
             aria-label="Wyloguj"
+            title="Wyloguj"
           >
             <LogOut className="h-4 w-4" />
           </Button>
@@ -378,6 +389,20 @@ export const Topbar = ({
       </div>
 
       <div className="ml-auto flex items-center justify-end gap-2 md:gap-3">
+        {canSwitchModule && (
+          <Button
+            variant="ghost"
+            className="h-10 min-h-10 w-10 px-0 py-0 md:hidden"
+            aria-label="Zmień moduł"
+            title="Zmień moduł"
+            onClick={() => {
+              clearActiveWarehouse();
+              router.push('/magazyny');
+            }}
+          >
+            <ArrowLeftRight className="h-4 w-4" />
+          </Button>
+        )}
         {user && (
           <>
             <Button

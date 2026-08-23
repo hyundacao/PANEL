@@ -4,12 +4,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { ChevronDown, Copy, Pencil, Plus, Trash2, Upload, Wrench, X } from 'lucide-react';
+import { ChevronDown, Copy, Pencil, Plus, Settings2, Trash2, Upload, Wrench, X } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
+import { SelectField } from '@/components/ui/Select';
 import { Tabs, TabsContent } from '@/components/ui/Tabs';
 import { cn } from '@/lib/utils/cn';
 
@@ -17,6 +18,7 @@ type Team = 'mechanics' | 'process' | 'distribution' | 'graphics' | 'technician'
 type WorkKind = 'zmiana-formy' | 'forma-narzedziownia' | 'rozruch' | 'wznowienie' | 'zmiana-koloru' | 'zmiana-grafiki' | 'regulacja' | 'proby' | 'przeglad-a' | 'anulowane' | 'inne';
 type ReportKind = WorkKind | 'przygotowanie-stanowiska' | 'wznowienie-procesu';
 type PlanGroup = 'standard' | 'emergency' | 'planned';
+type TaskNotes = Partial<Record<Team, string>> & { processAssignee?: string };
 
 type Task = {
   id: string;
@@ -29,7 +31,7 @@ type Task = {
   highlighted: boolean;
   kinds: WorkKind[];
   teams: Team[];
-  notes: Partial<Record<Team, string>>;
+  notes: TaskNotes;
   done: boolean;
   material: string;
   materialType: string;
@@ -41,6 +43,22 @@ type Task = {
 type StoredPlan = {
   session: { file_name?: string | null; plan_sheet?: string | null; updated_at?: string | null } | null;
   tasks: Task[];
+  processEngineers?: string[];
+  processEngineerRoster?: ProcessEngineerRosterEntry[];
+};
+
+type ProcessEngineerRosterEntry = {
+  name: string;
+  shift: '1' | '2';
+  active: boolean;
+};
+
+type ProcessEngineerDraft = {
+  id: string;
+  originalName: string | null;
+  name: string;
+  shift: '1' | '2';
+  active: boolean;
 };
 
 type PlanHistory = {
@@ -66,6 +84,9 @@ const teamOptions: Array<{ id: Team; label: string; color: string }> = [
   { id: 'technician', label: 'Technik uruchomienia', color: '#20c8cc' },
   { id: 'additional', label: 'Informacja dodatkowa', color: '#f2c14a' }
 ];
+
+const defaultProcessEngineers = ['Adam', 'Mirek', 'Zbyszek', 'Paweł', 'Bogdan'];
+const defaultProcessEngineerRoster: ProcessEngineerRosterEntry[] = defaultProcessEngineers.map((name) => ({ name, shift: '1', active: true }));
 
 const workKinds: Array<{ id: WorkKind; label: string }> = [
   { id: 'zmiana-formy', label: 'Zmiana formy' },
@@ -110,6 +131,8 @@ const restartsProcessAfterToolroom = (task: Pick<Task, 'kinds' | 'teams' | 'note
   task.kinds.includes('forma-narzedziownia') && task.teams.includes('process');
 const kindsForTeam = (task: Task, team: Team) => team === 'mechanics'
   ? task.kinds.filter((kind) => kind === 'zmiana-formy' || kind === 'forma-narzedziownia' || kind === 'anulowane')
+  : team === 'process'
+    ? task.kinds.filter((kind) => kind !== 'zmiana-formy')
   : task.kinds;
 const planGroupLabel: Record<PlanGroup, string> = {
   standard: 'Plan bieżący',
@@ -218,9 +241,9 @@ const WorkKindTrendCharts = ({ series }: { series: WorkKindSeries[] }) => <secti
   <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">{series.map((item) => <div className="overflow-hidden rounded-lg border border-border bg-bg" key={item.id}><div className="flex items-center justify-between border-b border-border px-4 py-3"><p className="text-sm font-semibold text-title">{item.label}</p><span className="rounded border border-[rgba(255,122,0,0.55)] bg-[rgba(7,8,12,0.9)] px-2 py-0.5 text-sm font-bold text-[var(--brand)]">{item.total}</span></div><div className="h-36 px-2 py-2"><ResponsiveContainer height="100%" width="100%"><BarChart data={item.data} margin={{ top: 4, right: 2, left: -24, bottom: -4 }}><CartesianGrid stroke="rgba(255,255,255,0.07)" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" stroke="var(--t-dim)" tick={{ fontSize: 10 }} tickLine={false} /><YAxis allowDecimals={false} stroke="var(--t-dim)" tick={{ fontSize: 10 }} tickLine={false} /><Tooltip contentStyle={{ background: '#0b0c10', border: '1px solid rgba(255,122,0,0.45)', borderRadius: 8 }} cursor={{ fill: 'rgba(255,122,0,0.08)' }} /><Bar dataKey="value" fill="var(--brand)" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div></div>)}</div>
 </section>;
 
-const WorkHistoryDashboard = ({ history }: { history: PlanHistory[] }) => <section className="work-history-dashboard space-y-4">
+const WorkHistoryDashboard = ({ history, onDeleteDay }: { history: PlanHistory[]; onDeleteDay: (planDate: string) => void }) => <section className="work-history-dashboard space-y-4">
   <div className="border-b border-border pb-4"><p className="font-semibold text-title">Historia przypisanych prac</p><p className="mt-1 text-sm text-dim">Snapshoty zadań dla zespołów. Nie jest to historia plików Excel.</p></div>
-  {history.length === 0 ? <Card><p className="text-sm text-dim">Brak zapisanych prac. Snapshot pojawi się po pierwszym przypisaniu zadania.</p></Card> : history.map((entry) => <Card className="overflow-hidden p-0" key={entry.plan_date}><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">{new Date(`${entry.plan_date}T12:00:00`).toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}</p><p className="mt-1 text-sm text-dim">{entry.tasks.length} przypisanych prac</p></div><div className="grid gap-px bg-border xl:grid-cols-3">{teamOptions.map((team) => { const queue = entry.tasks.filter((task) => task.teams.includes(team.id)); return <div className="min-h-28 bg-surface p-4" key={team.id}><div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold" style={{ color: team.color }}>{team.label}</p><Badge>{queue.length}</Badge></div>{queue.length === 0 ? <p className="text-xs text-dim">Brak przypisanych prac.</p> : <div className="space-y-2">{queue.map((task, index) => { const labels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((kind) => kind.id === id)?.label).filter(Boolean).join(', '); return <div className="rounded border border-border bg-bg p-2.5" key={`${task.station}-${task.detail}-${index}`}><p className="text-xs font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">{labels || 'Zadanie'}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{task.done && <p className="mt-1 text-xs font-semibold text-emerald-400">Wykonane</p>}</div>; })}</div>}</div>; })}</div></Card>)}</section>;
+  {history.length === 0 ? <Card><p className="text-sm text-dim">Brak zapisanych prac. Snapshot pojawi się po pierwszym przypisaniu zadania.</p></Card> : history.map((entry) => <Card className="overflow-hidden p-0" key={entry.plan_date}><div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4"><div><p className="font-semibold text-title">{new Date(`${entry.plan_date}T12:00:00`).toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}</p><p className="mt-1 text-sm text-dim">{entry.tasks.length} przypisanych prac</p></div><button aria-label={`Usuń dzień ${entry.plan_date} z historii`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-red-500/45 text-red-300 transition hover:bg-red-500/10" onClick={() => onDeleteDay(entry.plan_date)} title="Usuń cały dzień z historii" type="button"><Trash2 className="h-4 w-4" /></button></div><div className="grid gap-px bg-border xl:grid-cols-3">{teamOptions.map((team) => { const queue = entry.tasks.filter((task) => task.teams.includes(team.id)); return <div className="min-h-28 bg-surface p-4" key={team.id}><div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold" style={{ color: team.color }}>{team.label}</p><Badge>{queue.length}</Badge></div>{queue.length === 0 ? <p className="text-xs text-dim">Brak przypisanych prac.</p> : <div className="space-y-2">{queue.map((task, index) => { const labels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((kind) => kind.id === id)?.label).filter(Boolean).join(', '); return <div className="rounded border border-border bg-bg p-2.5" key={`${task.station}-${task.detail}-${index}`}><p className="text-xs font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">{labels || 'Zadanie'}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{task.done && <p className="mt-1 text-xs font-semibold text-emerald-400">Wykonane</p>}</div>; })}</div>}</div>; })}</div></Card>)}</section>;
 
 const hasYellowFill = (cell: XLSX.CellObject | undefined) => {
   const style = cell?.s as { fill?: { fgColor?: { rgb?: string } }; fgColor?: { rgb?: string } } | undefined;
@@ -372,8 +395,17 @@ export default function PrzygotowanieProdukcjiPage() {
   const [showManualTaskForm, setShowManualTaskForm] = useState(false);
   const [manualTaskText, setManualTaskText] = useState('');
   const [manualTaskTeams, setManualTaskTeams] = useState<Team[]>([]);
+  const [processEngineerRoster, setProcessEngineerRoster] = useState<ProcessEngineerRosterEntry[]>(defaultProcessEngineerRoster);
+  const [processEngineerDrafts, setProcessEngineerDrafts] = useState<ProcessEngineerDraft[]>([]);
+  const [editingProcessEngineers, setEditingProcessEngineers] = useState(false);
+  const [savingProcessEngineers, setSavingProcessEngineers] = useState(false);
+  const [processEngineersError, setProcessEngineersError] = useState<string | null>(null);
   const sheetNames = workbook?.SheetNames ?? [];
-  const activeView = searchParams.get('view') === 'material' ? 'material' : searchParams.get('view') === 'work-plan' ? 'work-plan' : searchParams.get('view') === 'history' ? 'history' : searchParams.get('view') === 'report' ? 'report' : 'plan';
+  const processEngineers = useMemo(() => processEngineerRoster
+    .filter((engineer) => engineer.active)
+    .sort((left, right) => left.shift.localeCompare(right.shift))
+    .map((engineer) => engineer.name), [processEngineerRoster]);
+  const activeView = searchParams.get('view') === 'material' ? 'material' : searchParams.get('view') === 'work-plan' ? 'work-plan' : searchParams.get('view') === 'history' ? 'history' : searchParams.get('view') === 'report' ? 'report' : searchParams.get('view') === 'management' ? 'management' : 'plan';
 
   const apiRequest = async <T,>(body?: unknown) => {
     const response = await fetch('/api/przygotowanie-produkcji', body ? {
@@ -393,7 +425,13 @@ export default function PrzygotowanieProdukcjiPage() {
     fetch('/api/przygotowanie-produkcji')
       .then((response) => response.ok ? response.json() as Promise<StoredPlan> : Promise.reject())
       .then((data) => {
-        if (!active || !data.session) return;
+        if (!active) return;
+        const roster = Array.isArray(data.processEngineerRoster)
+          ? data.processEngineerRoster
+          : (data.processEngineers ?? defaultProcessEngineers).map((name) => ({ name, shift: '1' as const, active: true }));
+        setProcessEngineerRoster(roster);
+        setProcessEngineerDrafts(roster.map((engineer, index) => ({ ...engineer, id: `engineer-${index}-${engineer.name}`, originalName: engineer.name })));
+        if (!data.session) return;
         setFileName(data.session.file_name ?? '');
         setSheetName(data.session.plan_sheet ?? '');
         setTasks(data.tasks ?? []);
@@ -605,10 +643,103 @@ export default function PrzygotowanieProdukcjiPage() {
     return { id: kind.id, label: kind.label, total: data.reduce((sum, item) => sum + item.value, 0), data };
   }), [reportDays]);
 
+  const processTasksByEngineer = useMemo(() => {
+    const processTasks = tasks.filter(
+      (task) => !isPanelGroupHeader(task) && task.teams.includes('process')
+    );
+    return new Map(
+      processEngineers.map((engineer) => [
+        engineer,
+        processTasks.filter((task) => task.notes.processAssignee === engineer)
+      ])
+    );
+  }, [processEngineers, tasks]);
+
   const removeTaskFromTeam = (task: Task, team: Team) => {
     const notes = { ...task.notes };
     delete notes[team];
+    if (team === 'process') delete notes.processAssignee;
     updateTask(task.id, { teams: task.teams.filter((item) => item !== team), notes });
+  };
+
+  const assignProcessEngineer = (task: Task, assignee: string) => {
+    const notes = { ...task.notes };
+    if (assignee) notes.processAssignee = assignee;
+    else delete notes.processAssignee;
+    updateTask(task.id, { notes });
+  };
+
+  const beginProcessEngineersEdit = () => {
+    setProcessEngineerDrafts(processEngineerRoster.map((engineer, index) => ({
+      ...engineer,
+      id: `engineer-${index}-${engineer.name}`,
+      originalName: engineer.name
+    })));
+    setProcessEngineersError(null);
+    setEditingProcessEngineers(true);
+  };
+
+  const saveProcessEngineers = async () => {
+    const cleanedDrafts = processEngineerDrafts
+      .map((draft) => ({ ...draft, name: draft.name.trim() }))
+      .filter((draft) => draft.name);
+    const nameKeys = cleanedDrafts.map((draft) => draft.name.toLocaleLowerCase('pl-PL'));
+    if (new Set(nameKeys).size !== nameKeys.length) {
+      setProcessEngineersError('Każda osoba musi mieć inną nazwę.');
+      return;
+    }
+
+    const nextRoster = cleanedDrafts.map(({ name, shift, active }) => ({ name, shift, active }));
+    const nextNames = nextRoster.filter((engineer) => engineer.active).map((engineer) => engineer.name);
+    const renamedByOriginal = new Map(
+      cleanedDrafts
+        .filter((draft): draft is ProcessEngineerDraft & { originalName: string } => Boolean(draft.originalName))
+        .map((draft) => [draft.originalName, draft])
+    );
+    const currentRosterNames = processEngineerRoster.map((engineer) => engineer.name);
+    const unavailableNames = currentRosterNames.filter((name) => {
+      const draft = renamedByOriginal.get(name);
+      return !draft || !draft.active;
+    });
+    const unavailableAssignments = tasks.filter((task) => task.notes.processAssignee && unavailableNames.includes(task.notes.processAssignee)).length;
+    if (unavailableAssignments > 0 && !window.confirm(`Usuwane lub nieobecne osoby mają ${unavailableAssignments} przypisanych zadań. Przenieść je do Nieprzypisane?`)) return;
+
+    let assignmentsChanged = false;
+    const nextTasks = tasks.map((task) => {
+      const currentAssignee = task.notes.processAssignee;
+      if (!currentAssignee || !currentRosterNames.includes(currentAssignee)) return task;
+      const assignedDraft = renamedByOriginal.get(currentAssignee);
+      const nextAssignee = assignedDraft?.active ? assignedDraft.name : undefined;
+      if (nextAssignee === currentAssignee) return task;
+      assignmentsChanged = true;
+      const notes = { ...task.notes };
+      if (nextAssignee) notes.processAssignee = nextAssignee;
+      else delete notes.processAssignee;
+      return { ...task, notes };
+    });
+
+    setSavingProcessEngineers(true);
+    setProcessEngineersError(null);
+    setSaveState('saving');
+    setSaveError(null);
+    try {
+      await apiRequest({ action: 'saveProcessEngineers', processEngineers: nextNames, processEngineerRoster: nextRoster });
+      if (assignmentsChanged) {
+        await apiRequest({ action: 'savePlan', tasks: nextTasks, fileName, sheetName });
+        setTasks(nextTasks);
+      }
+      setProcessEngineerRoster(nextRoster);
+      setProcessEngineerDrafts(cleanedDrafts);
+      setEditingProcessEngineers(false);
+      setSaveState('saved');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się zapisać składu inżynierów.';
+      setProcessEngineersError(message);
+      setSaveError(message);
+      setSaveState('error');
+    } finally {
+      setSavingProcessEngineers(false);
+    }
   };
 
   const clearTaskWork = (task: Task) => {
@@ -620,6 +751,22 @@ export default function PrzygotowanieProdukcjiPage() {
     const nextTasks = tasks.map((task) => ({ ...task, kinds: [], teams: [], notes: {}, done: false }));
     setTasks(nextTasks);
     void savePlan(nextTasks, fileName, sheetName);
+  };
+
+  const deleteHistoryDay = async (planDate: string) => {
+    const displayDate = new Date(`${planDate}T12:00:00`).toLocaleDateString('pl-PL');
+    if (!window.confirm(`Usunąć cały dzień ${displayDate} z historii planów i raportów?`)) return;
+    setSaveState('saving');
+    setSaveError(null);
+    try {
+      await apiRequest({ action: 'deleteHistoryDay', planDate });
+      setHistory((current) => current.filter((entry) => entry.plan_date !== planDate));
+      setSaveState('saved');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się usunąć dnia z historii.';
+      setSaveError(message);
+      setSaveState('error');
+    }
   };
 
   const copyQueueTask = async (task: Task, team: Team) => {
@@ -655,6 +802,28 @@ export default function PrzygotowanieProdukcjiPage() {
     });
     await navigator.clipboard.writeText(rows.join('\r\n'));
     const copyId = `column-${team}`;
+    setCopiedQueueTask(copyId);
+    window.setTimeout(() => setCopiedQueueTask((current) => current === copyId ? null : current), 1800);
+  };
+
+  const copyProcessEngineerQueue = async (engineer: string, queue: Task[]) => {
+    if (!queue.length) return;
+    const rows = queue.map((task) => {
+      const kindLabels = [...new Set(kindsForTeam(task, 'process'))]
+        .map((id) => workKinds.find((item) => item.id === id)?.label)
+        .filter(Boolean)
+        .join(', ');
+      return [
+        `- ${task.station} ${task.detail}`,
+        [kindLabels, task.notes.process].filter(Boolean).join(': '),
+        !isManualTask(task) ? standard5s : ''
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).replace(/\s+/g, ' ').trim())
+        .join(' | ');
+    });
+    await navigator.clipboard.writeText(rows.join('\r\n'));
+    const copyId = `engineer-column-${engineer}`;
     setCopiedQueueTask(copyId);
     window.setTimeout(() => setCopiedQueueTask((current) => current === copyId ? null : current), 1800);
   };
@@ -733,6 +902,22 @@ export default function PrzygotowanieProdukcjiPage() {
         .production-queues .flex.justify-end svg {
           width: 0.8rem !important;
           height: 0.8rem !important;
+        }
+
+        .process-engineer-columns {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        @media (min-width: 640px) {
+          .process-engineer-columns {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (min-width: 1024px) {
+          .process-engineer-columns {
+            grid-template-columns: repeat(var(--process-engineer-count), minmax(0, 1fr));
+          }
         }
 
         @media (max-width: 767px) {
@@ -885,16 +1070,48 @@ export default function PrzygotowanieProdukcjiPage() {
                 return !(task.kinds.length === 1 && task.kinds[0] === 'przeglad-a' && ['mechanics', 'distribution', 'technician'].includes(team.id));
               });
               const columnCopyId = `column-${team.id}`;
-              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><div className="flex items-center gap-2"><button aria-label={`Kopiuj wszystkie zadania: ${team.label}`} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim transition hover:border-[rgba(255,122,0,0.65)] hover:text-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40" disabled={queue.length === 0} onClick={() => void copyTeamQueue(team.id, queue)} title="Kopiuj całą kolumnę" type="button"><Copy className="h-4 w-4" /></button><Badge>{queue.filter((task) => !task.done).length}</Badge></div></div>{copiedQueueTask === columnCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-400">Skopiowano całą kolumnę.</p>}<div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; const showProductionMetrics = !isManualTask(task) && !['mechanics', 'process', 'technician'].includes(team.id); return <div className={cn('rounded-lg border border-border bg-bg', task.kinds.includes('anulowane') && 'border-slate-400/70 bg-slate-400/10')} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', task.done && 'border-[rgba(34,197,94,0.65)]')} onClick={() => void copyQueueTask(task, team.id)} type="button"><p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p>{showProductionMetrics && <p className="mt-1 text-xs text-body">Ilość: {task.quantity || '---'} | Norma: {task.norm || '---'}</p>}<p className="mt-1 text-xs text-body">{kindLabels}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{!isManualTask(task) && teamsWith5s.includes(team.id) && <p className="mt-1 text-xs text-body">{standard5s}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button><div className="flex justify-end gap-1.5 border-t border-border p-2"><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim hover:border-[rgba(255,122,0,0.65)] hover:text-title" onClick={() => setEditingQueueTask(editing ? null : copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-4 w-4" /></button><button aria-label="Usuń zadanie z tego działu" className="flex h-8 w-8 items-center justify-center rounded border border-red-500/45 text-red-300 hover:bg-red-500/10" onClick={() => { removeTaskFromTeam(task, team.id); setEditingQueueTask(null); }} title="Usuń zadanie z tego działu" type="button"><X className="h-4 w-4" /></button></div>{editing && <div className="space-y-3 border-t border-border p-3"><div className="grid grid-cols-2 gap-1.5">{workKinds.map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTask(task.id, { notes: { ...task.notes, [team.id]: event.target.value } })} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); setEditingQueueTask(null); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
+              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><div className="flex items-center gap-2"><button aria-label={`Kopiuj wszystkie zadania: ${team.label}`} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim transition hover:border-[rgba(255,122,0,0.65)] hover:text-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40" disabled={queue.length === 0} onClick={() => void copyTeamQueue(team.id, queue)} title="Kopiuj całą kolumnę" type="button"><Copy className="h-4 w-4" /></button><Badge>{queue.filter((task) => !task.done).length}</Badge></div></div>{copiedQueueTask === columnCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-400">Skopiowano całą kolumnę.</p>}<div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; const showProductionMetrics = !isManualTask(task) && !['mechanics', 'process', 'technician'].includes(team.id); return <div className={cn('rounded-lg border border-border bg-bg', task.kinds.includes('anulowane') && 'border-slate-400/70 bg-slate-400/10')} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', task.done && 'border-[rgba(34,197,94,0.65)]')} onClick={() => void copyQueueTask(task, team.id)} type="button"><p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p>{showProductionMetrics && <p className="mt-1 text-xs text-body">Ilość: {task.quantity || '---'} | Norma: {task.norm || '---'}</p>}<p className="mt-1 text-xs text-body">{kindLabels}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{!isManualTask(task) && teamsWith5s.includes(team.id) && <p className="mt-1 text-xs text-body">{standard5s}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button><div className="flex justify-end gap-1.5 border-t border-border p-2"><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim hover:border-[rgba(255,122,0,0.65)] hover:text-title" onClick={() => setEditingQueueTask(editing ? null : copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-4 w-4" /></button><button aria-label="Usuń zadanie z tego działu" className="flex h-8 w-8 items-center justify-center rounded border border-red-500/45 text-red-300 hover:bg-red-500/10" onClick={() => { removeTaskFromTeam(task, team.id); setEditingQueueTask(null); }} title="Usuń zadanie z tego działu" type="button"><X className="h-4 w-4" /></button></div>{team.id === 'process' && <div className="border-t border-border p-2"><SelectField aria-label={`Przypisz inżyniera do zadania ${task.station}`} className="min-h-9 rounded-lg border-[rgba(47,181,240,0.35)] px-2 py-1.5 text-xs" onChange={(event) => assignProcessEngineer(task, event.target.value)} value={task.notes.processAssignee ?? ''}><option value="">Nieprzypisane</option>{(['1', '2'] as const).map((shift) => { const shiftEngineers = processEngineerRoster.filter((engineer) => engineer.active && engineer.shift === shift); return shiftEngineers.length > 0 ? <optgroup key={shift} label={`Zmiana ${shift}`}>{shiftEngineers.map((engineer) => <option key={engineer.name} value={engineer.name}>{engineer.name}</option>)}</optgroup> : null; })}</SelectField></div>}{editing && <div className="space-y-3 border-t border-border p-3"><div className="grid grid-cols-2 gap-1.5">{workKinds.map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTask(task.id, { notes: { ...task.notes, [team.id]: event.target.value } })} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); setEditingQueueTask(null); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
             })}</div>}
+            {activeView === 'work-plan' && <section className="overflow-hidden border-y border-[rgba(47,181,240,0.3)] bg-[rgba(8,11,16,0.72)]">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[rgba(47,181,240,0.25)] px-4 py-3">
+                <div className="flex items-center gap-2"><Wrench className="h-4 w-4 text-[#2fb5f0]" /><h2 className="font-semibold text-title">Przydział inżynierów procesu</h2></div>
+                <button className="flex min-h-8 items-center gap-1.5 rounded border border-[rgba(47,181,240,0.35)] px-3 text-xs font-semibold text-[#8bd9f8] transition hover:border-[rgba(47,181,240,0.75)] hover:bg-[rgba(47,181,240,0.08)]" onClick={() => editingProcessEngineers ? setEditingProcessEngineers(false) : beginProcessEngineersEdit()} type="button"><Pencil className="h-3.5 w-3.5" />{editingProcessEngineers ? 'Zamknij edycję' : 'Edytuj skład'}</button>
+              </div>
+              {editingProcessEngineers && <div className="border-b border-[rgba(47,181,240,0.25)] bg-[rgba(47,181,240,0.04)] p-3 sm:p-4">
+                <div className="grid gap-2 lg:grid-cols-2">
+                  {processEngineerDrafts.map((draft) => <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_90px_auto_36px] items-center gap-1.5 rounded-lg border border-border bg-bg p-1.5" key={draft.id}><Input className="min-w-0" onChange={(event) => setProcessEngineerDrafts((current) => current.map((item) => item.id === draft.id ? { ...item, name: event.target.value } : item))} placeholder="Imię i nazwisko" value={draft.name} /><SelectField aria-label={`Zmiana dla ${draft.name || 'osoby'}`} className="min-h-9 rounded-lg px-2 py-1.5 text-xs" onChange={(event) => setProcessEngineerDrafts((current) => current.map((item) => item.id === draft.id ? { ...item, shift: event.target.value === '2' ? '2' : '1' } : item))} value={draft.shift}><option value="1">Zm. 1</option><option value="2">Zm. 2</option></SelectField><label className="flex h-9 items-center gap-1.5 px-1 text-[11px] font-semibold text-dim"><input checked={draft.active} onChange={(event) => setProcessEngineerDrafts((current) => current.map((item) => item.id === draft.id ? { ...item, active: event.target.checked } : item))} type="checkbox" />Dostępny</label><button aria-label={`Usuń ${draft.name || 'osobę'}`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded border border-red-500/40 text-red-300 hover:bg-red-500/10" onClick={() => setProcessEngineerDrafts((current) => current.filter((item) => item.id !== draft.id))} title="Usuń osobę" type="button"><X className="h-4 w-4" /></button></div>)}
+                </div>
+                {processEngineersError && <p className="mt-2 text-xs font-semibold text-red-300">{processEngineersError}</p>}
+                <div className="mt-3 flex flex-wrap justify-end gap-2"><Button className="min-h-9 px-3 py-2 text-xs" onClick={() => setProcessEngineerDrafts((current) => [...current, { id: `new-engineer-${Date.now()}`, originalName: null, name: '', shift: '1', active: true }])} type="button" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" />Dodaj osobę</Button><Button className="min-h-9 px-3 py-2 text-xs" disabled={savingProcessEngineers} onClick={() => void saveProcessEngineers()} type="button" variant="primaryEmber">{savingProcessEngineers ? 'Zapisywanie...' : 'Zapisz skład'}</Button></div>
+              </div>}
+              {processEngineers.length === 0 ? <p className="px-4 py-6 text-sm text-dim">Brak dostępnych inżynierów. Użyj „Edytuj skład”, aby dodać osoby na zmianę.</p> : <div className="process-engineer-columns grid divide-y divide-border lg:divide-x lg:divide-y-0" style={{ '--process-engineer-count': Math.max(processEngineers.length, 1) } as React.CSSProperties}>{processEngineers.map((engineer) => { const queue = processTasksByEngineer.get(engineer) ?? []; const rosterEntry = processEngineerRoster.find((item) => item.name === engineer); const engineerCopyId = `engineer-column-${engineer}`; return <div className="min-w-0 px-2 py-2.5" key={engineer}><div className="mb-1.5 flex min-w-0 items-start justify-between gap-1 border-b border-border pb-1.5"><button aria-label={`Kopiuj wszystkie zadania: ${engineer}`} className="group flex min-w-0 items-start gap-1.5 text-left disabled:cursor-not-allowed disabled:opacity-55" disabled={queue.length === 0} onClick={() => void copyProcessEngineerQueue(engineer, queue)} title={queue.length > 0 ? 'Kopiuj wszystkie zadania do jednej kolumny Excela' : 'Brak zadań do skopiowania'} type="button"><Copy className="mt-0.5 h-3 w-3 shrink-0 text-[#2fb5f0] transition group-hover:text-[var(--brand)]" /><span className="min-w-0"><span className="block break-words text-xs font-semibold leading-tight text-[#8bd9f8] group-hover:text-[var(--brand)]">{engineer}</span><span className="mt-0.5 block text-[9px] font-semibold uppercase text-dim">Zmiana {rosterEntry?.shift ?? '1'}</span></span></button><Badge>{queue.length}</Badge></div>{copiedQueueTask === engineerCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-1.5 py-1.5 text-[9px] font-semibold text-emerald-300">Skopiowano {queue.length} {queue.length === 1 ? 'pracę' : 'prace'} do Excela.</p>}<div className="divide-y divide-border">{queue.length === 0 ? <p className="py-2 text-[10px] leading-snug text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `process-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, 'process'))].map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); return <button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text py-2 text-left', task.kinds.includes('anulowane') && 'opacity-55')} key={task.id} onClick={() => void copyQueueTask(task, 'process')} type="button"><p className="break-words text-[10px] font-semibold leading-snug text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 break-words text-[10px] leading-snug text-body">{kindLabels}{task.notes.process ? `: ${task.notes.process}` : ''}</p>{!isManualTask(task) && <p className="mt-1 break-words text-[10px] leading-snug text-body">{standard5s}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-[10px] font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button>; })}</div></div>; })}</div>}
+            </section>}
           </>}
+        </TabsContent>
+
+        <TabsContent value="management" className="space-y-4">
+          <Card className="overflow-hidden p-0">
+            <div className="flex flex-col gap-3 border-b border-border bg-[linear-gradient(110deg,rgba(47,181,240,0.12),rgba(255,122,0,0.06),transparent)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+              <div className="flex items-start gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[rgba(47,181,240,0.35)] bg-[rgba(47,181,240,0.08)]"><Settings2 className="h-5 w-5 text-[#2fb5f0]" /></span><div><h2 className="font-semibold text-title">Skład inżynierów procesu</h2><p className="mt-1 text-sm text-dim">Ustaw zmianę i zaznacz osoby dostępne dzisiaj. Tylko dostępne osoby pojawią się przy przypisywaniu prac.</p></div></div>
+              <Button className="min-h-10 shrink-0 px-4 py-2 text-xs" onClick={() => editingProcessEngineers ? setEditingProcessEngineers(false) : beginProcessEngineersEdit()} type="button" variant="outline"><Pencil className="mr-1.5 h-3.5 w-3.5" />{editingProcessEngineers ? 'Zamknij edycję' : 'Edytuj skład'}</Button>
+            </div>
+            {editingProcessEngineers ? <div className="space-y-3 p-3 sm:p-5">
+              <div className="grid gap-2 lg:grid-cols-2">
+                {processEngineerDrafts.map((draft) => <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_90px_auto_36px] items-center gap-1.5 rounded-lg border border-border bg-bg p-1.5" key={draft.id}><Input className="min-w-0" onChange={(event) => setProcessEngineerDrafts((current) => current.map((item) => item.id === draft.id ? { ...item, name: event.target.value } : item))} placeholder="Imię i nazwisko" value={draft.name} /><SelectField aria-label={`Zmiana dla ${draft.name || 'osoby'}`} className="min-h-9 rounded-lg px-2 py-1.5 text-xs" onChange={(event) => setProcessEngineerDrafts((current) => current.map((item) => item.id === draft.id ? { ...item, shift: event.target.value === '2' ? '2' : '1' } : item))} value={draft.shift}><option value="1">Zm. 1</option><option value="2">Zm. 2</option></SelectField><label className="flex h-9 items-center gap-1.5 px-1 text-[11px] font-semibold text-dim"><input checked={draft.active} onChange={(event) => setProcessEngineerDrafts((current) => current.map((item) => item.id === draft.id ? { ...item, active: event.target.checked } : item))} type="checkbox" />Dostępny</label><button aria-label={`Usuń ${draft.name || 'osobę'}`} className="flex h-9 w-9 items-center justify-center rounded border border-red-500/40 text-red-300 hover:bg-red-500/10" onClick={() => setProcessEngineerDrafts((current) => current.filter((item) => item.id !== draft.id))} title="Usuń osobę" type="button"><X className="h-4 w-4" /></button></div>)}
+              </div>
+              {processEngineersError && <p className="text-xs font-semibold text-red-300">{processEngineersError}</p>}
+              <div className="flex flex-wrap justify-end gap-2"><Button className="min-h-9 px-3 py-2 text-xs" onClick={() => setProcessEngineerDrafts((current) => [...current, { id: `new-engineer-${Date.now()}`, originalName: null, name: '', shift: '1', active: true }])} type="button" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" />Dodaj osobę</Button><Button className="min-h-9 px-3 py-2 text-xs" disabled={savingProcessEngineers} onClick={() => void saveProcessEngineers()} type="button" variant="primaryEmber">{savingProcessEngineers ? 'Zapisywanie...' : 'Zapisz skład'}</Button></div>
+            </div> : <div className="grid gap-px bg-border lg:grid-cols-2">
+              {(['1', '2'] as const).map((shift) => { const shiftEngineers = processEngineerRoster.filter((engineer) => engineer.shift === shift); return <section className="bg-surface p-4 sm:p-5" key={shift}><div className="mb-3 flex items-center justify-between border-b border-border pb-3"><div><p className="text-xs font-semibold uppercase text-[#8bd9f8]">Zmiana {shift}</p><p className="mt-1 text-sm text-dim">{shiftEngineers.filter((engineer) => engineer.active).length} dostępnych</p></div><Badge>{shiftEngineers.length}</Badge></div><div className="divide-y divide-border">{shiftEngineers.length === 0 ? <p className="py-4 text-sm text-dim">Brak przypisanych osób.</p> : shiftEngineers.map((engineer) => <div className="flex items-center justify-between gap-3 py-3" key={engineer.name}><p className="font-semibold text-title">{engineer.name}</p><span className={cn('rounded-full border px-2.5 py-1 text-[11px] font-semibold', engineer.active ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300' : 'border-slate-500/35 bg-slate-500/10 text-slate-300')}>{engineer.active ? 'Dostępny' : 'Nieobecny'}</span></div>)}</div></section>; })}
+            </div>}
+          </Card>
         </TabsContent>
 
         <TabsContent value="material" className="space-y-4">
           {!activeTasks.length ? <EmptyState title="Brak rozpiski" description="Wgraj plan produkcyjny, aby przygotować rozpiszę materiałową." /> : <Card className="overflow-hidden p-0"><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Rozpiska materiałowa</p><p className="mt-1 text-sm text-dim">Materiał, źródło i suszarkę uzupełniasz dla pozycji z importowanego planu.</p></div><div className="overflow-x-auto"><table className="min-w-[1050px] w-full text-left text-sm"><thead className="bg-surface2 text-xs uppercase text-dim"><tr>{['Stanowisko', 'Indeks', 'Materiał', 'Rodzaj', 'Źródło', 'Suszarka', 'Temp.'].map((label) => <th className="border-b border-border px-4 py-3 font-semibold" key={label}>{label}</th>)}</tr></thead><tbody>{activeTasks.map((task) => <tr className={cn('border-b border-border/80', task.highlighted && 'bg-[rgba(245,197,66,0.06)]')} key={task.id}><td className="px-4 py-3 font-bold text-[var(--brand)]">{task.station}</td><td className="max-w-[290px] px-4 py-3 font-semibold text-title">{task.detail}</td><td className="px-2 py-2"><Input value={task.material} onChange={(event) => updateTask(task.id, { material: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.materialType} onChange={(event) => updateTask(task.id, { materialType: event.target.value, temperature: temperatureFor(event.target.value) || task.temperature })} /></td><td className="px-2 py-2"><Input value={task.source} onChange={(event) => updateTask(task.id, { source: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.dryer} onChange={(event) => updateTask(task.id, { dryer: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.temperature} onChange={(event) => updateTask(task.id, { temperature: event.target.value })} /></td></tr>)}</tbody></table></div></Card>}
         </TabsContent>
         <TabsContent value="history" className="work-history space-y-4">
-          <WorkHistoryDashboard history={history} />
+          <WorkHistoryDashboard history={history} onDeleteDay={(planDate) => void deleteHistoryDay(planDate)} />
           <Card className="overflow-hidden p-0"><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Historia planów</p><p className="mt-1 text-sm text-dim">Końcowe przypisania z każdego dnia, gotowe do późniejszych analiz.</p></div>{history.length === 0 ? <div className="px-5 py-8 text-sm text-dim">Brak zapisanych dni. Pierwszy snapshot pojawi się po rozpoczęciu kolejnego dnia.</div> : <div className="divide-y divide-border">{history.map((entry) => { const counts = entry.tasks.flatMap((task) => Array.isArray(task.kinds) ? task.kinds : []).reduce<Record<string, number>>((result, kind) => ({ ...result, [kind]: (result[kind] ?? 0) + 1 }), {}); return <div className="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between" key={entry.plan_date}><div><p className="font-semibold text-title">{new Date(`${entry.plan_date}T12:00:00`).toLocaleDateString('pl-PL')}</p><p className="mt-1 text-xs text-dim">{entry.file_name || 'Plan produkcyjny'}{entry.plan_sheet ? ` · arkusz ${entry.plan_sheet}` : ''} · {entry.tasks.length} przypisań</p></div><div className="flex flex-wrap gap-2">{Object.entries(counts).map(([kind, count]) => <Badge key={kind}>{workKinds.find((item) => item.id === kind)?.label ?? kind}: {count}</Badge>)}</div></div>; })}</div>}</Card>
         </TabsContent>
         <TabsContent value="report" className="production-report space-y-4">

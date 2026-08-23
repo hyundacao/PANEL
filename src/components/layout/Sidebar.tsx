@@ -15,7 +15,8 @@ import {
   Wind,
   LogOut,
   History,
-  Droplets
+  Droplets,
+  Settings2
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useUiStore } from '@/lib/store/ui';
@@ -89,6 +90,12 @@ const navItemsFarbyTasmy: NavItem[] = [
     href: '/spis-farb-tasm',
     icon: ClipboardCheck,
     tab: 'rozliczanie-farb-tasm'
+  },
+  {
+    label: 'Zarządzanie spisem',
+    href: '/spis-farb-tasm/zarzadzanie',
+    icon: Settings2,
+    requiresAdmin: true
   }
 ];
 
@@ -97,7 +104,8 @@ const navItemsPrzygotowanieProdukcji: NavItem[] = [
   { label: 'Plan pracy', href: '/przygotowanie-produkcji?view=work-plan', icon: ClipboardCheck },
   { label: 'Rozpiska materiałowa', href: '/przygotowanie-produkcji?view=material', icon: Layers },
   { label: 'Historia planów', href: '/przygotowanie-produkcji?view=history', icon: History },
-  { label: 'Raport prac', href: '/przygotowanie-produkcji?view=report', icon: FileText }
+  { label: 'Raport prac', href: '/przygotowanie-produkcji?view=report', icon: FileText },
+  { label: 'Zarządzanie', href: '/przygotowanie-produkcji?view=management', icon: Settings2 }
 ];
 
 export const Sidebar = () => {
@@ -149,6 +157,9 @@ export const Sidebar = () => {
     if (href === '/przygotowanie-produkcji?view=report') {
       return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'report';
     }
+    if (href === '/przygotowanie-produkcji?view=management') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'management';
+    }
     if (href.startsWith('/admin')) return isAdminRoute;
     if (href === '/czesci') return pathname === '/czesci';
     if (href === '/spis') return pathname === '/spis' || pathname.startsWith('/spis/');
@@ -159,7 +170,10 @@ export const Sidebar = () => {
       return pathname === '/rozliczanie-farb-rozcienczalnikow' || pathname.startsWith('/rozliczanie-farb-rozcienczalnikow/');
     }
     if (href === '/spis-farb-tasm') {
-      return pathname === '/spis-farb-tasm' || pathname.startsWith('/spis-farb-tasm/');
+      return pathname === '/spis-farb-tasm';
+    }
+    if (href === '/spis-farb-tasm/zarzadzanie') {
+      return pathname === '/spis-farb-tasm/zarzadzanie';
     }
     if (href === '/przesuniecia') {
       return pathname === '/przesuniecia' || pathname.startsWith('/przesuniecia/');

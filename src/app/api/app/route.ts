@@ -1069,6 +1069,12 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'getOriginalInventoryCatalogFromErp':
       requireOriginalInventoryOrPaintTapeReadAccess(user);
       return;
+    case 'getPaintTapeInventoryCatalogAdmin':
+    case 'getPaintTapeInventorySessionsAdmin':
+    case 'setPaintTapeInventoryCatalogItemActive':
+    case 'removePaintTapeInventorySession':
+      requireWarehouseAdminAccess(user, 'FARBY_TASMY');
+      return;
     case 'getOriginalInventoryErpSnapshot':
       requireOriginalInventoryOrPaintTapeReadAccess(user);
       return;
@@ -1263,6 +1269,8 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'savePaintTapeInventoryEntry',
   'removePaintTapeInventoryEntry',
   'addPaintTapeInventoryCatalogItem',
+  'setPaintTapeInventoryCatalogItemActive',
+  'removePaintTapeInventorySession',
   'closePaintTapeInventorySession',
   'reopenPaintTapeInventorySession',
   'addSparePart',
@@ -1306,6 +1314,8 @@ const PAINT_TAPE_AUDIT_ACTIONS = new Set<string>([
   'savePaintTapeInventoryEntry',
   'removePaintTapeInventoryEntry',
   'addPaintTapeInventoryCatalogItem',
+  'setPaintTapeInventoryCatalogItemActive',
+  'removePaintTapeInventorySession',
   'closePaintTapeInventorySession',
   'reopenPaintTapeInventorySession'
 ]);
@@ -1389,6 +1399,8 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   savePaintTapeInventoryEntry: 'Spis farb i tasm: zapis pozycji',
   removePaintTapeInventoryEntry: 'Spis farb i tasm: usuniecie pomiaru',
   addPaintTapeInventoryCatalogItem: 'Spis farb i tasm: nowa kartoteka',
+  setPaintTapeInventoryCatalogItemActive: 'Spis farb i tasm: zmiana aktywnosci kartoteki',
+  removePaintTapeInventorySession: 'Spis farb i tasm: usuniecie calego spisu',
   closePaintTapeInventorySession: 'Spis farb i tasm: zamkniecie spisu',
   reopenPaintTapeInventorySession: 'Spis farb i tasm: ponowne otwarcie spisu',
   addSparePart: 'Czesci: dodanie pozycji',
@@ -6933,6 +6945,77 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }
       if (!data) throw new Error('NOT_FOUND');
       return mapPaintTapeInventoryCatalogItem(data);
+    }
+    case 'getPaintTapeInventoryCatalogAdmin': {
+      await ensurePaintTapeInventorySeeded();
+      const { data, error } = await supabaseAdmin
+        .from('paint_tape_inventory_catalog')
+        .select('*')
+        .order('is_active', { ascending: false })
+        .order('sort_order', { ascending: true })
+        .order('name', { ascending: true });
+      if (error) {
+        if (isMissingPaintTapeInventoryTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY');
+        }
+        throw error;
+      }
+      return (data ?? []).map(mapPaintTapeInventoryCatalogItem);
+    }
+    case 'getPaintTapeInventorySessionsAdmin': {
+      const { data, error } = await supabaseAdmin
+        .from('paint_tape_inventory_sessions')
+        .select('*')
+        .order('inventory_date', { ascending: false })
+        .limit(365);
+      if (error) {
+        if (isMissingPaintTapeInventoryTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY');
+        }
+        throw error;
+      }
+      return (data ?? []).map(mapPaintTapeInventorySession);
+    }
+    case 'setPaintTapeInventoryCatalogItemActive': {
+      const id = String(payload?.id ?? '').trim();
+      const isActive = payload?.isActive;
+      if (!id) throw new Error('NOT_FOUND');
+      if (typeof isActive !== 'boolean') throw new Error('ACTIVE_STATUS_REQUIRED');
+      const { data, error } = await supabaseAdmin
+        .from('paint_tape_inventory_catalog')
+        .update({ is_active: isActive })
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (isMissingPaintTapeInventoryTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY');
+        }
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      return mapPaintTapeInventoryCatalogItem(data);
+    }
+    case 'removePaintTapeInventorySession': {
+      const sessionId = String(payload?.sessionId ?? '').trim();
+      if (!sessionId) throw new Error('NOT_FOUND');
+      const { data: sessionRow, error: sessionError } = await supabaseAdmin
+        .from('paint_tape_inventory_sessions')
+        .select('id, inventory_date')
+        .eq('id', sessionId)
+        .maybeSingle();
+      if (sessionError) throw sessionError;
+      if (!sessionRow) throw new Error('NOT_FOUND');
+
+      const { error: deleteError } = await supabaseAdmin
+        .from('paint_tape_inventory_sessions')
+        .delete()
+        .eq('id', sessionId);
+      if (deleteError) throw deleteError;
+      return {
+        id: String(sessionRow.id),
+        inventoryDate: String(sessionRow.inventory_date)
+      };
     }
     case 'closePaintTapeInventorySession':
     case 'reopenPaintTapeInventorySession': {

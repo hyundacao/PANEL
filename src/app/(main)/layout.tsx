@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
 import { ContentScrim } from '@/components/ui/ContentScrim';
@@ -22,6 +22,7 @@ import { getCurrentSessionUser } from '@/lib/api';
 const getTitle = (pathname: string) => {
   if (pathname.startsWith('/dashboard')) return 'Pulpit';
   if (pathname.startsWith('/rozliczanie-farb-rozcienczalnikow')) return 'Rozliczanie farb i rozcieńczalników';
+  if (pathname.startsWith('/spis-farb-tasm/zarzadzanie')) return 'Zarządzanie spisem';
   if (pathname.startsWith('/spis-farb-tasm')) return 'Spis farb i taśm';
   if (pathname.startsWith('/spis-oryginalow')) return 'Spis oryginałów';
   if (pathname.startsWith('/spis')) return 'Spis przemiałów';
@@ -80,8 +81,10 @@ const getTabFromPath = (pathname: string): WarehouseTab | null => {
 
 type MobileNavItem = {
   label: string;
+  mobileLabel?: string;
   href: string;
   tab?: WarehouseTab;
+  requiresAdmin?: boolean;
 };
 
 const navItemsPrzemialy: MobileNavItem[] = [
@@ -139,8 +142,18 @@ const navItemsBilans: MobileNavItem[] = [
 ];
 
 const navItemsFarbyTasmy: MobileNavItem[] = [
-  { label: 'Rozliczanie farb i rozcieńczalników', href: '/rozliczanie-farb-rozcienczalnikow', tab: 'rozliczanie-farb-tasm' },
-  { label: 'Spis farb i taśm', href: '/spis-farb-tasm', tab: 'rozliczanie-farb-tasm' }
+  { label: 'Rozliczanie farb i rozcieńczalników', mobileLabel: 'Rozliczanie', href: '/rozliczanie-farb-rozcienczalnikow', tab: 'rozliczanie-farb-tasm' },
+  { label: 'Spis farb i taśm', mobileLabel: 'Spis', href: '/spis-farb-tasm', tab: 'rozliczanie-farb-tasm' },
+  { label: 'Zarządzanie spisem', mobileLabel: 'Zarządzanie', href: '/spis-farb-tasm/zarzadzanie', requiresAdmin: true }
+];
+
+const navItemsPrzygotowanieProdukcji: MobileNavItem[] = [
+  { label: 'Plan zmian', href: '/przygotowanie-produkcji' },
+  { label: 'Plan pracy', href: '/przygotowanie-produkcji?view=work-plan' },
+  { label: 'Rozpiska materiałowa', href: '/przygotowanie-produkcji?view=material' },
+  { label: 'Historia planów', href: '/przygotowanie-produkcji?view=history' },
+  { label: 'Raport prac', href: '/przygotowanie-produkcji?view=report' },
+  { label: 'Zarządzanie', href: '/przygotowanie-produkcji?view=management' }
 ];
 
 const getModuleNavItems = (warehouse: WarehouseKey | null) => {
@@ -148,7 +161,7 @@ const getModuleNavItems = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'RAPORT_ZMIANOWY') return navItemsRaport;
   if (warehouse === 'RAPORT_BRAKOWOSCI') return navItemsRaportBrakowosci;
   if (warehouse === 'BILANS_PRZEZBROJEN') return navItemsBilans;
-  if (warehouse === 'PRZYGOTOWANIE_PRODUKCJI') return [];
+  if (warehouse === 'PRZYGOTOWANIE_PRODUKCJI') return navItemsPrzygotowanieProdukcji;
   if (warehouse === 'FARBY_TASMY') return navItemsFarbyTasmy;
   return navItemsPrzemialy;
 };
@@ -167,6 +180,7 @@ const getFirstAccessibleModuleHref = (
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const baseTitle = getTitle(pathname);
   const {
     sidebarCollapsed,
@@ -358,10 +372,27 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       : baseTitle;
   const showMobileNav =
     !pathname.startsWith('/admin') &&
-    activeWarehouse !== 'FARBY_TASMY' &&
     Boolean(activeWarehouse && warehouseFromPath);
   const isReportsPath = pathname.startsWith('/raporty');
   const isActivePath = (href: string) => {
+    if (href === '/przygotowanie-produkcji') {
+      return pathname === href && !searchParams.get('view');
+    }
+    if (href === '/przygotowanie-produkcji?view=work-plan') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'work-plan';
+    }
+    if (href === '/przygotowanie-produkcji?view=material') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'material';
+    }
+    if (href === '/przygotowanie-produkcji?view=history') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'history';
+    }
+    if (href === '/przygotowanie-produkcji?view=report') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'report';
+    }
+    if (href === '/przygotowanie-produkcji?view=management') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'management';
+    }
     if (href === '/czesci') return pathname === '/czesci';
     if (href === '/spis') return pathname === '/spis' || pathname.startsWith('/spis/');
     if (href === '/spis-oryginalow') {
@@ -371,7 +402,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       return pathname === '/rozliczanie-farb-rozcienczalnikow' || pathname.startsWith('/rozliczanie-farb-rozcienczalnikow/');
     }
     if (href === '/spis-farb-tasm') {
-      return pathname === '/spis-farb-tasm' || pathname.startsWith('/spis-farb-tasm/');
+      return pathname === '/spis-farb-tasm';
+    }
+    if (href === '/spis-farb-tasm/zarzadzanie') {
+      return pathname === '/spis-farb-tasm/zarzadzanie';
     }
     if (href === '/przesuniecia') {
       return pathname === '/przesuniecia' || pathname.startsWith('/przesuniecia/');
@@ -381,9 +415,12 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   const mobileItems =
     getModuleNavItems(activeWarehouse).filter((item) => {
       if (!activeWarehouse) return false;
+      if (item.requiresAdmin && !isWarehouseAdmin(user, activeWarehouse)) return false;
       if (!item.tab) return true;
       return canSeeTab(user, activeWarehouse, item.tab);
     });
+  const isPaintTapeMobileNav = activeWarehouse === 'FARBY_TASMY';
+  const isPreparationMobileNav = activeWarehouse === 'PRZYGOTOWANIE_PRODUKCJI';
   const isDashboardPath = pathname.startsWith('/dashboard');
 
   return (
@@ -406,7 +443,11 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           sidebarCollapsed ? 'pl-0 md:pl-20' : 'pl-0 md:pl-64'
         )}
       >
-        {!isDashboardPath && <Topbar title={title} breadcrumb={breadcrumb} />}
+        <Topbar
+          title={title}
+          breadcrumb={breadcrumb}
+          className={isDashboardPath ? 'md:hidden' : undefined}
+        />
         <main
           className={cn(
             'content-area flex-1',
@@ -420,8 +461,26 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {isDashboardPath ? (
             <>
               {showMobileNav && (
-                <div className={mobileNavPanelClass}>
-                  <div className="grid grid-cols-2 gap-2.5">
+                <div
+                  className={cn(
+                    isPaintTapeMobileNav
+                      ? '-mx-2 mb-4 border-b border-border bg-[rgba(8,9,13,0.72)] md:hidden'
+                      : isPreparationMobileNav
+                        ? 'mb-4 md:hidden'
+                        : mobileNavPanelClass
+                  )}
+                >
+                  <div
+                    className={cn(
+                      'grid',
+                      isPaintTapeMobileNav ? 'gap-0' : 'grid-cols-2 gap-2.5'
+                    )}
+                    style={
+                      isPaintTapeMobileNav
+                        ? { gridTemplateColumns: `repeat(${Math.max(mobileItems.length, 1)}, minmax(0, 1fr))` }
+                        : undefined
+                    }
+                  >
                     {mobileItems.map((item) => {
                       const active = isActivePath(item.href);
                       const textured =
@@ -432,11 +491,20 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                           key={item.href}
                           href={item.href}
                           className={cn(
-                            mobileNavLinkClass,
+                            isPaintTapeMobileNav
+                              ? 'relative flex min-h-[48px] min-w-0 items-center justify-center px-2 py-2 text-center text-xs font-bold text-muted transition hover:text-title'
+                              : mobileNavLinkClass,
                             textured &&
                               'overflow-hidden bg-[#0b0c10] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_8px_20px_rgba(0,0,0,0.18)] hover:bg-[#111318] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_24px_rgba(0,0,0,0.22)]',
-                            active &&
+                            !isPaintTapeMobileNav && active &&
                               'border-[rgba(255,122,26,0.85)] bg-[linear-gradient(180deg,rgba(255,122,26,0.13),rgba(255,122,26,0.035))] shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]',
+                            isPaintTapeMobileNav &&
+                              active &&
+                              'text-[var(--brand)] after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-[var(--brand)]',
+                            isPreparationMobileNav &&
+                              mobileItems.length % 2 === 1 &&
+                              item.href === mobileItems.at(-1)?.href &&
+                              'col-span-2',
                             textured &&
                               active &&
                               'shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.11)]'
@@ -447,7 +515,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                               : undefined
                           }
                         >
-                          <span className="block max-w-full text-balance">{item.label}</span>
+                          <span className="block max-w-full text-balance">{item.mobileLabel ?? item.label}</span>
                         </Link>
                       );
                     })}
@@ -459,8 +527,26 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           ) : (
             <>
               {showMobileNav && (
-              <div className={mobileNavPanelClass}>
-                <div className="grid grid-cols-2 gap-2.5">
+              <div
+                className={cn(
+                  isPaintTapeMobileNav
+                    ? '-mx-2 mb-4 border-b border-border bg-[rgba(8,9,13,0.72)] md:hidden'
+                    : isPreparationMobileNav
+                      ? 'mb-4 md:hidden'
+                      : mobileNavPanelClass
+                )}
+              >
+                <div
+                  className={cn(
+                    'grid',
+                    isPaintTapeMobileNav ? 'gap-0' : 'grid-cols-2 gap-2.5'
+                  )}
+                  style={
+                    isPaintTapeMobileNav
+                      ? { gridTemplateColumns: `repeat(${Math.max(mobileItems.length, 1)}, minmax(0, 1fr))` }
+                      : undefined
+                  }
+                >
                   {mobileItems.map((item) => {
                     const active = isActivePath(item.href);
                     const textured =
@@ -471,11 +557,20 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                         key={item.href}
                         href={item.href}
                         className={cn(
-                          mobileNavLinkClass,
+                          isPaintTapeMobileNav
+                            ? 'relative flex min-h-[48px] min-w-0 items-center justify-center px-2 py-2 text-center text-xs font-bold text-muted transition hover:text-title'
+                            : mobileNavLinkClass,
                           textured &&
                             'overflow-hidden bg-[#0b0c10] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_8px_20px_rgba(0,0,0,0.18)] hover:bg-[#111318] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_24px_rgba(0,0,0,0.22)]',
-                          active &&
+                          !isPaintTapeMobileNav && active &&
                             'border-[rgba(255,122,26,0.85)] bg-[linear-gradient(180deg,rgba(255,122,26,0.13),rgba(255,122,26,0.035))] shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]',
+                          isPaintTapeMobileNav &&
+                            active &&
+                            'text-[var(--brand)] after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-[var(--brand)]',
+                          isPreparationMobileNav &&
+                            mobileItems.length % 2 === 1 &&
+                            item.href === mobileItems.at(-1)?.href &&
+                            'col-span-2',
                           textured &&
                             active &&
                             'shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.11)]'
@@ -486,7 +581,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                             : undefined
                         }
                       >
-                        <span className="block max-w-full text-balance">{item.label}</span>
+                        <span className="block max-w-full text-balance">{item.mobileLabel ?? item.label}</span>
                       </Link>
                     );
                   })}

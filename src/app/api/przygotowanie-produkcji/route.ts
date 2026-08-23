@@ -25,6 +25,73 @@ type StoredTask = {
   temperature: string;
 };
 
+const PROCESS_ENGINEERS_SETTINGS_KEY = '__process_engineers__';
+const PROCESS_ENGINEERS_SETTINGS_DATE = '2000-01-01';
+const DEFAULT_PROCESS_ENGINEERS = ['Adam', 'Mirek', 'Zbyszek', 'Paweł', 'Bogdan'];
+const defaultProcessEngineerRoster = (): ProcessEngineerRosterEntry[] =>
+  DEFAULT_PROCESS_ENGINEERS.map((name) => ({ name, shift: '1', active: true }));
+
+type ProcessEngineerRosterEntry = {
+  name: string;
+  shift: '1' | '2';
+  active: boolean;
+};
+
+const isProcessEngineersSettings = (task: Record<string, unknown>) =>
+  String(task.task_key ?? task.id ?? '') === PROCESS_ENGINEERS_SETTINGS_KEY;
+
+const normalizeProcessEngineers = (value: unknown) => {
+  if (!Array.isArray(value)) return [...DEFAULT_PROCESS_ENGINEERS];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  value.forEach((item) => {
+    const name = String(item ?? '').trim().slice(0, 80);
+    const key = name.toLocaleLowerCase('pl-PL');
+    if (!name || seen.has(key)) return;
+    seen.add(key);
+    result.push(name);
+  });
+  return result.slice(0, 30);
+};
+
+const normalizeProcessEngineerRoster = (value: unknown, legacyNames?: unknown): ProcessEngineerRosterEntry[] => {
+  if (!Array.isArray(value)) {
+    return normalizeProcessEngineers(legacyNames).map((name) => ({ name, shift: '1', active: true }));
+  }
+  const result: ProcessEngineerRosterEntry[] = [];
+  const seen = new Set<string>();
+  value.forEach((item) => {
+    if (!item || typeof item !== 'object') return;
+    const record = item as Record<string, unknown>;
+    const name = String(record.name ?? '').trim().slice(0, 80);
+    const key = name.toLocaleLowerCase('pl-PL');
+    if (!name || seen.has(key)) return;
+    seen.add(key);
+    result.push({ name, shift: record.shift === '2' ? '2' : '1', active: record.active !== false });
+  });
+  return result.slice(0, 30);
+};
+
+const readGlobalProcessEngineerRoster = async () => {
+  const { data: settingsSession, error: sessionError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_sessions')
+    .select('id')
+    .eq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE)
+    .maybeSingle();
+  if (sessionError) throw sessionError;
+  if (!settingsSession) return null;
+  const { data: settingsRow, error: settingsError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_tasks')
+    .select('notes')
+    .eq('session_id', settingsSession.id)
+    .eq('task_key', PROCESS_ENGINEERS_SETTINGS_KEY)
+    .maybeSingle();
+  if (settingsError) throw settingsError;
+  if (!settingsRow?.notes || typeof settingsRow.notes !== 'object') return null;
+  const notes = settingsRow.notes as Record<string, unknown>;
+  return normalizeProcessEngineerRoster(notes.processEngineerRoster, notes.processEngineers);
+};
+
 const todayKey = () => {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/Warsaw',
@@ -67,7 +134,7 @@ const saveHistorySnapshot = async (
   session: { session_date: string; file_name?: string | null; plan_sheet?: string | null; created_by?: string | null },
   tasks: Array<Record<string, unknown>>
 ) => {
-  const assignedTasks = tasks.filter(hasAssignment);
+  const assignedTasks = tasks.filter((task) => !isProcessEngineersSettings(task) && hasAssignment(task));
   if (!assignedTasks.length) return;
   try {
     const { data: existingHistory, error: historyReadError } = await supabaseAdmin
@@ -105,7 +172,8 @@ const archivePreviousDays = async () => {
     const { data: previousSessions, error: sessionError } = await supabaseAdmin
       .from('przygotowanie_produkcji_sessions')
       .select('id, session_date, file_name, plan_sheet, created_by')
-      .lt('session_date', todayKey());
+      .lt('session_date', todayKey())
+      .neq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE);
     if (sessionError) throw sessionError;
 
     for (const session of previousSessions ?? []) {
@@ -123,7 +191,10 @@ const archivePreviousDays = async () => {
         .eq('session_id', session.id)
         .order('position_no');
       if (taskError) throw taskError;
-      const tasks = (taskRows ?? []).filter((task) => hasAssignment(task as Record<string, unknown>));
+      const tasks = (taskRows ?? []).filter((task) => {
+        const record = task as Record<string, unknown>;
+        return !isProcessEngineersSettings(record) && hasAssignment(record);
+      });
       if (!tasks.length) continue;
 
       const { error: historyError } = await supabaseAdmin
@@ -213,22 +284,42 @@ export async function GET(request: NextRequest) {
         console.error('[przygotowanie-produkcji] History read skipped:', historyError);
         return NextResponse.json({ history: [] });
       }
-      return NextResponse.json({ history: history ?? [] });
+      return NextResponse.json({
+        history: (history ?? []).filter((entry) => Array.isArray(entry.tasks) && entry.tasks.length > 0)
+      });
     }
+    const globalRoster = await readGlobalProcessEngineerRoster();
     const { data: session, error: sessionError } = await supabaseAdmin
       .from('przygotowanie_produkcji_sessions')
       .select('id, session_date, file_name, plan_sheet, updated_at')
       .eq('session_date', todayKey())
       .maybeSingle();
     if (sessionError) throw sessionError;
-    if (!session) return NextResponse.json({ session: null, tasks: [] });
+    if (!session) {
+      const processEngineerRoster = globalRoster ?? defaultProcessEngineerRoster();
+      return NextResponse.json({
+        session: null,
+        tasks: [],
+        processEngineers: processEngineerRoster.filter((engineer) => engineer.active).map((engineer) => engineer.name),
+        processEngineerRoster
+      });
+    }
     const { data: taskRows, error: taskError } = await supabaseAdmin
       .from('przygotowanie_produkcji_tasks')
       .select('*')
       .eq('session_id', session.id)
       .order('position_no');
     if (taskError) throw taskError;
-    return NextResponse.json({ session, tasks: (taskRows ?? []).map((row) => fromDbTask(row as Record<string, unknown>)) });
+    const settingsRow = (taskRows ?? []).find((row) => isProcessEngineersSettings(row as Record<string, unknown>));
+    const settingsNotes = settingsRow?.notes && typeof settingsRow.notes === 'object'
+      ? settingsRow.notes as Record<string, unknown>
+      : {};
+    const processEngineerRoster = globalRoster ?? normalizeProcessEngineerRoster(settingsNotes.processEngineerRoster, settingsNotes.processEngineers);
+    const processEngineers = processEngineerRoster.filter((engineer) => engineer.active).map((engineer) => engineer.name);
+    const tasks = (taskRows ?? [])
+      .filter((row) => !isProcessEngineersSettings(row as Record<string, unknown>))
+      .map((row) => fromDbTask(row as Record<string, unknown>));
+    return NextResponse.json({ session, tasks, processEngineers, processEngineerRoster });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Nie udało się odczytać planu.';
     return NextResponse.json({ code: 'PREPARATION_READ_FAILED', message }, { status: 400 });
@@ -240,8 +331,85 @@ export async function POST(request: NextRequest) {
     const access = await ensureAccess(request, true);
     if (access.response || !access.user) return access.response;
     await archivePreviousDays();
-    const body = await request.json() as { action?: string; fileName?: string; sheetName?: string; tasks?: StoredTask[]; task?: StoredTask };
+    const body = await request.json() as { action?: string; fileName?: string; sheetName?: string; tasks?: StoredTask[]; task?: StoredTask; processEngineers?: string[]; processEngineerRoster?: ProcessEngineerRosterEntry[]; planDate?: string };
     const now = new Date().toISOString();
+
+    if (body.action === 'deleteHistoryDay') {
+      const planDate = String(body.planDate ?? '');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(planDate)) {
+        return NextResponse.json({ code: 'INVALID_PLAN_DATE' }, { status: 400 });
+      }
+      const { error: historyError } = await supabaseAdmin
+        .from('przygotowanie_produkcji_history')
+        .update({ tasks: [], file_name: '', plan_sheet: '' })
+        .eq('plan_date', planDate);
+      if (historyError) throw historyError;
+      return NextResponse.json({ deleted: true, planDate });
+    }
+
+    if (body.action === 'saveProcessEngineers') {
+      const processEngineerRoster = normalizeProcessEngineerRoster(body.processEngineerRoster, body.processEngineers);
+      const processEngineers = processEngineerRoster.filter((engineer) => engineer.active).map((engineer) => engineer.name);
+      const { data: existingSession, error: sessionReadError } = await supabaseAdmin
+        .from('przygotowanie_produkcji_sessions')
+        .select('id')
+        .eq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE)
+        .maybeSingle();
+      if (sessionReadError) throw sessionReadError;
+      let session = existingSession;
+      if (!session) {
+        const { data: createdSession, error: sessionCreateError } = await supabaseAdmin
+          .from('przygotowanie_produkcji_sessions')
+          .insert({ session_date: PROCESS_ENGINEERS_SETTINGS_DATE, file_name: 'USTAWIENIA', plan_sheet: '', created_by: access.user.name, updated_at: now })
+          .select('id')
+          .single();
+        if (sessionCreateError) throw sessionCreateError;
+        session = createdSession;
+      }
+
+      const { data: existingSettings, error: settingsReadError } = await supabaseAdmin
+        .from('przygotowanie_produkcji_tasks')
+        .select('id')
+        .eq('session_id', session.id)
+        .eq('task_key', PROCESS_ENGINEERS_SETTINGS_KEY)
+        .maybeSingle();
+      if (settingsReadError) throw settingsReadError;
+
+      const settings = {
+        position_no: -1,
+        is_current_plan: false,
+        plan_group: 'standard',
+        station: 'USTAWIENIA',
+        detail: 'INZYNIEROWIE PROCESU',
+        quantity: '',
+        norm: '',
+        highlighted: false,
+        kinds: [],
+        teams: [],
+        notes: { processEngineers, processEngineerRoster },
+        done: false,
+        material: '',
+        material_type: '',
+        source: '',
+        dryer: '',
+        temperature: '',
+        updated_at: now,
+        updated_by: access.user.name
+      };
+      if (existingSettings) {
+        const { error: updateError } = await supabaseAdmin
+          .from('przygotowanie_produkcji_tasks')
+          .update(settings)
+          .eq('id', existingSettings.id);
+        if (updateError) throw updateError;
+      } else {
+        const { error: insertError } = await supabaseAdmin
+          .from('przygotowanie_produkcji_tasks')
+          .insert({ ...settings, session_id: session.id, task_key: PROCESS_ENGINEERS_SETTINGS_KEY });
+        if (insertError) throw insertError;
+      }
+      return NextResponse.json({ processEngineers, processEngineerRoster });
+    }
 
     if (body.action === 'savePlan') {
       const tasks = Array.isArray(body.tasks) ? body.tasks : [];
@@ -283,7 +451,7 @@ export async function POST(request: NextRequest) {
         if (insertError) throw insertError;
       }
       const staleIds = (storedRows ?? [])
-        .filter((row) => !taskKeys.includes(String(row.task_key)))
+        .filter((row) => String(row.task_key) !== PROCESS_ENGINEERS_SETTINGS_KEY && !taskKeys.includes(String(row.task_key)))
         .map((row) => String(row.id));
       if (staleIds.length) {
         const { error: retainError } = await supabaseAdmin
