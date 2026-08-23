@@ -431,6 +431,7 @@ export default function OriginalInventoryPage() {
     Record<string, { percent: string; hopperPresent: boolean }>
   >({});
   const [showNameSuggestions, setShowNameSuggestions] = useState(false);
+  const qtyInputRef = useRef<HTMLInputElement | null>(null);
   const [reportQuery, setReportQuery] = useState('');
   const [showReportSuggestions, setShowReportSuggestions] = useState(false);
   const [reportQuantityMode, setReportQuantityMode] = useState<'real' | 'available'>('real');
@@ -1409,9 +1410,14 @@ export default function OriginalInventoryPage() {
     const matched =
       existingByName.get(needle) ??
       catalog.find((item) => normalizeCatalogNameKey(item.name) === needle) ??
+      nameSuggestions.find(
+        (item) => item.indexCode && normalizeCatalogNameKey(item.indexCode) === needle
+      ) ??
       null;
     if (matched) {
       setForm((prev) => ({ ...prev, name: matched.name, unit: matched.unit }));
+      qtyInputRef.current?.focus();
+      qtyInputRef.current?.select();
       return;
     }
     setForm((prev) => ({ ...prev, name: rawName }));
@@ -1422,6 +1428,8 @@ export default function OriginalInventoryPage() {
       name: suggestion.name,
       unit: suggestion.unit || prev.unit
     }));
+    qtyInputRef.current?.focus();
+    qtyInputRef.current?.select();
   };
 
   const materialGroups = useMemo(() => {
@@ -2679,6 +2687,12 @@ export default function OriginalInventoryPage() {
                     placeholder="np. BOREALIS HF700SA"
                     className={form.name ? 'min-h-[46px] pr-10' : 'min-h-[46px]'}
                     onFocus={() => setShowNameSuggestions(true)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' || filteredNameSuggestions.length === 0) return;
+                      event.preventDefault();
+                      applyNameSuggestionToForm(filteredNameSuggestions[0]);
+                      setShowNameSuggestions(false);
+                    }}
                     onBlur={() => {
                       setTimeout(() => setShowNameSuggestions(false), 120);
                     }}
@@ -2748,6 +2762,7 @@ export default function OriginalInventoryPage() {
               <div>
                 <label className="text-xs uppercase tracking-wide text-dim">Ilosc</label>
                 <Input
+                  ref={qtyInputRef}
                   value={form.qty}
                   onChange={(event) => setForm((prev) => ({ ...prev, qty: event.target.value }))}
                   placeholder="0"
