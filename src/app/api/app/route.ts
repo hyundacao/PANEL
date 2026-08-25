@@ -1099,6 +1099,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'removePaintTapeSettlement':
     case 'upsertPaintTapeTechnologyUsages':
     case 'savePaintTapeInventoryEntry':
+    case 'updatePaintTapeInventoryEntry':
     case 'removePaintTapeInventoryEntry':
     case 'addPaintTapeInventoryCatalogItem':
     case 'closePaintTapeInventorySession':
@@ -1397,6 +1398,7 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   removePaintTapeSettlement: 'Rozliczanie farb i rozcienczalnikow: usuniecie zlecenia',
   upsertPaintTapeTechnologyUsages: 'Rozliczanie farb i rozcienczalnikow: import norm technologicznych',
   savePaintTapeInventoryEntry: 'Spis farb i tasm: zapis pozycji',
+  updatePaintTapeInventoryEntry: 'Spis farb i tasm: korekta pomiaru',
   removePaintTapeInventoryEntry: 'Spis farb i tasm: usuniecie pomiaru',
   addPaintTapeInventoryCatalogItem: 'Spis farb i tasm: nowa kartoteka',
   setPaintTapeInventoryCatalogItemActive: 'Spis farb i tasm: zmiana aktywnosci kartoteki',
@@ -1725,8 +1727,7 @@ const buildExternalTotalsByDate = (
     qty: number;
     from_location_id?: string | null;
     to_location_id?: string | null;
-  }>,
-  activeLocationIds: Set<string>
+  }>
 ): TransferAdjustmentsByDate => {
   const result: TransferAdjustmentsByDate = {};
   transfers.forEach((transfer) => {
@@ -1735,13 +1736,11 @@ const buildExternalTotalsByDate = (
     const dateKey = formatDate(new Date(transfer.at));
     const materialId = String(transfer.material_id);
     if (transfer.kind === 'EXTERNAL_OUT' && transfer.from_location_id) {
-      if (!activeLocationIds.has(transfer.from_location_id)) return;
       if (!result[dateKey]) result[dateKey] = {};
       const adjustment = ensureAdjustment(result[dateKey], materialId);
       adjustment.removed += qty;
     }
     if (transfer.kind === 'EXTERNAL_IN' && transfer.to_location_id) {
-      if (!activeLocationIds.has(transfer.to_location_id)) return;
       if (!result[dateKey]) result[dateKey] = {};
       const adjustment = ensureAdjustment(result[dateKey], materialId);
       adjustment.added += qty;
@@ -1792,14 +1791,12 @@ const buildExternalOutCommentsByDate = (
     from_location_id?: string | null;
     partner?: string | null;
     note?: string | null;
-  }>,
-  activeLocationIds: Set<string>
+  }>
 ): TransferCommentsByDate => {
   const result: TransferCommentsByDate = {};
   transfers.forEach((transfer) => {
     if (transfer.kind !== 'EXTERNAL_OUT') return;
     if (!transfer.from_location_id) return;
-    if (!activeLocationIds.has(transfer.from_location_id)) return;
     const dateKey = formatDate(new Date(transfer.at));
     const materialId = String(transfer.material_id);
     const commentParts = [];
@@ -3700,10 +3697,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         await fetchInventoryAdjustmentsForStats(fromKey, addDays(dateKey, 1))
       );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
-      const externalTotalsByDate = buildExternalTotalsByDate(
-        transferRows,
-        new Set(activeLocations.map((loc) => loc.id))
-      );
+      const externalTotalsByDate = buildExternalTotalsByDate(transferRows);
       const diffs = collectConfirmedDiffs(
         dateKey,
         entriesByDate,
@@ -3819,10 +3813,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         await fetchInventoryAdjustmentsForStats(fromKey, addDays(todayKey, 1))
       );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
-      const externalTotalsByDate = buildExternalTotalsByDate(
-        transferRows,
-        new Set(activeLocations.map((loc) => loc.id))
-      );
+      const externalTotalsByDate = buildExternalTotalsByDate(transferRows);
       const dateKeys = buildDateKeys(fromKey, todayKey);
       const addedTotals = new Map<string, number>();
       const removedTotals = new Map<string, number>();
@@ -3871,12 +3862,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(range.from, range.to);
-      const activeLocationIds = new Set(activeLocations.map((loc) => loc.id));
       const inventoryDeltasByDate = buildInventoryDeltasByDate(
         await fetchInventoryAdjustmentsForStats(range.from, addDays(range.to, 1))
       );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
-      const externalTotalsByDate = buildExternalTotalsByDate(transferRows, activeLocationIds);
+      const externalTotalsByDate = buildExternalTotalsByDate(transferRows);
       const dateKeys = buildDateKeys(range.from, range.to);
       const daily = dateKeys.map((key) => {
         const diffs = collectConfirmedDiffs(
@@ -3927,10 +3917,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         await fetchInventoryAdjustmentsForStats(fromKey, addDays(todayKey, 1))
       );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
-      const externalTotalsByDate = buildExternalTotalsByDate(
-        transferRows,
-        new Set(activeLocations.map((loc) => loc.id))
-      );
+      const externalTotalsByDate = buildExternalTotalsByDate(transferRows);
       const dateKeys = buildDateKeys(fromKey, todayKey);
       const addedTotals = new Map<string, number>();
       const removedTotals = new Map<string, number>();
@@ -3994,10 +3981,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         await fetchInventoryAdjustmentsForStats(fromKey, addDays(todayKey, 1))
       );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
-      const externalTotalsByDate = buildExternalTotalsByDate(
-        transferRows,
-        new Set(activeLocations.map((loc) => loc.id))
-      );
+      const externalTotalsByDate = buildExternalTotalsByDate(transferRows);
       return dateKeys.map((key) => {
         const diffs = collectConfirmedDiffs(
           key,
@@ -4040,16 +4024,12 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const entriesByDate = buildEntriesByDate(rows);
       const materialMap = new Map(materials.map((mat) => [mat.id, mat]));
       const transferRows = await fetchTransfers(range.from, range.to);
-      const activeLocationIds = new Set(activeLocations.map((loc) => loc.id));
       const inventoryDeltasByDate = buildInventoryDeltasByDate(
         await fetchInventoryAdjustmentsForStats(range.from, addDays(range.to, 1))
       );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
-      const externalTotalsByDate = buildExternalTotalsByDate(transferRows, activeLocationIds);
-      const transferExternalOutCommentsByDate = buildExternalOutCommentsByDate(
-        transferRows,
-        activeLocationIds
-      );
+      const externalTotalsByDate = buildExternalTotalsByDate(transferRows);
+      const transferExternalOutCommentsByDate = buildExternalOutCommentsByDate(transferRows);
       const dateKeys = buildDateKeys(range.from, range.to);
       const addedTotals = new Map<string, number>();
       const removedTotals = new Map<string, number>();
@@ -4151,10 +4131,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         await fetchInventoryAdjustmentsForStats(range.from, addDays(range.to, 1))
       );
       const transferDeltasByDate = buildTransferDeltasByDate(transferRows);
-      const externalTotalsByDate = buildExternalTotalsByDate(
-        transferRows,
-        new Set(activeLocations.map((loc) => loc.id))
-      );
+      const externalTotalsByDate = buildExternalTotalsByDate(transferRows);
       const dateKeys = buildDateKeys(range.from, range.to);
       const byMonth = new Map<string, { added: number; removed: number }>();
       dateKeys.forEach((key) => {
@@ -4719,6 +4696,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .from('materials')
         .select('id')
         .eq('catalog_id', catalogId)
+        .eq('is_active', true)
         .limit(1);
       if (assignedError) throw assignedError;
       if (assigned && assigned.length > 0) {
@@ -6906,6 +6884,39 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (deleteError) throw deleteError;
       const updatedSession = await refreshPaintTapeInventorySessionCount(String(sessionRow.id));
       return { session: mapPaintTapeInventorySession(updatedSession) };
+    }
+    case 'updatePaintTapeInventoryEntry': {
+      const entryId = String(payload?.entryId ?? '').trim();
+      const qty = Number(payload?.qty);
+      if (!entryId) throw new Error('NOT_FOUND');
+      if (!Number.isFinite(qty) || qty < 0) throw new Error('QTY_REQUIRED');
+
+      const { data: entryRow, error: entryError } = await supabaseAdmin
+        .from('paint_tape_inventory_entries')
+        .select('id, session_id')
+        .eq('id', entryId)
+        .maybeSingle();
+      if (entryError) throw entryError;
+      if (!entryRow) throw new Error('NOT_FOUND');
+
+      const { data: sessionRow, error: sessionError } = await supabaseAdmin
+        .from('paint_tape_inventory_sessions')
+        .select('status')
+        .eq('id', entryRow.session_id)
+        .maybeSingle();
+      if (sessionError) throw sessionError;
+      if (!sessionRow) throw new Error('NOT_FOUND');
+      if (sessionRow.status === 'CLOSED') throw new Error('INVENTORY_SESSION_CLOSED');
+
+      const { data: updatedEntry, error: updateError } = await supabaseAdmin
+        .from('paint_tape_inventory_entries')
+        .update({ qty })
+        .eq('id', entryId)
+        .select('*')
+        .maybeSingle();
+      if (updateError) throw updateError;
+      if (!updatedEntry) throw new Error('NOT_FOUND');
+      return mapPaintTapeInventoryEntry(updatedEntry);
     }
     case 'addPaintTapeInventoryCatalogItem': {
       const itemIndex = String(payload?.itemIndex ?? '').trim();

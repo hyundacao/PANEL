@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -40,9 +40,37 @@ type Task = {
   temperature: string;
 };
 
+type TaskFieldPatch = Partial<Pick<Task,
+  | 'isCurrentPlan'
+  | 'planGroup'
+  | 'station'
+  | 'detail'
+  | 'quantity'
+  | 'norm'
+  | 'highlighted'
+  | 'done'
+  | 'material'
+  | 'materialType'
+  | 'source'
+  | 'dryer'
+  | 'temperature'
+>>;
+
+type TaskMutation = {
+  fields?: TaskFieldPatch;
+  addKinds?: WorkKind[];
+  removeKinds?: WorkKind[];
+  addTeams?: Team[];
+  removeTeams?: Team[];
+  setNotes?: Record<string, string | null>;
+  setNotesIfMissing?: Record<string, string>;
+  clearWork?: boolean;
+};
+
 type StoredPlan = {
   session: { file_name?: string | null; plan_sheet?: string | null; updated_at?: string | null } | null;
   tasks: Task[];
+  unchanged?: boolean;
   processEngineers?: string[];
   processEngineerRoster?: ProcessEngineerRosterEntry[];
 };
@@ -400,6 +428,11 @@ export default function PrzygotowanieProdukcjiPage() {
   const [editingProcessEngineers, setEditingProcessEngineers] = useState(false);
   const [savingProcessEngineers, setSavingProcessEngineers] = useState(false);
   const [processEngineersError, setProcessEngineersError] = useState<string | null>(null);
+  const pendingTaskSavesRef = useRef(new Map<string, number>());
+  const taskSaveQueuesRef = useRef(new Map<string, Promise<void>>());
+  const pendingSaveTotalRef = useRef(0);
+  const taskSaveFailedRef = useRef(false);
+  const sessionVersionRef = useRef('');
   const sheetNames = workbook?.SheetNames ?? [];
   const processEngineers = useMemo(() => processEngineerRoster
     .filter((engineer) => engineer.active)
@@ -422,23 +455,64 @@ export default function PrzygotowanieProdukcjiPage() {
 
   useEffect(() => {
     let active = true;
-    fetch('/api/przygotowanie-produkcji')
-      .then((response) => response.ok ? response.json() as Promise<StoredPlan> : Promise.reject())
-      .then((data) => {
+    let initialized = false;
+    let requestInFlight = false;
+    const loadCurrentPlan = async () => {
+      if (requestInFlight || (initialized && document.visibilityState !== 'visible')) return;
+      requestInFlight = true;
+      try {
+        const syncQuery = initialized
+          ? `?sync=1${sessionVersionRef.current ? `&since=${encodeURIComponent(sessionVersionRef.current)}` : ''}`
+          : '';
+        const response = await fetch(`/api/przygotowanie-produkcji${syncQuery}`, { cache: 'no-store' });
+        if (!response.ok) return;
+        const data = await response.json() as StoredPlan;
         if (!active) return;
-        const roster = Array.isArray(data.processEngineerRoster)
-          ? data.processEngineerRoster
-          : (data.processEngineers ?? defaultProcessEngineers).map((name) => ({ name, shift: '1' as const, active: true }));
-        setProcessEngineerRoster(roster);
-        setProcessEngineerDrafts(roster.map((engineer, index) => ({ ...engineer, id: `engineer-${index}-${engineer.name}`, originalName: engineer.name })));
+        if (data.unchanged) return;
+        if (!initialized) {
+          const roster = Array.isArray(data.processEngineerRoster)
+            ? data.processEngineerRoster
+            : (data.processEngineers ?? defaultProcessEngineers).map((name) => ({ name, shift: '1' as const, active: true }));
+          setProcessEngineerRoster(roster);
+          setProcessEngineerDrafts(roster.map((engineer, index) => ({ ...engineer, id: `engineer-${index}-${engineer.name}`, originalName: engineer.name })));
+        }
         if (!data.session) return;
+        sessionVersionRef.current = data.session.updated_at ?? '';
         setFileName(data.session.file_name ?? '');
         setSheetName(data.session.plan_sheet ?? '');
-        setTasks(data.tasks ?? []);
-      })
-      .catch(() => undefined)
-      .finally(() => { if (active) setLoadingSavedPlan(false); });
-    return () => { active = false; };
+        setTasks((current) => {
+          if (!initialized || current.length === 0) return data.tasks ?? [];
+          const localById = new Map(current.map((task) => [task.id, task]));
+          return (data.tasks ?? []).map((remoteTask) =>
+            (pendingTaskSavesRef.current.get(remoteTask.id) ?? 0) > 0
+              ? localById.get(remoteTask.id) ?? remoteTask
+              : remoteTask
+          );
+        });
+      } catch {
+        // A temporary refresh failure must not clear the plan already visible on screen.
+      } finally {
+        requestInFlight = false;
+        if (!initialized) {
+          initialized = true;
+          if (active) setLoadingSavedPlan(false);
+        }
+      }
+    };
+    void loadCurrentPlan();
+    const interval = window.setInterval(() => void loadCurrentPlan(), 5000);
+    const refreshOnFocus = () => void loadCurrentPlan();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void loadCurrentPlan();
+    };
+    window.addEventListener('focus', refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
   }, []);
 
   useEffect(() => {
@@ -479,21 +553,40 @@ export default function PrzygotowanieProdukcjiPage() {
     }
   };
 
-  const saveTask = async (task: Task) => {
+  const saveTaskMutation = (taskId: string, mutation: TaskMutation) => {
+    if (pendingSaveTotalRef.current === 0) taskSaveFailedRef.current = false;
+    pendingSaveTotalRef.current += 1;
+    pendingTaskSavesRef.current.set(taskId, (pendingTaskSavesRef.current.get(taskId) ?? 0) + 1);
     setSaveState('saving');
     setSaveError(null);
-    try {
-      await apiRequest({ action: 'updateTask', task });
-      const historyResponse = await fetch('/api/przygotowanie-produkcji?history=1');
-      if (historyResponse.ok) {
-        const data = await historyResponse.json() as { history: PlanHistory[] };
-        setHistory(data.history ?? []);
-      }
-      setSaveState('saved');
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : 'Nie udało się zapisać przygotowania produkcji.');
-      setSaveState('error');
-    }
+
+    const previous = taskSaveQueuesRef.current.get(taskId) ?? Promise.resolve();
+    const request = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await apiRequest({ action: 'mutateTask', taskId, mutation });
+      });
+    taskSaveQueuesRef.current.set(taskId, request);
+
+    void request
+      .catch((error) => {
+        taskSaveFailedRef.current = true;
+        setSaveError(error instanceof Error ? error.message : 'Nie udało się zapisać przygotowania produkcji.');
+      })
+      .finally(() => {
+        const remainingForTask = (pendingTaskSavesRef.current.get(taskId) ?? 1) - 1;
+        if (remainingForTask > 0) pendingTaskSavesRef.current.set(taskId, remainingForTask);
+        else pendingTaskSavesRef.current.delete(taskId);
+        pendingSaveTotalRef.current = Math.max(0, pendingSaveTotalRef.current - 1);
+        if (taskSaveQueuesRef.current.get(taskId) === request) taskSaveQueuesRef.current.delete(taskId);
+        if (pendingSaveTotalRef.current === 0) {
+          setSaveState(taskSaveFailedRef.current ? 'error' : 'saved');
+          void fetch('/api/przygotowanie-produkcji?history=1', { cache: 'no-store' })
+            .then((response) => response.ok ? response.json() as Promise<{ history: PlanHistory[] }> : Promise.reject())
+            .then((data) => setHistory(data.history ?? []))
+            .catch(() => undefined);
+        }
+      });
   };
 
   const selectSheet = (nextSheet: string) => {
@@ -526,12 +619,21 @@ export default function PrzygotowanieProdukcjiPage() {
     }
   };
 
-  const updateTask = (id: string, patch: Partial<Task>) => setTasks((current) => current.map((task) => {
-    if (task.id !== id) return task;
-    const next = { ...task, ...patch };
-    void saveTask(next);
-    return next;
-  }));
+  const mutateTask = (id: string, mutation: TaskMutation, optimisticUpdate: (task: Task) => Task) => {
+    setTasks((current) => current.map((task) => task.id === id ? optimisticUpdate(task) : task));
+    saveTaskMutation(id, mutation);
+  };
+  const updateTask = (id: string, fields: TaskFieldPatch) => {
+    mutateTask(id, { fields }, (task) => ({ ...task, ...fields }));
+  };
+  const updateTaskNote = (id: string, key: keyof TaskNotes, value: string) => {
+    mutateTask(id, { setNotes: { [key]: value } }, (task) => {
+      const notes = { ...task.notes };
+      if (value) notes[key] = value;
+      else delete notes[key];
+      return { ...task, notes };
+    });
+  };
   const addManualTask = () => {
     const detail = manualTaskText.trim();
     if (!detail || manualTaskTeams.length === 0) return;
@@ -563,20 +665,37 @@ export default function PrzygotowanieProdukcjiPage() {
   const toggleKind = (task: Task, kind: WorkKind) => {
     const adding = !task.kinds.includes(kind);
     const addedKinds = adding && kind === 'zmiana-formy' ? [kind, 'rozruch' as WorkKind] : [kind];
-    const kinds = [...new Set(adding ? [...task.kinds, ...addedKinds] : task.kinds.filter((item) => item !== kind))];
     const addedTeams = adding ? addedKinds.flatMap((item) => automaticTeams[item] ?? []) : [];
-    const teams = [...new Set([...task.teams, ...addedTeams])];
-    let notes = addedTeams.includes('distribution') && !task.notes.distribution ? { ...task.notes, distribution: 'Przygotować stanowisko' } : task.notes;
-    if (adding && kind === 'forma-narzedziownia' && !notes.process) {
-      notes = { ...notes, process: 'Wznowienie procesu po powrocie z narzędziowni.' };
-    }
-    updateTask(task.id, { kinds, teams, notes });
+    const setNotesIfMissing: Record<string, string> = {};
+    if (addedTeams.includes('distribution')) setNotesIfMissing.distribution = 'Przygotować stanowisko';
+    if (adding && kind === 'forma-narzedziownia') setNotesIfMissing.process = 'Wznowienie procesu po powrocie z narzędziowni.';
+    mutateTask(task.id, {
+      ...(adding ? { addKinds: addedKinds, addTeams: addedTeams } : { removeKinds: [kind] }),
+      setNotesIfMissing
+    }, (currentTask) => {
+      const kinds = [...new Set(adding ? [...currentTask.kinds, ...addedKinds] : currentTask.kinds.filter((item) => item !== kind))];
+      const teams = [...new Set([...currentTask.teams, ...addedTeams])];
+      let notes = addedTeams.includes('distribution') && !currentTask.notes.distribution
+        ? { ...currentTask.notes, distribution: 'Przygotować stanowisko' }
+        : currentTask.notes;
+      if (adding && kind === 'forma-narzedziownia' && !notes.process) {
+        notes = { ...notes, process: 'Wznowienie procesu po powrocie z narzędziowni.' };
+      }
+      return { ...currentTask, kinds, teams, notes };
+    });
   };
   const toggleTeam = (task: Task, team: Team) => {
     const adding = !task.teams.includes(team);
-    const teams = adding ? [...task.teams, team] : task.teams.filter((item) => item !== team);
-    const notes = adding && team === 'distribution' && !task.notes.distribution ? { ...task.notes, distribution: 'Przygotować stanowisko' } : task.notes;
-    updateTask(task.id, { teams, notes });
+    mutateTask(task.id, {
+      ...(adding ? { addTeams: [team] } : { removeTeams: [team] }),
+      setNotesIfMissing: adding && team === 'distribution' ? { distribution: 'Przygotować stanowisko' } : undefined
+    }, (currentTask) => {
+      const teams = adding ? [...new Set([...currentTask.teams, team])] : currentTask.teams.filter((item) => item !== team);
+      const notes = adding && team === 'distribution' && !currentTask.notes.distribution
+        ? { ...currentTask.notes, distribution: 'Przygotować stanowisko' }
+        : currentTask.notes;
+      return { ...currentTask, teams, notes };
+    });
   };
   const togglePlannedTask = (id: string) => setExpandedPlannedTasks((current) =>
     current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
@@ -656,17 +775,24 @@ export default function PrzygotowanieProdukcjiPage() {
   }, [processEngineers, tasks]);
 
   const removeTaskFromTeam = (task: Task, team: Team) => {
-    const notes = { ...task.notes };
-    delete notes[team];
-    if (team === 'process') delete notes.processAssignee;
-    updateTask(task.id, { teams: task.teams.filter((item) => item !== team), notes });
+    mutateTask(task.id, {
+      removeTeams: [team],
+      setNotes: { [team]: null, ...(team === 'process' ? { processAssignee: null } : {}) }
+    }, (currentTask) => {
+      const notes = { ...currentTask.notes };
+      delete notes[team];
+      if (team === 'process') delete notes.processAssignee;
+      return { ...currentTask, teams: currentTask.teams.filter((item) => item !== team), notes };
+    });
   };
 
   const assignProcessEngineer = (task: Task, assignee: string) => {
-    const notes = { ...task.notes };
-    if (assignee) notes.processAssignee = assignee;
-    else delete notes.processAssignee;
-    updateTask(task.id, { notes });
+    mutateTask(task.id, { setNotes: { processAssignee: assignee || null } }, (currentTask) => {
+      const notes = { ...currentTask.notes };
+      if (assignee) notes.processAssignee = assignee;
+      else delete notes.processAssignee;
+      return { ...currentTask, notes };
+    });
   };
 
   const beginProcessEngineersEdit = () => {
@@ -743,7 +869,7 @@ export default function PrzygotowanieProdukcjiPage() {
   };
 
   const clearTaskWork = (task: Task) => {
-    updateTask(task.id, { kinds: [], teams: [], notes: {} });
+    mutateTask(task.id, { clearWork: true }, (currentTask) => ({ ...currentTask, kinds: [], teams: [], notes: {} }));
   };
 
   const clearAllAssignments = () => {
@@ -1016,7 +1142,7 @@ export default function PrzygotowanieProdukcjiPage() {
                       <div className="grid grid-cols-2 gap-1.5">{teamOptions.map((team) => <label className={cn('flex min-h-10 w-full items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.teams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={team.id} style={taskChoiceBackground(task.teams.includes(team.id))}><input checked={task.teams.includes(team.id)} onChange={() => toggleTeam(task, team.id)} type="checkbox" />{team.label}</label>)}</div>
                     </section>
                   </div>
-                  {task.teams.length > 0 && <div className="mt-3 grid gap-2 border-t border-border pt-3 md:grid-cols-2 xl:grid-cols-3">{teamOptions.filter((team) => task.teams.includes(team.id)).map((team) => <label className="text-xs text-dim" key={team.id}>{team.id === 'additional' ? 'Informacja dodatkowa' : `Uwagi dla: ${team.label}`}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTask(task.id, { notes: { ...task.notes, [team.id]: event.target.value } })} placeholder="Dodaj ustalenie" /></label>)}</div>}
+                  {task.teams.length > 0 && <div className="mt-3 grid gap-2 border-t border-border pt-3 md:grid-cols-2 xl:grid-cols-3">{teamOptions.filter((team) => task.teams.includes(team.id)).map((team) => <label className="text-xs text-dim" key={team.id}>{team.id === 'additional' ? 'Informacja dodatkowa' : `Uwagi dla: ${team.label}`}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTaskNote(task.id, team.id, event.target.value)} placeholder="Dodaj ustalenie" /></label>)}</div>}
                 </article>
                   </div>;
                 })}
@@ -1057,7 +1183,7 @@ export default function PrzygotowanieProdukcjiPage() {
                         <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">{teamOptions.map((team) => <label className={cn('flex min-h-10 w-full items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.teams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={team.id} style={taskChoiceBackground(task.teams.includes(team.id))}><input checked={task.teams.includes(team.id)} onChange={() => toggleTeam(task, team.id)} type="checkbox" />{team.label}</label>)}</div>
                       </section>
                     </div>
-                    {task.teams.length > 0 && <div className="mt-3 grid gap-2 border-t border-[rgba(183,122,255,0.22)] pt-3 md:grid-cols-2 xl:grid-cols-3">{teamOptions.filter((team) => task.teams.includes(team.id)).map((team) => <label className="text-xs text-dim" key={team.id}>{team.id === 'additional' ? 'Informacja dodatkowa' : `Uwagi dla: ${team.label}`}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTask(task.id, { notes: { ...task.notes, [team.id]: event.target.value } })} placeholder="Dodaj ustalenie" /></label>)}</div>}
+                    {task.teams.length > 0 && <div className="mt-3 grid gap-2 border-t border-[rgba(183,122,255,0.22)] pt-3 md:grid-cols-2 xl:grid-cols-3">{teamOptions.filter((team) => task.teams.includes(team.id)).map((team) => <label className="text-xs text-dim" key={team.id}>{team.id === 'additional' ? 'Informacja dodatkowa' : `Uwagi dla: ${team.label}`}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTaskNote(task.id, team.id, event.target.value)} placeholder="Dodaj ustalenie" /></label>)}</div>}
                   </div>}
                 </div>;
               })}</div>
@@ -1070,7 +1196,7 @@ export default function PrzygotowanieProdukcjiPage() {
                 return !(task.kinds.length === 1 && task.kinds[0] === 'przeglad-a' && ['mechanics', 'distribution', 'technician'].includes(team.id));
               });
               const columnCopyId = `column-${team.id}`;
-              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><div className="flex items-center gap-2"><button aria-label={`Kopiuj wszystkie zadania: ${team.label}`} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim transition hover:border-[rgba(255,122,0,0.65)] hover:text-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40" disabled={queue.length === 0} onClick={() => void copyTeamQueue(team.id, queue)} title="Kopiuj całą kolumnę" type="button"><Copy className="h-4 w-4" /></button><Badge>{queue.filter((task) => !task.done).length}</Badge></div></div>{copiedQueueTask === columnCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-400">Skopiowano całą kolumnę.</p>}<div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; const showProductionMetrics = !isManualTask(task) && !['mechanics', 'process', 'technician'].includes(team.id); return <div className={cn('rounded-lg border border-border bg-bg', task.kinds.includes('anulowane') && 'border-slate-400/70 bg-slate-400/10')} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', task.done && 'border-[rgba(34,197,94,0.65)]')} onClick={() => void copyQueueTask(task, team.id)} type="button"><p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p>{showProductionMetrics && <p className="mt-1 text-xs text-body">Ilość: {task.quantity || '---'} | Norma: {task.norm || '---'}</p>}<p className="mt-1 text-xs text-body">{kindLabels}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{!isManualTask(task) && teamsWith5s.includes(team.id) && <p className="mt-1 text-xs text-body">{standard5s}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button><div className="flex justify-end gap-1.5 border-t border-border p-2"><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim hover:border-[rgba(255,122,0,0.65)] hover:text-title" onClick={() => setEditingQueueTask(editing ? null : copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-4 w-4" /></button><button aria-label="Usuń zadanie z tego działu" className="flex h-8 w-8 items-center justify-center rounded border border-red-500/45 text-red-300 hover:bg-red-500/10" onClick={() => { removeTaskFromTeam(task, team.id); setEditingQueueTask(null); }} title="Usuń zadanie z tego działu" type="button"><X className="h-4 w-4" /></button></div>{team.id === 'process' && <div className="border-t border-border p-2"><SelectField aria-label={`Przypisz inżyniera do zadania ${task.station}`} className="min-h-9 rounded-lg border-[rgba(47,181,240,0.35)] px-2 py-1.5 text-xs" onChange={(event) => assignProcessEngineer(task, event.target.value)} value={task.notes.processAssignee ?? ''}><option value="">Nieprzypisane</option>{(['1', '2'] as const).map((shift) => { const shiftEngineers = processEngineerRoster.filter((engineer) => engineer.active && engineer.shift === shift); return shiftEngineers.length > 0 ? <optgroup key={shift} label={`Zmiana ${shift}`}>{shiftEngineers.map((engineer) => <option key={engineer.name} value={engineer.name}>{engineer.name}</option>)}</optgroup> : null; })}</SelectField></div>}{editing && <div className="space-y-3 border-t border-border p-3"><div className="grid grid-cols-2 gap-1.5">{workKinds.map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTask(task.id, { notes: { ...task.notes, [team.id]: event.target.value } })} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); setEditingQueueTask(null); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
+              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><div className="flex items-center gap-2"><button aria-label={`Kopiuj wszystkie zadania: ${team.label}`} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim transition hover:border-[rgba(255,122,0,0.65)] hover:text-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40" disabled={queue.length === 0} onClick={() => void copyTeamQueue(team.id, queue)} title="Kopiuj całą kolumnę" type="button"><Copy className="h-4 w-4" /></button><Badge>{queue.filter((task) => !task.done).length}</Badge></div></div>{copiedQueueTask === columnCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-400">Skopiowano całą kolumnę.</p>}<div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; const showProductionMetrics = !isManualTask(task) && !['mechanics', 'process', 'technician'].includes(team.id); return <div className={cn('rounded-lg border border-border bg-bg', task.kinds.includes('anulowane') && 'border-slate-400/70 bg-slate-400/10')} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', task.done && 'border-[rgba(34,197,94,0.65)]')} onClick={() => void copyQueueTask(task, team.id)} type="button"><p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p>{showProductionMetrics && <p className="mt-1 text-xs text-body">Ilość: {task.quantity || '---'} | Norma: {task.norm || '---'}</p>}<p className="mt-1 text-xs text-body">{kindLabels}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{!isManualTask(task) && teamsWith5s.includes(team.id) && <p className="mt-1 text-xs text-body">{standard5s}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button><div className="flex justify-end gap-1.5 border-t border-border p-2"><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim hover:border-[rgba(255,122,0,0.65)] hover:text-title" onClick={() => setEditingQueueTask(editing ? null : copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-4 w-4" /></button><button aria-label="Usuń zadanie z tego działu" className="flex h-8 w-8 items-center justify-center rounded border border-red-500/45 text-red-300 hover:bg-red-500/10" onClick={() => { removeTaskFromTeam(task, team.id); setEditingQueueTask(null); }} title="Usuń zadanie z tego działu" type="button"><X className="h-4 w-4" /></button></div>{team.id === 'process' && <div className="border-t border-border p-2"><SelectField aria-label={`Przypisz inżyniera do zadania ${task.station}`} className="min-h-9 rounded-lg border-[rgba(47,181,240,0.35)] px-2 py-1.5 text-xs" onChange={(event) => assignProcessEngineer(task, event.target.value)} value={task.notes.processAssignee ?? ''}><option value="">Nieprzypisane</option>{(['1', '2'] as const).map((shift) => { const shiftEngineers = processEngineerRoster.filter((engineer) => engineer.active && engineer.shift === shift); return shiftEngineers.length > 0 ? <optgroup key={shift} label={`Zmiana ${shift}`}>{shiftEngineers.map((engineer) => <option key={engineer.name} value={engineer.name}>{engineer.name}</option>)}</optgroup> : null; })}</SelectField></div>}{editing && <div className="space-y-3 border-t border-border p-3"><div className="grid grid-cols-2 gap-1.5">{workKinds.map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTaskNote(task.id, team.id, event.target.value)} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); setEditingQueueTask(null); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
             })}</div>}
             {activeView === 'work-plan' && <section className="overflow-hidden border-y border-[rgba(47,181,240,0.3)] bg-[rgba(8,11,16,0.72)]">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[rgba(47,181,240,0.25)] px-4 py-3">

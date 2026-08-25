@@ -1402,24 +1402,6 @@ export default function OriginalInventoryPage() {
   );
   const hasMoreCatalogRows = catalogVisibleCount < filteredCatalog.length;
   const applyNameToForm = (rawName: string) => {
-    const needle = normalizeCatalogNameKey(rawName);
-    if (!needle) {
-      setForm((prev) => ({ ...prev, name: rawName }));
-      return;
-    }
-    const matched =
-      existingByName.get(needle) ??
-      catalog.find((item) => normalizeCatalogNameKey(item.name) === needle) ??
-      nameSuggestions.find(
-        (item) => item.indexCode && normalizeCatalogNameKey(item.indexCode) === needle
-      ) ??
-      null;
-    if (matched) {
-      setForm((prev) => ({ ...prev, name: matched.name, unit: matched.unit }));
-      qtyInputRef.current?.focus();
-      qtyInputRef.current?.select();
-      return;
-    }
     setForm((prev) => ({ ...prev, name: rawName }));
   };
   const applyNameSuggestionToForm = (suggestion: (typeof nameSuggestions)[number]) => {

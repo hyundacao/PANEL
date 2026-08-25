@@ -25,6 +25,31 @@ type StoredTask = {
   temperature: string;
 };
 
+type StoredTaskMutation = {
+  fields?: Partial<Pick<StoredTask,
+    | 'isCurrentPlan'
+    | 'planGroup'
+    | 'station'
+    | 'detail'
+    | 'quantity'
+    | 'norm'
+    | 'highlighted'
+    | 'done'
+    | 'material'
+    | 'materialType'
+    | 'source'
+    | 'dryer'
+    | 'temperature'
+  >>;
+  addKinds?: string[];
+  removeKinds?: string[];
+  addTeams?: string[];
+  removeTeams?: string[];
+  setNotes?: Record<string, string | null>;
+  setNotesIfMissing?: Record<string, string>;
+  clearWork?: boolean;
+};
+
 const PROCESS_ENGINEERS_SETTINGS_KEY = '__process_engineers__';
 const PROCESS_ENGINEERS_SETTINGS_DATE = '2000-01-01';
 const DEFAULT_PROCESS_ENGINEERS = ['Adam', 'Mirek', 'Zbyszek', 'Paweł', 'Bogdan'];
@@ -270,11 +295,62 @@ const fromDbTask = (row: Record<string, unknown>): StoredTask => ({
   temperature: String(row.temperature ?? '')
 });
 
+const validWorkKinds = new Set([
+  'zmiana-formy', 'forma-narzedziownia', 'rozruch', 'wznowienie', 'zmiana-koloru',
+  'zmiana-grafiki', 'regulacja', 'proby', 'przeglad-a', 'anulowane', 'inne'
+]);
+const validTeams = new Set(['mechanics', 'process', 'distribution', 'graphics', 'technician', 'additional']);
+const validNoteKeys = new Set([...validTeams, 'processAssignee']);
+
+const applyTaskMutation = (task: StoredTask, mutation: StoredTaskMutation): StoredTask => {
+  const fields = mutation.fields ?? {};
+  const next: StoredTask = {
+    ...task,
+    isCurrentPlan: typeof fields.isCurrentPlan === 'boolean' ? fields.isCurrentPlan : task.isCurrentPlan,
+    planGroup: fields.planGroup === undefined ? task.planGroup : String(fields.planGroup),
+    station: fields.station === undefined ? task.station : String(fields.station),
+    detail: fields.detail === undefined ? task.detail : String(fields.detail),
+    quantity: fields.quantity === undefined ? task.quantity : String(fields.quantity),
+    norm: fields.norm === undefined ? task.norm : String(fields.norm),
+    highlighted: typeof fields.highlighted === 'boolean' ? fields.highlighted : task.highlighted,
+    done: typeof fields.done === 'boolean' ? fields.done : task.done,
+    material: fields.material === undefined ? task.material : String(fields.material),
+    materialType: fields.materialType === undefined ? task.materialType : String(fields.materialType),
+    source: fields.source === undefined ? task.source : String(fields.source),
+    dryer: fields.dryer === undefined ? task.dryer : String(fields.dryer),
+    temperature: fields.temperature === undefined ? task.temperature : String(fields.temperature),
+    kinds: mutation.clearWork ? [] : [...task.kinds],
+    teams: mutation.clearWork ? [] : [...task.teams],
+    notes: mutation.clearWork ? {} : { ...task.notes }
+  };
+
+  const removedKinds = new Set((mutation.removeKinds ?? []).filter((kind) => validWorkKinds.has(kind)));
+  const addedKinds = (mutation.addKinds ?? []).filter((kind) => validWorkKinds.has(kind));
+  next.kinds = [...new Set([...next.kinds.filter((kind) => !removedKinds.has(kind)), ...addedKinds])];
+
+  const removedTeams = new Set((mutation.removeTeams ?? []).filter((team) => validTeams.has(team)));
+  const addedTeams = (mutation.addTeams ?? []).filter((team) => validTeams.has(team));
+  next.teams = [...new Set([...next.teams.filter((team) => !removedTeams.has(team)), ...addedTeams])];
+
+  Object.entries(mutation.setNotesIfMissing ?? {}).forEach(([key, value]) => {
+    if (!validNoteKeys.has(key) || String(next.notes[key] ?? '').trim()) return;
+    next.notes[key] = String(value);
+  });
+  Object.entries(mutation.setNotes ?? {}).forEach(([key, value]) => {
+    if (!validNoteKeys.has(key)) return;
+    if (value === null || value === '') delete next.notes[key];
+    else next.notes[key] = String(value);
+  });
+
+  return next;
+};
+
 export async function GET(request: NextRequest) {
   try {
     const access = await ensureAccess(request);
     if (access.response) return access.response;
-    await archivePreviousDays();
+    const syncOnly = request.nextUrl.searchParams.get('sync') === '1';
+    if (!syncOnly) await archivePreviousDays();
     if (request.nextUrl.searchParams.get('history') === '1') {
       const { data: history, error: historyError } = await supabaseAdmin
         .from('przygotowanie_produkcji_history')
@@ -288,13 +364,17 @@ export async function GET(request: NextRequest) {
         history: (history ?? []).filter((entry) => Array.isArray(entry.tasks) && entry.tasks.length > 0)
       });
     }
-    const globalRoster = await readGlobalProcessEngineerRoster();
     const { data: session, error: sessionError } = await supabaseAdmin
       .from('przygotowanie_produkcji_sessions')
       .select('id, session_date, file_name, plan_sheet, updated_at')
       .eq('session_date', todayKey())
       .maybeSingle();
     if (sessionError) throw sessionError;
+    const requestedVersion = request.nextUrl.searchParams.get('since');
+    if (syncOnly && session && requestedVersion && requestedVersion === String(session.updated_at ?? '')) {
+      return NextResponse.json({ unchanged: true, updatedAt: session.updated_at });
+    }
+    const globalRoster = syncOnly ? null : await readGlobalProcessEngineerRoster();
     if (!session) {
       const processEngineerRoster = globalRoster ?? defaultProcessEngineerRoster();
       return NextResponse.json({
@@ -331,7 +411,7 @@ export async function POST(request: NextRequest) {
     const access = await ensureAccess(request, true);
     if (access.response || !access.user) return access.response;
     await archivePreviousDays();
-    const body = await request.json() as { action?: string; fileName?: string; sheetName?: string; tasks?: StoredTask[]; task?: StoredTask; processEngineers?: string[]; processEngineerRoster?: ProcessEngineerRosterEntry[]; planDate?: string };
+    const body = await request.json() as { action?: string; fileName?: string; sheetName?: string; tasks?: StoredTask[]; task?: StoredTask; taskId?: string; mutation?: StoredTaskMutation; processEngineers?: string[]; processEngineerRoster?: ProcessEngineerRosterEntry[]; planDate?: string };
     const now = new Date().toISOString();
 
     if (body.action === 'deleteHistoryDay') {
@@ -487,6 +567,63 @@ export async function POST(request: NextRequest) {
       if (taskRowsError) throw taskRowsError;
       await saveHistorySnapshot({ ...session, session_date: todayKey(), created_by: access.user.name }, (taskRows ?? []) as Array<Record<string, unknown>>);
       return NextResponse.json({ task: body.task });
+    }
+
+    if (body.action === 'mutateTask' && body.taskId && body.mutation) {
+      const { data: session, error: sessionError } = await supabaseAdmin
+        .from('przygotowanie_produkcji_sessions')
+        .select('id, session_date, file_name, plan_sheet, created_by')
+        .eq('session_date', todayKey())
+        .maybeSingle();
+      if (sessionError) throw sessionError;
+      if (!session) return NextResponse.json({ code: 'NO_PLAN' }, { status: 409 });
+
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const { data: currentRow, error: readError } = await supabaseAdmin
+          .from('przygotowanie_produkcji_tasks')
+          .select('*')
+          .eq('session_id', session.id)
+          .eq('task_key', body.taskId)
+          .maybeSingle();
+        if (readError) throw readError;
+        if (!currentRow) return NextResponse.json({ code: 'TASK_NOT_FOUND' }, { status: 404 });
+
+        const currentTask = fromDbTask(currentRow as Record<string, unknown>);
+        const nextTask = applyTaskMutation(currentTask, body.mutation);
+        const storedTask = toDbTask(nextTask, session.id, Number(currentRow.position_no ?? 0), access.user.name);
+        const updates = omitFields(storedTask, ['session_id', 'task_key', 'position_no'] as const);
+        const { data: updatedRow, error: updateError } = await supabaseAdmin
+          .from('przygotowanie_produkcji_tasks')
+          .update(updates)
+          .eq('id', currentRow.id)
+          .eq('updated_at', currentRow.updated_at)
+          .select('*')
+          .maybeSingle();
+        if (updateError) throw updateError;
+        if (!updatedRow) continue;
+
+        const { data: taskRows, error: taskRowsError } = await supabaseAdmin
+          .from('przygotowanie_produkcji_tasks')
+          .select('*')
+          .eq('session_id', session.id)
+          .order('position_no');
+        if (taskRowsError) throw taskRowsError;
+        const currentTasks = (taskRows ?? [])
+          .filter((row) => !isProcessEngineersSettings(row as Record<string, unknown>))
+          .map((row) => fromDbTask(row as Record<string, unknown>));
+        const { error: sessionUpdateError } = await supabaseAdmin
+          .from('przygotowanie_produkcji_sessions')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', session.id);
+        if (sessionUpdateError) throw sessionUpdateError;
+        await saveHistorySnapshot(session, currentTasks as unknown as Array<Record<string, unknown>>);
+        return NextResponse.json({ task: fromDbTask(updatedRow as Record<string, unknown>) });
+      }
+
+      return NextResponse.json({
+        code: 'TASK_UPDATE_CONFLICT',
+        message: 'Ktoś równocześnie zmieniał to zadanie. Spróbuj ponownie.'
+      }, { status: 409 });
     }
 
     return NextResponse.json({ code: 'INVALID_ACTION' }, { status: 400 });

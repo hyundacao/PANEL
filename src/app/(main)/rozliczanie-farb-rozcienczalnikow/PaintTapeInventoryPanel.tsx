@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Boxes,
+  Check,
   CircleCheckBig,
   ChevronDown,
   ChevronRight,
@@ -31,7 +32,8 @@ import {
   getPaintTapeInventory,
   removePaintTapeInventoryEntry,
   reopenPaintTapeInventorySession,
-  savePaintTapeInventoryEntry
+  savePaintTapeInventoryEntry,
+  updatePaintTapeInventoryEntry
 } from '@/lib/api';
 import type {
   PaintTapeInventoryCategory,
@@ -161,6 +163,7 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
   const [category, setCategory] = useState<'ALL' | PaintTapeInventoryCategory>('ALL');
   const [completion, setCompletion] = useState<CompletionFilter>('ALL');
   const [drafts, setDrafts] = useState<Record<string, InventoryDraft>>({});
+  const [entryEditDrafts, setEntryEditDrafts] = useState<Record<string, string>>({});
   const [showAddForm, setShowAddForm] = useState(false);
   const [catalogSearch, setCatalogSearch] = useState('');
   const [showCatalogSuggestions, setShowCatalogSuggestions] = useState(false);
@@ -190,7 +193,7 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
   const entries = useMemo(() => data?.entries ?? [], [data?.entries]);
   const catalog = useMemo(() => data?.catalog ?? [], [data?.catalog]);
   const session = data?.session ?? null;
-  const locked = readOnly || session?.status === 'CLOSED' || view === 'HISTORY';
+  const locked = readOnly || session?.status === 'CLOSED' || (view === 'HISTORY' && !session);
   const showErpComparison = view === 'HISTORY';
 
   const entriesByItem = useMemo(() => {
@@ -401,6 +404,31 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
     }
   });
 
+  const updateEntryMutation = useMutation({
+    mutationFn: updatePaintTapeInventoryEntry,
+    onSuccess: (entry) => {
+      setEntryEditDrafts((current) => {
+        const next = { ...current };
+        delete next[entry.id];
+        return next;
+      });
+      void queryClient.invalidateQueries({ queryKey: ['paint-tape-inventory'] });
+      toast({ title: 'Pomiar został poprawiony', tone: 'success' });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: 'Nie udało się poprawić pomiaru',
+        description:
+          error.message === 'INVENTORY_SESSION_CLOSED'
+            ? 'Najpierw otwórz ponownie ten spis.'
+            : error.message === 'QTY_REQUIRED'
+              ? 'Wpisz poprawną ilość, także 0.'
+              : 'Sprawdź połączenie z bazą.',
+        tone: 'error'
+      });
+    }
+  });
+
   const addItemMutation = useMutation({
     mutationFn: addPaintTapeInventoryCatalogItem,
     onSuccess: () => {
@@ -478,6 +506,15 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
     });
   };
 
+  const handleEntryUpdate = (entry: PaintTapeInventoryEntry) => {
+    const qty = parseQuantity(entryEditDrafts[entry.id] ?? String(entry.qty));
+    if (qty === null) {
+      toast({ title: 'Wpisz poprawną ilość, także 0.', tone: 'error' });
+      return;
+    }
+    updateEntryMutation.mutate({ entryId: entry.id, qty });
+  };
+
   const handleClose = () => {
     if (!session) return;
     const missing = Math.max(0, catalog.length - checkedItemCount);
@@ -510,8 +547,8 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
       erpSnapshotLookup.byName.get(normalizeSearch(item.name));
     const unitsMatch =
       !erpSnapshot || normalizeUnit(erpSnapshot.unit) === normalizeUnit(item.unit);
-    const difference = hasEntries && erpSnapshot && unitsMatch
-      ? totalQty - erpSnapshot.realQty
+    const difference = hasEntries && unitsMatch && (Boolean(erpSnapshot) || totalQty > 0)
+      ? totalQty - (erpSnapshot?.realQty ?? 0)
       : null;
     const absoluteDifference = difference === null ? null : Math.abs(difference);
     const differenceIsZero = difference !== null && absoluteDifference! < 0.0005;
@@ -531,7 +568,9 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
         className={cn(
           'grid scroll-mt-24 gap-3 border-b border-[rgba(255,255,255,0.09)] px-2 py-4 transition last:border-b-0 sm:px-4',
           showErpComparison
-            ? 'lg:grid-cols-[minmax(260px,1.25fr)_130px_130px_minmax(190px,0.9fr)] lg:items-center'
+            ? locked
+              ? 'lg:grid-cols-[minmax(260px,1.25fr)_130px_130px_minmax(190px,0.9fr)] lg:items-center'
+              : 'lg:grid-cols-[minmax(240px,1.25fr)_120px_120px_minmax(170px,0.9fr)_130px_52px] lg:items-center'
             : locked
               ? 'lg:grid-cols-[minmax(280px,1fr)_160px] lg:items-center'
               : 'lg:grid-cols-[minmax(280px,1fr)_160px_150px_52px] lg:items-center',
@@ -614,14 +653,14 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
           >
             {!hasEntries
               ? 'Brak pomiaru'
-              : !erpSnapshot
-                ? 'Brak stanu ERP'
-                : !unitsMatch
-                  ? 'Niezgodna jednostka'
+              : !unitsMatch
+                ? 'Niezgodna jednostka'
+                : difference !== null && difference > 0
+                  ? `Mamy więcej fizycznie: +${formatQuantity(absoluteDifference!)} ${item.unit}`
+                  : !erpSnapshot
+                    ? 'Brak stanu ERP'
                     : differenceIsZero
                       ? 'Stan zgodny'
-                      : difference! > 0
-                      ? `Mamy więcej fizycznie: +${formatQuantity(absoluteDifference!)} ${item.unit}`
                       : `Do rozpisania: ${formatQuantity(absoluteDifference!)} ${item.unit}`}
               </p>
             </div>
@@ -672,9 +711,41 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
                 key={entry.id}
                 className="flex min-w-0 items-start gap-2 rounded-lg bg-[rgba(255,255,255,0.035)] px-3 py-2 text-xs"
               >
-                <span className="shrink-0 font-black tabular-nums text-title">
-                  {index + 1}. {formatQuantity(entry.qty)} {item.unit}
-                </span>
+                {locked ? (
+                  <span className="shrink-0 font-black tabular-nums text-title">
+                    {index + 1}. {formatQuantity(entry.qty)} {item.unit}
+                  </span>
+                ) : (
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="font-black text-dim">{index + 1}.</span>
+                    <div className="relative w-28">
+                      <Input
+                        aria-label={`Edytuj pomiar ${index + 1} dla ${item.name}`}
+                        value={entryEditDrafts[entry.id] ?? String(entry.qty)}
+                        onChange={(event) => setEntryEditDrafts((current) => ({ ...current, [entry.id]: event.target.value }))}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            handleEntryUpdate(entry);
+                          }
+                        }}
+                        inputMode="decimal"
+                        className="h-8 min-h-8 rounded-md px-2 pr-8 py-1 text-xs font-black tabular-nums"
+                      />
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-dim">{item.unit}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleEntryUpdate(entry)}
+                      disabled={updateEntryMutation.isPending || parseQuantity(entryEditDrafts[entry.id] ?? String(entry.qty)) === null}
+                      className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-emerald-500/25 text-emerald-300 transition hover:bg-emerald-500/10 disabled:opacity-40"
+                      aria-label={`Zapisz pomiar ${index + 1}`}
+                      title="Zapisz poprawioną ilość"
+                    >
+                      <Check className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
                 <span className="min-w-0 flex-1 break-words text-dim">
                   {entry.checkedBy} · {new Date(entry.checkedAt).toLocaleString('pl-PL')}
                 </span>
@@ -790,7 +861,7 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
                   Zapisane pozycje: {checkedItemCount} · pomiary: {entries.length}
                 </p>
               </div>
-              {session?.status === 'CLOSED' && !readOnly && (
+              {session?.status === 'CLOSED' && !readOnly ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -801,13 +872,25 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
                   <RotateCcw className="mr-2 h-4 w-4" />
                   Otwórz ponownie
                 </Button>
-              )}
+              ) : session?.status === 'OPEN' && !readOnly ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleClose}
+                  disabled={closeMutation.isPending}
+                  className="paint-inventory-button paint-inventory-button-amber paint-inventory-button-active min-h-[44px] border-amber-500/35 px-4 text-title hover:border-amber-400/55"
+                >
+                  <LockKeyhole className="mr-2 h-4 w-4" />
+                  Zamknij ponownie
+                </Button>
+              ) : null}
             </div>
-            <div className="hidden grid-cols-[minmax(260px,1.25fr)_130px_130px_minmax(190px,0.9fr)] gap-3 border-b border-border bg-[rgba(255,255,255,0.035)] px-4 py-3 text-[10px] font-black uppercase text-dim lg:grid">
+            <div className={cn('hidden gap-3 border-b border-border bg-[rgba(255,255,255,0.035)] px-4 py-3 text-[10px] font-black uppercase text-dim lg:grid', locked ? 'grid-cols-[minmax(260px,1.25fr)_130px_130px_minmax(190px,0.9fr)]' : 'grid-cols-[minmax(240px,1.25fr)_120px_120px_minmax(170px,0.9fr)_130px_52px]')}>
               <span>Nazwa</span>
               <span>Stan fizyczny</span>
               <span>ERP</span>
               <span>Różnica / korekta</span>
+              {!locked && <><span>Dopisz ilość</span><span /></>}
             </div>
             {inventoryQuery.isLoading ? (
               <p className="p-4 text-sm text-dim">Wczytywanie...</p>

@@ -169,7 +169,9 @@ const sampleTechnologyUsageByIndex: Record<string, TechnologyUsage> = {
 const getTechnologyUsage = (
   settlement: PaintTapeSettlement,
   technologyUsageByIndex: Map<string, TechnologyUsage>
-) => technologyUsageByIndex.get(normalizeKey(settlement.itemIndexCode));
+) =>
+  technologyUsageByIndex.get(normalizeKey(settlement.itemIndexCode)) ??
+  technologyUsageByIndex.get(`name:${normalizeKey(settlement.itemName)}`);
 
 type UsageComparison = 'HIGHER' | 'LOWER' | 'MATCH' | null;
 
@@ -398,6 +400,7 @@ const parseTechnologyUsageValue = (value: unknown) => {
   const text = String(value ?? '')
     .replace(/\s+/g, '')
     .replace(',', '.');
+  if (!text) return null;
   const fraction = text.match(/^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/);
   if (fraction) {
     const numerator = Number(fraction[1]);
@@ -410,26 +413,61 @@ const parseTechnologyUsageValue = (value: unknown) => {
 
 const parseTechnologyUsageRows = (rows: unknown[][]): TechnologyUsageImportEntry[] => {
   const imports = new Map<string, TechnologyUsageImportEntry>();
-  rows.forEach((rawRow, rowIndex) => {
-    const headerRow = rawRow.map((value) => normalizeKey(value));
-    const indexColumn = headerRow.findIndex((value) => value.includes('indkes') || value.includes('indeks'));
+  let columns: {
+    index: number;
+    usage: number;
+    unit: number;
+    name: number;
+  } | null = null;
+
+  rows.forEach((rawRow) => {
+    const headerRow = rawRow.map((value) => normalizeKey(value).replace(/ł/g, 'l'));
+    const indexColumn = [
+      headerRow.findIndex((value) => value === 'indeks materialu'),
+      headerRow.findIndex((value) => value === 'indkes'),
+      headerRow.findIndex((value) => value === 'indeks'),
+      headerRow.findIndex((value) => value.includes('indeks materialu'))
+    ].find((column) => column >= 0) ?? -1;
     const usageColumn = headerRow.findIndex(
       (value) => value.includes('zuzycie') && (value.includes('tech') || value.includes('technolog'))
     );
     const unitColumn = headerRow.findIndex((value) => value.includes('jednost'));
-    const nameColumn = headerRow.findIndex((value) => value.includes('nazwa'));
-    if (indexColumn < 0 || usageColumn < 0) return;
+    const nameColumn = [
+      headerRow.findIndex((value) => value === 'nazwa materialu'),
+      headerRow.findIndex((value) => value === 'nazwa indeksu'),
+      headerRow.findIndex((value) => value === 'nazwa')
+    ].find((column) => column >= 0) ?? -1;
 
-    rows.slice(rowIndex + 1).forEach((row) => {
-      const indexCode = String(row[indexColumn] ?? '').trim();
-      const usagePerPiece = parseTechnologyUsageValue(row[usageColumn]);
-      if (!indexCode || usagePerPiece === null) return;
-      imports.set(normalizeKey(indexCode), {
-        indexCode,
-        itemName: nameColumn >= 0 ? String(row[nameColumn] ?? '').trim() : '',
-        usagePerPiece,
-        unit: unitColumn >= 0 ? String(row[unitColumn] ?? '').trim() || 'kg' : 'kg'
-      });
+    if (indexColumn >= 0 && usageColumn >= 0) {
+      columns = {
+        index: indexColumn,
+        usage: usageColumn,
+        unit: unitColumn,
+        name: nameColumn
+      };
+      return;
+    }
+
+    if (!columns) return;
+    const indexCode = String(rawRow[columns.index] ?? '').trim();
+    const usagePerPiece = parseTechnologyUsageValue(rawRow[columns.usage]);
+    if (!indexCode || usagePerPiece === null) return;
+
+    const unit = columns.unit >= 0 ? String(rawRow[columns.unit] ?? '').trim() || 'kg' : 'kg';
+    const key = normalizeKey(indexCode);
+    const existing = imports.get(key);
+    if (
+      existing &&
+      (Math.abs(existing.usagePerPiece - usagePerPiece) > 1e-12 || normalizeKey(existing.unit) !== normalizeKey(unit))
+    ) {
+      throw new Error(`TECHNOLOGY_USAGE_CONFLICT:${indexCode}`);
+    }
+
+    imports.set(key, {
+      indexCode,
+      itemName: columns.name >= 0 ? String(rawRow[columns.name] ?? '').trim() : '',
+      usagePerPiece,
+      unit
     });
   });
   return [...imports.values()];
@@ -443,7 +481,7 @@ const parseTechnologyUsageFile = async (file: File): Promise<TechnologyUsageImpo
     const rows = workbook.SheetNames.flatMap((sheetName) => {
       const sheet = workbook.Sheets[sheetName];
       return sheet
-        ? (XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as unknown[][])
+        ? (XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true }) as unknown[][])
         : [];
     });
     return parseTechnologyUsageRows(rows);
@@ -546,11 +584,29 @@ export default function PaintTapeSettlementsPage() {
 
   const technologyUsageByIndex = useMemo(() => {
     const values = new Map<string, TechnologyUsage>(Object.entries(sampleTechnologyUsageByIndex));
+    const ambiguousNames = new Set<string>();
     importedTechnologyUsages.forEach((usage: PaintTapeTechnologyUsage) => {
-      values.set(normalizeKey(usage.indexCode), {
+      const technologyUsage = {
         usagePerPiece: usage.usagePerPiece,
         unit: usage.unit
-      });
+      };
+      values.set(normalizeKey(usage.indexCode), technologyUsage);
+
+      const normalizedName = normalizeKey(usage.itemName);
+      if (!normalizedName) return;
+      const nameKey = `name:${normalizedName}`;
+      if (ambiguousNames.has(nameKey)) return;
+      const existing = values.get(nameKey);
+      if (
+        existing &&
+        (Math.abs(existing.usagePerPiece - technologyUsage.usagePerPiece) > 1e-12 ||
+          normalizeKey(existing.unit) !== normalizeKey(technologyUsage.unit))
+      ) {
+        values.delete(nameKey);
+        ambiguousNames.add(nameKey);
+        return;
+      }
+      values.set(nameKey, technologyUsage);
     });
     return values;
   }, [importedTechnologyUsages]);
@@ -1339,10 +1395,16 @@ export default function PaintTapeSettlementsPage() {
         return;
       }
       await technologyImportMutation.mutateAsync({ entries });
-    } catch {
+    } catch (error) {
+      const conflictIndex =
+        error instanceof Error && error.message.startsWith('TECHNOLOGY_USAGE_CONFLICT:')
+          ? error.message.slice('TECHNOLOGY_USAGE_CONFLICT:'.length)
+          : '';
       toast({
         title: 'Nie odczytano pliku z normami technologicznymi',
-        description: 'Obsługiwane są pliki DOCX, XLSX i XLS z tabelą technologii.',
+        description: conflictIndex
+          ? `Indeks ${conflictIndex} ma w pliku różne normy lub jednostki. Ujednolić wpisy w pliku i spróbować ponownie.`
+          : 'Obsługiwane są pliki DOCX, XLSX i XLS z tabelą technologii.',
         tone: 'error'
       });
     } finally {

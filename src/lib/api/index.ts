@@ -805,6 +805,12 @@ export const removePaintTapeInventoryEntry = async (entryId: string): Promise<{
   session: PaintTapeInventorySession;
 }> => appRequest('removePaintTapeInventoryEntry', { entryId });
 
+export const updatePaintTapeInventoryEntry = async (payload: {
+  entryId: string;
+  qty: number;
+}): Promise<PaintTapeInventoryEntry> =>
+  appRequest('updatePaintTapeInventoryEntry', payload);
+
 export const addPaintTapeInventoryCatalogItem = async (payload: {
   itemIndex: string;
   itemCode?: string;
