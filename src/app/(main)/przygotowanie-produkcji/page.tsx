@@ -439,6 +439,9 @@ export default function PrzygotowanieProdukcjiPage() {
     .sort((left, right) => left.shift.localeCompare(right.shift))
     .map((engineer) => engineer.name), [processEngineerRoster]);
   const activeView = searchParams.get('view') === 'material' ? 'material' : searchParams.get('view') === 'work-plan' ? 'work-plan' : searchParams.get('view') === 'history' ? 'history' : searchParams.get('view') === 'report' ? 'report' : searchParams.get('view') === 'management' ? 'management' : 'plan';
+  const activeViewRef = useRef(activeView);
+  const refreshCurrentPlanRef = useRef<(() => void) | null>(null);
+  const lastSyncAttemptRef = useRef(0);
 
   const apiRequest = async <T,>(body?: unknown) => {
     const response = await fetch('/api/przygotowanie-produkcji', body ? {
@@ -459,6 +462,9 @@ export default function PrzygotowanieProdukcjiPage() {
     let requestInFlight = false;
     const loadCurrentPlan = async () => {
       if (requestInFlight || (initialized && document.visibilityState !== 'visible')) return;
+      const syncInterval = activeViewRef.current === 'plan' ? 5000 : 60000;
+      if (initialized && Date.now() - lastSyncAttemptRef.current < syncInterval) return;
+      lastSyncAttemptRef.current = Date.now();
       requestInFlight = true;
       try {
         const syncQuery = initialized
@@ -499,11 +505,16 @@ export default function PrzygotowanieProdukcjiPage() {
         }
       }
     };
+    refreshCurrentPlanRef.current = () => void loadCurrentPlan();
     void loadCurrentPlan();
     const interval = window.setInterval(() => void loadCurrentPlan(), 5000);
-    const refreshOnFocus = () => void loadCurrentPlan();
+    const refreshImmediately = () => {
+      lastSyncAttemptRef.current = 0;
+      void loadCurrentPlan();
+    };
+    const refreshOnFocus = () => refreshImmediately();
     const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible') void loadCurrentPlan();
+      if (document.visibilityState === 'visible') refreshImmediately();
     };
     window.addEventListener('focus', refreshOnFocus);
     document.addEventListener('visibilitychange', refreshWhenVisible);
@@ -512,8 +523,15 @@ export default function PrzygotowanieProdukcjiPage() {
       window.clearInterval(interval);
       window.removeEventListener('focus', refreshOnFocus);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
+      refreshCurrentPlanRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    activeViewRef.current = activeView;
+    lastSyncAttemptRef.current = 0;
+    refreshCurrentPlanRef.current?.();
+  }, [activeView]);
 
   useEffect(() => {
     fetch('/api/przygotowanie-produkcji?history=1')
