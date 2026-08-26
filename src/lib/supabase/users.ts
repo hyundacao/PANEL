@@ -44,6 +44,7 @@ const validWarehouseKeys: WarehouseKey[] = [
   'RAPORT_BRAKOWOSCI',
   'BILANS_PRZEZBROJEN',
   'PRZYGOTOWANIE_PRODUKCJI',
+  'PLANOWANIE_ZAPOTRZEBOWANIA',
   'PRZESUNIECIA_ERP'
 ];
 const validWarehouseRoles: WarehouseRole[] = ['PODGLAD', 'MECHANIK', 'ROZDZIELCA'];

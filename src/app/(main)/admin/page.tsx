@@ -164,7 +164,6 @@ const roleOptions = [
 const przemialyTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'dashboard', label: 'Pulpit' },
   { key: 'spis', label: 'Spis przemialow' },
-  { key: 'spis-oryginalow', label: 'Spis oryginalow' },
   { key: 'przesuniecia', label: 'Przesuniecia przemialowe' },
   { key: 'raporty', label: 'Raporty' },
   { key: 'kartoteka', label: 'Stany magazynowe' },
@@ -189,6 +188,9 @@ const bilansPrzezbrojenTabOptions: Array<{ key: WarehouseTab; label: string }> =
 const przygotowanieProdukcjiTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'przygotowanie-produkcji', label: 'Plan zmian, rozpiska, historia i raport' }
 ];
+const planowanieZapotrzebowaniaTabOptions: Array<{ key: WarehouseTab; label: string }> = [
+  { key: 'planowanie-zapotrzebowania', label: 'Plan, technologie, obliczenia, dokumenty i zwroty' }
+];
 const erpModuleTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'erp-magazynier', label: 'Magazynier' },
   { key: 'erp-rozdzielca', label: 'Rozdzielca Wydziałowy' },
@@ -212,6 +214,7 @@ const warehouseLabels: Record<WarehouseKey, string> = {
   RAPORT_BRAKOWOSCI: 'Raport brakowosci',
   BILANS_PRZEZBROJEN: 'Bilans przezbrojen i personelu',
   PRZYGOTOWANIE_PRODUKCJI: 'Przygotowanie produkcji',
+  PLANOWANIE_ZAPOTRZEBOWANIA: 'Planowanie zapotrzebowania',
   PRZESUNIECIA_ERP: 'Przesuniecia magazynowe ERP'
 };
 
@@ -903,7 +906,9 @@ export default function AdminPage() {
               ? bilansPrzezbrojenTabOptions
               : warehouseKey === 'PRZYGOTOWANIE_PRODUKCJI'
                 ? przygotowanieProdukcjiTabOptions
-                : czesciTabOptions;
+                : warehouseKey === 'PLANOWANIE_ZAPOTRZEBOWANIA'
+                  ? planowanieZapotrzebowaniaTabOptions
+                  : czesciTabOptions;
     const visibleTabs =
       warehouseKey === 'CZESCI' && !canSeeHistory
         ? tabOptions.filter((tab) => tab.key !== 'historia')
@@ -2947,6 +2952,12 @@ export default function AdminPage() {
                     updatePermissionGroupFormAccess,
                     'ADMIN'
                   )}
+                  {renderWarehouseAccess(
+                    'PLANOWANIE_ZAPOTRZEBOWANIA',
+                    permissionGroupForm.access,
+                    updatePermissionGroupFormAccess,
+                    'ADMIN'
+                  )}
                   {renderPaintTapeAccess(
                     permissionGroupForm.access,
                     updatePermissionGroupFormAccess,
@@ -3114,6 +3125,12 @@ export default function AdminPage() {
                           )}
                           {renderWarehouseAccess(
                             'PRZYGOTOWANIE_PRODUKCJI',
+                            draft.access,
+                            (updater) => updatePermissionGroupDraftAccess(group.id, updater),
+                            'ADMIN'
+                          )}
+                          {renderWarehouseAccess(
+                            'PLANOWANIE_ZAPOTRZEBOWANIA',
                             draft.access,
                             (updater) => updatePermissionGroupDraftAccess(group.id, updater),
                             'ADMIN'
@@ -3291,6 +3308,12 @@ export default function AdminPage() {
                   )}
                   {renderWarehouseAccess(
                     'PRZYGOTOWANIE_PRODUKCJI',
+                    userForm.access,
+                    updateUserFormAccess,
+                    userForm.role
+                  )}
+                  {renderWarehouseAccess(
+                    'PLANOWANIE_ZAPOTRZEBOWANIA',
                     userForm.access,
                     updateUserFormAccess,
                     userForm.role
@@ -3568,6 +3591,12 @@ export default function AdminPage() {
                             )}
                             {renderWarehouseAccess(
                               'PRZYGOTOWANIE_PRODUKCJI',
+                              draft.access,
+                              (updater) => updateUserDraftAccess(item.id, updater),
+                              draft.role
+                            )}
+                            {renderWarehouseAccess(
+                              'PLANOWANIE_ZAPOTRZEBOWANIA',
                               draft.access,
                               (updater) => updateUserDraftAccess(item.id, updater),
                               draft.role

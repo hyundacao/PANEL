@@ -202,10 +202,16 @@ export async function POST(request: Request) {
       return response;
     }
 
-    if (
-      !canSeeTab(auth.user, 'PRZEMIALY', 'spis-oryginalow') ||
-      isReadOnly(auth.user, 'PRZEMIALY')
-    ) {
+    const canWriteOriginalInventory =
+      (canSeeTab(
+        auth.user,
+        'PLANOWANIE_ZAPOTRZEBOWANIA',
+        'planowanie-zapotrzebowania'
+      ) && !isReadOnly(auth.user, 'PLANOWANIE_ZAPOTRZEBOWANIA')) ||
+      (canSeeTab(auth.user, 'PRZEMIALY', 'spis-oryginalow') &&
+        !isReadOnly(auth.user, 'PRZEMIALY'));
+
+    if (!canWriteOriginalInventory) {
       return NextResponse.json({ code: 'FORBIDDEN' }, { status: 403 });
     }
 

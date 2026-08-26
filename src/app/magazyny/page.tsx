@@ -10,6 +10,7 @@ import {
   Droplets,
   FileText,
   Gauge,
+  PackageSearch,
   Shield,
   Wrench,
   type LucideIcon
@@ -50,7 +51,6 @@ const moduleOptions: ModuleOption[] = [
     requiredTabs: [
       'dashboard',
       'spis',
-      'spis-oryginalow',
       'przesuniecia',
       'raporty',
       'kartoteka',
@@ -100,6 +100,18 @@ const moduleOptions: ModuleOption[] = [
     tags: ['Produkcja', 'Przygotowanie'],
     keywords: ['plan produkcji', 'rozpiska materiałowa', 'wtryskarki', 'rozruch', 'zmiana formy', 'przygotowanie stanowiska'],
     icon: ClipboardCheck
+  },
+  {
+    id: 'planowanie-zapotrzebowania',
+    key: 'PLANOWANIE_ZAPOTRZEBOWANIA',
+    requiredTabs: ['planowanie-zapotrzebowania'],
+    title: 'Planowanie zapotrzebowania',
+    description: 'Osobny moduł: plan produkcyjny, ręczne technologie, spis hali, pobrania, zwroty i historia produkcji.',
+    action: 'Otwórz moduł',
+    href: '/planowanie-zapotrzebowania',
+    tags: ['Produkcja', 'Zapotrzebowanie'],
+    keywords: ['plan', 'technologie', 'materiały', 'pobrania', 'zwroty', 'hala', 'silosy'],
+    icon: PackageSearch
   },
   {
     id: 'przemialy-erp',

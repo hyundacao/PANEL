@@ -24,7 +24,7 @@ const getTitle = (pathname: string) => {
   if (pathname.startsWith('/rozliczanie-farb-rozcienczalnikow')) return 'Rozliczanie farb i rozcieńczalników';
   if (pathname.startsWith('/spis-farb-tasm/zarzadzanie')) return 'Zarządzanie spisem';
   if (pathname.startsWith('/spis-farb-tasm')) return 'Spis farb i taśm';
-  if (pathname.startsWith('/spis-oryginalow')) return 'Spis oryginałów';
+  if (pathname.startsWith('/spis-oryginalow')) return 'Spis rzeczywisty';
   if (pathname.startsWith('/spis')) return 'Spis przemiałów';
   if (pathname.startsWith('/przesuniecia')) return 'Przesunięcia przemiałowe';
   if (pathname.startsWith('/wymieszane')) return 'Wymieszane tworzywa';
@@ -33,6 +33,7 @@ const getTitle = (pathname: string) => {
   if (pathname.startsWith('/kartoteka')) return 'Stany magazynowe';
   if (pathname.startsWith('/bilans-przezbrojen')) return 'Bilans przezbrojeń';
   if (pathname.startsWith('/przygotowanie-produkcji')) return 'Przygotowanie produkcji';
+  if (pathname.startsWith('/planowanie-zapotrzebowania')) return 'Planowanie zapotrzebowania';
   if (pathname.startsWith('/suszarki')) return 'Suszarki';
   if (pathname.startsWith('/czesci/historia')) return 'Historia';
   if (pathname.startsWith('/czesci/stany')) return 'Stany magazynowe';
@@ -52,6 +53,7 @@ const getWarehouseFromPath = (pathname: string): WarehouseKey | null => {
   if (pathname.startsWith('/raport-brakowosci')) return 'RAPORT_BRAKOWOSCI';
   if (pathname.startsWith('/bilans-przezbrojen')) return 'BILANS_PRZEZBROJEN';
   if (pathname.startsWith('/przygotowanie-produkcji')) return 'PRZYGOTOWANIE_PRODUKCJI';
+  if (pathname.startsWith('/planowanie-zapotrzebowania')) return 'PLANOWANIE_ZAPOTRZEBOWANIA';
   if (pathname.startsWith('/admin')) return null;
   return 'PRZEMIALY';
 };
@@ -68,6 +70,7 @@ const getTabFromPath = (pathname: string): WarehouseTab | null => {
   if (pathname.startsWith('/kartoteka')) return 'kartoteka';
   if (pathname.startsWith('/bilans-przezbrojen')) return 'bilans-przezbrojen';
   if (pathname.startsWith('/przygotowanie-produkcji')) return 'przygotowanie-produkcji';
+  if (pathname.startsWith('/planowanie-zapotrzebowania')) return 'planowanie-zapotrzebowania';
   if (pathname.startsWith('/wymieszane')) return 'wymieszane';
   if (pathname.startsWith('/suszarki')) return 'suszarki';
   if (pathname.startsWith('/czesci/pobierz')) return 'pobierz';
@@ -90,7 +93,6 @@ type MobileNavItem = {
 const navItemsPrzemialy: MobileNavItem[] = [
   { label: 'Pulpit', href: '/dashboard', tab: 'dashboard' },
   { label: 'Spis przemiałów', href: '/spis', tab: 'spis' },
-  { label: 'Spis oryginałów', href: '/spis-oryginalow', tab: 'spis-oryginalow' },
   { label: 'Przesunięcia przemiałowe', href: '/przesuniecia', tab: 'przesuniecia' },
   { label: 'Raporty', href: '/raporty', tab: 'raporty' },
   { label: 'Stany magazynowe', href: '/kartoteka', tab: 'kartoteka' },
@@ -101,7 +103,6 @@ const navItemsPrzemialy: MobileNavItem[] = [
 const texturedMobilePrzemialyTabs = new Set<WarehouseTab>([
   'dashboard',
   'spis',
-  'spis-oryginalow',
   'przesuniecia',
   'raporty',
   'kartoteka',
@@ -156,12 +157,25 @@ const navItemsPrzygotowanieProdukcji: MobileNavItem[] = [
   { label: 'Zarządzanie', href: '/przygotowanie-produkcji?view=management' }
 ];
 
+const navItemsPlanowanieZapotrzebowania: MobileNavItem[] = [
+  { label: 'Plan', href: '/planowanie-zapotrzebowania', tab: 'planowanie-zapotrzebowania' },
+  { label: 'Technologie', href: '/planowanie-zapotrzebowania?view=technologie', tab: 'planowanie-zapotrzebowania' },
+  { label: 'Spis', href: '/planowanie-zapotrzebowania?view=spis', tab: 'planowanie-zapotrzebowania' },
+  { label: 'Obliczenia', href: '/planowanie-zapotrzebowania?view=obliczenia', tab: 'planowanie-zapotrzebowania' },
+  { label: 'Dokument', href: '/planowanie-zapotrzebowania?view=dokument', tab: 'planowanie-zapotrzebowania' },
+  { label: 'Zwroty', href: '/planowanie-zapotrzebowania?view=zwroty', tab: 'planowanie-zapotrzebowania' },
+  { label: 'Historia', href: '/planowanie-zapotrzebowania?view=historia', tab: 'planowanie-zapotrzebowania' },
+  { label: 'Ustawienia', href: '/planowanie-zapotrzebowania?view=ustawienia', tab: 'planowanie-zapotrzebowania' },
+  { label: 'Instrukcja', href: '/planowanie-zapotrzebowania?view=instrukcja', tab: 'planowanie-zapotrzebowania' }
+];
+
 const getModuleNavItems = (warehouse: WarehouseKey | null) => {
   if (warehouse === 'CZESCI') return navItemsCzesci;
   if (warehouse === 'RAPORT_ZMIANOWY') return navItemsRaport;
   if (warehouse === 'RAPORT_BRAKOWOSCI') return navItemsRaportBrakowosci;
   if (warehouse === 'BILANS_PRZEZBROJEN') return navItemsBilans;
   if (warehouse === 'PRZYGOTOWANIE_PRODUKCJI') return navItemsPrzygotowanieProdukcji;
+  if (warehouse === 'PLANOWANIE_ZAPOTRZEBOWANIA') return navItemsPlanowanieZapotrzebowania;
   if (warehouse === 'FARBY_TASMY') return navItemsFarbyTasmy;
   return navItemsPrzemialy;
 };
@@ -375,6 +389,11 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     Boolean(activeWarehouse && warehouseFromPath);
   const isReportsPath = pathname.startsWith('/raporty');
   const isActivePath = (href: string) => {
+    if (href.startsWith('/planowanie-zapotrzebowania')) {
+      const [, query = ''] = href.split('?');
+      const requestedView = new URLSearchParams(query).get('view');
+      return pathname === '/planowanie-zapotrzebowania' && searchParams.get('view') === requestedView;
+    }
     if (href === '/przygotowanie-produkcji') {
       return pathname === href && !searchParams.get('view');
     }
@@ -420,7 +439,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
       return canSeeTab(user, activeWarehouse, item.tab);
     });
   const isPaintTapeMobileNav = activeWarehouse === 'FARBY_TASMY';
-  const isPreparationMobileNav = activeWarehouse === 'PRZYGOTOWANIE_PRODUKCJI';
+  const isPreparationMobileNav = activeWarehouse === 'PRZYGOTOWANIE_PRODUKCJI' || activeWarehouse === 'PLANOWANIE_ZAPOTRZEBOWANIA';
   const isDashboardPath = pathname.startsWith('/dashboard');
 
   return (

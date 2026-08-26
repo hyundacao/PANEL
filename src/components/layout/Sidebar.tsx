@@ -16,7 +16,12 @@ import {
   LogOut,
   History,
   Droplets,
-  Settings2
+  Settings2,
+  Factory,
+  Calculator,
+  FileCheck2,
+  RotateCcw,
+  BookOpen
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useUiStore } from '@/lib/store/ui';
@@ -41,7 +46,6 @@ type NavItem = {
 const navItemsPrzemialy: NavItem[] = [
   { label: 'Pulpit', href: '/dashboard', icon: LayoutGrid, tab: 'dashboard' },
   { label: 'Spis przemiałów', href: '/spis', icon: ClipboardList, tab: 'spis' },
-  { label: 'Spis oryginałów', href: '/spis-oryginalow', icon: ClipboardCheck, tab: 'spis-oryginalow' },
   {
     label: 'Przesunięcia przemiałowe',
     href: '/przesuniecia',
@@ -108,6 +112,18 @@ const navItemsPrzygotowanieProdukcji: NavItem[] = [
   { label: 'Zarządzanie', href: '/przygotowanie-produkcji?view=management', icon: Settings2 }
 ];
 
+const navItemsPlanowanieZapotrzebowania: NavItem[] = [
+  { label: 'Plan produkcyjny', href: '/planowanie-zapotrzebowania', icon: ClipboardList, tab: 'planowanie-zapotrzebowania' },
+  { label: 'Technologie', href: '/planowanie-zapotrzebowania?view=technologie', icon: Factory, tab: 'planowanie-zapotrzebowania' },
+  { label: 'Spis rzeczywisty', href: '/planowanie-zapotrzebowania?view=spis', icon: ClipboardCheck, tab: 'planowanie-zapotrzebowania' },
+  { label: 'Obliczenia', href: '/planowanie-zapotrzebowania?view=obliczenia', icon: Calculator, tab: 'planowanie-zapotrzebowania' },
+  { label: 'Dokument', href: '/planowanie-zapotrzebowania?view=dokument', icon: FileCheck2, tab: 'planowanie-zapotrzebowania' },
+  { label: 'Zwroty', href: '/planowanie-zapotrzebowania?view=zwroty', icon: RotateCcw, tab: 'planowanie-zapotrzebowania' },
+  { label: 'Historia', href: '/planowanie-zapotrzebowania?view=historia', icon: History, tab: 'planowanie-zapotrzebowania' },
+  { label: 'Ustawienia', href: '/planowanie-zapotrzebowania?view=ustawienia', icon: Settings2, tab: 'planowanie-zapotrzebowania' },
+  { label: 'Instrukcja', href: '/planowanie-zapotrzebowania?view=instrukcja', icon: BookOpen, tab: 'planowanie-zapotrzebowania' }
+];
+
 export const Sidebar = () => {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -127,6 +143,8 @@ export const Sidebar = () => {
             ? navItemsBilans
             : warehouse === 'PRZYGOTOWANIE_PRODUKCJI'
               ? navItemsPrzygotowanieProdukcji
+            : warehouse === 'PLANOWANIE_ZAPOTRZEBOWANIA'
+              ? navItemsPlanowanieZapotrzebowania
             : warehouse === 'FARBY_TASMY'
               ? navItemsFarbyTasmy
               : navItemsPrzemialy;
@@ -142,6 +160,11 @@ export const Sidebar = () => {
   const warehouseLabel = getWarehouseLabel(warehouse);
   const isPrzemialyModuleManagementRoute = isAdminRoute && warehouse === 'PRZEMIALY';
   const isActivePath = (href: string) => {
+    if (href.startsWith('/planowanie-zapotrzebowania')) {
+      const [, query = ''] = href.split('?');
+      const requestedView = new URLSearchParams(query).get('view');
+      return pathname === '/planowanie-zapotrzebowania' && searchParams.get('view') === requestedView;
+    }
     if (href === '/przygotowanie-produkcji') {
       return pathname === href && !searchParams.get('view');
     }
@@ -196,6 +219,8 @@ export const Sidebar = () => {
                 ? 'PANEL BILANSU PRZEZBROJEŃ'
                 : warehouse === 'PRZYGOTOWANIE_PRODUKCJI'
                   ? 'PANEL PRZYGOTOWANIA PRODUKCJI'
+                : warehouse === 'PLANOWANIE_ZAPOTRZEBOWANIA'
+                  ? 'PANEL PLANOWANIA ZAPOTRZEBOWANIA'
                 : warehouse === 'PRZESUNIECIA_ERP'
                   ? 'PANEL PRZESUNIĘĆ ERP'
                   : 'PANEL MODUŁU';

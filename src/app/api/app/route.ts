@@ -892,10 +892,36 @@ const requireTabWriteAccess = (
   }
 };
 
+const canAccessOriginalInventoryInPlanning = (user: AppUser) =>
+  canSeeTab(
+    user,
+    'PLANOWANIE_ZAPOTRZEBOWANIA',
+    'planowanie-zapotrzebowania'
+  );
+
+const requireOriginalInventoryReadAccess = (user: AppUser) => {
+  if (canAccessOriginalInventoryInPlanning(user)) return;
+  requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+};
+
+const requireOriginalInventoryWriteAccess = (
+  user: AppUser,
+  przemialyTabs: WarehouseTab[] = ['spis-oryginalow']
+) => {
+  if (canAccessOriginalInventoryInPlanning(user)) {
+    if (isReadOnly(user, 'PLANOWANIE_ZAPOTRZEBOWANIA')) {
+      throw new Error('FORBIDDEN');
+    }
+    return;
+  }
+  requireTabWriteAccess(user, 'PRZEMIALY', przemialyTabs);
+};
+
 const requireOriginalInventoryOrPaintTapeReadAccess = (
   user: AppUser,
   przemialyTabs: WarehouseTab[] = ['spis-oryginalow']
 ) => {
+  if (canAccessOriginalInventoryInPlanning(user)) return;
   if (canSeeTab(user, 'FARBY_TASMY', 'rozliczanie-farb-tasm')) return;
   requireAnyTabAccess(user, 'PRZEMIALY', przemialyTabs);
 };
@@ -1051,20 +1077,23 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requireTabWriteAccess(user, 'PRZEMIALY', ['suszarki']);
       return;
     case 'getOriginalInventory':
-      requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      requireOriginalInventoryReadAccess(user);
       return;
     case 'getOriginalInventoryCatalog':
     case 'getOriginalInventorySilosConfig':
     case 'getOriginalInventorySiloEntries':
     case 'getOriginalInventoryGrindTasks':
-    case 'getPaintTapeSettlements':
-    case 'getPaintTapeTechnologyUsages':
-    case 'getPaintTapeInventory':
-    case 'getProductionDetailSuggestions':
       requireOriginalInventoryOrPaintTapeReadAccess(user, [
         'spis-oryginalow',
         'suszarki'
       ]);
+      return;
+    case 'getPaintTapeSettlements':
+    case 'getPaintTapeTechnologyUsages':
+    case 'getPaintTapeInventory':
+    case 'getProductionDetailSuggestions':
+      if (canSeeTab(user, 'FARBY_TASMY', 'rozliczanie-farb-tasm')) return;
+      requireAnyTabAccess(user, 'PRZEMIALY', ['spis-oryginalow', 'suszarki']);
       return;
     case 'getOriginalInventoryCatalogFromErp':
       requireOriginalInventoryOrPaintTapeReadAccess(user);
@@ -1087,7 +1116,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'completeOriginalInventoryGrindTask':
     case 'completeOriginalInventoryGrindTasks':
     case 'reopenOriginalInventoryGrindTasks':
-      requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      requireOriginalInventoryWriteAccess(user);
       return;
     case 'createPaintTapeSettlement':
       requirePaintTapeWriteAccess('create');
@@ -1107,7 +1136,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requirePaintTapeWriteAccess('open');
       return;
     case 'addOriginalInventoryCatalog':
-      requireTabWriteAccess(user, 'PRZEMIALY', [
+      requireOriginalInventoryWriteAccess(user, [
         'spis-oryginalow',
         'suszarki'
       ]);
@@ -1117,16 +1146,20 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'removeOriginalInventory':
     case 'removeOriginalInventoryCatalog':
     case 'removeOriginalInventoryErpSnapshot':
-      requireTabWriteAccess(user, 'PRZEMIALY', ['spis-oryginalow']);
+      requireOriginalInventoryWriteAccess(user);
       return;
     case 'getCatalog':
+      if (canAccessOriginalInventoryInPlanning(user)) return;
       requireAnyTabAccess(user, 'PRZEMIALY', ALL_PRZEMIALY_TABS);
       return;
     case 'addMaterial':
       requireTabWriteAccess(user, 'PRZEMIALY', ['suszarki']);
       return;
-    case 'getLocations':
     case 'getWarehouses':
+      if (canAccessOriginalInventoryInPlanning(user)) return;
+      requireWarehouseAccess(user, 'PRZEMIALY');
+      return;
+    case 'getLocations':
     case 'getWarehouse':
     case 'getLocation':
     case 'getMaterials':
