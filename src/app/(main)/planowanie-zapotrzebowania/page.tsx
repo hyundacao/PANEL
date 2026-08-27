@@ -10,13 +10,18 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Clock3,
   FileDown,
+  FilePlus2,
   PackageCheck,
   Plus,
   RefreshCw,
   Save,
+  Search,
   Trash2,
-  Upload
+  Undo2,
+  Upload,
+  X
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -29,15 +34,26 @@ import { isReadOnly } from '@/lib/auth/access';
 import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
 
+import {
+  allocateAmountByDemand,
+  calculateIssueBalance,
+  calculateReturnSurplus,
+  calculateScopedQuantity,
+  correctedQuantity,
+  diffPlanItems,
+  nextPlanVersionNumber,
+  type PlanDifference
+} from '@/lib/planowanie-zapotrzebowania/domain';
+
 type View =
   | 'plan'
   | 'technologie'
   | 'spis'
-  | 'obliczenia'
   | 'dokument'
   | 'zwroty'
   | 'historia'
   | 'ustawienia'
+  | 'obliczenia'
   | 'instrukcja';
 
 type MaterialCategory =
@@ -74,6 +90,8 @@ type Technology = {
 };
 
 type PlanGroup = 'standard' | 'emergency' | 'planned';
+type ItemScopeMode = 'global' | 'shifts' | 'quantity' | 'all';
+type PlanVersionStatus = 'draft' | 'ready' | 'active' | 'superseded';
 
 type PlanItem = {
   id: string;
@@ -93,6 +111,99 @@ type PlanItem = {
   continuationCandidateId: string;
   planGroup?: PlanGroup;
   plannedDate?: string;
+  scopeMode?: ItemScopeMode;
+  scopeShifts?: number;
+  scopeQuantity?: number;
+};
+
+
+type PlanVersion = {
+  id: string;
+  planDate: string;
+  versionNo: number;
+  importedAt: string;
+  importedBy: string;
+  fileName: string;
+  sheetName: string;
+  status: PlanVersionStatus;
+  items: PlanItem[];
+  differences: PlanDifference[];
+};
+
+type QuantityCorrection = {
+  id: string;
+  planDate: string;
+  planVersionId: string;
+  itemId: string;
+  index: string;
+  name: string;
+  previousValue: number;
+  newValue: number;
+  difference: number;
+  createdBy: string;
+  createdAt: string;
+  source: 'Ręczna korekta';
+  revertedAt?: string;
+};
+
+type PickingDocumentStatus = 'draft' | 'handed' | 'issued' | 'cancelled' | 'outdated';
+type PickingDocumentKind = 'base' | 'correction';
+
+type PickingDocumentSource = {
+  planItemId: string;
+  index: string;
+  name: string;
+  demand: number;
+};
+
+type PickingDocumentRow = {
+  key: string;
+  code: string;
+  name: string;
+  category: MaterialCategory;
+  unit: string;
+  demand: number;
+  areaStock: number;
+  issuedBefore: number;
+  pendingBefore: number;
+  toIssue: number;
+  confirmed: boolean;
+  sources: PickingDocumentSource[];
+};
+
+type PickingDocument = {
+  id: string;
+  documentNo: string;
+  planDate: string;
+  planVersionId: string;
+  planVersionNo: number;
+  areaId: string;
+  scopeLabel: string;
+  createdAt: string;
+  createdBy: string;
+  status: PickingDocumentStatus;
+  kind: PickingDocumentKind;
+  rows: PickingDocumentRow[];
+};
+
+type MaterialReturnRow = {
+  id: string;
+  planDate: string;
+  materialKey: string;
+  code: string;
+  name: string;
+  category: MaterialCategory;
+  unit: string;
+  planItemId: string;
+  index: string;
+  productName: string;
+  areaId: string;
+  reason: string;
+  issued: number;
+  currentNeed: number;
+  surplus: number;
+  destination: string;
+  status: 'open' | 'completed';
 };
 
 type InventoryItem = {
@@ -130,8 +241,15 @@ type AppState = {
   selectedAreaId: string;
   areas: Area[];
   stationMappings: StationMapping[];
+  selectedPlanDate: string;
+  activePlanVersionId: string;
   technologies: Technology[];
   plan: PlanItem[];
+  dailyPlans: Record<string, PlanItem[]>;
+  planVersions: PlanVersion[];
+  quantityCorrections: QuantityCorrection[];
+  documents: PickingDocument[];
+  returnStatuses: Record<string, 'open' | 'completed'>;
   inventory: InventoryItem[];
   pickingDone: Record<string, boolean>;
   archive: ProductionArchive[];
@@ -145,6 +263,11 @@ type Requirement = {
   category: MaterialCategory;
   unit: string;
   demand: number;
+  fullDemand: number;
+  issued: number;
+  pending: number;
+  sources: PickingDocumentSource[];
+  selectedDemand: number;
   areaStock: number;
   sharedStock: number;
   toIssue: number;
@@ -154,7 +277,6 @@ type Requirement = {
 
 type PendingWorkbook = { workbook: XLSX.WorkBook; fileName: string; purpose: 'plan' | 'inventory' };
 type ProductCatalogItem = { id: string; index: string; name: string; warehouseCode?: string; unit?: string };
-type CalculationSimulation = { mode: 'shifts' | 'quantity' | 'all'; shifts: number; quantity: number };
 
 const LOCAL_KEY = 'apka-kamila-planowanie-zapotrzebowania-v1';
 const CATEGORIES: MaterialCategory[] = [
@@ -242,6 +364,23 @@ const localDateKey = () => {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
+const dateOffsetKey = (offset: number) => {
+  const date = new Date();
+  date.setDate(date.getDate() + offset);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+const formatPlanDate = (value: string) => value
+  ? new Intl.DateTimeFormat('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(`${value}T12:00:00`))
+  : 'Brak daty';
+const clonePlanItems = (items: PlanItem[]) => items.map((item) => ({
+  ...item,
+  workingMaterials: item.workingMaterials ? item.workingMaterials.map((material) => ({ ...material })) : null
+}));
+const documentStatusLabel: Record<PickingDocumentStatus, string> = { draft: 'Roboczy', handed: 'Przekazany', issued: 'Wydany', cancelled: 'Anulowany', outdated: 'Nieaktualny' };
+const differenceLabel: Record<PlanDifference['kind'], string> = { new: 'Nowa', removed: 'Usunięta', quantity_increased: 'Zwiększona', quantity_decreased: 'Zmniejszona', station_changed: 'Zmiana stanowiska', norm_changed: 'Zmiana normy' };
 const cloneMaterials = (items: TechnologyMaterial[]) => items.map((item) => ({ ...item, id: uid('mat') }));
 
 const applyDefaultTechnologyAssignments = (plan: PlanItem[], technologies: Technology[]) => plan.map((item) => {
@@ -320,6 +459,8 @@ const demoState = (): AppState => {
     planSheet: 'DEMO',
     planImportedAt: nowLabel(),
     inventorySourceDate: '',
+    selectedPlanDate: localDateKey(),
+    activePlanVersionId: '',
     inventorySyncedAt: '',
     horizonShifts: 3.5,
     calculationMode: 'horizon',
@@ -376,6 +517,11 @@ const demoState = (): AppState => {
         manualOverride: false, continuationCandidateId: ''
       }
     ],
+    dailyPlans: {},
+    planVersions: [],
+    quantityCorrections: [],
+    documents: [],
+    returnStatuses: {},
     inventory: [
       { id: uid('inv'), areaId: 'hala-1', code: 'PPGF35GR', name: 'Hostacom PPR 1042', category: 'Tworzywo', qty: 120, unit: 'kg' },
       { id: uid('inv'), areaId: 'silosy', code: 'PPGF35GR', name: 'Hostacom PPR 1042', category: 'Tworzywo', qty: 6000, unit: 'kg' },
@@ -389,7 +535,7 @@ const demoState = (): AppState => {
 
 const emptyState = (): AppState => ({
   ...demoState(),
-  planName: '', planSheet: '', planImportedAt: '', inventorySourceDate: '', inventorySyncedAt: '', technologies: [], plan: [], inventory: [], pickingDone: {}, archive: []
+  planName: '', planSheet: '', planImportedAt: '', inventorySourceDate: '', inventorySyncedAt: '', technologies: [], plan: [], dailyPlans: {}, planVersions: [], quantityCorrections: [], documents: [], returnStatuses: {}, inventory: [], pickingDone: {}, archive: []
 });
 
 const parseStoredState = (value: unknown): AppState | null => {
@@ -400,7 +546,16 @@ const parseStoredState = (value: unknown): AppState | null => {
   const storedAreas = Array.isArray(record.areas) ? record.areas : [];
   const cleanPlanItem = (item: PlanItem): PlanItem => {
     const product = splitProductFields(item.name, item.index);
-    return { ...item, name: product.name, index: product.index, planGroup: item.planGroup ?? 'standard', plannedDate: item.plannedDate ?? '' };
+    return {
+      ...item,
+      name: product.name,
+      index: product.index,
+      planGroup: item.planGroup ?? 'standard',
+      plannedDate: item.plannedDate ?? '',
+      scopeMode: item.scopeMode ?? 'global',
+      scopeShifts: Math.max(0.5, numberValue(item.scopeShifts) || 3.5),
+      scopeQuantity: Math.max(0, numberValue(item.scopeQuantity))
+    };
   };
   const plan = applyStationMappings(record.plan.map(cleanPlanItem), stationMappings);
   const technologies = record.technologies.map((technology) => {
@@ -416,6 +571,32 @@ const parseStoredState = (value: unknown): AppState | null => {
       ? { ...normalizedTechnology, shiftNorm: matchingPlanItem.shiftNorm }
       : normalizedTechnology;
   });
+  const selectedPlanDate = record.selectedPlanDate || localDateKey();
+  const dailyPlans: Record<string, PlanItem[]> = record.dailyPlans && typeof record.dailyPlans === 'object'
+    ? Object.fromEntries(Object.entries(record.dailyPlans).map(([date, items]) => [
+      date,
+      Array.isArray(items) ? applyStationMappings(items.map(cleanPlanItem), stationMappings) : []
+    ]))
+    : {};
+  if (!Object.keys(dailyPlans).length && plan.length) dailyPlans[selectedPlanDate] = plan;
+  const storedVersions = Array.isArray(record.planVersions) ? record.planVersions : [];
+  const planVersions: PlanVersion[] = storedVersions.length ? storedVersions.map((planVersion) => ({
+    ...planVersion,
+    items: Array.isArray(planVersion.items) ? planVersion.items.map(cleanPlanItem) : [],
+    differences: Array.isArray(planVersion.differences) ? planVersion.differences : []
+  })) : (plan.length ? [{
+    id: uid('version'),
+    planDate: selectedPlanDate,
+    versionNo: 1,
+    importedAt: record.planImportedAt || record.updatedAt || nowLabel(),
+    importedBy: 'Migracja istniejącego planu',
+    fileName: record.planName || 'Istniejący plan',
+    sheetName: record.planSheet || '',
+    status: 'active',
+    items: clonePlanItems(plan),
+    differences: []
+  }] : []);
+  const selectedPlan = dailyPlans[selectedPlanDate] ?? plan;
   return {
     ...emptyState(),
     ...record,
@@ -423,7 +604,14 @@ const parseStoredState = (value: unknown): AppState | null => {
     areas: mergeAreas(storedAreas),
     stationMappings,
     technologies,
-    plan,
+    selectedPlanDate,
+    activePlanVersionId: record.activePlanVersionId || planVersions.find((planVersion) => planVersion.planDate === selectedPlanDate && planVersion.status === 'active')?.id || '',
+    plan: selectedPlan,
+    dailyPlans,
+    planVersions,
+    quantityCorrections: Array.isArray(record.quantityCorrections) ? record.quantityCorrections : [],
+    documents: Array.isArray(record.documents) ? record.documents : [],
+    returnStatuses: record.returnStatuses && typeof record.returnStatuses === 'object' ? record.returnStatuses : {},
     inventory: Array.isArray(record.inventory) ? record.inventory : [],
     archive: Array.isArray(record.archive) ? record.archive.map((entry) => ({ ...entry, planItem: cleanPlanItem(entry.planItem) })) : [],
     pickingDone: record.pickingDone && typeof record.pickingDone === 'object' ? record.pickingDone : {}
@@ -923,7 +1111,7 @@ export default function MaterialPlanningPage() {
   const user = useUiStore((store) => store.user);
   const readOnly = isReadOnly(user, 'PLANOWANIE_ZAPOTRZEBOWANIA');
   const requestedView = searchParams.get('view');
-  const view: View = requestedView && ['plan', 'technologie', 'spis', 'obliczenia', 'dokument', 'zwroty', 'historia', 'ustawienia', 'instrukcja'].includes(requestedView)
+  const view: View = requestedView && ['plan', 'technologie', 'spis', 'dokument', 'zwroty', 'historia', 'ustawienia'].includes(requestedView)
     ? requestedView as View
     : 'plan';
   const [state, setState] = useState<AppState>(() => emptyState());
@@ -931,16 +1119,23 @@ export default function MaterialPlanningPage() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [storageMode, setStorageMode] = useState<'server' | 'local' | 'loading'>('loading');
+  const [serverRevision, setServerRevision] = useState(0);
   const [message, setMessage] = useState('');
   const [sheetName, setSheetName] = useState('');
   const [pending, setPending] = useState<PendingWorkbook | null>(null);
   const [expandedPlan, setExpandedPlan] = useState('');
   const [expandedCalculation, setExpandedCalculation] = useState('');
-  const [calculationSimulations, setCalculationSimulations] = useState<Record<string, CalculationSimulation>>({});
+  const [showChanges, setShowChanges] = useState(false);
+  const [quantityInputs, setQuantityInputs] = useState<Record<string, string>>({});
+  const [technologySearch, setTechnologySearch] = useState('');
+  const [technologyFilter, setTechnologyFilter] = useState<'active' | 'archived'>('active');
+  const [expandedDocument, setExpandedDocument] = useState('');
+  const [expandedMaterial, setExpandedMaterial] = useState('');
   const [editingTechnologyId, setEditingTechnologyId] = useState('');
   const [productCatalog, setProductCatalog] = useState<ProductCatalogItem[]>([]);
   const [productCatalogLoading, setProductCatalogLoading] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const currentUserName = user?.username ?? user?.name ?? 'nieznany';
 
   const flash = (text: string) => {
     setMessage(text);
@@ -959,7 +1154,7 @@ export default function MaterialPlanningPage() {
     fetch('/api/planowanie-zapotrzebowania', { cache: 'no-store' })
       .then(async (response) => {
         if (!response.ok) throw new Error('API unavailable');
-        const payload = await response.json() as { state?: unknown };
+        const payload = await response.json() as { state?: unknown; revision?: number };
         const serverState = parseStoredState(payload.state);
         if (serverState) {
           const withDefaults = { ...serverState, plan: applyDefaultTechnologyAssignments(serverState.plan, serverState.technologies) };
@@ -967,6 +1162,7 @@ export default function MaterialPlanningPage() {
           window.localStorage.setItem(LOCAL_KEY, JSON.stringify(withDefaults));
         }
         setStorageMode('server');
+        setServerRevision(Math.max(0, Number(payload.revision ?? 0)));
       })
       .catch(() => setStorageMode('local'));
   }, []);
@@ -1039,9 +1235,11 @@ export default function MaterialPlanningPage() {
     setState((current) => {
       const next = updater(current);
       const mappedPlan = applyStationMappings(next.plan, next.stationMappings);
+      const plan = applyDefaultTechnologyAssignments(mappedPlan, next.technologies);
       return {
         ...next,
-        plan: applyDefaultTechnologyAssignments(mappedPlan, next.technologies),
+        plan,
+        dailyPlans: { ...next.dailyPlans, [next.selectedPlanDate]: clonePlanItems(plan) },
         updatedAt: nowLabel()
       };
     });
@@ -1054,16 +1252,23 @@ export default function MaterialPlanningPage() {
     window.localStorage.setItem(LOCAL_KEY, JSON.stringify(state));
     try {
       const response = await fetch('/api/planowanie-zapotrzebowania', {
-        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state })
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state, expectedRevision: serverRevision })
       });
-      if (!response.ok) throw new Error('save failed');
+      const payload = await response.json() as { revision?: number; code?: string };
+      if (response.status === 409) {
+        setServerRevision(Math.max(0, Number(payload.revision ?? serverRevision)));
+        setStorageMode('server');
+        flash('Ktoś zapisał nowsze zmiany. Odśwież dane przed ponownym zapisem — Twoje zmiany nie zostały nadpisane.');
+        return;
+      }
+      if (!response.ok) throw new Error(payload.code ?? 'save failed');
+      setServerRevision(Math.max(0, Number(payload.revision ?? serverRevision + 1)));
       setStorageMode('server');
       setDirty(false);
       flash('Zapisano moduł i historię zmian.');
     } catch {
       setStorageMode('local');
-      setDirty(false);
-      flash('Zapisano lokalnie. Baza modułu nie jest jeszcze dostępna.');
+      flash('Baza centralna jest niedostępna. Zachowano kopię lokalną, ale zmiany nadal wymagają zapisu centralnego.');
     } finally {
       setSaving(false);
     }
@@ -1085,11 +1290,38 @@ export default function MaterialPlanningPage() {
     }));
   };
 
+  const scopeForItem = (item: PlanItem) => {
+    if (item.scopeMode === 'all') return { mode: 'all' as const };
+    if (item.scopeMode === 'quantity') return { mode: 'quantity' as const, quantity: Math.max(0, item.scopeQuantity ?? 0) };
+    if (item.scopeMode === 'shifts') return { mode: 'shifts' as const, shifts: Math.max(0.5, item.scopeShifts ?? state.horizonShifts) };
+    return state.calculationMode === 'all'
+      ? { mode: 'all' as const }
+      : { mode: 'shifts' as const, shifts: state.horizonShifts };
+  };
+
   const itemProductionQty = (item: PlanItem) => {
     const remaining = Math.max(0, item.remainingQty || item.totalQty);
     const norm = item.shiftNorm || technologyForItem(item)?.shiftNorm || 0;
-    return Math.min(remaining, Math.max(0, norm * state.horizonShifts));
+    return calculateScopedQuantity(remaining, norm, scopeForItem(item));
   };
+
+  const itemScopeLabel = (item: PlanItem) => {
+    const scope = scopeForItem(item);
+    if (scope.mode === 'all') return 'Cały plan';
+    if (scope.mode === 'quantity') return `${fmt(scope.quantity)} szt.`;
+    return `${fmt(scope.shifts)} zm. / ${fmt(itemProductionQty(item))} szt.`;
+  };
+
+  const documentLedger = new Map<string, { issued: number; pending: number }>();
+  state.documents
+    .filter((document) => document.planDate === state.selectedPlanDate && (document.status === 'issued' || document.status === 'handed'))
+    .forEach((document) => document.rows.forEach((row) => {
+      const key = `${document.areaId}|${row.key}`;
+      const current = documentLedger.get(key) ?? { issued: 0, pending: 0 };
+      if (document.status === 'issued') current.issued += row.toIssue;
+      if (document.status === 'handed') current.pending += row.toIssue;
+      documentLedger.set(key, current);
+    }));
 
   const demandByArea = (() => {
     const all = new Map<string, Map<string, number>>();
@@ -1116,44 +1348,47 @@ export default function MaterialPlanningPage() {
       const areaStock = state.inventory
         .filter((item) => item.areaId === currentAreaId && materialMatches(material, item))
         .reduce((sum, item) => sum + item.qty, 0);
-      return { areaId: currentAreaId, demand, areaStock, netNeed: Math.max(0, demand - areaStock) };
+      const ledger = documentLedger.get(`${currentAreaId}|${key}`) ?? { issued: 0, pending: 0 };
+      const balance = calculateIssueBalance({ demand, areaStock, sharedCoverage: 0, issued: ledger.issued, pending: ledger.pending });
+      return { areaId: currentAreaId, demand, areaStock, issued: ledger.issued, pending: ledger.pending, netNeed: balance.toIssue };
     });
     const globalSharedDemand = areaNeeds.reduce((sum, item) => sum + item.netNeed, 0);
     const globalSharedShortage = Math.max(0, globalSharedDemand - sharedStock);
-    const selected = areaNeeds.find((item) => item.areaId === areaId) ?? { areaId, demand: 0, areaStock: 0, netNeed: 0 };
-    const toIssue = globalSharedDemand > 0
-      ? globalSharedShortage * (selected.netNeed / globalSharedDemand)
-      : 0;
+    const selected = areaNeeds.find((item) => item.areaId === areaId) ?? { areaId, demand: 0, areaStock: 0, issued: 0, pending: 0, netNeed: 0 };
+    const toIssue = globalSharedDemand > 0 ? globalSharedShortage * (selected.netNeed / globalSharedDemand) : 0;
     return { ...selected, sharedStock, globalSharedDemand, globalSharedShortage, toIssue };
   };
 
-  const requirements = (() => {
-    const aggregate = new Map<string, { material: TechnologyMaterial; demand: number }>();
-    state.plan
-      .filter((item) => item.included && item.areaId === state.selectedAreaId && item.technologyId)
-      .forEach((item) => {
-        const qty = itemProductionQty(item);
-        materialsForItem(item).forEach((material) => {
-          const key = materialKey(material);
-          const row = aggregate.get(key) ?? { material, demand: 0 };
-          row.demand += qty * material.usage;
-          aggregate.set(key, row);
-        });
+  const requirementsForArea = (areaId: string) => {
+    const aggregate = new Map<string, { material: TechnologyMaterial; demand: number; fullDemand: number; sources: PickingDocumentSource[] }>();
+    state.plan.filter((item) => item.included && item.areaId === areaId && item.technologyId).forEach((item) => {
+      const selectedQty = itemProductionQty(item);
+      const fullQty = Math.max(0, item.remainingQty || item.totalQty);
+      materialsForItem(item).forEach((material) => {
+        const key = materialKey(material);
+        const row = aggregate.get(key) ?? { material, demand: 0, fullDemand: 0, sources: [] };
+        const demand = selectedQty * material.usage;
+        row.demand += demand;
+        row.fullDemand += fullQty * material.usage;
+        row.sources.push({ planItemId: item.id, index: item.index, name: item.name, demand });
+        aggregate.set(key, row);
       });
+    });
     return [...aggregate.entries()].map(([key, row]) => {
-      const supply = materialSupply(key, row.material, state.selectedAreaId);
+      const supply = materialSupply(key, row.material, areaId);
       return {
         key, code: row.material.code, name: row.material.name, category: row.material.category, unit: row.material.unit,
-        demand: row.demand, areaStock: supply.areaStock, sharedStock: supply.sharedStock, toIssue: supply.toIssue,
+        demand: row.demand, selectedDemand: row.demand, fullDemand: row.fullDemand, issued: supply.issued, pending: supply.pending,
+        sources: row.sources, areaStock: supply.areaStock, sharedStock: supply.sharedStock, toIssue: supply.toIssue,
         globalSharedDemand: supply.globalSharedDemand, globalSharedShortage: supply.globalSharedShortage
       };
     }).sort((a, b) => (CATEGORY_ORDER.get(a.category) ?? 99) - (CATEGORY_ORDER.get(b.category) ?? 99) || a.name.localeCompare(b.name, 'pl')) as Requirement[];
-  })();
+  };
 
+  const requirements = requirementsForArea(state.selectedAreaId);
   const missingTechnologyCount = state.plan.filter((item) => item.included && !item.technologyId).length;
   const unassignedCount = state.plan.filter((item) => item.included && !item.areaId).length;
   const documentRows = requirements.filter((row) => row.toIssue > 0);
-  const doneCount = documentRows.filter((row) => state.pickingDone[`${state.selectedAreaId}|${row.key}`]).length;
 
   const openView = (next: View) => router.push(next === 'plan' ? '/planowanie-zapotrzebowania' : `/planowanie-zapotrzebowania?view=${next}`);
 
@@ -1183,31 +1418,171 @@ export default function MaterialPlanningPage() {
     }
     const imported = parsePlanRows(rows, state.stationMappings);
     if (!imported.length) return flash('Nie znaleziono rozpoznawalnych pozycji planu.');
+    let importedVersionNo = 1;
+    let differenceCount = 0;
     updateState((current) => {
-      const activeBySignature = new Map(current.plan.map((item) => [planItemSignature(item), item]));
+      const activeQueues = new Map<string, PlanItem[]>();
+      current.plan.forEach((item) => {
+        const signature = planItemSignature(item);
+        activeQueues.set(signature, [...(activeQueues.get(signature) ?? []), item]);
+      });
       const suspended = current.archive.filter((item) => item.status === 'suspended');
       const nextPlan = imported.map((incoming) => {
         const signature = planItemSignature(incoming);
-        const active = activeBySignature.get(signature);
+        const queue = activeQueues.get(signature) ?? [];
+        const active = queue.shift();
+        activeQueues.set(signature, queue);
         if (active) {
-          activeBySignature.delete(signature);
-          return { ...incoming, id: active.id, runId: active.runId, technologyId: active.technologyId, workingMaterials: active.workingMaterials, manualOverride: active.manualOverride, remainingQty: incoming.totalQty };
+          return {
+            ...incoming,
+            id: active.id,
+            runId: active.runId,
+            included: incoming.planGroup === 'planned' ? active.included : true,
+            technologyId: active.technologyId,
+            workingMaterials: active.workingMaterials,
+            manualOverride: active.manualOverride,
+            remainingQty: incoming.totalQty,
+            scopeMode: active.scopeMode ?? 'global',
+            scopeShifts: active.scopeShifts ?? 3.5,
+            scopeQuantity: active.scopeQuantity ?? 0
+          };
         }
         const candidate = suspended.find((entry) => planItemSignature(entry.planItem) === signature);
-        const variants = current.technologies.filter((technology) => !technology.archived && (normalize(technology.productIndex) === normalize(incoming.index) || normalize(technology.productName) === normalize(incoming.name)));
-        return { ...incoming, continuationCandidateId: candidate?.id ?? '', technologyId: candidate ? '' : variants.length === 1 ? variants[0].id : '', workingMaterials: candidate ? null : variants.length === 1 ? cloneMaterials(variants[0].materials) : null };
+        const variants = current.technologies.filter((technology) => !technology.archived && (
+          normalize(technology.productIndex) === normalize(incoming.index) || normalize(technology.productName) === normalize(incoming.name)
+        ));
+        const defaultTechnology = variants.find((technology) => technology.variant === 'base') ?? (variants.length === 1 ? variants[0] : undefined);
+        return {
+          ...incoming,
+          continuationCandidateId: candidate?.id ?? '',
+          technologyId: candidate ? '' : defaultTechnology?.id ?? '',
+          workingMaterials: candidate || !defaultTechnology ? null : cloneMaterials(defaultTechnology.materials),
+          scopeMode: 'global' as const,
+          scopeShifts: 3.5,
+          scopeQuantity: 0
+        };
       });
-      const newSuspended = [...activeBySignature.values()].map<ProductionArchive>((item) => ({
-        id: item.runId, status: 'suspended', planItem: item, technologyName: technologyForItem(item) ? technologyLabel(technologyForItem(item) as Technology) : 'Brak technologii',
-        materials: materialsForItem(item), at: nowLabel(), reason: 'Pozycja zniknęła z nowego planu'
-      }));
+      const previousVersion = current.planVersions
+        .filter((version) => version.planDate === current.selectedPlanDate)
+        .sort((left, right) => right.versionNo - left.versionNo)[0];
+      const differences = diffPlanItems(previousVersion?.items ?? [], nextPlan);
+      importedVersionNo = nextPlanVersionNumber(current.planVersions, current.selectedPlanDate);
+      differenceCount = differences.length;
+      const importedAt = nowLabel();
+      const versionId = uid('version');
+      const nextVersion: PlanVersion = {
+        id: versionId,
+        planDate: current.selectedPlanDate,
+        versionNo: importedVersionNo,
+        importedAt,
+        importedBy: currentUserName,
+        fileName: pending.fileName,
+        sheetName,
+        status: 'active',
+        items: clonePlanItems(nextPlan),
+        differences
+      };
+      const removedItems = [...activeQueues.values()].flat();
+      const newSuspended = removedItems.map<ProductionArchive>((item) => {
+        const technology = current.technologies.find((entry) => entry.id === item.technologyId);
+        return {
+          id: item.runId,
+          status: 'suspended',
+          planItem: item,
+          technologyName: technology ? technologyLabel(technology) : 'Brak technologii',
+          materials: item.workingMaterials ?? technology?.materials ?? [],
+          at: importedAt,
+          reason: `Pozycja zniknęła z wersji ${importedVersionNo} planu na ${formatPlanDate(current.selectedPlanDate)}`
+        };
+      });
       return {
-        ...current, plan: nextPlan, planName: pending.fileName, planSheet: sheetName, planImportedAt: nowLabel(),
+        ...current,
+        plan: nextPlan,
+        activePlanVersionId: versionId,
+        planName: pending.fileName,
+        planSheet: sheetName,
+        planImportedAt: importedAt,
+        planVersions: [
+          nextVersion,
+          ...current.planVersions.map((version) => version.planDate === current.selectedPlanDate && version.status !== 'superseded'
+            ? { ...version, status: 'superseded' as const }
+            : version)
+        ],
+        documents: current.documents.map((document) => document.planDate === current.selectedPlanDate && document.status === 'draft'
+          ? { ...document, status: 'outdated' as const }
+          : document),
         archive: [...newSuspended, ...current.archive.filter((entry) => !newSuspended.some((item) => item.id === entry.id))]
       };
     });
     setPending(null);
-    flash(`Zaimportowano ${imported.length} pozycji z zakładki ${sheetName}.`);
+    setShowChanges(differenceCount > 0);
+    flash(`Zaimportowano wersję ${importedVersionNo}: ${imported.length} pozycji, ${differenceCount} zmian.`);
+  };
+
+  const selectPlanDate = (planDate: string) => {
+    if (!planDate) return;
+    setState((current) => {
+      const dailyPlans = { ...current.dailyPlans, [current.selectedPlanDate]: clonePlanItems(current.plan) };
+      const latest = current.planVersions
+        .filter((version) => version.planDate === planDate)
+        .sort((left, right) => right.versionNo - left.versionNo)[0];
+      return {
+        ...current,
+        selectedPlanDate: planDate,
+        activePlanVersionId: latest?.id ?? '',
+        plan: clonePlanItems(dailyPlans[planDate] ?? latest?.items ?? []),
+        dailyPlans,
+        planName: latest?.fileName ?? '',
+        planSheet: latest?.sheetName ?? '',
+        planImportedAt: latest?.importedAt ?? ''
+      };
+    });
+    setExpandedPlan('');
+    setShowChanges(false);
+  };
+
+  const applyQuantityCorrection = (item: PlanItem, mode: 'exact' | 'increase' | 'decrease') => {
+    const amount = numberValue(quantityInputs[item.id]);
+    const nextTotal = correctedQuantity(item.totalQty, mode, amount);
+    if (nextTotal === item.totalQty) return flash('Podaj wartość, która zmienia ilość.');
+    const createdAt = nowLabel();
+    updateState((current) => {
+      const produced = Math.max(0, item.totalQty - item.remainingQty);
+      const correction: QuantityCorrection = {
+        id: uid('correction'), planDate: current.selectedPlanDate, planVersionId: current.activePlanVersionId,
+        itemId: item.id, index: item.index, name: item.name, previousValue: item.totalQty, newValue: nextTotal,
+        difference: nextTotal - item.totalQty, createdBy: currentUserName, createdAt, source: 'Ręczna korekta'
+      };
+      return {
+        ...current,
+        plan: current.plan.map((row) => row.id === item.id ? {
+          ...row, totalQty: nextTotal, remainingQty: Math.max(0, nextTotal - produced)
+        } : row),
+        quantityCorrections: [correction, ...current.quantityCorrections],
+        documents: current.documents.map((document) => document.planDate === current.selectedPlanDate && document.status === 'draft'
+          ? { ...document, status: 'outdated' as const }
+          : document)
+      };
+    });
+    setQuantityInputs((current) => ({ ...current, [item.id]: '' }));
+  };
+
+  const undoLastCorrection = (item: PlanItem) => {
+    const previous = state.quantityCorrections.find((correction) => correction.planDate === state.selectedPlanDate && correction.itemId === item.id && !correction.revertedAt);
+    if (!previous) return flash('Brak ręcznej korekty do cofnięcia.');
+    const revertedAt = nowLabel();
+    updateState((current) => ({
+      ...current,
+      plan: current.plan.map((row) => row.id === item.id ? {
+        ...row,
+        totalQty: previous.previousValue,
+        remainingQty: Math.max(0, previous.previousValue - Math.max(0, row.totalQty - row.remainingQty))
+      } : row),
+      quantityCorrections: current.quantityCorrections.map((correction) => correction.id === previous.id ? { ...correction, revertedAt } : correction),
+      documents: current.documents.map((document) => document.planDate === current.selectedPlanDate && document.status === 'draft'
+        ? { ...document, status: 'outdated' as const }
+        : document)
+    }));
   };
 
   const syncOriginalInventory = async (showMessage = true) => {
@@ -1231,7 +1606,6 @@ export default function MaterialPlanningPage() {
         inventorySyncedAt: new Date(payload.syncedAt).toLocaleString('pl-PL'),
         updatedAt: nowLabel()
       }));
-      if (!readOnly) setDirty(true);
       if (showMessage) flash(`Pobrano ${inventory.length} pozycji ze Spisu rzeczywistego.`);
     } catch {
       if (showMessage) flash('Nie udało się pobrać aktualnego Spisu rzeczywistego.');
@@ -1241,7 +1615,7 @@ export default function MaterialPlanningPage() {
   useEffect(() => {
     if (
       !hydrated ||
-      !(['spis', 'obliczenia', 'dokument', 'zwroty'] as View[]).includes(view)
+      !(['plan', 'spis', 'dokument', 'zwroty'] as View[]).includes(view)
     ) {
       return;
     }
@@ -1328,38 +1702,32 @@ export default function MaterialPlanningPage() {
     }));
   };
 
-  const continueProduction = (itemId: string, archiveId: string, keep: boolean) => {
-    updateState((current) => {
-      const archived = current.archive.find((entry) => entry.id === archiveId);
-      return {
-        ...current,
-        plan: current.plan.map((item) => item.id === itemId ? {
-          ...item,
-          runId: keep && archived ? archived.planItem.runId : uid('run'),
-          technologyId: keep && archived ? archived.planItem.technologyId : '',
-          workingMaterials: keep && archived ? cloneMaterials(archived.materials) : null,
-          manualOverride: keep && archived ? archived.planItem.manualOverride : false,
-          continuationCandidateId: ''
-        } : item),
-        archive: current.archive.filter((entry) => entry.id !== archiveId)
-      };
-    });
-    flash(keep ? 'Kontynuacja zachowała technologię roboczą.' : 'Rozpoczęto nową produkcję bez poprzednich korekt.');
-  };
-
-  const exportDocument = () => {
-    const rows = [['Status', 'Grupa', 'Kod', 'Materiał', 'Zapotrzebowanie', 'Na obszarze', 'Stan wspólny silosów', 'Do wypisania', 'J.m.']];
-    documentRows.forEach((row) => rows.push([
-      state.pickingDone[`${state.selectedAreaId}|${row.key}`] ? 'Wypisane' : 'Do wypisania', row.category, row.code, row.name,
-      String(row.demand), String(row.areaStock), String(row.sharedStock), String(row.toIssue), row.unit
-    ]));
-    const csv = `\uFEFF${rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(';')).join('\r\n')}`;
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `pobranie-${state.selectedAreaId}-${state.horizonShifts}-zmiany.csv`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+  const saveWorkingAsTechnology = (item: PlanItem) => {
+    const materials = materialsForItem(item);
+    if (!materials.length) return flash('Dodaj przynajmniej jeden materiał do technologii roboczej.');
+    const alternatives = state.technologies.filter((technology) => (
+      normalize(technology.productIndex) === normalize(item.index) || normalize(technology.productName) === normalize(item.name)
+    ) && technology.variant === 'alternative');
+    const technology: Technology = {
+      id: uid('tech'),
+      productIndex: item.index,
+      productName: item.name,
+      variant: state.technologies.some((entry) => normalize(entry.productIndex) === normalize(item.index)) ? 'alternative' : 'base',
+      alternativeNo: alternatives.length + 1,
+      description: `Zapisano z planu ${formatPlanDate(state.selectedPlanDate)}`,
+      notes: `Utworzył: ${currentUserName}`,
+      shiftNorm: item.shiftNorm,
+      materials: cloneMaterials(materials),
+      archived: false
+    };
+    updateState((current) => ({
+      ...current,
+      technologies: [...current.technologies, technology],
+      plan: current.plan.map((row) => row.id === item.id ? {
+        ...row, technologyId: technology.id, workingMaterials: cloneMaterials(technology.materials), manualOverride: false
+      } : row)
+    }));
+    flash(`Zapisano ${technologyLabel(technology)} w bibliotece.`);
   };
 
   const renderHeader = (title: string, subtitle: string) => (
@@ -1374,7 +1742,8 @@ export default function MaterialPlanningPage() {
           {storageMode === 'server' ? 'Zapis centralny' : storageMode === 'local' ? 'Zapis lokalny' : 'Łączenie...'}
         </Badge>
         {dirty ? <Badge tone="warning">Niezapisane zmiany</Badge> : null}
-        {!readOnly ? <Button onClick={save} disabled={saving} className="min-h-[44px]" variant="secondary"><Save className="mr-2 h-4 w-4" />{saving ? 'Zapisuję...' : 'Zapisz'}</Button> : <Badge tone="info">Tylko podgląd</Badge>}
+        {!readOnly && view !== 'technologie' ? <Button onClick={save} disabled={saving} className="min-h-[44px]" variant="secondary"><Save className="mr-2 h-4 w-4" />{saving ? 'Zapisuję...' : 'Zapisz'}</Button> : null}
+        {readOnly ? <Badge tone="info">Tylko podgląd</Badge> : null}
       </div>
     </div>
   );
@@ -1394,88 +1763,104 @@ export default function MaterialPlanningPage() {
     </Card>
   ) : null;
 
-  const renderPlanTable = (
-    items: PlanItem[],
-    title: string,
-    subtitle: string,
-    tone: 'standard' | 'emergency' | 'planned'
-  ) => {
+  const currentPlanVersion = state.planVersions
+    .filter((version) => version.planDate === state.selectedPlanDate)
+    .sort((left, right) => right.versionNo - left.versionNo)[0];
+
+  const renderPlanTable = (items: PlanItem[], title: string, subtitle: string, tone: PlanGroup) => {
     if (!items.length) return null;
-    return <Card className={cn(
-      'overflow-hidden p-0',
-      tone === 'emergency' && 'border-[rgba(239,68,68,0.5)]',
-      tone === 'planned' && 'border-[rgba(183,122,255,0.5)] bg-[rgba(183,122,255,0.035)]'
-    )}>
-      <div className={cn(
-        'flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3',
-        tone === 'emergency' && 'bg-[rgba(239,68,68,0.08)]',
-        tone === 'planned' && 'border-[rgba(183,122,255,0.25)] bg-[rgba(183,122,255,0.08)]'
-      )}>
+    return <Card className={cn('overflow-hidden p-0', tone === 'emergency' && 'border-[rgba(239,68,68,0.42)]', tone === 'planned' && 'border-[rgba(183,122,255,0.45)]')}>
+      <div className={cn('flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3', tone === 'planned' && 'border-[rgba(183,122,255,0.25)]')}>
         <div>
           <p className={cn('font-bold text-title', tone === 'emergency' && 'text-red-300', tone === 'planned' && 'text-[#debaff]')}>{title}</p>
           <p className="mt-0.5 text-xs text-muted">{subtitle}</p>
         </div>
         <Badge tone={tone === 'emergency' ? 'danger' : tone === 'planned' ? 'info' : 'default'}>{items.length}</Badge>
       </div>
-      <div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-sm"><thead className="bg-[rgba(255,255,255,0.045)] text-left text-xs uppercase tracking-wide text-dim"><tr><th className="p-3">Licz</th><th className="p-3">Indeks / detal</th><th className="p-3">Stanowisko</th><th className="p-3">Strefa</th><th className="p-3 text-right">Całość</th><th className="p-3 text-right">Pozostało</th><th className="p-3 text-right">Norma / zmianę</th><th className="p-3">Technologia</th><th className="p-3"></th></tr></thead><tbody>
-        {items.map((item) => {
-          const variants = technologiesFor(item);
-          return <tr key={item.id} className={cn(
-            'border-t border-border align-top',
-            !item.included && 'opacity-55',
-            tone === 'planned' && 'border-[rgba(183,122,255,0.18)]'
-          )}>
-            <td className="p-3"><button onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, included: !row.included } : row) }))} className={cn('flex h-7 w-7 items-center justify-center rounded-lg border', item.included ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_20%,transparent)] text-success' : 'border-border text-dim')}>{item.included ? <Check className="h-4 w-4" /> : null}</button></td>
-            <td className="p-3"><div className="flex flex-wrap items-center gap-2"><p className="font-bold text-title">{item.index}</p>{item.planGroup === 'planned' && item.plannedDate ? <span className="rounded-md border border-[rgba(183,122,255,0.45)] bg-[rgba(183,122,255,0.1)] px-2 py-0.5 text-xs font-bold text-[#debaff]">{item.plannedDate}</span> : null}</div><p className="mt-1 max-w-[300px] text-muted">{item.name}</p>{item.continuationCandidateId ? <div className="mt-2 flex gap-2"><Button className="min-h-[34px] px-3 py-1 text-xs" onClick={() => continueProduction(item.id, item.continuationCandidateId, true)}>Kontynuuj</Button><Button className="min-h-[34px] px-3 py-1 text-xs" variant="ghost" onClick={() => continueProduction(item.id, item.continuationCandidateId, false)}>Nowa produkcja</Button></div> : null}</td>
-            <td className="p-3"><div className="min-w-[150px] rounded-xl border border-border bg-[rgba(255,255,255,0.025)] px-3 py-2"><p className="font-semibold text-title">{item.station || 'Nie podano'}</p><p className="mt-0.5 text-[11px] text-dim">Z planu produkcyjnego</p></div></td>
-            <td className="p-3">{item.areaId ? <Badge tone="info">{areaName(item.areaId)}</Badge> : <Badge tone="warning">Brak przypisu</Badge>}</td>
-            <td className="p-3 text-right font-semibold">{fmt(item.totalQty)}</td>
-            <td className="p-3"><Input className="text-right" type="number" value={item.remainingQty} onChange={(event) => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, remainingQty: Math.max(0, numberValue(event.target.value)) } : row) }))} /></td>
-            <td className="p-3"><Input className="text-right" type="number" value={item.shiftNorm} onChange={(event) => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, shiftNorm: Math.max(0, numberValue(event.target.value)) } : row) }))} /></td>
-            <td className="min-w-[220px] p-3">{variants.length ? <SelectField value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}><option value="">{variants.length > 1 ? 'Wybierz technologię' : 'Technologia'}</option>{variants.map((technology) => <option key={technology.id} value={technology.id}>{technologyLabel(technology)} · {technology.description || 'bez opisu'}</option>)}</SelectField> : <Button variant="outline" className="min-h-[40px]" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button>}</td>
-            <td className="p-3"><button aria-expanded={expandedPlan === item.id} aria-label={`Rozwiń technologię ${item.index}`} className="rounded-lg p-2 text-muted hover:bg-[rgba(255,255,255,0.06)] hover:text-title" onClick={() => setExpandedPlan(expandedPlan === item.id ? '' : item.id)}>{expandedPlan === item.id ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}</button></td>
-          </tr>;
-        })}
-      </tbody></table></div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1020px] table-fixed text-sm">
+          <thead className="sticky top-0 z-10 bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim">
+            <tr>
+              <th className="w-14 p-3">Uwzgl.</th><th className="w-[260px] p-3">Indeks / nazwa</th><th className="w-28 p-3">Stanowisko</th>
+              <th className="w-20 p-3">Strefa</th><th className="w-16 p-3 text-right">Ilość</th>
+              <th className="w-16 p-3 text-right">Norma</th><th className="w-[320px] p-3">Technologia</th><th className="w-14 p-3"><span className="sr-only">Szczegóły</span></th>
+            </tr>
+          </thead>
+          <tbody>{items.map((item) => {
+            const variants = technologiesFor(item);
+            const changes = currentPlanVersion?.differences.filter((difference) => difference.itemId === item.id) ?? [];
+            const quantityChange = changes.find((difference) => difference.kind === 'quantity_increased' || difference.kind === 'quantity_decreased');
+            const corrected = state.quantityCorrections.some((correction) => correction.planDate === state.selectedPlanDate && correction.itemId === item.id && !correction.revertedAt);
+            const expanded = expandedPlan === item.id;
+            return <Fragment key={item.id}>
+              <tr className={cn('border-t border-border align-top transition', !item.included && 'bg-[rgba(255,255,255,0.018)] text-dim', tone === 'planned' && 'border-[rgba(183,122,255,0.2)]')}>
+                <td className="p-3"><button type="button" title={item.included ? 'Wyłącz z obliczeń' : 'Uwzględnij w obliczeniach'} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, included: !row.included } : row) }))} className={cn('flex h-11 w-11 items-center justify-center rounded-lg border', item.included ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_18%,transparent)] text-success' : 'border-border text-dim')}>{item.included ? <Check className="h-4 w-4" /> : null}</button></td>
+                <td className="p-3">
+                  <div className="flex flex-wrap items-center gap-1.5"><p className="break-words font-bold text-title">{item.index}</p>{tone === 'emergency' ? <Badge tone="danger">Awaryjna</Badge> : null}{tone === 'planned' ? <Badge tone="info">Przyszła</Badge> : null}{corrected ? <Badge tone="warning">Zmieniona ręcznie</Badge> : null}{changes.map((change) => <Badge key={change.id} tone={change.kind === 'new' ? 'success' : change.kind === 'quantity_decreased' ? 'warning' : 'info'}>{differenceLabel[change.kind]}</Badge>)}</div>
+                  <p className="mt-1 break-words text-muted">{item.name}</p>
+                  {item.plannedDate ? <p className="mt-1 text-xs text-[#debaff]">Termin: {item.plannedDate}</p> : null}
+                </td>
+                <td className="p-3 font-semibold text-title">{item.station || 'Nie podano'}</td>
+                <td className="p-3">{item.areaId ? <Badge tone="info">{areaName(item.areaId)}</Badge> : <Badge tone="warning">Brak przypisu</Badge>}</td>
+                <td className="p-3 text-right"><p className="font-black text-title">{fmt(item.totalQty)}</p>{quantityChange ? <p className={cn('mt-1 text-xs font-bold', quantityChange.difference > 0 ? 'text-success' : 'text-warning')}>{quantityChange.difference > 0 ? '+' : ''}{fmt(quantityChange.difference)}</p> : null}</td>
+                <td className="p-3 text-right">{fmt(item.shiftNorm)}</td>
+                <td className="p-3">{variants.length ? <SelectField value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}><option value="">Wybierz technologię</option>{variants.map((technology) => <option key={technology.id} value={technology.id}>{technologyLabel(technology)} · {technology.description || 'bez opisu'}</option>)}</SelectField> : <Button variant="outline" className="min-h-11" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj</Button>}{!item.technologyId ? <p className="mt-1 text-xs font-bold text-danger">Brak technologii</p> : item.manualOverride ? <p className="mt-1 text-xs font-bold text-warning">Technologia robocza</p> : <p className="mt-1 text-xs text-success">Gotowa</p>}</td>
+                <td className="p-3"><button type="button" title={expanded ? 'Zwiń pozycję' : 'Rozwiń pozycję'} aria-expanded={expanded} className="flex h-11 w-11 items-center justify-center rounded-lg border border-border text-muted hover:border-brand hover:text-title" onClick={() => setExpandedPlan(expanded ? '' : item.id)}>{expanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}</button></td>
+              </tr>
+              {expanded ? <tr className="border-t border-border"><td colSpan={8} className="p-0">{renderCalculationDetails(item)}</td></tr> : null}
+            </Fragment>;
+          })}</tbody>
+        </table>
+      </div>
     </Card>;
   };
 
-  const renderPlan = () => (
-    <div className="space-y-5">
-      {renderHeader('Plan produkcyjny', 'Tutaj wgrywasz plan i kontrolujesz dane wejściowe. Technologie oraz obliczenia mają własne ekrany.')}
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Pozycje planu" value={String(state.plan.length)} />
-        <Stat label="Bez technologii" value={String(missingTechnologyCount)} tone={missingTechnologyCount ? 'warning' : 'success'} />
-        <Stat label="Bez przypisanej strefy" value={String(unassignedCount)} tone={unassignedCount ? 'warning' : 'success'} />
+  const renderPlan = () => <div className="space-y-5">
+    {renderHeader('Plan produkcyjny', 'Plan dnia, technologie i pełne obliczenia materiałowe są dostępne bezpośrednio w rozwijanych pozycjach.')}
+    <input ref={fileInputRef} className="hidden" type="file" accept=".xlsx,.xls,.csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleWorkbook(file, 'plan'); event.target.value = ''; }} />
+
+    <Card className="space-y-5">
+      <div className="grid gap-4 xl:grid-cols-[minmax(310px,0.8fr)_minmax(360px,1fr)_auto] xl:items-end">
+        <div className="space-y-2"><p className="text-xs font-bold uppercase text-dim">Data produkcji</p><div className="grid grid-cols-2 gap-2 sm:grid-cols-[auto_auto_minmax(160px,1fr)]"><Button variant={state.selectedPlanDate === localDateKey() ? 'secondary' : 'outline'} onClick={() => selectPlanDate(localDateKey())}>Dzisiaj</Button><Button variant={state.selectedPlanDate === dateOffsetKey(1) ? 'secondary' : 'outline'} onClick={() => selectPlanDate(dateOffsetKey(1))}>Jutro</Button><Input className="col-span-2 sm:col-span-1" type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></div></div>
+        <div className="space-y-2"><p className="text-xs font-bold uppercase text-dim">Globalny zakres obliczeń</p><div className="flex flex-wrap gap-2"><Button className="min-h-11" variant={state.calculationMode === 'horizon' && state.horizonShifts === 3.5 ? 'secondary' : 'outline'} onClick={() => updateState((current) => ({ ...current, calculationMode: 'horizon', horizonShifts: 3.5 }))}>3,5 zmiany</Button><Button className="min-h-11" variant={state.calculationMode === 'horizon' && state.horizonShifts === 9 ? 'secondary' : 'outline'} onClick={() => updateState((current) => ({ ...current, calculationMode: 'horizon', horizonShifts: 9 }))}>9 zmian</Button><Input className="w-28" aria-label="Własna liczba zmian" type="number" min="0.5" step="0.5" value={state.horizonShifts} onChange={(event) => updateState((current) => ({ ...current, calculationMode: 'horizon', horizonShifts: Math.max(0.5, numberValue(event.target.value)) }))} /><Button className="min-h-11" variant={state.calculationMode === 'all' ? 'secondary' : 'outline'} onClick={() => updateState((current) => ({ ...current, calculationMode: 'all' }))}>Cały plan</Button></div></div>
+        <div className="flex flex-wrap gap-2 xl:justify-end"><Button onClick={() => fileInputRef.current?.click()}><Upload className="mr-2 h-4 w-4" />{currentPlanVersion ? 'Wgraj aktualizację' : 'Wgraj plan'}</Button><Button variant="outline" disabled={!currentPlanVersion?.differences.length} onClick={() => setShowChanges((current) => !current)}>{showChanges ? <X className="mr-2 h-4 w-4" /> : <Clock3 className="mr-2 h-4 w-4" />}Pokaż zmiany</Button></div>
       </div>
-      <input ref={fileInputRef} className="hidden" type="file" accept=".xlsx,.xls,.csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleWorkbook(file, 'plan'); event.target.value = ''; }} />
-      <Card className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div><p className="font-bold text-title">{state.planName || 'Brak wgranego planu'}</p><p className="mt-1 text-sm text-muted">{state.planSheet ? `Zakładka: ${state.planSheet} · ${state.planImportedAt}` : 'Wybierz plik Excel, a potem jedną zakładkę.'}</p></div>
-        <div className="flex flex-wrap gap-2"><Button onClick={() => fileInputRef.current?.click()}><Upload className="mr-2 h-4 w-4" />Wgraj plan Excel</Button><Button variant="ghost" onClick={() => { if (readOnly) return; setState(demoState()); setDirty(true); flash('Wczytano dane demonstracyjne.'); }}><RefreshCw className="mr-2 h-4 w-4" />Wczytaj demo</Button></div>
-      </Card>
-      {renderPendingImport()}
-      {state.plan.length ? <div className="space-y-4">
-        {renderPlanTable(state.plan.filter((item) => (item.planGroup ?? 'standard') === 'standard'), 'Plan bieżący', 'Aktualna produkcja z wybranego arkusza.', 'standard')}
-        {renderPlanTable(state.plan.filter((item) => item.planGroup === 'emergency'), 'Awaryjnie', 'Pozycje oznaczone w planie jako awaryjne.', 'emergency')}
-        {renderPlanTable(state.plan.filter((item) => item.planGroup === 'planned'), 'Planowane zmiany form', 'Pozycje przyszłe. Włącz „Licz”, aby uwzględnić wybraną pozycję w zapotrzebowaniu.', 'planned')}
-      </div> : <EmptyState title="Nie wgrano planu" description="Zaimportuj plik Excel i wybierz jedną zakładkę planu produkcyjnego." />}
-      {expandedPlan ? (() => {
-        const item = state.plan.find((row) => row.id === expandedPlan);
-        if (!item) return null;
-        const materials = materialsForItem(item);
-        return <Card className="space-y-4 border-[rgba(255,122,26,0.4)]"><div className="flex items-center justify-between"><SectionTitle title={`Technologia robocza: ${item.index}`} subtitle="Zmiany dotyczą tylko tej pozycji planu. Biblioteka technologii nie zostanie nadpisana." />{item.manualOverride ? <Badge tone="warning">Ręcznie zmieniona</Badge> : <Badge tone="success">Kopia nominalna</Badge>}</div>{materials.length ? <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm"><thead className="text-left text-xs uppercase text-dim"><tr><th className="p-2">Kod</th><th className="p-2">Nazwa</th><th className="p-2">Rodzaj</th><th className="p-2">Zużycie / szt.</th><th className="p-2">J.m.</th><th className="p-2">Ilość na palecie / w opakowaniu</th><th></th></tr></thead><tbody>{materials.map((material) => <tr key={material.id} className="border-t border-border"><td className="p-2"><Input value={material.code} onChange={(event) => updateWorkingMaterial(item.id, material.id, { code: event.target.value })} /></td><td className="p-2"><Input list="material-name-suggestions" value={material.name} onChange={(event) => updateWorkingMaterial(item.id, material.id, { name: event.target.value })} /></td><td className="p-2"><SelectField value={material.category} onChange={(event) => updateWorkingMaterial(item.id, material.id, { category: event.target.value as MaterialCategory })}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td><td className="p-2"><Input type="number" step="0.0001" value={material.usage} onChange={(event) => updateWorkingMaterial(item.id, material.id, { usage: numberValue(event.target.value) })} /></td><td className="p-2"><Input value={material.unit} onChange={(event) => updateWorkingMaterial(item.id, material.id, { unit: event.target.value })} /></td><td className="p-2"><Input type="number" value={material.logisticQty} onChange={(event) => updateWorkingMaterial(item.id, material.id, { logisticQty: numberValue(event.target.value) })} /></td><td className="p-2"><Button variant="ghost" className="min-h-[38px] px-3 text-danger" onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, manualOverride: true, workingMaterials: materials.filter((entry) => entry.id !== material.id) } : row) }))}><Trash2 className="h-4 w-4" /></Button></td></tr>)}</tbody></table></div> : <p className="text-sm text-muted">Wybierz technologię, aby utworzyć kopię roboczą materiałów.</p>}<Button variant="outline" disabled={!item.technologyId} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, manualOverride: true, workingMaterials: [...materials, { id: uid('mat'), code: '', name: '', category: 'Pozostałe', usage: 0, unit: 'szt.', logisticQty: 1 }] } : row) }))}><Plus className="mr-2 h-4 w-4" />Dodaj materiał</Button></Card>;
-      })() : null}
-    </div>
-  );
+      <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div><p className="text-xs uppercase text-dim">Plan na dzień</p><p className="mt-1 text-xl font-black text-title">{formatPlanDate(state.selectedPlanDate)}</p></div>
+        <div><p className="text-xs uppercase text-dim">Aktualna wersja</p><p className="mt-1 font-bold text-title">{currentPlanVersion ? `Wersja ${currentPlanVersion.versionNo}` : 'Brak planu'}</p><p className="text-xs text-muted">{currentPlanVersion?.importedAt ?? '—'}</p></div>
+        <div><p className="text-xs uppercase text-dim">Plik / arkusz</p><p className="mt-1 break-words font-semibold text-title">{currentPlanVersion?.fileName ?? '—'}</p><p className="text-xs text-muted">{currentPlanVersion?.sheetName ?? '—'}</p></div>
+        <Field label="Status wersji"><SelectField disabled={!currentPlanVersion} value={currentPlanVersion?.status ?? 'draft'} onChange={(event) => updateState((current) => ({ ...current, planVersions: current.planVersions.map((version) => version.id === currentPlanVersion?.id ? { ...version, status: event.target.value as PlanVersionStatus } : version) }))}><option value="draft">Roboczy</option><option value="ready">Gotowy</option><option value="active">Aktywny</option><option value="superseded">Zastąpiony</option></SelectField></Field>
+      </div>
+    </Card>
+
+    {renderPendingImport()}
+    {showChanges && currentPlanVersion ? <Card className="space-y-3"><div className="flex items-center justify-between"><SectionTitle title={`Zmiany w wersji ${currentPlanVersion.versionNo}`} subtitle="Porównanie z poprzednim importem tej samej daty." /><Badge tone={currentPlanVersion.differences.length ? 'warning' : 'success'}>{currentPlanVersion.differences.length}</Badge></div>{currentPlanVersion.differences.length ? <div className="divide-y divide-border">{currentPlanVersion.differences.map((difference) => <div key={difference.id} className="grid gap-2 py-3 md:grid-cols-[150px_1fr_auto]"><Badge tone={difference.kind === 'removed' ? 'danger' : difference.kind === 'quantity_decreased' ? 'warning' : 'info'}>{differenceLabel[difference.kind]}</Badge><div><p className="font-bold text-title">{difference.index} · {difference.name}</p><p className="text-xs text-muted">{String(difference.previousValue ?? '—')} → {String(difference.currentValue ?? '—')}</p></div>{difference.difference ? <p className={cn('font-black', difference.difference > 0 ? 'text-success' : 'text-warning')}>{difference.difference > 0 ? '+' : ''}{fmt(difference.difference)}</p> : null}</div>)}</div> : <p className="text-sm text-muted">Pierwszy import albo brak różnic.</p>}</Card> : null}
+
+    <div className="grid gap-3 grid-cols-2 xl:grid-cols-4"><Stat label="Pozycje planu" value={String(state.plan.length)} /><Stat label="Uwzględnione" value={String(state.plan.filter((item) => item.included).length)} /><Stat label="Bez technologii" value={String(missingTechnologyCount)} tone={missingTechnologyCount ? 'warning' : 'success'} /><Stat label="Bez strefy" value={String(unassignedCount)} tone={unassignedCount ? 'warning' : 'success'} /></div>
+
+    {state.plan.length ? <div className="space-y-4">
+      {renderPlanTable(state.plan.filter((item) => (item.planGroup ?? 'standard') === 'standard'), 'Plan na dzisiaj', 'Bieżące pozycje wchodzą do obliczeń i dokumentów.', 'standard')}
+      {renderPlanTable(state.plan.filter((item) => item.planGroup === 'emergency'), 'Pozycje awaryjne', 'Działają obliczeniowo tak samo jak plan bieżący.', 'emergency')}
+      {renderPlanTable(state.plan.filter((item) => item.planGroup === 'planned'), 'Planowane zmiany form — przyszłe', 'Nie są liczone, dopóki ręcznie nie włączysz pozycji.', 'planned')}
+    </div> : <EmptyState title={`Brak planu na ${formatPlanDate(state.selectedPlanDate)}`} description="Wgraj pierwszy plan dla wybranej daty. Poprzednie dni i wersje pozostaną w historii." />}
+  </div>;
 
   const renderTechnologies=() => {
-    const selected=state.technologies.find((technology) => technology.id===editingTechnologyId)??state.technologies.find((technology) => !technology.archived);
+    const normalizedSearch = normalize(technologySearch);
+    const filteredTechnologies = state.technologies.filter((technology) => (
+      technologyFilter === 'archived' ? technology.archived : !technology.archived
+    ) && (!normalizedSearch || normalize(`${technology.productIndex} ${technology.productName}`).includes(normalizedSearch)))
+      .sort((left, right) => left.productName.localeCompare(right.productName, 'pl') || left.alternativeNo - right.alternativeNo);
+    const selected = state.technologies.find((technology) => technology.id === editingTechnologyId)
+      ?? filteredTechnologies[0];
     return <div className="space-y-5">
       {renderHeader('Biblioteka technologii','Technologie są wprowadzane ręcznie i pozostają w bibliotece. Bazowa jest zawsze pierwsza, kolejne warianty to Alternatywna 1, 2, 3...')}
       {selected && !readOnly ? <div className="flex justify-end"><Button variant="outline" className="border-[color:color-mix(in_srgb,var(--danger)_48%,transparent)] text-danger hover:border-danger" onClick={() => deleteTechnology(selected.id)}><Trash2 className="mr-2 h-4 w-4" />Usuń wybraną technologię</Button></div> : null}
+      <Card className="space-y-3"><div className="relative"><Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-dim" /><Input className="min-h-14 pl-12 text-base" placeholder="Szukaj po indeksie lub nazwie produktu" value={technologySearch} onChange={(event) => setTechnologySearch(event.target.value)} /></div><div className="flex flex-wrap gap-2"><Button variant={technologyFilter === 'active' ? 'secondary' : 'outline'} onClick={() => setTechnologyFilter('active')}>Aktywne ({state.technologies.filter((technology) => !technology.archived).length})</Button><Button variant={technologyFilter === 'archived' ? 'secondary' : 'outline'} onClick={() => setTechnologyFilter('archived')}>Archiwalne ({state.technologies.filter((technology) => technology.archived).length})</Button><Button className="ml-auto" onClick={() => addTechnology()}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button></div></Card>
+      {selected?.archived && !readOnly ? <div className="flex justify-end"><Button variant="secondary" onClick={() => editTechnology(selected.id, { archived: false })}><RefreshCw className="mr-2 h-4 w-4" />Przywróć technologię</Button></div> : null}
       <div className="grid gap-5 xl:grid-cols-[340px_1fr]">
-        <Card className="space-y-3"><div className="flex items-center justify-between"><SectionTitle title="Technologie" subtitle={`${state.technologies.filter((item) => !item.archived).length} aktywnych`} /><Button className="min-h-[40px] px-3" onClick={() => addTechnology()}><Plus className="h-4 w-4" /></Button></div><div className="max-h-[68vh] space-y-2 overflow-y-auto pr-1">{state.technologies.filter((technology) => !technology.archived).map((technology) => <button key={technology.id} onClick={() => setEditingTechnologyId(technology.id)} className={cn('w-full rounded-xl border p-3 text-left transition',selected?.id===technology.id? 'border-[rgba(255,122,26,0.75)] bg-brandSoft':'border-border bg-[rgba(255,255,255,0.025)] hover:border-borderStrong')}><div className="flex items-center justify-between gap-2"><Badge tone={technology.variant==='base'? 'success':'info'}>{technologyLabel(technology)}</Badge><span className="text-xs text-dim">{fmt(technology.shiftNorm)} / zm.</span></div><p className="mt-2 font-bold text-title">{technology.productIndex||'Nowy indeks'}</p><p className="mt-1 line-clamp-2 text-xs text-muted">{technology.productName||technology.description||'Uzupełnij dane technologii'}</p></button>)}</div></Card>
-        {selected? <Card className="space-y-5"><div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><SectionTitle title={`${technologyLabel(selected)} · ${selected.productIndex||'Nowa technologia'}`} subtitle="Ta karta jest wzorcem wielokrotnego użytku. Korekty konkretnej produkcji wykonuje się w planie lub obliczeniach." /><Button variant="ghost" className="text-danger" onClick={() => editTechnology(selected.id,{ archived: true })}><Archive className="mr-2 h-4 w-4" />Archiwizuj</Button></div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3"><ProductCatalogField label="Indeks produktu" mode="index" value={selected.productIndex} items={productCatalog} loading={productCatalogLoading} onChange={(value) => editTechnologyProductField(selected.id,'index',value)} onSelect={(item) => assignTechnologyProduct(selected.id,item.index,item.name)} /><ProductCatalogField label="Nazwa produktu" mode="name" value={selected.productName} items={productCatalog} loading={productCatalogLoading} onChange={(value) => editTechnologyProductField(selected.id,'name',value)} onSelect={(item) => assignTechnologyProduct(selected.id,item.index,item.name)} /><Field label="Rodzaj wersji"><SelectField value={selected.variant} onChange={(event) => editTechnology(selected.id,{ variant: event.target.value as Technology['variant'],alternativeNo: event.target.value==='base'? 0:selected.alternativeNo||1 })}><option value="base">Bazowa</option><option value="alternative">Alternatywna</option></SelectField></Field>{selected.variant==='alternative'? <Field label="Numer alternatywy"><Input type="number" min="1" value={selected.alternativeNo} onChange={(event) => editTechnology(selected.id,{ alternativeNo: Math.max(1,Math.floor(numberValue(event.target.value))) })} /></Field>:null}<Field label="Norma na zmianę (8h)"><Input type="number" value={selected.shiftNorm} onChange={(event) => editTechnology(selected.id,{ shiftNorm: Math.max(0,numberValue(event.target.value)) })} /></Field><Field label="Krótki opis"><Input placeholder="np. Pakowanie w karton rozmiar 5" value={selected.description} onChange={(event) => editTechnology(selected.id,{ description: event.target.value })} /></Field><label className="space-y-1.5 text-xs font-semibold uppercase tracking-wide text-dim md:col-span-2 xl:col-span-3"><span>Uwagi (opcjonalne)</span><textarea className="min-h-20 w-full rounded-xl border border-border bg-[rgba(0,0,0,0.4)] p-3 text-sm font-normal normal-case tracking-normal text-body focus:border-[rgba(255,106,0,0.55)] focus:outline-none" value={selected.notes} onChange={(event) => editTechnology(selected.id,{ notes: event.target.value })} /></label></div><div className="flex items-center justify-between"><SectionTitle title="Materiały technologii" subtitle="Zużycie jest podawane na jedną sztukę produktu. Ilość logistyczna jest tylko wskazówką i nie zaokrągla pobrania do pełnej palety." /><Button variant="outline" onClick={() => editTechnology(selected.id,{ materials: [...selected.materials,{ id: uid('mat'),code: '',name: '',category: 'Pozostałe',usage: 0,unit: 'szt.',logisticQty: 1 }] })}><Plus className="mr-2 h-4 w-4" />Dodaj materiał</Button></div><div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm"><thead className="text-left text-xs uppercase text-dim"><tr><th className="p-2">Kod</th><th className="p-2">Nazwa materiału</th><th className="p-2">Rodzaj</th><th className="p-2">Zużycie / szt.</th><th className="p-2">J.m.</th><th className="p-2">Na palecie / w opakowaniu</th><th></th></tr></thead><tbody>{selected.materials.map((material) => <tr key={material.id} className="border-t border-border"><td className="p-2"><Input list="material-code-suggestions" value={material.code} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,code: event.target.value }:row) })} /></td><td className="p-2"><Input list="material-name-suggestions" value={material.name} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,name: event.target.value }:row) })} /></td><td className="p-2"><SelectField value={material.category} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,category: event.target.value as MaterialCategory }:row) })}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td><td className="p-2"><Input type="number" step="0.0001" value={material.usage} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,usage: numberValue(event.target.value) }:row) })} /></td><td className="p-2"><Input value={material.unit} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,unit: event.target.value }:row) })} /></td><td className="p-2"><Input type="number" value={material.logisticQty} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,logisticQty: numberValue(event.target.value) }:row) })} /></td><td className="p-2"><Button variant="ghost" className="min-h-[38px] px-3 text-danger" onClick={() => editTechnology(selected.id,{ materials: selected.materials.filter((row) => row.id!==material.id) })}><Trash2 className="h-4 w-4" /></Button></td></tr>)}</tbody></table></div></Card>:<EmptyState title="Brak technologii" description="Dodaj pierwszą technologię bazową dla produktu." />}
+        <Card className="space-y-3"><div className="flex items-center justify-between"><SectionTitle title={technologyFilter === 'active' ? 'Aktywne technologie' : 'Archiwalne technologie'} subtitle={`${filteredTechnologies.length} wyników`} /></div><div className="max-h-[68vh] space-y-2 overflow-y-auto pr-1">{filteredTechnologies.map((technology) => <button key={technology.id} onClick={() => setEditingTechnologyId(technology.id)} className={cn('w-full rounded-xl border p-3 text-left transition',selected?.id===technology.id? 'border-[rgba(255,122,26,0.75)] bg-brandSoft':'border-border bg-[rgba(255,255,255,0.025)] hover:border-borderStrong')}><div className="flex items-center justify-between gap-2"><Badge tone={technology.variant==='base'? 'success':'info'}>{technologyLabel(technology)}</Badge><span className="text-xs text-dim">{fmt(technology.shiftNorm)} / zm.</span></div><p className="mt-2 break-words font-bold text-title">{technology.productIndex||'Nowy indeks'}</p><p className="mt-1 line-clamp-2 text-xs text-muted">{technology.productName||technology.description||'Uzupełnij dane technologii'}</p></button>)}{!filteredTechnologies.length ? <p className="py-8 text-center text-sm text-muted">Brak technologii spełniających kryteria.</p> : null}</div></Card>
+        {selected? <Card className="space-y-5"><div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><SectionTitle title={`${technologyLabel(selected)} · ${selected.productIndex||'Nowa technologia'}`} subtitle="Ta karta jest wzorcem wielokrotnego użytku. Korekty konkretnej produkcji wykonuje się w planie lub obliczeniach." /><div className="flex flex-wrap items-center gap-2">{!readOnly ? <Button onClick={save} disabled={saving} className="min-h-[44px]" variant="secondary"><Save className="mr-2 h-4 w-4" />{saving ? 'Zapisuję...' : 'Zapisz'}</Button> : null}<Button variant="ghost" className="text-danger" onClick={() => editTechnology(selected.id,{ archived: true })}><Archive className="mr-2 h-4 w-4" />Archiwizuj</Button></div></div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3"><ProductCatalogField label="Indeks produktu" mode="index" value={selected.productIndex} items={productCatalog} loading={productCatalogLoading} onChange={(value) => editTechnologyProductField(selected.id,'index',value)} onSelect={(item) => assignTechnologyProduct(selected.id,item.index,item.name)} /><ProductCatalogField label="Nazwa produktu" mode="name" value={selected.productName} items={productCatalog} loading={productCatalogLoading} onChange={(value) => editTechnologyProductField(selected.id,'name',value)} onSelect={(item) => assignTechnologyProduct(selected.id,item.index,item.name)} /><Field label="Rodzaj wersji"><SelectField value={selected.variant} onChange={(event) => editTechnology(selected.id,{ variant: event.target.value as Technology['variant'],alternativeNo: event.target.value==='base'? 0:selected.alternativeNo||1 })}><option value="base">Bazowa</option><option value="alternative">Alternatywna</option></SelectField></Field>{selected.variant==='alternative'? <Field label="Numer alternatywy"><Input type="number" min="1" value={selected.alternativeNo} onChange={(event) => editTechnology(selected.id,{ alternativeNo: Math.max(1,Math.floor(numberValue(event.target.value))) })} /></Field>:null}<Field label="Norma na zmianę (8h)"><Input type="number" value={selected.shiftNorm} onChange={(event) => editTechnology(selected.id,{ shiftNorm: Math.max(0,numberValue(event.target.value)) })} /></Field><Field label="Krótki opis"><Input placeholder="np. Pakowanie w karton rozmiar 5" value={selected.description} onChange={(event) => editTechnology(selected.id,{ description: event.target.value })} /></Field><label className="space-y-1.5 text-xs font-semibold uppercase tracking-wide text-dim md:col-span-2 xl:col-span-3"><span>Uwagi (opcjonalne)</span><textarea className="min-h-20 w-full rounded-xl border border-border bg-[rgba(0,0,0,0.4)] p-3 text-sm font-normal normal-case tracking-normal text-body focus:border-[rgba(255,106,0,0.55)] focus:outline-none" value={selected.notes} onChange={(event) => editTechnology(selected.id,{ notes: event.target.value })} /></label></div><div className="flex items-center justify-between"><SectionTitle title="Materiały technologii" subtitle="Zużycie jest podawane na jedną sztukę produktu. Ilość logistyczna jest tylko wskazówką i nie zaokrągla pobrania do pełnej palety." /><Button variant="outline" onClick={() => editTechnology(selected.id,{ materials: [...selected.materials,{ id: uid('mat'),code: '',name: '',category: 'Pozostałe',usage: 0,unit: 'szt.',logisticQty: 1 }] })}><Plus className="mr-2 h-4 w-4" />Dodaj materiał</Button></div><div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm"><thead className="text-left text-xs uppercase text-dim"><tr><th className="p-2">Kod</th><th className="p-2">Nazwa materiału</th><th className="p-2">Rodzaj</th><th className="p-2">Zużycie / szt.</th><th className="p-2">J.m.</th><th className="p-2">Na palecie / w opakowaniu</th><th></th></tr></thead><tbody>{selected.materials.map((material) => <tr key={material.id} className="border-t border-border"><td className="p-2"><Input list="material-code-suggestions" value={material.code} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,code: event.target.value }:row) })} /></td><td className="p-2"><Input list="material-name-suggestions" value={material.name} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,name: event.target.value }:row) })} /></td><td className="p-2"><SelectField value={material.category} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,category: event.target.value as MaterialCategory }:row) })}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td><td className="p-2"><Input type="number" step="0.0001" value={material.usage} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,usage: numberValue(event.target.value) }:row) })} /></td><td className="p-2"><Input value={material.unit} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,unit: event.target.value }:row) })} /></td><td className="p-2"><Input type="number" value={material.logisticQty} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,logisticQty: numberValue(event.target.value) }:row) })} /></td><td className="p-2"><Button variant="ghost" className="min-h-[38px] px-3 text-danger" onClick={() => editTechnology(selected.id,{ materials: selected.materials.filter((row) => row.id!==material.id) })}><Trash2 className="h-4 w-4" /></Button></td></tr>)}</tbody></table></div></Card>:<EmptyState title="Brak technologii" description="Dodaj pierwszą technologię bazową dla produktu." />}
       </div>
     </div>;
   };
@@ -1485,59 +1870,71 @@ export default function MaterialPlanningPage() {
   const renderCalculationDetails = (item: PlanItem) => {
     const technology = technologyForItem(item);
     const materials = materialsForItem(item);
-    const simulation = calculationSimulations[item.id] ?? { mode: 'shifts', shifts: 3.5, quantity: 0 };
     const remaining = Math.max(0, item.remainingQty || item.totalQty);
     const norm = Math.max(0, item.shiftNorm || technology?.shiftNorm || 0);
-    const simulationQty = simulation.mode === 'all'
-      ? remaining
-      : simulation.mode === 'quantity'
-        ? Math.min(remaining, Math.max(0, simulation.quantity))
-        : Math.min(remaining, norm * Math.max(0, simulation.shifts));
-    const updateSimulation = (patch: Partial<CalculationSimulation>) => setCalculationSimulations((current) => ({
+    const selectedQty = itemProductionQty(item);
+    const currentDifference = currentPlanVersion?.differences.find((difference) => difference.itemId === item.id && (difference.kind === 'quantity_increased' || difference.kind === 'quantity_decreased'));
+    const previousQty = typeof currentDifference?.previousValue === 'number' ? currentDifference.previousValue : item.totalQty;
+    const updateScope = (patch: Pick<PlanItem, 'scopeMode' | 'scopeShifts' | 'scopeQuantity'>) => updateState((current) => ({
       ...current,
-      [item.id]: { ...simulation, ...patch }
+      plan: current.plan.map((row) => row.id === item.id ? { ...row, ...patch } : row)
     }));
 
-    return <div className="space-y-4 border-t border-[rgba(255,122,26,0.28)] bg-[rgba(255,255,255,0.018)] p-4">
+    return <div className="space-y-5 bg-[rgba(255,255,255,0.012)] p-4 md:p-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <SectionTitle title={`Symulacja: ${item.index}`} subtitle="Zakres symulacji nie zmienia ilości zapisanej w planie. Edycja materiałów tworzy roboczą korektę tylko dla tej pozycji." />
+        <SectionTitle title={`${item.index} · ${item.name}`} subtitle="Plan, zakres, technologia i zapotrzebowanie materiałowe tej pozycji." />
         <div className="flex flex-wrap gap-2">
-          {[1, 2, 3, 3.5].map((shifts) => <Button key={shifts} className="min-h-9 px-3 py-1.5 text-xs" variant={simulation.mode === 'shifts' && simulation.shifts === shifts ? 'secondary' : 'outline'} onClick={() => updateSimulation({ mode: 'shifts', shifts })}>{String(shifts).replace('.', ',')} zm.</Button>)}
-          <Button className="min-h-9 px-3 py-1.5 text-xs" variant={simulation.mode === 'all' ? 'secondary' : 'outline'} onClick={() => updateSimulation({ mode: 'all' })}>Całe zlecenie</Button>
+          <Button className="min-h-11" variant={!item.scopeMode || item.scopeMode === 'global' ? 'secondary' : 'outline'} onClick={() => updateScope({ scopeMode: 'global', scopeShifts: item.scopeShifts, scopeQuantity: item.scopeQuantity })}>Zakres globalny</Button>
+          <Button className="min-h-11" variant={item.scopeMode === 'all' ? 'secondary' : 'outline'} onClick={() => updateScope({ scopeMode: 'all', scopeShifts: item.scopeShifts, scopeQuantity: item.scopeQuantity })}>Cały pozostały plan</Button>
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <Field label="Własna liczba zmian"><Input type="number" min="0" step="0.5" value={simulation.shifts} onChange={(event) => updateSimulation({ mode: 'shifts', shifts: Math.max(0, numberValue(event.target.value)) })} /></Field>
-        <Field label="Własna liczba sztuk"><Input type="number" min="0" value={simulation.quantity} onChange={(event) => updateSimulation({ mode: 'quantity', quantity: Math.max(0, numberValue(event.target.value)) })} /></Field>
-        <Stat label="Produkcja w symulacji" value={`${fmt(simulationQty)} szt.`} />
-        <Stat label="Zmiany do końca" value={norm > 0 ? fmt(remaining / norm) : 'Brak normy'} tone={norm > 0 ? 'default' : 'warning'} />
-      </div>
+      <section className="space-y-3 border-t border-border pt-4">
+        <h3 className="text-xs font-black uppercase text-dim">Plan i zakres</h3>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3 xl:grid-cols-4">
+          {[
+            ['Plan łącznie', `${fmt(item.totalQty)} szt.`],
+            ['Poprzednia ilość', `${fmt(previousQty)} szt.`],
+            ['Aktualna ilość', `${fmt(item.totalQty)} szt.`],
+            ['Różnica', `${item.totalQty - previousQty > 0 ? '+' : ''}${fmt(item.totalQty - previousQty)} szt.`],
+            ['Pozostało', `${fmt(remaining)} szt.`],
+            ['Norma / zmianę', `${fmt(norm)} szt.`],
+            ['Wybrany zakres', itemScopeLabel(item)],
+            ['Sztuk w zakresie', `${fmt(selectedQty)} szt.`]
+          ].map(([label, value]) => <div key={label} className="min-h-20 border-l-2 border-border px-3 py-2"><p className="text-[11px] font-bold uppercase text-dim">{label}</p><p className="mt-2 break-words text-lg font-black text-title">{value}</p></div>)}
+        </div>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[220px_220px_1fr]">
+          <Field label="Własna liczba zmian"><Input type="number" min="0.5" step="0.5" value={item.scopeShifts ?? state.horizonShifts} onChange={(event) => updateScope({ scopeMode: 'shifts', scopeShifts: Math.max(0.5, numberValue(event.target.value)), scopeQuantity: item.scopeQuantity })} /></Field>
+          <Field label="Własna liczba sztuk"><Input type="number" min="0" value={item.scopeQuantity ?? 0} onChange={(event) => updateScope({ scopeMode: 'quantity', scopeShifts: item.scopeShifts, scopeQuantity: Math.max(0, numberValue(event.target.value)) })} /></Field>
+          <div className="grid gap-2 sm:grid-cols-[minmax(120px,1fr)_auto_auto_auto_auto] sm:items-end"><Field label="Ręczna korekta ilości"><Input type="number" min="0" placeholder="np. 200" value={quantityInputs[item.id] ?? ''} onChange={(event) => setQuantityInputs((current) => ({ ...current, [item.id]: event.target.value }))} /></Field><Button variant="outline" onClick={() => applyQuantityCorrection(item, 'exact')}>Ustaw</Button><Button variant="outline" onClick={() => applyQuantityCorrection(item, 'increase')}>Dodaj</Button><Button variant="outline" onClick={() => applyQuantityCorrection(item, 'decrease')}>Odejmij</Button><Button title="Cofnij ostatnią korektę" variant="ghost" className="min-h-11 px-3" onClick={() => undoLastCorrection(item)}><Undo2 className="h-4 w-4" /></Button></div>
+        </div>
+      </section>
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Pozostało" value={`${fmt(remaining)} szt.`} />
-        <Stat label="Norma / zmianę" value={`${fmt(norm)} szt.`} />
-        <Stat label="Strefa" value={item.areaId ? areaName(item.areaId) : 'Brak przypisu'} tone={item.areaId ? 'default' : 'warning'} />
-      </div>
+      <section className="space-y-3 border-t border-border pt-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-xs font-black uppercase text-dim">Technologia</h3><p className="mt-1 text-sm text-muted">Zmiany robocze dotyczą tylko tej pozycji i nie nadpisują biblioteki.</p></div>{technology ? <SelectField className="max-w-md" value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}>{technologiesFor(item).map((variant) => <option key={variant.id} value={variant.id}>{technologyLabel(variant)} · {variant.description || 'bez opisu'}</option>)}</SelectField> : null}</div>
 
       {!technology ? <div className="flex flex-col gap-3 rounded-xl border border-[rgba(245,158,11,0.4)] bg-[rgba(245,158,11,0.07)] p-4 sm:flex-row sm:items-center sm:justify-between"><p className="text-sm font-semibold text-warning">Najpierw wybierz lub dodaj technologię dla tej pozycji.</p><Button variant="outline" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button></div> : <>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2"><Badge tone={item.manualOverride ? 'warning' : 'success'}>{item.manualOverride ? 'Technologia robocza zmieniona' : 'Kopia technologii bazowej'}</Badge><span className="text-xs text-muted">Zmiany zapiszą się razem z modułem.</span></div>
-          {item.manualOverride ? <Button variant="ghost" onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, workingMaterials: cloneMaterials(technology.materials), manualOverride: false } : row) }))}><RefreshCw className="mr-2 h-4 w-4" />Przywróć bazową</Button> : null}
+          <div className="flex flex-wrap items-center gap-2"><Badge tone={item.manualOverride ? 'warning' : 'success'}>{item.manualOverride ? 'Technologia robocza zmieniona' : technologyLabel(technology)}</Badge><span className="text-xs text-muted">{technology.description || 'Bez opisu'}</span></div>
+          {item.manualOverride ? <Button variant="ghost" onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, workingMaterials: cloneMaterials(technology.materials), manualOverride: false } : row) }))}><RefreshCw className="mr-2 h-4 w-4" />Przywróć wybraną</Button> : null}
         </div>
-        {materials.length ? <div className="overflow-x-auto"><table className="w-full min-w-[1500px] text-sm"><thead className="text-left text-xs uppercase text-dim"><tr><th className="p-2">Kod</th><th className="p-2">Nazwa materiału</th><th className="p-2">Rodzaj</th><th className="p-2 text-right">Zużycie / szt.</th><th className="p-2">J.m.</th><th className="p-2 text-right">Potrzeba</th><th className="p-2 text-right">W strefie</th><th className="p-2 text-right">W silosach</th><th className="p-2 text-right">Do pobrania</th><th className="p-2 text-right">Brakuje</th><th></th></tr></thead><tbody>{materials.map((material) => {
+        {materials.length ? <div className="overflow-x-auto"><table className="w-full min-w-[1900px] text-sm"><thead className="sticky top-0 bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim"><tr><th className="w-[320px] p-2">Kod i nazwa materiału</th><th className="w-40 p-2">Rodzaj</th><th className="w-28 p-2 text-right">Zużycie / szt.</th><th className="w-32 p-2 text-right">Cały plan</th><th className="w-32 p-2 text-right">Wybrany zakres</th><th className="w-28 p-2 text-right">Wydano</th><th className="w-28 p-2 text-right">Oczekuje</th><th className="w-28 p-2 text-right">Stan strefy</th><th className="w-28 p-2 text-right">Źródła wspólne</th><th className="w-28 p-2 text-right">Wydać teraz</th><th className="w-32 p-2 text-right">Bilans</th><th className="w-24 p-2">J.m.</th><th className="w-14"></th></tr></thead><tbody>{materials.map((material) => {
           const key = materialKey(material);
-          const demand = simulationQty * material.usage;
+          const demand = selectedQty * material.usage;
+          const fullDemand = remaining * material.usage;
           const supply = materialSupply(key, material, item.areaId);
           const itemShare = supply.demand > 0 ? Math.min(1, demand / supply.demand) : 0;
           const areaStock = supply.areaStock;
           const sharedStock = supply.sharedStock;
+          const issued = supply.issued * itemShare;
+          const pendingAmount = supply.pending * itemShare;
           const toIssue = supply.toIssue * itemShare;
-          const shortage = toIssue;
-          return <tr key={material.id} className="border-t border-border align-top"><td className="p-2"><Input value={material.code} onChange={(event) => updateWorkingMaterial(item.id, material.id, { code: event.target.value })} /></td><td className="p-2"><Input list="material-name-suggestions" value={material.name} onChange={(event) => updateWorkingMaterial(item.id, material.id, { name: event.target.value })} /></td><td className="p-2"><SelectField value={material.category} onChange={(event) => updateWorkingMaterial(item.id, material.id, { category: event.target.value as MaterialCategory })}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td><td className="p-2"><Input className="text-right" type="number" step="0.0001" value={material.usage} onChange={(event) => updateWorkingMaterial(item.id, material.id, { usage: Math.max(0, numberValue(event.target.value)) })} /></td><td className="p-2"><Input value={material.unit} onChange={(event) => updateWorkingMaterial(item.id, material.id, { unit: event.target.value })} /></td><td className="p-2 text-right font-black text-title">{fmt(demand)}</td><td className="p-2 text-right">{fmt(areaStock)}</td><td className="p-2 text-right">{fmt(sharedStock)}</td><td className="p-2 text-right font-bold text-warning">{fmt(toIssue)}</td><td className={cn('p-2 text-right font-black', shortage > 0 ? 'text-danger' : 'text-success')}>{fmt(shortage)}</td><td className="p-2"><Button variant="ghost" className="min-h-[38px] px-3 text-danger" onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, manualOverride: true, workingMaterials: materials.filter((entry) => entry.id !== material.id) } : row) }))}><Trash2 className="h-4 w-4" /></Button></td></tr>;
+          const covered = Math.max(0, demand - toIssue);
+          const surplus = Math.max(0, areaStock + sharedStock + issued + pendingAmount - demand);
+          return <tr key={material.id} className="border-t border-border align-top"><td className="space-y-2 p-2"><Input value={material.code} aria-label="Kod materiału" onChange={(event) => updateWorkingMaterial(item.id, material.id, { code: event.target.value })} /><Input list="material-name-suggestions" value={material.name} aria-label="Nazwa materiału" onChange={(event) => updateWorkingMaterial(item.id, material.id, { name: event.target.value })} /></td><td className="p-2"><SelectField value={material.category} onChange={(event) => updateWorkingMaterial(item.id, material.id, { category: event.target.value as MaterialCategory })}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td><td className="p-2"><Input className="text-right" type="number" step="0.0001" value={material.usage} onChange={(event) => updateWorkingMaterial(item.id, material.id, { usage: Math.max(0, numberValue(event.target.value)) })} /></td><td className="p-2 text-right font-semibold">{fmt(fullDemand)}</td><td className="p-2 text-right font-black text-title">{fmt(demand)}</td><td className="p-2 text-right">{fmt(issued)}</td><td className="p-2 text-right text-warning">{fmt(pendingAmount)}</td><td className="p-2 text-right">{fmt(areaStock)}</td><td className="p-2 text-right">{fmt(sharedStock)}</td><td className="p-2 text-right font-black text-warning">{fmt(toIssue)}</td><td className={cn('p-2 text-right font-black', toIssue > 0 ? 'text-danger' : 'text-success')}>{toIssue > 0 ? `Brak ${fmt(toIssue)}` : surplus > 0 ? `Nadwyżka ${fmt(surplus)}` : `Pokryte ${fmt(covered)}`}</td><td className="p-2"><Input value={material.unit} onChange={(event) => updateWorkingMaterial(item.id, material.id, { unit: event.target.value })} /></td><td className="p-2"><Button title="Usuń materiał z technologii roboczej" variant="ghost" className="min-h-11 px-3 text-danger" onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, manualOverride: true, workingMaterials: materials.filter((entry) => entry.id !== material.id) } : row) }))}><Trash2 className="h-4 w-4" /></Button></td></tr>;
         })}</tbody></table></div> : <p className="text-sm text-muted">Technologia nie ma jeszcze materiałów.</p>}
-        <Button variant="outline" onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, manualOverride: true, workingMaterials: [...materials, { id: uid('mat'), code: '', name: '', category: 'Pozostałe', usage: 0, unit: 'szt.', logisticQty: 1 }] } : row) }))}><Plus className="mr-2 h-4 w-4" />Dodaj materiał do tej pozycji</Button>
+        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, manualOverride: true, workingMaterials: [...materials, { id: uid('mat'), code: '', name: '', category: 'Pozostałe', usage: 0, unit: 'szt.', logisticQty: 1 }] } : row) }))}><Plus className="mr-2 h-4 w-4" />Dodaj materiał</Button><Button variant="secondary" onClick={() => saveWorkingAsTechnology(item)}><Save className="mr-2 h-4 w-4" />Zapisz jako nową technologię w bibliotece</Button></div>
       </>}
+      </section>
     </div>;
   };
 
@@ -1629,23 +2026,322 @@ export default function MaterialPlanningPage() {
     );
   };
 
-  const renderDocument = () => {
-    const groups = CATEGORIES.map((category) => ({ category, rows: documentRows.filter((row) => row.category === category) })).filter((group) => group.rows.length);
-    return <div className="space-y-5">{renderHeader('Dokument pobrania', `Do wypisania dla ${areaName(state.selectedAreaId)} · ${state.calculationMode === 'all' ? 'cała pozostała produkcja' : `${fmt(state.horizonShifts)} zmiany`}.`)}<div className="grid gap-3 sm:grid-cols-3"><Stat label="Pozycje do wypisania" value={String(documentRows.length)} /><Stat label="Oznaczone jako wypisane" value={`${doneCount} / ${documentRows.length}`} tone={doneCount === documentRows.length && documentRows.length ? 'success' : 'default'} /><Stat label="Obszar" value={areaName(state.selectedAreaId)} /></div><div className="flex justify-end"><Button variant="outline" onClick={exportDocument}><FileDown className="mr-2 h-4 w-4" />Pobierz CSV</Button></div>{groups.length ? groups.map((group) => <Card key={group.category} className="overflow-hidden p-0"><div className="flex items-center justify-between border-b border-border px-4 py-3"><h2 className="font-black text-title">{group.category}</h2><Badge tone="info">{group.rows.length}</Badge></div><div className="overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead className="text-left text-xs uppercase text-dim"><tr><th className="p-3">Wypisane</th><th className="p-3">Kod / materiał</th><th className="p-3 text-right">Zapotrzebowanie</th><th className="p-3 text-right">Na obszarze</th><th className="p-3 text-right">W silosach</th><th className="p-3 text-right">Do wypisania</th><th className="p-3">J.m.</th></tr></thead><tbody>{group.rows.map((row) => { const statusKey = `${state.selectedAreaId}|${row.key}`; const done = Boolean(state.pickingDone[statusKey]); return <tr key={row.key} className={cn('border-t border-border transition', done && 'bg-[color:color-mix(in_srgb,var(--success)_9%,transparent)]')}><td className="p-3"><button onClick={() => updateState((current) => ({ ...current, pickingDone: { ...current.pickingDone, [statusKey]: !done } }))} className={cn('flex min-h-11 items-center gap-2 rounded-xl border px-3 font-bold transition', done ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_18%,transparent)] text-success' : 'border-border bg-[rgba(255,255,255,0.03)] text-muted hover:border-success')}><Check className="h-4 w-4" />{done ? 'Wypisane' : 'Kliknij po wypisaniu'}</button></td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="text-muted">{row.name}</p></td><td className="p-3 text-right">{fmt(row.demand)}</td><td className="p-3 text-right">{fmt(row.areaStock)}</td><td className="p-3 text-right">{fmt(row.sharedStock)}{row.globalSharedShortage > 0 ? <p className="mt-1 text-xs font-bold text-warning">Globalnie brakuje {fmt(row.globalSharedShortage)}</p> : null}</td><td className="p-3 text-right text-lg font-black text-title">{fmt(row.toIssue)}</td><td className="p-3">{row.unit}</td></tr>; })}</tbody></table></div></Card>) : <EmptyState title="Brak materiałów do wypisania" description="Najpierw wybierz technologie i przelicz zapotrzebowanie." />}</div>;
+  const documentTone = (status: PickingDocumentStatus): 'default' | 'success' | 'warning' | 'danger' | 'info' => {
+    if (status === 'issued') return 'success';
+    if (status === 'handed') return 'info';
+    if (status === 'outdated') return 'warning';
+    if (status === 'cancelled') return 'danger';
+    return 'default';
   };
 
-  const returns = state.inventory.filter((item) => !state.areas.find((area) => area.id === item.areaId)?.shared).map((item) => {
-    const key = materialKey(item);
-    const ownDemand = demandByArea.get(item.areaId)?.get(key) ?? 0;
-    const other = state.areas.filter((area) => !area.shared && area.id !== item.areaId).map((area) => ({ area, demand: demandByArea.get(area.id)?.get(key) ?? 0 })).filter((entry) => entry.demand > 0);
-    return { item, ownDemand, surplus: Math.max(0, item.qty - ownDemand), other };
-  }).filter((row) => row.surplus > 0);
+  const createOrRefreshPickingDocument = () => {
+    const rows = requirementsForArea(state.selectedAreaId)
+      .filter((row) => row.toIssue > 0)
+      .map<PickingDocumentRow>((row) => ({
+        key: row.key,
+        code: row.code,
+        name: row.name,
+        category: row.category,
+        unit: row.unit,
+        demand: row.demand,
+        areaStock: row.areaStock,
+        issuedBefore: row.issued,
+        pendingBefore: row.pending,
+        toIssue: row.toIssue,
+        confirmed: false,
+        sources: row.sources.map((source) => ({ ...source }))
+      }));
+    if (!rows.length) {
+      flash('Dla wybranej strefy nie ma materiałów wymagających wydania.');
+      return;
+    }
+    const createdAt = nowLabel();
+    updateState((current) => {
+      const lockedExists = current.documents.some((document) =>
+        document.planDate === current.selectedPlanDate &&
+        document.areaId === current.selectedAreaId &&
+        (document.status === 'handed' || document.status === 'issued')
+      );
+      const kind: PickingDocumentKind = lockedExists ? 'correction' : 'base';
+      const editable = current.documents.find((document) =>
+        document.planDate === current.selectedPlanDate &&
+        document.areaId === current.selectedAreaId &&
+        document.kind === kind &&
+        (document.status === 'draft' || document.status === 'outdated')
+      );
+      const activeVersion = current.planVersions.find((version) => version.id === current.activePlanVersionId)
+        ?? current.planVersions
+          .filter((version) => version.planDate === current.selectedPlanDate)
+          .sort((left, right) => right.versionNo - left.versionNo)[0];
+      const scopeLabel = current.calculationMode === 'all'
+        ? 'Cały pozostały plan'
+        : `${fmt(current.horizonShifts)} zmiany`;
+      if (editable) {
+        return {
+          ...current,
+          documents: current.documents.map((document) => document.id === editable.id ? {
+            ...document,
+            planVersionId: activeVersion?.id ?? '',
+            planVersionNo: activeVersion?.versionNo ?? 0,
+            scopeLabel,
+            createdAt,
+            createdBy: currentUserName,
+            status: 'draft' as const,
+            rows
+          } : document)
+        };
+      }
+      const sequence = current.documents.filter((document) =>
+        document.planDate === current.selectedPlanDate && document.areaId === current.selectedAreaId
+      ).length + 1;
+      const areaCode = current.selectedAreaId.replace(/[^a-z0-9]/gi, '').slice(0, 6).toUpperCase() || 'STREFA';
+      const document: PickingDocument = {
+        id: uid('document'),
+        documentNo: `${current.selectedPlanDate.replaceAll('-', '')}-${areaCode}-${String(sequence).padStart(2, '0')}`,
+        planDate: current.selectedPlanDate,
+        planVersionId: activeVersion?.id ?? '',
+        planVersionNo: activeVersion?.versionNo ?? 0,
+        areaId: current.selectedAreaId,
+        scopeLabel,
+        createdAt,
+        createdBy: currentUserName,
+        status: 'draft',
+        kind,
+        rows
+      };
+      return { ...current, documents: [document, ...current.documents] };
+    });
+    flash('Dokument do wypisania został zapisany jako roboczy.');
+  };
 
-  const renderReturns = () => <div className="space-y-5">{renderHeader('Zwroty i przesunięcia między halami', 'Nadwyżka spisana na hali trafia tutaj. Jeżeli materiał jest potrzebny na innym obszarze, aplikacja wskazuje przesunięcie przed zwrotem do magazynu.')} {returns.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm"><thead className="bg-[rgba(255,255,255,0.045)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Materiał</th><th className="p-3">Skąd</th><th className="p-3 text-right">Nadwyżka</th><th className="p-3">Najpierw sprawdź</th><th className="p-3">Decyzja</th></tr></thead><tbody>{returns.map((row) => <tr key={row.item.id} className="border-t border-border"><td className="p-3"><p className="font-bold text-title">{row.item.code || '—'} · {row.item.name}</p><p className="text-xs text-muted">{row.item.category}</p></td><td className="p-3">{areaName(row.item.areaId)}</td><td className="p-3 text-right text-lg font-black">{fmt(row.surplus)} {row.item.unit}</td><td className="p-3">{row.other.length ? <div className="space-y-1">{row.other.map(({ area, demand }) => <Badge key={area.id} tone="warning">{area.name} potrzebuje {fmt(demand)} {row.item.unit}</Badge>)}</div> : <span className="text-muted">Inne hale nie potrzebują tego materiału</span>}</td><td className="p-3">{row.other.length ? <Badge tone="info">Przesunięcie między halami</Badge> : <Badge>Zwrot do magazynu</Badge>}</td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak pozycji do zwrotu" description="Zwroty pojawią się po porównaniu rzeczywistego spisu z aktualnym zapotrzebowaniem." />}</div>;
+  const changePickingDocumentStatus = (documentId: string, nextStatus: PickingDocumentStatus) => {
+    const document = state.documents.find((item) => item.id === documentId);
+    if (!document) return;
+    const allowed =
+      (nextStatus === 'handed' && document.status === 'draft') ||
+      (nextStatus === 'issued' && document.status === 'handed') ||
+      (nextStatus === 'cancelled' && ['draft', 'outdated', 'handed'].includes(document.status));
+    if (!allowed) {
+      flash('Ta zmiana statusu nie jest dozwolona.');
+      return;
+    }
+    updateState((current) => ({
+      ...current,
+      documents: current.documents.map((item) => item.id === documentId ? {
+        ...item,
+        status: nextStatus,
+        rows: nextStatus === 'issued' ? item.rows.map((row) => ({ ...row, confirmed: true })) : item.rows
+      } : item)
+    }));
+    flash(`Dokument ma teraz status: ${documentStatusLabel[nextStatus]}.`);
+  };
 
-  const renderHistory = () => <div className="space-y-5">{renderHeader('Historia produkcji', 'Pozycje znikające z nowego planu są wstrzymywane. Ich technologia robocza i ręczne zamienniki pozostają zapisane do decyzji operatora.')} {state.archive.length ? <div className="space-y-3">{state.archive.map((entry) => <Card key={entry.id} className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><div className="flex flex-wrap items-center gap-2"><Badge tone={entry.status === 'suspended' ? 'warning' : 'success'}>{entry.status === 'suspended' ? 'Wstrzymana' : 'Zakończona'}</Badge>{entry.planItem.manualOverride ? <Badge tone="info">Ręczna technologia</Badge> : null}</div><p className="mt-3 font-bold text-title">{entry.planItem.index} · {entry.planItem.name}</p><p className="mt-1 text-sm text-muted">{entry.planItem.station || 'Brak stanowiska'} · {entry.technologyName} · {entry.at}</p><p className="mt-1 text-xs text-dim">{entry.reason}</p></div>{entry.status === 'suspended' && !readOnly ? <Button variant="ghost" onClick={() => updateState((current) => ({ ...current, archive: current.archive.map((row) => row.id === entry.id ? { ...row, status: 'completed', reason: 'Produkcja zakończona ręcznie', at: nowLabel() } : row) }))}><Archive className="mr-2 h-4 w-4" />Zakończ produkcję</Button> : null}</Card>)}</div> : <EmptyState title="Historia jest pusta" description="Pojawi się po kolejnym imporcie planu lub ręcznym zakończeniu produkcji." />}</div>;
+  const togglePickingConfirmation = (documentId: string, rowKey: string) => {
+    const document = state.documents.find((item) => item.id === documentId);
+    if (!document || document.status !== 'draft') return;
+    updateState((current) => ({
+      ...current,
+      documents: current.documents.map((item) => item.id === documentId ? {
+        ...item,
+        rows: item.rows.map((row) => row.key === rowKey ? { ...row, confirmed: !row.confirmed } : row)
+      } : item)
+    }));
+  };
 
-  const renderSettings = () => <div className="space-y-5">{renderHeader('Ustawienia modułu', 'Przypisz stanowiska do obszarów. Import planu będzie uzupełniał halę automatycznie na podstawie tej listy.')}<Card className="space-y-4"><div className="flex items-center justify-between"><SectionTitle title="Stanowiska i obszary" subtitle="Domyślnie WTR 1–28 należą do Hali 1, a WTR 29–52 do Hali 2." /><Button variant="outline" onClick={() => updateState((current) => ({ ...current, stationMappings: [...current.stationMappings, { station: '', areaId: 'hala-1' }] }))}><Plus className="mr-2 h-4 w-4" />Dodaj</Button></div><div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{state.stationMappings.map((mapping, index) => <div key={`${index}-${mapping.station}`} className="grid grid-cols-[1fr_1fr_auto] gap-2 rounded-xl border border-border p-2"><Input value={mapping.station} placeholder="np. WTR 12 lub ST 3" onChange={(event) => updateState((current) => ({ ...current, stationMappings: current.stationMappings.map((row, rowIndex) => rowIndex === index ? { ...row, station: event.target.value } : row) }))} /><SelectField value={mapping.areaId} onChange={(event) => updateState((current) => ({ ...current, stationMappings: current.stationMappings.map((row, rowIndex) => rowIndex === index ? { ...row, areaId: event.target.value } : row) }))}>{state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField><Button variant="ghost" className="min-h-[44px] px-3 text-danger" onClick={() => updateState((current) => ({ ...current, stationMappings: current.stationMappings.filter((_, rowIndex) => rowIndex !== index) }))}><Trash2 className="h-4 w-4" /></Button></div>)}</div></Card></div>;
+  const exportPickingDocument = (pickingDocument: PickingDocument) => {
+    const rows = [[
+      'Dokument', 'Status', 'Typ', 'Data planu', 'Wersja planu', 'Strefa', 'Zakres', 'Materiał', 'Kod',
+      'Zapotrzebowanie', 'Stan strefy', 'Wydano wcześniej', 'Oczekuje', 'Wydać teraz', 'J.m.', 'Źródła'
+    ]];
+    pickingDocument.rows.forEach((row) => rows.push([
+      pickingDocument.documentNo,
+      documentStatusLabel[pickingDocument.status],
+      pickingDocument.kind === 'base' ? 'Podstawowy' : 'Korekta',
+      pickingDocument.planDate,
+      String(pickingDocument.planVersionNo),
+      areaName(pickingDocument.areaId),
+      pickingDocument.scopeLabel,
+      row.name,
+      row.code,
+      String(row.demand),
+      String(row.areaStock),
+      String(row.issuedBefore),
+      String(row.pendingBefore),
+      String(row.toIssue),
+      row.unit,
+      row.sources.map((source) => `${source.index} - ${source.name}: ${fmt(source.demand)}`).join(' | ')
+    ]));
+    const csv = `\uFEFF${rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(';')).join('\r\n')}`;
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${pickingDocument.documentNo}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const deriveReturnsForDate = (planDate: string): MaterialReturnRow[] => {
+    const datePlan = planDate === state.selectedPlanDate
+      ? state.plan
+      : state.dailyPlans[planDate]
+        ?? state.planVersions
+          .filter((version) => version.planDate === planDate)
+          .sort((left, right) => right.versionNo - left.versionNo)[0]?.items
+        ?? [];
+    const allocations = new Map<string, {
+      materialKey: string;
+      code: string;
+      name: string;
+      category: MaterialCategory;
+      unit: string;
+      planItemId: string;
+      index: string;
+      productName: string;
+      areaId: string;
+      issued: number;
+    }>();
+    state.documents
+      .filter((document) => document.planDate === planDate && document.status === 'issued')
+      .forEach((document) => document.rows.forEach((row) => {
+        allocateAmountByDemand(row.toIssue, row.sources).forEach((source) => {
+          const key = `${document.areaId}|${row.key}|${source.planItemId}`;
+          const current = allocations.get(key) ?? {
+            materialKey: row.key,
+            code: row.code,
+            name: row.name,
+            category: row.category,
+            unit: row.unit,
+            planItemId: source.planItemId,
+            index: source.index,
+            productName: source.name,
+            areaId: document.areaId,
+            issued: 0
+          };
+          current.issued += source.allocated;
+          allocations.set(key, current);
+        });
+      }));
+
+    return [...allocations.values()].map((allocation) => {
+      const item = datePlan.find((entry) => entry.id === allocation.planItemId);
+      const material = item ? materialsForItem(item).find((entry) => materialKey(entry) === allocation.materialKey) : undefined;
+      const currentNeed = item && item.included && item.areaId === allocation.areaId && material
+        ? itemProductionQty(item) * material.usage
+        : 0;
+      const surplus = calculateReturnSurplus(allocation.issued, currentNeed);
+      if (surplus <= 0.000001) return null;
+      let reason = 'Zmniejszenie ilości produkcji';
+      if (!item || !item.included) reason = 'Pozycja usunięta lub wyłączona z planu';
+      else if (!material) reason = 'Zmiana technologii lub materiału';
+      let destination = 'Zwrot do magazynu';
+      if (planDate === state.selectedPlanDate) {
+        const targetArea = state.areas
+          .filter((area) => !area.shared && area.id !== allocation.areaId)
+          .find((area) => requirementsForArea(area.id).some((requirement) => requirement.key === allocation.materialKey && requirement.toIssue > 0));
+        if (targetArea) destination = `Przesunięcie do: ${targetArea.name}`;
+      }
+      const id = `${planDate}|${allocation.areaId}|${allocation.materialKey}|${allocation.planItemId}`;
+      return {
+        id,
+        planDate,
+        ...allocation,
+        reason,
+        currentNeed,
+        surplus,
+        destination,
+        status: state.returnStatuses[id] ?? 'open'
+      } satisfies MaterialReturnRow;
+    }).filter((row): row is MaterialReturnRow => Boolean(row));
+  };
+
+  const renderDocumentV2 = () => {
+    const documents = state.documents
+      .filter((document) => document.planDate === state.selectedPlanDate && document.areaId === state.selectedAreaId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt, 'pl'));
+    return <div className="space-y-5">
+      {renderHeader('Dokument do wypisania', 'Każda strefa otrzymuje osobny, zapisany dokument. Po przekazaniu lub wydaniu jego ilości pozostają niezmienne.')}
+      <Card className="space-y-4">
+        <div className="grid gap-3 lg:grid-cols-[minmax(220px,0.6fr)_minmax(260px,1fr)_auto] lg:items-end">
+          <Field label="Data planu"><Input type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
+          <Field label="Strefa"><SelectField value={state.selectedAreaId} onChange={(event) => updateState((current) => ({ ...current, selectedAreaId: event.target.value }))}>{state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField></Field>
+          <Button onClick={createOrRefreshPickingDocument}><FilePlus2 className="mr-2 h-4 w-4" />{documents.some((document) => document.status === 'draft' || document.status === 'outdated') ? 'Przelicz dokument roboczy' : 'Utwórz dokument'}</Button>
+        </div>
+        <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-3">
+          <Stat label="Do wydania teraz" value={`${documentRows.length} pozycji`} tone={documentRows.length ? 'warning' : 'success'} />
+          <Stat label="Dokumenty dla strefy" value={String(documents.length)} />
+          <Stat label="Aktualna wersja planu" value={currentPlanVersion ? `Wersja ${currentPlanVersion.versionNo}` : 'Brak'} />
+        </div>
+      </Card>
+
+      {documents.length ? documents.map((document) => {
+        const expanded = expandedDocument === document.id;
+        const locked = document.status === 'handed' || document.status === 'issued';
+        return <Card key={document.id} className="overflow-hidden p-0">
+          <div className="flex flex-col gap-3 border-b border-border px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+            <button type="button" className="flex min-w-0 items-center gap-3 text-left" onClick={() => setExpandedDocument(expanded ? '' : document.id)}>
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-border text-muted">{expanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}</span>
+              <span className="min-w-0"><span className="block break-words font-black text-title">{document.documentNo}</span><span className="mt-1 block text-xs text-muted">{formatPlanDate(document.planDate)} · wersja {document.planVersionNo || '—'} · {document.scopeLabel} · {document.createdBy} · {document.createdAt}</span></span>
+            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={document.kind === 'correction' ? 'warning' : 'info'}>{document.kind === 'correction' ? 'Korekta' : 'Podstawowy'}</Badge>
+              <Badge tone={documentTone(document.status)}>{documentStatusLabel[document.status]}</Badge>
+              {(document.status === 'draft' || document.status === 'outdated') ? <Button variant="outline" onClick={createOrRefreshPickingDocument}><RefreshCw className="mr-2 h-4 w-4" />Przelicz</Button> : null}
+              {document.status === 'draft' ? <Button variant="secondary" onClick={() => changePickingDocumentStatus(document.id, 'handed')}><PackageCheck className="mr-2 h-4 w-4" />Przekaż</Button> : null}
+              {document.status === 'handed' ? <Button variant="secondary" onClick={() => changePickingDocumentStatus(document.id, 'issued')}><Check className="mr-2 h-4 w-4" />Oznacz jako wydany</Button> : null}
+              {['draft', 'outdated', 'handed'].includes(document.status) ? <Button variant="ghost" className="text-danger" onClick={() => changePickingDocumentStatus(document.id, 'cancelled')}><X className="mr-2 h-4 w-4" />Anuluj</Button> : null}
+              <Button title="Pobierz dokument CSV" variant="ghost" className="min-h-11 px-3" onClick={() => exportPickingDocument(document)}><FileDown className="h-4 w-4" /></Button>
+            </div>
+          </div>
+          {expanded ? <div className="overflow-x-auto">
+            <table className="w-full min-w-[1120px] text-sm">
+              <thead className="sticky top-0 z-10 bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim"><tr><th className="w-14 p-3"><span className="sr-only">Źródła</span></th><th className="p-3">Materiał</th><th className="p-3 text-right">Zapotrzebowanie</th><th className="p-3 text-right">Stan strefy</th><th className="p-3 text-right">Już wydano</th><th className="p-3 text-right">Oczekuje</th><th className="p-3 text-right">Wydać teraz</th><th className="p-3">J.m.</th><th className="p-3">Potwierdzenie</th></tr></thead>
+              <tbody>{document.rows.map((row) => {
+                const sourceKey = `${document.id}|${row.key}`;
+                const sourcesExpanded = expandedMaterial === sourceKey;
+                return <Fragment key={row.key}><tr className="border-t border-border"><td className="p-3"><button type="button" title={sourcesExpanded ? 'Ukryj źródła zapotrzebowania' : 'Pokaż indeksy źródłowe'} className="flex h-11 w-11 items-center justify-center rounded-lg border border-border text-muted" onClick={() => setExpandedMaterial(sourcesExpanded ? '' : sourceKey)}>{sourcesExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button></td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="break-words text-muted">{row.name}</p></td><td className="p-3 text-right">{fmt(row.demand)}</td><td className="p-3 text-right">{fmt(row.areaStock)}</td><td className="p-3 text-right">{fmt(row.issuedBefore)}</td><td className="p-3 text-right text-warning">{fmt(row.pendingBefore)}</td><td className="p-3 text-right text-lg font-black text-title">{fmt(row.toIssue)}</td><td className="p-3">{row.unit}</td><td className="p-3"><button type="button" disabled={locked || document.status !== 'draft'} onClick={() => togglePickingConfirmation(document.id, row.key)} className={cn('flex min-h-11 items-center gap-2 rounded-lg border px-3 font-bold', row.confirmed ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success' : 'border-border text-muted', (locked || document.status !== 'draft') && 'cursor-default opacity-80')}><Check className="h-4 w-4" />{document.status === 'issued' ? 'Wydano' : row.confirmed ? 'Sprawdzone' : 'Do potwierdzenia'}</button></td></tr>{sourcesExpanded ? <tr className="border-t border-border bg-[rgba(255,255,255,0.025)]"><td colSpan={9} className="px-5 py-4"><p className="text-xs font-bold uppercase text-dim">Źródła zapotrzebowania</p><div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{row.sources.map((source) => <div key={`${source.planItemId}-${source.index}`} className="border-l-2 border-brand pl-3"><p className="font-bold text-title">{source.index}</p><p className="break-words text-sm text-muted">{source.name}</p><p className="mt-1 text-xs text-dim">{fmt(source.demand)} {row.unit}</p></div>)}</div></td></tr> : null}</Fragment>;
+              })}</tbody>
+            </table>
+          </div> : null}
+        </Card>;
+      }) : <EmptyState title="Brak zapisanych dokumentów" description="Wybierz strefę i utwórz dokument z aktualnego planu. Jeżeli materiały są już pokryte, dokument nie będzie potrzebny." />}
+    </div>;
+  };
+
+  const renderReturnsV2 = () => {
+    const returnRows = deriveReturnsForDate(state.selectedPlanDate);
+    const openRows = returnRows.filter((row) => row.status === 'open');
+    return <div className="space-y-5">
+      {renderHeader('Zwroty', 'Nadwyżki powstają wyłącznie z materiałów wcześniej oznaczonych jako wydane. Zmniejszenie lub usunięcie planu nigdy nie tworzy ujemnego wydania.')}
+      <Card className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-[minmax(220px,360px)_1fr] sm:items-end"><Field label="Data planu"><Input type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field><p className="text-sm text-muted">Propozycja przesunięcia uwzględnia bieżące braki innych stref dla tej samej daty.</p></div>
+        <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-3"><Stat label="Otwarte zwroty" value={String(openRows.length)} tone={openRows.length ? 'warning' : 'success'} /><Stat label="Łącznie pozycji" value={String(returnRows.length)} /><Stat label="Data" value={formatPlanDate(state.selectedPlanDate)} /></div>
+      </Card>
+      {returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[1220px] text-sm"><thead className="sticky top-0 z-10 bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim"><tr><th className="p-3">Materiał</th><th className="p-3">Indeks produkcyjny</th><th className="p-3">Strefa</th><th className="p-3">Przyczyna</th><th className="p-3 text-right">Wydano</th><th className="p-3 text-right">Aktualna potrzeba</th><th className="p-3 text-right">Nadwyżka</th><th className="p-3">Proponowane miejsce</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className={cn('border-t border-border', row.status === 'completed' && 'bg-[color:color-mix(in_srgb,var(--success)_7%,transparent)]')}><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="break-words text-muted">{row.name}</p></td><td className="p-3"><p className="font-bold text-title">{row.index}</p><p className="break-words text-xs text-muted">{row.productName}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3">{row.reason}</td><td className="p-3 text-right">{fmt(row.issued)} {row.unit}</td><td className="p-3 text-right">{fmt(row.currentNeed)} {row.unit}</td><td className="p-3 text-right text-lg font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Badge tone={row.destination.startsWith('Przesunięcie') ? 'info' : 'default'}>{row.destination}</Badge></td><td className="p-3"><Button variant={row.status === 'completed' ? 'ghost' : 'secondary'} onClick={() => updateState((current) => ({ ...current, returnStatuses: { ...current.returnStatuses, [row.id]: row.status === 'completed' ? 'open' : 'completed' } }))}>{row.status === 'completed' ? <Undo2 className="mr-2 h-4 w-4" /> : <Check className="mr-2 h-4 w-4" />}{row.status === 'completed' ? 'Przywróć' : 'Wykonano'}</Button></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak materiałów do zwrotu" description="Zwroty pojawią się po wydaniu materiału i późniejszym zmniejszeniu, usunięciu lub zmianie technologii pozycji planu." />}
+    </div>;
+  };
+
+  const renderHistoryV2 = () => {
+    const versions = [...state.planVersions].sort((left, right) => right.planDate.localeCompare(left.planDate) || right.versionNo - left.versionNo);
+    const corrections = [...state.quantityCorrections].sort((left, right) => right.createdAt.localeCompare(left.createdAt, 'pl'));
+    const documents = [...state.documents].sort((left, right) => right.planDate.localeCompare(left.planDate) || right.createdAt.localeCompare(left.createdAt, 'pl'));
+    const returnDates = [...new Set(state.documents.filter((document) => document.status === 'issued').map((document) => document.planDate))];
+    const returnRows = returnDates.flatMap(deriveReturnsForDate);
+    return <div className="space-y-5">
+      {renderHeader('Historia', 'Wersje planów, korekty, dokumenty i zwroty pozostają zapisane. Kolejny import nie usuwa wcześniejszych danych.')}
+
+      <section className="space-y-3"><SectionTitle title="Wersje planów" subtitle={`${versions.length} zapisanych wersji`} />{versions.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-[rgba(255,255,255,0.035)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data / wersja</th><th className="p-3">Import</th><th className="p-3">Plik / arkusz</th><th className="p-3">Status</th><th className="p-3">Różnice</th></tr></thead><tbody>{versions.map((version) => <tr key={version.id} className="border-t border-border align-top"><td className="p-3"><p className="font-black text-title">{formatPlanDate(version.planDate)}</p><p className="text-muted">Wersja {version.versionNo}</p></td><td className="p-3"><p>{version.importedAt}</p><p className="text-xs text-muted">{version.importedBy}</p></td><td className="p-3"><p className="break-words font-semibold text-title">{version.fileName}</p><p className="text-xs text-muted">{version.sheetName}</p></td><td className="p-3"><Badge tone={version.status === 'active' ? 'success' : version.status === 'superseded' ? 'default' : 'warning'}>{version.status === 'active' ? 'Aktywny' : version.status === 'superseded' ? 'Zastąpiony' : version.status === 'ready' ? 'Gotowy' : 'Roboczy'}</Badge></td><td className="p-3"><div className="flex max-w-[420px] flex-wrap gap-1.5">{version.differences.length ? version.differences.map((difference) => <Badge key={difference.id} tone={difference.kind === 'removed' ? 'danger' : difference.kind === 'quantity_decreased' ? 'warning' : 'info'}>{differenceLabel[difference.kind]} · {difference.index}</Badge>) : <span className="text-muted">Pierwsza wersja lub brak różnic</span>}</div></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak wersji planów" description="Pierwszy import utworzy wersję 1 dla wybranej daty." />}</section>
+
+      <section className="space-y-3"><SectionTitle title="Ręczne korekty ilości" subtitle={`${corrections.length} operacji`} />{corrections.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[920px] text-sm"><thead className="bg-[rgba(255,255,255,0.035)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data planu</th><th className="p-3">Pozycja</th><th className="p-3 text-right">Poprzednio</th><th className="p-3 text-right">Nowa ilość</th><th className="p-3 text-right">Różnica</th><th className="p-3">Użytkownik / czas</th><th className="p-3">Status</th></tr></thead><tbody>{corrections.map((correction) => <tr key={correction.id} className="border-t border-border"><td className="p-3">{formatPlanDate(correction.planDate)}</td><td className="p-3"><p className="font-bold text-title">{correction.index}</p><p className="text-xs text-muted">{correction.name}</p></td><td className="p-3 text-right">{fmt(correction.previousValue)}</td><td className="p-3 text-right">{fmt(correction.newValue)}</td><td className={cn('p-3 text-right font-black', correction.difference > 0 ? 'text-success' : 'text-warning')}>{correction.difference > 0 ? '+' : ''}{fmt(correction.difference)}</td><td className="p-3"><p>{correction.createdBy}</p><p className="text-xs text-muted">{correction.createdAt}</p></td><td className="p-3"><Badge tone={correction.revertedAt ? 'default' : 'info'}>{correction.revertedAt ? 'Cofnięta' : correction.source}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak ręcznych korekt" description="Zmiana dokładna, + lub - przy pozycji planu pojawi się tutaj." />}</section>
+
+      <section className="space-y-3"><SectionTitle title="Dokumenty i wydania" subtitle={`${documents.length} dokumentów`} />{documents.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-[rgba(255,255,255,0.035)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Dokument</th><th className="p-3">Data / strefa</th><th className="p-3">Wersja i zakres</th><th className="p-3">Utworzył</th><th className="p-3">Typ</th><th className="p-3">Status</th><th className="p-3 text-right">Pozycje</th></tr></thead><tbody>{documents.map((document) => <tr key={document.id} className="border-t border-border"><td className="p-3 font-black text-title">{document.documentNo}</td><td className="p-3"><p>{formatPlanDate(document.planDate)}</p><p className="text-xs text-muted">{areaName(document.areaId)}</p></td><td className="p-3"><p>Wersja {document.planVersionNo || '—'}</p><p className="text-xs text-muted">{document.scopeLabel}</p></td><td className="p-3"><p>{document.createdBy}</p><p className="text-xs text-muted">{document.createdAt}</p></td><td className="p-3"><Badge tone={document.kind === 'correction' ? 'warning' : 'info'}>{document.kind === 'correction' ? 'Korekta' : 'Podstawowy'}</Badge></td><td className="p-3"><Badge tone={documentTone(document.status)}>{documentStatusLabel[document.status]}</Badge></td><td className="p-3 text-right">{document.rows.length}</td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak dokumentów" description="Dokumenty podstawowe i korekty pojawią się po ich utworzeniu." />}</section>
+
+      <section className="space-y-3"><SectionTitle title="Zwroty" subtitle={`${returnRows.length} wykrytych pozycji`} />{returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[880px] text-sm"><thead className="bg-[rgba(255,255,255,0.035)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data</th><th className="p-3">Materiał</th><th className="p-3">Indeks</th><th className="p-3">Przyczyna</th><th className="p-3 text-right">Nadwyżka</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className="border-t border-border"><td className="p-3">{formatPlanDate(row.planDate)}</td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="text-xs text-muted">{row.name}</p></td><td className="p-3">{row.index}</td><td className="p-3">{row.reason}</td><td className="p-3 text-right font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Badge tone={row.status === 'completed' ? 'success' : 'warning'}>{row.status === 'completed' ? 'Wykonany' : 'Otwarty'}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak zwrotów" description="Historia zwrotów pojawi się po zmianie planu następującej po wydaniu materiałów." />}</section>
+
+      {state.archive.length ? <section className="space-y-3"><SectionTitle title="Wstrzymane i zakończone produkcje" subtitle={`${state.archive.length} pozycji`} /><div className="divide-y divide-border border-y border-border">{state.archive.map((entry) => <div key={entry.id} className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between"><div><div className="flex flex-wrap gap-2"><Badge tone={entry.status === 'suspended' ? 'warning' : 'success'}>{entry.status === 'suspended' ? 'Wstrzymana' : 'Zakończona'}</Badge>{entry.planItem.manualOverride ? <Badge tone="info">Technologia robocza</Badge> : null}</div><p className="mt-2 font-bold text-title">{entry.planItem.index} · {entry.planItem.name}</p><p className="mt-1 text-sm text-muted">{entry.planItem.station || 'Brak stanowiska'} · {entry.technologyName} · {entry.at}</p><p className="mt-1 text-xs text-dim">{entry.reason}</p></div>{entry.status === 'suspended' && !readOnly ? <Button variant="ghost" onClick={() => updateState((current) => ({ ...current, archive: current.archive.map((row) => row.id === entry.id ? { ...row, status: 'completed', reason: 'Produkcja zakończona ręcznie', at: nowLabel() } : row) }))}><Archive className="mr-2 h-4 w-4" />Zakończ produkcję</Button> : null}</div>)}</div></section> : null}
+    </div>;
+  };
+
+  const renderSettings = () => <div className="space-y-5">{renderHeader('Ustawienia modułu', 'Przypisz stanowiska do obszarów. Import planu będzie uzupełniał halę automatycznie na podstawie tej listy.')}<Card className="space-y-4"><div className="flex items-center justify-between"><SectionTitle title="Stanowiska i obszary" subtitle="Domyślnie WTR 1–28 należą do Hali 1, a WTR 29–52 do Hali 2." /><Button variant="outline" onClick={() => updateState((current) => ({ ...current, stationMappings: [...current.stationMappings, { station: '', areaId: 'hala-1' }] }))}><Plus className="mr-2 h-4 w-4" />Dodaj</Button></div><div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{state.stationMappings.map((mapping, index) => <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2 rounded-xl border border-border p-2"><Input value={mapping.station} placeholder="np. WTR 12 lub ST 3" onChange={(event) => updateState((current) => ({ ...current, stationMappings: current.stationMappings.map((row, rowIndex) => rowIndex === index ? { ...row, station: event.target.value } : row) }))} /><SelectField value={mapping.areaId} onChange={(event) => updateState((current) => ({ ...current, stationMappings: current.stationMappings.map((row, rowIndex) => rowIndex === index ? { ...row, areaId: event.target.value } : row) }))}>{state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField><Button variant="ghost" className="min-h-[44px] px-3 text-danger" onClick={() => updateState((current) => ({ ...current, stationMappings: current.stationMappings.filter((_, rowIndex) => rowIndex !== index) }))}><Trash2 className="h-4 w-4" /></Button></div>)}</div></Card></div>;
 
   const renderGuide = () => <div className="space-y-5">{renderHeader('Instrukcja modułu', 'Krótki opis pełnego obiegu i najważniejszych zasad działania.')}{[
     ['1. Plan produkcyjny', 'Wgraj Excel i wybierz jedną zakładkę. Stanowiska zostaną przypisane do obszarów zgodnie z ustawieniami. Pozycje bez przypisu pozostaną widoczne na obu halach z ostrzeżeniem.'],
@@ -1665,9 +2361,9 @@ export default function MaterialPlanningPage() {
     technologie: renderTechnologies,
     spis: renderInventory,
     obliczenia: renderCalculation,
-    dokument: renderDocument,
-    zwroty: renderReturns,
-    historia: renderHistory,
+    dokument: renderDocumentV2,
+    zwroty: renderReturnsV2,
+    historia: renderHistoryV2,
     ustawienia: renderSettings,
     instrukcja: renderGuide
   };

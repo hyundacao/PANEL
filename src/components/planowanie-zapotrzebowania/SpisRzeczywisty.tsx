@@ -465,6 +465,8 @@ export default function SpisRzeczywisty() {
     Record<string, { percent: string; hopperPresent: boolean }>
   >({});
   const [showNameSuggestions, setShowNameSuggestions] = useState(false);
+  const entryFormRef = useRef<HTMLFormElement | null>(null);
+  const entryFormViewportTopRef = useRef<number | null>(null);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const qtyInputRef = useRef<HTMLInputElement | null>(null);
   const [reportQuery, setReportQuery] = useState('');
@@ -755,6 +757,7 @@ export default function SpisRzeczywisty() {
       toast({ title: 'Dodano wpis do spisu', tone: 'success' });
     },
     onError: (err: Error) => {
+      entryFormViewportTopRef.current = null;
       const messageMap: Record<string, string> = {
         WAREHOUSE_REQUIRED: 'Wybierz hale do spisu.',
         NAME_REQUIRED: 'Podaj pełną nazwę tworzywa lub półproduktu.',
@@ -1069,6 +1072,7 @@ export default function SpisRzeczywisty() {
       toast({ title: 'Wpisz poprawną ilość.', tone: 'error' });
       return;
     }
+    entryFormViewportTopRef.current = entryFormRef.current?.getBoundingClientRect().top ?? null;
     addMutation.mutate(
       {
         warehouseId: effectiveSelectedWarehouseId,
@@ -1081,8 +1085,20 @@ export default function SpisRzeczywisty() {
       {
         onSuccess: () => {
           window.requestAnimationFrame(() => {
-            nameInputRef.current?.focus();
-            nameInputRef.current?.select();
+            window.requestAnimationFrame(() => {
+              const expectedTop = entryFormViewportTopRef.current;
+              const entryForm = entryFormRef.current;
+              if (entryForm && expectedTop !== null) {
+                const currentTop = entryForm.getBoundingClientRect().top;
+                const scrollDelta = currentTop - expectedTop;
+                if (Math.abs(scrollDelta) > 1) {
+                  window.scrollBy({ top: scrollDelta, left: 0, behavior: 'auto' });
+                }
+              }
+              nameInputRef.current?.focus({ preventScroll: true });
+              nameInputRef.current?.select();
+              entryFormViewportTopRef.current = null;
+            });
           });
         }
       }
@@ -2695,6 +2711,7 @@ export default function SpisRzeczywisty() {
               <p className="text-xs text-dim">Spis i raport dzienny liczone dla wybranego dnia (00:00-24:00).</p>
             </div>
             <form
+              ref={entryFormRef}
               onSubmit={(event) => {
                 event.preventDefault();
                 handleAdd();

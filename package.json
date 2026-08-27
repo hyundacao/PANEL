@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:planning": "node --experimental-strip-types --test src/lib/planowanie-zapotrzebowania/domain.test.mjs"
   },
   "dependencies": {
     "@radix-ui/react-select": "^2.2.6",

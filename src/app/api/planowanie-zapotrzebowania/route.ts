@@ -155,15 +155,28 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ code: 'ORIGINAL_INVENTORY_LOAD_FAILED', detail }, { status: 500 });
     }
   }
-  const { data, error } = await supabaseAdmin
+  const withRevision = await supabaseAdmin
     .from('material_planning_state')
-    .select('state, updated_at, updated_by')
+    .select('state, updated_at, updated_by, revision')
     .eq('id', MODULE_KEY)
     .maybeSingle();
-  if (error) {
-    return NextResponse.json({ code: 'MIGRATION_REQUIRED', detail: error.message }, { status: 503 });
+  if (!withRevision.error) {
+    return NextResponse.json({
+      state: withRevision.data?.state ?? null,
+      updatedAt: withRevision.data?.updated_at ?? null,
+      updatedBy: withRevision.data?.updated_by ?? null,
+      revision: Number(withRevision.data?.revision ?? 0)
+    });
   }
-  return NextResponse.json({ state: data?.state ?? null, updatedAt: data?.updated_at ?? null, updatedBy: data?.updated_by ?? null });
+  const legacy = await supabaseAdmin.from('material_planning_state').select('state, updated_at, updated_by').eq('id', MODULE_KEY).maybeSingle();
+  if (legacy.error) return NextResponse.json({ code: 'MIGRATION_REQUIRED', detail: legacy.error.message }, { status: 503 });
+  return NextResponse.json({
+    state: legacy.data?.state ?? null,
+    updatedAt: legacy.data?.updated_at ?? null,
+    updatedBy: legacy.data?.updated_by ?? null,
+    revision: 0,
+    concurrencyMigrationRequired: true
+  });
 }
 
 export async function PUT(request: NextRequest) {
@@ -175,27 +188,32 @@ export async function PUT(request: NextRequest) {
   } catch {
     return NextResponse.json({ code: 'INVALID_JSON' }, { status: 400 });
   }
-  const state = body && typeof body === 'object' ? (body as { state?: unknown }).state : null;
+  const payload = body && typeof body === 'object' ? body as { state?: unknown; expectedRevision?: unknown } : {};
+  const state = payload.state;
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
     return NextResponse.json({ code: 'INVALID_STATE' }, { status: 400 });
   }
-  const updatedAt = new Date().toISOString();
-  const { error } = await supabaseAdmin.from('material_planning_state').upsert({
-    id: MODULE_KEY,
-    state,
-    updated_at: updatedAt,
-    updated_by: access.user.name
-  }, { onConflict: 'id' });
-  if (error) {
-    return NextResponse.json({ code: 'SAVE_FAILED', detail: error.message }, { status: 500 });
+  const expectedRevision = Number(payload.expectedRevision ?? 0);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+    return NextResponse.json({ code: 'INVALID_REVISION' }, { status: 400 });
   }
-  await supabaseAdmin.from('material_planning_events').insert({
-    event_type: 'STATE_SAVED',
-    event_data: {
-      planName: String((state as Record<string, unknown>).planName ?? ''),
-      planSheet: String((state as Record<string, unknown>).planSheet ?? '')
-    },
-    created_by: access.user.name
+  const updatedBy = access.user.username ?? access.user.name;
+  const { data, error } = await supabaseAdmin.rpc('save_material_planning_state', {
+    p_module_id: MODULE_KEY,
+    p_state: state,
+    p_expected_revision: expectedRevision,
+    p_updated_by: updatedBy
   });
-  return NextResponse.json({ ok: true, updatedAt });
+  if (error) {
+    return NextResponse.json({
+      code: error.code === 'PGRST202' ? 'CONCURRENCY_MIGRATION_REQUIRED' : 'SAVE_FAILED',
+      detail: error.message
+    }, { status: error.code === 'PGRST202' ? 503 : 500 });
+  }
+  const result = Array.isArray(data) ? data[0] as { new_revision?: number; has_conflict?: boolean } | undefined : undefined;
+  const revision = Number(result?.new_revision ?? expectedRevision);
+  if (result?.has_conflict) {
+    return NextResponse.json({ code: 'REVISION_CONFLICT', revision }, { status: 409 });
+  }
+  return NextResponse.json({ ok: true, revision, updatedAt: new Date().toISOString() });
 }

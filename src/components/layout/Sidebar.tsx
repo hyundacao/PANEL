@@ -18,10 +18,8 @@ import {
   Droplets,
   Settings2,
   Factory,
-  Calculator,
   FileCheck2,
-  RotateCcw,
-  BookOpen
+  RotateCcw
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useUiStore } from '@/lib/store/ui';
@@ -114,14 +112,12 @@ const navItemsPrzygotowanieProdukcji: NavItem[] = [
 
 const navItemsPlanowanieZapotrzebowania: NavItem[] = [
   { label: 'Plan produkcyjny', href: '/planowanie-zapotrzebowania', icon: ClipboardList, tab: 'planowanie-zapotrzebowania' },
-  { label: 'Technologie', href: '/planowanie-zapotrzebowania?view=technologie', icon: Factory, tab: 'planowanie-zapotrzebowania' },
+  { label: 'Biblioteka technologii', href: '/planowanie-zapotrzebowania?view=technologie', icon: Factory, tab: 'planowanie-zapotrzebowania' },
   { label: 'Spis rzeczywisty', href: '/planowanie-zapotrzebowania?view=spis', icon: ClipboardCheck, tab: 'planowanie-zapotrzebowania' },
-  { label: 'Obliczenia', href: '/planowanie-zapotrzebowania?view=obliczenia', icon: Calculator, tab: 'planowanie-zapotrzebowania' },
-  { label: 'Dokument', href: '/planowanie-zapotrzebowania?view=dokument', icon: FileCheck2, tab: 'planowanie-zapotrzebowania' },
+  { label: 'Dokument do wypisania', href: '/planowanie-zapotrzebowania?view=dokument', icon: FileCheck2, tab: 'planowanie-zapotrzebowania' },
   { label: 'Zwroty', href: '/planowanie-zapotrzebowania?view=zwroty', icon: RotateCcw, tab: 'planowanie-zapotrzebowania' },
   { label: 'Historia', href: '/planowanie-zapotrzebowania?view=historia', icon: History, tab: 'planowanie-zapotrzebowania' },
-  { label: 'Ustawienia', href: '/planowanie-zapotrzebowania?view=ustawienia', icon: Settings2, tab: 'planowanie-zapotrzebowania' },
-  { label: 'Instrukcja', href: '/planowanie-zapotrzebowania?view=instrukcja', icon: BookOpen, tab: 'planowanie-zapotrzebowania' }
+  { label: 'Ustawienia', href: '/planowanie-zapotrzebowania?view=ustawienia', icon: Settings2, tab: 'planowanie-zapotrzebowania' }
 ];
 
 export const Sidebar = () => {

@@ -159,14 +159,12 @@ const navItemsPrzygotowanieProdukcji: MobileNavItem[] = [
 
 const navItemsPlanowanieZapotrzebowania: MobileNavItem[] = [
   { label: 'Plan', href: '/planowanie-zapotrzebowania', tab: 'planowanie-zapotrzebowania' },
-  { label: 'Technologie', href: '/planowanie-zapotrzebowania?view=technologie', tab: 'planowanie-zapotrzebowania' },
+  { label: 'Biblioteka', href: '/planowanie-zapotrzebowania?view=technologie', tab: 'planowanie-zapotrzebowania' },
   { label: 'Spis', href: '/planowanie-zapotrzebowania?view=spis', tab: 'planowanie-zapotrzebowania' },
-  { label: 'Obliczenia', href: '/planowanie-zapotrzebowania?view=obliczenia', tab: 'planowanie-zapotrzebowania' },
   { label: 'Dokument', href: '/planowanie-zapotrzebowania?view=dokument', tab: 'planowanie-zapotrzebowania' },
   { label: 'Zwroty', href: '/planowanie-zapotrzebowania?view=zwroty', tab: 'planowanie-zapotrzebowania' },
   { label: 'Historia', href: '/planowanie-zapotrzebowania?view=historia', tab: 'planowanie-zapotrzebowania' },
-  { label: 'Ustawienia', href: '/planowanie-zapotrzebowania?view=ustawienia', tab: 'planowanie-zapotrzebowania' },
-  { label: 'Instrukcja', href: '/planowanie-zapotrzebowania?view=instrukcja', tab: 'planowanie-zapotrzebowania' }
+  { label: 'Ustawienia', href: '/planowanie-zapotrzebowania?view=ustawienia', tab: 'planowanie-zapotrzebowania' }
 ];
 
 const getModuleNavItems = (warehouse: WarehouseKey | null) => {
