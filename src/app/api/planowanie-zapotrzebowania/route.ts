@@ -7,6 +7,12 @@ export const dynamic = 'force-dynamic';
 
 const MODULE_KEY = 'main';
 const PRODUCT_CATALOG_PAGE_SIZE = 1000;
+const PRODUCT_CATALOG_CACHE_MS = 5 * 60 * 1000;
+
+type ProductCatalogItem = { id: string; name: string; index: string; warehouseCode: string; unit: string };
+
+let productCatalogCache: { items: ProductCatalogItem[]; expiresAt: number } | null = null;
+let productCatalogLoadPromise: Promise<ProductCatalogItem[]> | null = null;
 
 const normalizeName = (value: unknown) =>
   String(value ?? '')
@@ -25,7 +31,7 @@ const warsawDateKey = (value = new Date()) =>
     day: '2-digit'
   }).format(value);
 
-const loadProductCatalog = async () => {
+const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
   const rows: Array<{ id: string; name: string; index_code: string | null; warehouse_code: string | null; unit: string | null }> = [];
   for (let from = 0; ; from += PRODUCT_CATALOG_PAGE_SIZE) {
     const { data, error } = await supabaseAdmin
@@ -39,8 +45,7 @@ const loadProductCatalog = async () => {
     if (page.length < PRODUCT_CATALOG_PAGE_SIZE) break;
   }
 
-  type CatalogItem = { id: string; name: string; index: string; warehouseCode: string; unit: string };
-  const unique = new Map<string, CatalogItem>();
+  const unique = new Map<string, ProductCatalogItem>();
   rows.forEach((row) => {
     const name = String(row.name ?? '').replace(/\s+/g, ' ').trim();
     const index = String(row.index_code ?? '').replace(/\s+/g, ' ').trim();
@@ -50,7 +55,7 @@ const loadProductCatalog = async () => {
     const key = `${normalizeName(name)}|${normalizeName(warehouseCode)}`;
     const next = { id: String(row.id), name, index, warehouseCode, unit };
     const current = unique.get(key);
-    const score = (item: CatalogItem) => (item.warehouseCode ? 4 : 0) + (item.index ? 2 : 0) + (item.unit ? 1 : 0);
+    const score = (item: ProductCatalogItem) => (item.warehouseCode ? 4 : 0) + (item.index ? 2 : 0) + (item.unit ? 1 : 0);
     if (!current || score(next) > score(current)) unique.set(key, next);
   });
 
@@ -62,6 +67,20 @@ const loadProductCatalog = async () => {
   return values.filter(
     (item) => Boolean(item.warehouseCode) || !namesWithWarehouseVariant.has(normalizeName(item.name))
   );
+};
+
+const loadProductCatalog = async () => {
+  if (productCatalogCache && productCatalogCache.expiresAt > Date.now()) {
+    return productCatalogCache.items;
+  }
+  if (!productCatalogLoadPromise) productCatalogLoadPromise = queryProductCatalog();
+  try {
+    const items = await productCatalogLoadPromise;
+    productCatalogCache = { items, expiresAt: Date.now() + PRODUCT_CATALOG_CACHE_MS };
+    return items;
+  } finally {
+    productCatalogLoadPromise = null;
+  }
 };
 
 const inventoryAreaId = (warehouseId: unknown, warehouseName: unknown, sourceType: unknown) => {

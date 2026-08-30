@@ -1031,6 +1031,16 @@ insert into public.warehouses (id, name, order_no, include_in_spis, include_in_s
   ('daszek-2', 'Daszek NR 2', 5, false, false, true)
 on conflict (id) do nothing;
 
+insert into public.warehouses (id, name, order_no, include_in_spis, include_in_stats, is_active) values
+  ('bakoma', 'Bakoma', 3, true, true, true),
+  ('lakiernia', 'Lakiernia', 4, true, true, true)
+on conflict (id) do update set
+  name = excluded.name,
+  order_no = excluded.order_no,
+  include_in_spis = true,
+  include_in_stats = true,
+  is_active = true;
+
 with target_warehouses as (
   select w.id, w.name
   from public.warehouses w
@@ -2179,5 +2189,112 @@ create index if not exists paint_tape_inventory_entries_item_idx
 alter table if exists public.paint_tape_inventory_catalog enable row level security;
 alter table if exists public.paint_tape_inventory_sessions enable row level security;
 alter table if exists public.paint_tape_inventory_entries enable row level security;
+
+-- ============================================================
+-- MATERIAL PLANNING STATE AND CONCURRENCY
+-- Consolidates migrate_planowanie_zapotrzebowania.sql and
+-- migrate_material_planning_versions.sql for a fresh database.
+-- This section does not modify the Spis rzeczywisty schema.
+-- ============================================================
+
+create table if not exists public.material_planning_state (
+  id text primary key,
+  state jsonb not null default '{}'::jsonb,
+  revision bigint not null default 0,
+  updated_at timestamptz not null default now(),
+  updated_by text not null default ''
+);
+
+alter table if exists public.material_planning_state
+  add column if not exists revision bigint not null default 0;
+
+create table if not exists public.material_planning_events (
+  id uuid primary key default gen_random_uuid(),
+  event_type text not null,
+  event_data jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  created_by text not null default ''
+);
+
+create index if not exists material_planning_events_created_at_idx
+  on public.material_planning_events (created_at desc);
+
+alter table if exists public.material_planning_state enable row level security;
+alter table if exists public.material_planning_events enable row level security;
+
+comment on table public.material_planning_state is
+  'Stan osobnego modułu planowania zapotrzebowania. Dostęp wyłącznie przez autoryzowane API aplikacji.';
+comment on table public.material_planning_events is
+  'Techniczny dziennik zapisów modułu planowania zapotrzebowania.';
+
+create or replace function public.save_material_planning_state(
+  p_module_id text,
+  p_state jsonb,
+  p_expected_revision bigint,
+  p_updated_by text
+)
+returns table(new_revision bigint, has_conflict boolean)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_revision bigint;
+  next_revision bigint;
+begin
+  if p_module_id is null or btrim(p_module_id) = '' then
+    raise exception 'MODULE_ID_REQUIRED';
+  end if;
+  if p_state is null or jsonb_typeof(p_state) <> 'object' then
+    raise exception 'STATE_OBJECT_REQUIRED';
+  end if;
+  if p_expected_revision is null or p_expected_revision < 0 then
+    raise exception 'EXPECTED_REVISION_INVALID';
+  end if;
+
+  insert into public.material_planning_state (id, state, updated_at, updated_by, revision)
+  values (p_module_id, '{}'::jsonb, now(), coalesce(p_updated_by, ''), 0)
+  on conflict (id) do nothing;
+
+  select revision
+    into current_revision
+    from public.material_planning_state
+    where id = p_module_id
+    for update;
+
+  if current_revision <> p_expected_revision then
+    return query select current_revision, true;
+    return;
+  end if;
+
+  next_revision := current_revision + 1;
+  update public.material_planning_state
+    set state = p_state,
+        updated_at = now(),
+        updated_by = coalesce(p_updated_by, ''),
+        revision = next_revision
+    where id = p_module_id;
+
+  insert into public.material_planning_events (event_type, event_data, created_by)
+  values (
+    'STATE_SAVED',
+    jsonb_build_object(
+      'revision', next_revision,
+      'planDate', coalesce(p_state ->> 'selectedPlanDate', ''),
+      'planName', coalesce(p_state ->> 'planName', ''),
+      'planSheet', coalesce(p_state ->> 'planSheet', '')
+    ),
+    coalesce(p_updated_by, '')
+  );
+
+  return query select next_revision, false;
+end;
+$$;
+
+revoke all on function public.save_material_planning_state(text, jsonb, bigint, text) from public;
+grant execute on function public.save_material_planning_state(text, jsonb, bigint, text) to service_role;
+
+comment on function public.save_material_planning_state(text, jsonb, bigint, text) is
+  'Atomowy zapis modułu Planowanie zapotrzebowania z blokadą optymistyczną i dziennikiem zdarzeń.';
 
 notify pgrst, 'reload schema';

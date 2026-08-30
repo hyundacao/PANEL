@@ -1105,12 +1105,10 @@ const Stat = ({ label, value, tone = 'default' }: { label: string; value: string
   </div>
 );
 
-export default function MaterialPlanningPage() {
+function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | null }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const user = useUiStore((store) => store.user);
   const readOnly = isReadOnly(user, 'PLANOWANIE_ZAPOTRZEBOWANIA');
-  const requestedView = searchParams.get('view');
   const view: View = requestedView && ['plan', 'technologie', 'spis', 'dokument', 'zwroty', 'historia', 'ustawienia'].includes(requestedView)
     ? requestedView as View
     : 'plan';
@@ -1133,7 +1131,8 @@ export default function MaterialPlanningPage() {
   const [expandedMaterial, setExpandedMaterial] = useState('');
   const [editingTechnologyId, setEditingTechnologyId] = useState('');
   const [productCatalog, setProductCatalog] = useState<ProductCatalogItem[]>([]);
-  const [productCatalogLoading, setProductCatalogLoading] = useState(true);
+  const [productCatalogLoading, setProductCatalogLoading] = useState(false);
+  const productCatalogRequestedRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentUserName = user?.username ?? user?.name ?? 'nieznany';
 
@@ -1159,7 +1158,6 @@ export default function MaterialPlanningPage() {
         if (serverState) {
           const withDefaults = { ...serverState, plan: applyDefaultTechnologyAssignments(serverState.plan, serverState.technologies) };
           setState(withDefaults);
-          window.localStorage.setItem(LOCAL_KEY, JSON.stringify(withDefaults));
         }
         setStorageMode('server');
         setServerRevision(Math.max(0, Number(payload.revision ?? 0)));
@@ -1168,25 +1166,26 @@ export default function MaterialPlanningPage() {
   }, []);
 
   useEffect(() => {
-    let active = true;
+    const needsCatalog = view === 'technologie' || Boolean(expandedPlan) || Boolean(expandedCalculation);
+    if (!needsCatalog || productCatalogRequestedRef.current) return;
+    productCatalogRequestedRef.current = true;
+    setProductCatalogLoading(true);
     fetch('/api/planowanie-zapotrzebowania?source=product-catalog', { cache: 'no-store' })
       .then(async (response) => {
         if (!response.ok) throw new Error('catalog unavailable');
         return response.json() as Promise<{ items?: ProductCatalogItem[] }>;
       })
       .then((payload) => {
-        if (active) setProductCatalog(Array.isArray(payload.items) ? payload.items : []);
+        setProductCatalog(Array.isArray(payload.items) ? payload.items : []);
       })
       .catch(() => {
-        if (active) setProductCatalog([]);
+        productCatalogRequestedRef.current = false;
+        setProductCatalog([]);
       })
       .finally(() => {
-        if (active) setProductCatalogLoading(false);
+        setProductCatalogLoading(false);
       });
-    return () => {
-      active = false;
-    };
-  }, []);
+  }, [expandedCalculation, expandedPlan, view]);
 
   useEffect(() => {
     if (!hydrated || !productCatalog.length) return;
@@ -1227,7 +1226,14 @@ export default function MaterialPlanningPage() {
 
   useEffect(() => {
     if (!hydrated) return;
-    window.localStorage.setItem(LOCAL_KEY, JSON.stringify(state));
+    const timeoutId = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(LOCAL_KEY, JSON.stringify(state));
+      } catch {
+        // Zapis centralny nadal działa, nawet gdy lokalna kopia przekroczy limit przeglądarki.
+      }
+    }, 500);
+    return () => window.clearTimeout(timeoutId);
   }, [hydrated, state]);
 
   const updateState = (updater: (current: AppState) => AppState) => {
@@ -1249,7 +1255,11 @@ export default function MaterialPlanningPage() {
   const save = async () => {
     if (readOnly) return;
     setSaving(true);
-    window.localStorage.setItem(LOCAL_KEY, JSON.stringify(state));
+    try {
+      window.localStorage.setItem(LOCAL_KEY, JSON.stringify(state));
+    } catch {
+      // Brak lokalnej kopii nie może blokować zapisu centralnego.
+    }
     try {
       const response = await fetch('/api/planowanie-zapotrzebowania', {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state, expectedRevision: serverRevision })
@@ -1312,20 +1322,24 @@ export default function MaterialPlanningPage() {
     return `${fmt(scope.shifts)} zm. / ${fmt(itemProductionQty(item))} szt.`;
   };
 
+  const needsMaterialBalances = (['plan', 'obliczenia', 'dokument', 'zwroty', 'historia'] as View[]).includes(view);
   const documentLedger = new Map<string, { issued: number; pending: number }>();
-  state.documents
-    .filter((document) => document.planDate === state.selectedPlanDate && (document.status === 'issued' || document.status === 'handed'))
-    .forEach((document) => document.rows.forEach((row) => {
-      const key = `${document.areaId}|${row.key}`;
-      const current = documentLedger.get(key) ?? { issued: 0, pending: 0 };
-      if (document.status === 'issued') current.issued += row.toIssue;
-      if (document.status === 'handed') current.pending += row.toIssue;
-      documentLedger.set(key, current);
-    }));
+  if (needsMaterialBalances) {
+    state.documents
+      .filter((document) => document.planDate === state.selectedPlanDate && (document.status === 'issued' || document.status === 'handed'))
+      .forEach((document) => document.rows.forEach((row) => {
+        const key = `${document.areaId}|${row.key}`;
+        const current = documentLedger.get(key) ?? { issued: 0, pending: 0 };
+        if (document.status === 'issued') current.issued += row.toIssue;
+        if (document.status === 'handed') current.pending += row.toIssue;
+        documentLedger.set(key, current);
+      }));
+  }
 
   const demandByArea = (() => {
     const all = new Map<string, Map<string, number>>();
     state.areas.filter((area) => !area.shared).forEach((area) => all.set(area.id, new Map()));
+    if (!needsMaterialBalances) return all;
     state.plan.filter((item) => item.included && item.areaId && item.technologyId).forEach((item) => {
       const areaMap = all.get(item.areaId) ?? new Map<string, number>();
       const qty = itemProductionQty(item);
@@ -1385,7 +1399,9 @@ export default function MaterialPlanningPage() {
     }).sort((a, b) => (CATEGORY_ORDER.get(a.category) ?? 99) - (CATEGORY_ORDER.get(b.category) ?? 99) || a.name.localeCompare(b.name, 'pl')) as Requirement[];
   };
 
-  const requirements = requirementsForArea(state.selectedAreaId);
+  const requirements = view === 'dokument' || view === 'obliczenia'
+    ? requirementsForArea(state.selectedAreaId)
+    : [];
   const missingTechnologyCount = state.plan.filter((item) => item.included && !item.technologyId).length;
   const unassignedCount = state.plan.filter((item) => item.included && !item.areaId).length;
   const documentRows = requirements.filter((row) => row.toIssue > 0);
@@ -1615,7 +1631,7 @@ export default function MaterialPlanningPage() {
   useEffect(() => {
     if (
       !hydrated ||
-      !(['plan', 'spis', 'dokument', 'zwroty'] as View[]).includes(view)
+      !(['plan', 'dokument', 'zwroty'] as View[]).includes(view)
     ) {
       return;
     }
@@ -2374,4 +2390,10 @@ export default function MaterialPlanningPage() {
       {renderer[view]()}
     </div>
   </MaterialCatalogContext.Provider>;
+}
+
+export default function MaterialPlanningPage() {
+  const requestedView = useSearchParams().get('view');
+  if (requestedView === 'spis') return <SpisRzeczywisty />;
+  return <MaterialPlanningWorkspace requestedView={requestedView} />;
 }
