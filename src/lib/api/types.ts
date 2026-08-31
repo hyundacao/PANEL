@@ -582,6 +582,8 @@ export type Transfer = {
   toLocationId?: string;
   partner?: string;
   note?: string;
+  cancelledAt?: string;
+  cancelledBy?: string;
 };
 
 export type WarehouseTransferDocumentStatus = 'OPEN' | 'ISSUED' | 'CLOSED';

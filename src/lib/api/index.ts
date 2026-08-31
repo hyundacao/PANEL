@@ -316,6 +316,9 @@ export const getLocationsAdmin = async (scope?: WarehouseAdminScope): Promise<Lo
 export const getTransfers = async (dateKey?: string): Promise<Transfer[]> =>
   appRequest('getTransfers', { dateKey });
 
+export const cancelTransfer = async (id: string): Promise<Transfer> =>
+  appRequest('cancelTransfer', { id });
+
 export const addTransfer = async (payload: {
   kind: TransferKind;
   materialId: string;

@@ -5,9 +5,12 @@ import {
   calculateIssueBalance,
   calculateReturnSurplus,
   calculateScopedQuantity,
+  coalesceQuantityCorrection,
   correctedQuantity,
   diffPlanItems,
-  nextPlanVersionNumber
+  latestPlanVersion,
+  nextPlanVersionNumber,
+  setRemainingQuantity
 } from './domain.ts';
 
 const item = (patch = {}) => ({
@@ -73,6 +76,80 @@ test('ręczne +200, -200 i wartość dokładna nie schodzą poniżej zera', () =
   assert.equal(correctedQuantity(3000, 'decrease', 200), 2800);
   assert.equal(correctedQuantity(100, 'decrease', 200), 0);
   assert.equal(correctedQuantity(100, 'exact', 7000), 7000);
+});
+
+test('bieżąca wersja wynika z numeru i dnia, a nie dawnego ręcznego statusu', () => {
+  const versions = [
+    { id: 'old', planDate: '2026-08-31', versionNo: 1, status: 'active' },
+    { id: 'tomorrow', planDate: '2026-09-01', versionNo: 1, status: 'draft' },
+    { id: 'latest', planDate: '2026-08-31', versionNo: 3, status: 'superseded' },
+    { id: 'middle', planDate: '2026-08-31', versionNo: 2, status: 'ready' }
+  ];
+  const before = JSON.stringify(versions);
+  assert.equal(latestPlanVersion(versions, '2026-08-31')?.id, 'latest');
+  assert.equal(latestPlanVersion(versions, '2026-09-01')?.id, 'tomorrow');
+  assert.equal(latestPlanVersion(versions, '2026-09-02'), undefined);
+  assert.equal(latestPlanVersion([], '2026-08-31'), undefined);
+  assert.equal(JSON.stringify(versions), before);
+});
+
+test('bezpośrednia zmiana 90 na 120 przelicza ilość i zapotrzebowanie', () => {
+  const original = { ...item({ totalQty: 90, shiftNorm: 380 }), sourceQuantity: '90', scopeMode: 'global' };
+  const updated = setRemainingQuantity(original, 120);
+  assert.equal(updated.totalQty, 120);
+  assert.equal(updated.remainingQty, 120);
+  assert.equal(calculateScopedQuantity(updated.remainingQty, updated.shiftNorm, { mode: 'shifts', shifts: 3.5 }), 120);
+  assert.equal(updated.remainingQty * 0.25, 30);
+  assert.equal(updated.sourceQuantity, '90');
+  assert.equal(original.totalQty, 90);
+});
+
+test('edycja ilości do zrobienia zachowuje sztuki wykonane wcześniej', () => {
+  const updated = setRemainingQuantity(item({ totalQty: 300, remainingQty: 90 }), 120);
+  assert.equal(updated.remainingQty, 120);
+  assert.equal(updated.totalQty, 330);
+  assert.equal(updated.totalQty - updated.remainingQty, 210);
+  const finished = setRemainingQuantity(updated, 0);
+  assert.equal(finished.totalQty, 210);
+  assert.equal(calculateScopedQuantity(finished.remainingQty, 380, { mode: 'all' }), 0);
+  assert.equal(calculateScopedQuantity(finished.remainingQty, 380, { mode: 'shifts', shifts: 3.5 }), 0);
+});
+
+test('jedna sesja wpisywania daje jedną korektę 90 na 120 i zachowuje podstawę cofnięcia', () => {
+  let current = item({ totalQty: 90 });
+  let corrections = [];
+  for (const quantity of [1, 12, 120]) {
+    const next = setRemainingQuantity(current, quantity);
+    corrections = coalesceQuantityCorrection(corrections, {
+      id: 'edit-1', previousValue: current.totalQty, newValue: next.totalQty,
+      difference: next.totalQty - current.totalQty
+    });
+    current = next;
+  }
+  assert.deepEqual(corrections, [{ id: 'edit-1', previousValue: 90, newValue: 120, difference: 30 }]);
+  corrections = coalesceQuantityCorrection(corrections, {
+    id: 'edit-2', previousValue: 120, newValue: 200, difference: 80
+  });
+  assert.equal(corrections.length, 2);
+  assert.equal(corrections[1].previousValue, 90);
+  const reverted = setRemainingQuantity(current, corrections[1].previousValue);
+  assert.equal(reverted.remainingQty, 90);
+});
+
+test('potwierdzenie brakującej ilości jako zero pozostaje w historii', () => {
+  const corrections = coalesceQuantityCorrection([], {
+    id: 'edit-zero', previousValue: 0, newValue: 0, difference: 0, previousQuantityStatus: 'missing'
+  });
+  assert.equal(corrections.length, 1);
+  assert.equal(corrections[0].newValue, 0);
+  assert.equal(corrections[0].previousQuantityStatus, 'missing');
+});
+
+test('edycja normy zmienia zakres zmian, ale nie ilość całej produkcji', () => {
+  assert.equal(calculateScopedQuantity(3000, 380, { mode: 'shifts', shifts: 3.5 }), 1330);
+  assert.equal(calculateScopedQuantity(3000, 500, { mode: 'shifts', shifts: 3.5 }), 1750);
+  assert.equal(calculateScopedQuantity(3000, 0, { mode: 'shifts', shifts: 3.5 }), 0);
+  assert.equal(calculateScopedQuantity(3000, 0, { mode: 'all' }), 3000);
 });
 
 test('wydanie uwzględnia stan, wydane i oczekujące bez wartości ujemnych', () => {

@@ -4,6 +4,8 @@ import { randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { formatDate } from '@/lib/utils/format';
+import { isRegrindStatsWarehouse } from '@/lib/utils/regrindStats';
+import { expandTransferStatsRows, isActiveTransferForStats } from '@/lib/utils/transferCancellation';
 import {
   canAccessWarehouse,
   canUsePaintTapePermission,
@@ -336,7 +338,9 @@ const mapTransfer = (row: any): Transfer => ({
   fromLocationId: row.from_location_id ?? undefined,
   toLocationId: row.to_location_id ?? undefined,
   partner: row.partner ?? undefined,
-  note: row.note ?? undefined
+  note: row.note ?? undefined,
+  cancelledAt: row.cancelled_at ?? undefined,
+  cancelledBy: row.cancelled_by ?? undefined
 });
 
 const mapTransferForWarehouses = (row: any, locations: Location[]): Transfer => {
@@ -1021,6 +1025,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requireAnyTabAccess(user, 'PRZESUNIECIA_ERP', ERP_MODULE_TABS);
       return;
     case 'addTransfer':
+    case 'cancelTransfer':
       requireTabWriteAccess(user, 'PRZEMIALY', ['przesuniecia']);
       return;
     case 'createWarehouseTransferDocument':
@@ -1262,6 +1267,7 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'updateLocation',
   'removeLocation',
   'addTransfer',
+  'cancelTransfer',
   'createWarehouseTransferDocument',
   'addWarehouseTransferItemIssue',
   'updateWarehouseTransferItemIssue',
@@ -1379,6 +1385,7 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   confirmNoChangeEntry: 'Spis: potwierdzenie bez zmian',
   confirmNoChangeLocation: 'Spis: potwierdzenie lokalizacji',
   addTransfer: 'Przesuniecia: nowy ruch',
+  cancelTransfer: 'Przesuniecia: cofniecie ruchu',
   createWarehouseTransferDocument: 'Przesuniecia magazynowe: nowy dokument',
   addWarehouseTransferItemIssue: 'Przesuniecia magazynowe: wydanie pozycji',
   updateWarehouseTransferItemIssue: 'Przesuniecia magazynowe: edycja wydania',
@@ -1636,10 +1643,15 @@ const writeAuditLog = async (
   if (!AUDITABLE_ACTIONS.has(action)) return;
 
   const warehouse = getAuditWarehouse(action, payload);
-  const location = getAuditLocation(payload);
-  const material = getAuditMaterial(action, payload);
-  const qty = getAuditQty(action, payload, data);
-  const actionLabel = AUDIT_ACTION_LABELS[action] ?? action;
+  const auditInput = action === 'cancelTransfer' ? data : payload;
+  const location = getAuditLocation(auditInput);
+  const material = getAuditMaterial(action, auditInput);
+  const qty = action === 'cancelTransfer'
+    ? { prevQty: toAuditNumber((data as Transfer).qty), nextQty: 0 }
+    : getAuditQty(action, payload, data);
+  const actionLabel = action === 'cancelTransfer'
+    ? `${AUDIT_ACTION_LABELS[action]} (${(data as Transfer).id})`
+    : AUDIT_ACTION_LABELS[action] ?? action;
 
   const auditPayload = {
     at: new Date().toISOString(),
@@ -1663,7 +1675,7 @@ const writeAuditLog = async (
 
 const getActiveStatsLocations = (warehouses: Warehouse[], locations: Location[]) => {
   const allowed = new Set(
-    warehouses.filter((warehouse) => warehouse.isActive && warehouse.includeInStats).map((item) => item.id)
+    warehouses.filter(isRegrindStatsWarehouse).map((item) => item.id)
   );
   return locations.filter(
     (loc) =>
@@ -1754,6 +1766,7 @@ const buildTransferDeltasByDate = (
 
 const buildExternalTotalsByDate = (
   transfers: Array<{
+    cancelled_at?: string | null;
     at: string;
     kind: string;
     material_id: string;
@@ -1764,6 +1777,7 @@ const buildExternalTotalsByDate = (
 ): TransferAdjustmentsByDate => {
   const result: TransferAdjustmentsByDate = {};
   transfers.forEach((transfer) => {
+    if (!isActiveTransferForStats(transfer)) return;
     const qty = toNumber(transfer.qty);
     if (!qty) return;
     const dateKey = formatDate(new Date(transfer.at));
@@ -1784,6 +1798,7 @@ const buildExternalTotalsByDate = (
 
 const buildExternalTotalsByWarehouse = (
   transfers: Array<{
+    cancelled_at?: string | null;
     at: string;
     kind: string;
     material_id: string;
@@ -1795,6 +1810,7 @@ const buildExternalTotalsByWarehouse = (
 ): TransferAdjustmentsByWarehouse => {
   const result: TransferAdjustmentsByWarehouse = {};
   transfers.forEach((transfer) => {
+    if (!isActiveTransferForStats(transfer)) return;
     const qty = toNumber(transfer.qty);
     if (!qty) return;
     const dateKey = formatDate(new Date(transfer.at));
@@ -1818,6 +1834,7 @@ const buildExternalTotalsByWarehouse = (
 
 const buildExternalOutCommentsByDate = (
   transfers: Array<{
+    cancelled_at?: string | null;
     at: string;
     kind: string;
     material_id: string;
@@ -1828,6 +1845,7 @@ const buildExternalOutCommentsByDate = (
 ): TransferCommentsByDate => {
   const result: TransferCommentsByDate = {};
   transfers.forEach((transfer) => {
+    if (!isActiveTransferForStats(transfer)) return;
     if (transfer.kind !== 'EXTERNAL_OUT') return;
     if (!transfer.from_location_id) return;
     const dateKey = formatDate(new Date(transfer.at));
@@ -3077,15 +3095,22 @@ const fetchLatestEntriesByLocation = async (
 };
 
 const fetchTransfers = async (fromKey: string, toKey: string) => {
-  const start = `${fromKey}T00:00:00.000Z`;
-  const end = `${addDays(toKey, 1)}T00:00:00.000Z`;
-  const { data, error } = await supabaseAdmin
+  // Query a UTC envelope, then select Warsaw calendar days (including DST).
+  const start = `${addDays(fromKey, -1)}T00:00:00.000Z`;
+  const end = `${addDays(toKey, 2)}T00:00:00.000Z`;
+  let { data, error } = await supabaseAdmin
     .from('transfers')
-    .select('at, kind, material_id, qty, from_location_id, to_location_id, partner, note')
-    .gte('at', start)
-    .lt('at', end);
+    .select('*')
+    .or(`and(at.gte.${start},at.lt.${end}),and(cancelled_at.gte.${start},cancelled_at.lt.${end})`);
+  if (error && ['42703', 'PGRST204'].includes(error.code) && error.message.includes('cancelled_at')) {
+    // Existing databases keep working until the cancellation migration is applied.
+    ({ data, error } = await supabaseAdmin.from('transfers').select('*').gte('at', start).lt('at', end));
+  }
   if (error) throw error;
-  return data ?? [];
+  return expandTransferStatsRows(data ?? []).filter((transfer) => {
+    const day = formatDate(new Date(transfer.at));
+    return day >= fromKey && day <= toKey;
+  });
 };
 
 const fetchLocationStatus = async (fromKey: string, toKey?: string) => {
@@ -3219,7 +3244,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const inventoryDeltasByDate = buildInventoryDeltasByDate(inventoryRows);
       const inventoryDeltas = inventoryDeltasByDate[dateKey] ?? {};
       const warehouseSummaries = warehouses
-        .filter((warehouse) => warehouse.isActive && warehouse.includeInStats)
+        .filter(isRegrindStatsWarehouse)
         .map((warehouse) => {
           const locs = activeStatsLocations.filter((loc) => loc.warehouseId === warehouse.id);
           let added = 0;
@@ -5995,6 +6020,19 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const locations = await fetchLocations();
       return (data ?? []).map((row) => mapTransferForWarehouses(row, locations));
     }
+    case 'cancelTransfer': {
+      const id = String(payload?.id ?? '').trim();
+      if (!id) throw new Error('TRANSFER_NOT_FOUND');
+      const { data, error } = await supabaseAdmin.rpc('cancel_regrind_transfer', {
+        p_transfer_id: id,
+        p_cancelled_by: getActorName(currentUser)
+      });
+      if (error?.code === 'PGRST202') throw new Error('MIGRATION_REQUIRED_TRANSFER_CANCELLATION');
+      if (error?.code === 'P0001') throw new Error(error.message);
+      if (error) throw error;
+      const locations = await fetchLocations();
+      return mapTransferForWarehouses(data, locations);
+    }
     case 'addTransfer': {
       const kind = String(payload?.kind ?? '') as TransferKind;
       const materialId = String(payload?.materialId ?? '');
@@ -6006,7 +6044,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         ? await resolveInventoryLocationId(String(payload.toLocationId))
         : undefined;
       if (!materialId) throw new Error('MATERIAL_MISSING');
-      if (!qty || qty <= 0) throw new Error('INVALID_QTY');
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error('INVALID_QTY');
+      if (!['INTERNAL', 'EXTERNAL_IN', 'EXTERNAL_OUT'].includes(kind)) throw new Error('INVALID_TRANSFER_KIND');
       const materials = await fetchMaterials();
       const material = materials.find((mat) => mat.id === materialId);
       if (!material) throw new Error('MATERIAL_MISSING');
@@ -6016,6 +6055,19 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }
       if (kind === 'EXTERNAL_IN' && !toLocationId) throw new Error('MISSING_LOCATION');
       if (kind === 'EXTERNAL_OUT' && !fromLocationId) throw new Error('MISSING_LOCATION');
+      const { data: atomicTransfer, error: atomicError } = await supabaseAdmin.rpc('create_regrind_transfer', {
+        p_kind: kind,
+        p_material_id: materialId,
+        p_qty: qty,
+        p_from_location_id: fromLocationId ?? null,
+        p_to_location_id: toLocationId ?? null,
+        p_partner: payload?.partner ? String(payload.partner).trim() : null,
+        p_note: payload?.note ? String(payload.note).trim() : null
+      });
+      if (!atomicError) return mapTransferForWarehouses(atomicTransfer, await fetchLocations());
+      if (atomicError.code === 'P0001') throw new Error(atomicError.message);
+      if (atomicError.code !== 'PGRST202') throw atomicError;
+      // Keep the existing creation path available before the migration is installed.
       if ((kind === 'INTERNAL' || kind === 'EXTERNAL_OUT') && fromLocationId) {
         const todayKey = getTodayKey();
         const yesterdayKey = addDays(todayKey, -1);

@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createHash } from 'node:crypto';
 import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, withToolroomReturnTasks } from '@/lib/utils/productionToolroomTasks';
+import { PRODUCTION_TEAMS, TEAM_COMMENT_KEY_PREFIX, defaultTeamComments, isProductionTeam, normalizeTeamComment, validateTeamComment } from '@/lib/utils/productionTeamComments';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,6 +67,34 @@ type ProcessEngineerRosterEntry = {
 
 const isProcessEngineersSettings = (task: Record<string, unknown>) =>
   String(task.task_key ?? task.id ?? '') === PROCESS_ENGINEERS_SETTINGS_KEY;
+
+const isModuleSettings = (task: Record<string, unknown>) =>
+  isProcessEngineersSettings(task) || String(task.task_key ?? task.id ?? '').startsWith(TEAM_COMMENT_KEY_PREFIX);
+
+const readGlobalTeamComments = async () => {
+  const comments = defaultTeamComments();
+  const { data: session, error: sessionError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_sessions')
+    .select('id')
+    .eq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE)
+    .maybeSingle();
+  if (sessionError) throw sessionError;
+  if (!session) return comments;
+  const { data: rows, error } = await supabaseAdmin
+    .from('przygotowanie_produkcji_tasks')
+    .select('task_key, notes')
+    .eq('session_id', session.id)
+    .in('task_key', PRODUCTION_TEAMS.map((team) => `${TEAM_COMMENT_KEY_PREFIX}${team}`));
+  if (error) throw error;
+  for (const row of rows ?? []) {
+    const team = String(row.task_key).slice(TEAM_COMMENT_KEY_PREFIX.length);
+    if (isProductionTeam(team)) {
+      const notes = row.notes && typeof row.notes === 'object' ? row.notes as Record<string, unknown> : {};
+      comments[team] = normalizeTeamComment(notes.comment, team);
+    }
+  }
+  return comments;
+};
 
 const normalizeProcessEngineers = (value: unknown) => {
   if (!Array.isArray(value)) return [...DEFAULT_PROCESS_ENGINEERS];
@@ -141,7 +172,7 @@ const omitFields = <T extends object, K extends keyof T>(value: T, fields: reado
 const hasAssignment = (task: Record<string, unknown>) => {
   const kinds = Array.isArray(task.kinds) ? task.kinds : [];
   const teams = Array.isArray(task.teams) ? task.teams : [];
-  const notes = task.notes && typeof task.notes === 'object' ? Object.keys(task.notes).length : 0;
+  const notes = task.notes && typeof task.notes === 'object' ? Object.keys(task.notes).filter((key) => key !== 'toolroomParentId').length : 0;
   return kinds.length > 0 || teams.length > 0 || notes > 0 || Boolean(task.done);
 };
 
@@ -159,7 +190,10 @@ const saveHistorySnapshot = async (
   session: { session_date: string; file_name?: string | null; plan_sheet?: string | null; created_by?: string | null },
   tasks: Array<Record<string, unknown>>
 ) => {
-  const assignedTasks = tasks.filter((task) => !isProcessEngineersSettings(task) && hasAssignment(task));
+  const assignedTasks = withToolroomReturnTasks(tasks
+    .filter((task) => !isModuleSettings(task))
+    .map((task) => 'task_key' in task ? fromDbTask(task) : task as unknown as StoredTask))
+    .filter((task) => hasAssignment(task as unknown as Record<string, unknown>));
   if (!assignedTasks.length) return;
   try {
     const { data: existingHistory, error: historyReadError } = await supabaseAdmin
@@ -216,10 +250,10 @@ const archivePreviousDays = async () => {
         .eq('session_id', session.id)
         .order('position_no');
       if (taskError) throw taskError;
-      const tasks = (taskRows ?? []).filter((task) => {
+      const tasks = withToolroomReturnTasks((taskRows ?? []).filter((task) => {
         const record = task as Record<string, unknown>;
-        return !isProcessEngineersSettings(record) && hasAssignment(record);
-      });
+        return !isModuleSettings(record) && hasAssignment(record);
+      }).map((row) => fromDbTask(row as Record<string, unknown>)), false);
       if (!tasks.length) continue;
 
       const { error: historyError } = await supabaseAdmin
@@ -296,7 +330,7 @@ const fromDbTask = (row: Record<string, unknown>): StoredTask => ({
 });
 
 const validWorkKinds = new Set([
-  'zmiana-formy', 'forma-narzedziownia', 'rozruch', 'wznowienie', 'zmiana-koloru',
+  'zmiana-formy', 'forma-narzedziownia', 'powrot-formy-narzedziownia', 'rozruch', 'wznowienie', 'zmiana-koloru',
   'zmiana-grafiki', 'regulacja', 'proby', 'przeglad-a', 'anulowane', 'inne'
 ]);
 const validTeams = new Set(['mechanics', 'process', 'distribution', 'graphics', 'technician', 'additional']);
@@ -321,7 +355,7 @@ const applyTaskMutation = (task: StoredTask, mutation: StoredTaskMutation): Stor
     temperature: fields.temperature === undefined ? task.temperature : String(fields.temperature),
     kinds: mutation.clearWork ? [] : [...task.kinds],
     teams: mutation.clearWork ? [] : [...task.teams],
-    notes: mutation.clearWork ? {} : { ...task.notes }
+    notes: mutation.clearWork ? toolroomLinkNotes(task) : { ...task.notes }
   };
 
   const removedKinds = new Set((mutation.removeKinds ?? []).filter((kind) => validWorkKinds.has(kind)));
@@ -345,6 +379,48 @@ const applyTaskMutation = (task: StoredTask, mutation: StoredTaskMutation): Stor
   return next;
 };
 
+// Materialize linked work using a stable UUID: even older databases without a
+// unique task_key index cannot create duplicate return rows on parallel saves.
+const toolroomRowUuid = (sessionId: string, taskId: string) => {
+  const hash = createHash('sha256').update(`${sessionId}\0${taskId}`).digest('hex');
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+};
+
+const syncToolroomReturns = async (sessionId: string, userName: string) => {
+  const readRows = () => supabaseAdmin.from('przygotowanie_produkcji_tasks')
+    .select('*').eq('session_id', sessionId).order('position_no');
+  const initial = await readRows();
+  if (initial.error) throw initial.error;
+  const rows = initial.data ?? [];
+  const workRows = rows.filter((row) => !isModuleSettings(row as Record<string, unknown>));
+  const byKey = new Map(workRows.map((row) => [String(row.task_key), row]));
+  const tasks = withToolroomReturnTasks(workRows.map((row) => fromDbTask(row as Record<string, unknown>)));
+  let changed = false;
+  for (const task of tasks.filter(isToolroomReturnTask)) {
+    const existing = byKey.get(task.id);
+    if (!existing) {
+      const id = toolroomRowUuid(sessionId, task.id);
+      const parent = byKey.get(toolroomParentId(task) ?? '');
+      const { error } = await supabaseAdmin.from('przygotowanie_produkcji_tasks')
+        .insert({ id, ...toDbTask(task, sessionId, Number(parent?.position_no ?? 0), userName) });
+      if (error && error.code !== '23505') throw error;
+      changed = true;
+    } else if (existing.station !== task.station || existing.detail !== task.detail
+      || existing.quantity !== task.quantity || existing.norm !== task.norm || existing.is_current_plan !== false) {
+      const { error } = await supabaseAdmin.from('przygotowanie_produkcji_tasks')
+        .update({ station: task.station, detail: task.detail, quantity: task.quantity, norm: task.norm,
+          is_current_plan: false, updated_at: new Date().toISOString(), updated_by: userName })
+        .eq('id', existing.id);
+      if (error) throw error;
+      changed = true;
+    }
+  }
+  if (!changed) return rows;
+  const refreshed = await readRows();
+  if (refreshed.error) throw refreshed.error;
+  return refreshed.data ?? [];
+};
+
 export async function GET(request: NextRequest) {
   try {
     const access = await ensureAccess(request);
@@ -364,6 +440,7 @@ export async function GET(request: NextRequest) {
         history: (history ?? []).filter((entry) => Array.isArray(entry.tasks) && entry.tasks.length > 0)
       });
     }
+    const teamComments = await readGlobalTeamComments();
     const { data: session, error: sessionError } = await supabaseAdmin
       .from('przygotowanie_produkcji_sessions')
       .select('id, session_date, file_name, plan_sheet, updated_at')
@@ -372,7 +449,7 @@ export async function GET(request: NextRequest) {
     if (sessionError) throw sessionError;
     const requestedVersion = request.nextUrl.searchParams.get('since');
     if (syncOnly && session && requestedVersion && requestedVersion === String(session.updated_at ?? '')) {
-      return NextResponse.json({ unchanged: true, updatedAt: session.updated_at });
+      return NextResponse.json({ unchanged: true, updatedAt: session.updated_at, teamComments });
     }
     const globalRoster = syncOnly ? null : await readGlobalProcessEngineerRoster();
     if (!session) {
@@ -380,6 +457,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         session: null,
         tasks: [],
+        teamComments,
         processEngineers: processEngineerRoster.filter((engineer) => engineer.active).map((engineer) => engineer.name),
         processEngineerRoster
       });
@@ -397,9 +475,9 @@ export async function GET(request: NextRequest) {
     const processEngineerRoster = globalRoster ?? normalizeProcessEngineerRoster(settingsNotes.processEngineerRoster, settingsNotes.processEngineers);
     const processEngineers = processEngineerRoster.filter((engineer) => engineer.active).map((engineer) => engineer.name);
     const tasks = (taskRows ?? [])
-      .filter((row) => !isProcessEngineersSettings(row as Record<string, unknown>))
+      .filter((row) => !isModuleSettings(row as Record<string, unknown>))
       .map((row) => fromDbTask(row as Record<string, unknown>));
-    return NextResponse.json({ session, tasks, processEngineers, processEngineerRoster });
+    return NextResponse.json({ session, tasks: withToolroomReturnTasks(tasks), processEngineers, processEngineerRoster, teamComments });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Nie udało się odczytać planu.';
     return NextResponse.json({ code: 'PREPARATION_READ_FAILED', message }, { status: 400 });
@@ -410,9 +488,62 @@ export async function POST(request: NextRequest) {
   try {
     const access = await ensureAccess(request, true);
     if (access.response || !access.user) return access.response;
-    await archivePreviousDays();
-    const body = await request.json() as { action?: string; fileName?: string; sheetName?: string; tasks?: StoredTask[]; task?: StoredTask; taskId?: string; mutation?: StoredTaskMutation; processEngineers?: string[]; processEngineerRoster?: ProcessEngineerRosterEntry[]; planDate?: string };
+    const body = await request.json() as { action?: string; fileName?: string; sheetName?: string; tasks?: StoredTask[]; task?: StoredTask; taskId?: string; mutation?: StoredTaskMutation; processEngineers?: string[]; processEngineerRoster?: ProcessEngineerRosterEntry[]; planDate?: string; team?: unknown; comment?: unknown };
     const now = new Date().toISOString();
+
+    if (body.action === 'saveTeamComment') {
+      if (!isProductionTeam(body.team)) return NextResponse.json({ code: 'INVALID_TEAM', message: 'Nieprawidłowa grupa osób.' }, { status: 400 });
+      const validationError = validateTeamComment(body.comment);
+      if (validationError) return NextResponse.json({ code: 'INVALID_TEAM_COMMENT', message: validationError }, { status: 400 });
+      const team = body.team;
+      const commentForRow = (row: { notes?: unknown } | null) => {
+        const notes = row?.notes && typeof row.notes === 'object' ? row.notes as Record<string, unknown> : {};
+        // Older open clients may still save just the comment; keep the saved visibility in that case.
+        return normalizeTeamComment(body.comment, team, notes.comment);
+      };
+
+      // Reuse the permanent settings session, not the daily production plan.
+      // A separate row per group keeps edits independent of the engineer roster and other groups.
+      const { error: createError } = await supabaseAdmin
+        .from('przygotowanie_produkcji_sessions')
+        .upsert({ session_date: PROCESS_ENGINEERS_SETTINGS_DATE, file_name: 'USTAWIENIA', plan_sheet: '', created_by: access.user.name, updated_at: now }, { onConflict: 'session_date', ignoreDuplicates: true });
+      if (createError) throw createError;
+      const { data: settingsSession, error: sessionError } = await supabaseAdmin
+        .from('przygotowanie_produkcji_sessions')
+        .select('id')
+        .eq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE)
+        .single();
+      if (sessionError) throw sessionError;
+      const key = `${TEAM_COMMENT_KEY_PREFIX}${team}`;
+      const readRow = () => supabaseAdmin.from('przygotowanie_produkcji_tasks')
+        .select('id, notes').eq('session_id', settingsSession.id).eq('task_key', key).maybeSingle();
+      const { data: existing, error: readError } = await readRow();
+      if (readError) throw readError;
+      let comment = commentForRow(existing);
+      const values = { notes: { comment }, updated_at: now, updated_by: access.user.name };
+      const updateRow = (id: string) => supabaseAdmin.from('przygotowanie_produkcji_tasks').update(values).eq('id', id);
+      if (existing) {
+        const { error } = await updateRow(existing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabaseAdmin.from('przygotowanie_produkcji_tasks').insert({
+          ...values, session_id: settingsSession.id, task_key: key, position_no: -2,
+          is_current_plan: false, plan_group: 'standard', station: 'USTAWIENIA',
+          detail: `KOMENTARZ: ${team}`, kinds: [], teams: [], done: false
+        });
+        if (error?.code === '23505') {
+          const retry = await readRow();
+          if (retry.error || !retry.data) throw retry.error ?? error;
+          comment = commentForRow(retry.data);
+          values.notes.comment = comment;
+          const update = await updateRow(retry.data.id);
+          if (update.error) throw update.error;
+        } else if (error) throw error;
+      }
+      return NextResponse.json({ team, comment });
+    }
+
+    await archivePreviousDays();
 
     if (body.action === 'deleteHistoryDay') {
       const planDate = String(body.planDate ?? '');
@@ -492,7 +623,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.action === 'savePlan') {
-      const tasks = Array.isArray(body.tasks) ? body.tasks : [];
+      let tasks = Array.isArray(body.tasks) ? body.tasks : [];
       const { data: session, error: sessionError } = await supabaseAdmin
         .from('przygotowanie_produkcji_sessions')
         .upsert({ session_date: todayKey(), file_name: body.fileName ?? '', plan_sheet: body.sheetName ?? '', created_by: access.user.name, updated_at: now }, { onConflict: 'session_date' })
@@ -505,12 +636,16 @@ export async function POST(request: NextRequest) {
       }
       const { data: storedRows, error: storedRowsError } = await supabaseAdmin
         .from('przygotowanie_produkcji_tasks')
-        .select('id, task_key')
+        .select('*')
         .eq('session_id', session.id);
       if (storedRowsError) throw storedRowsError;
+      const storedReturns = (storedRows ?? []).map((row) => fromDbTask(row as Record<string, unknown>))
+        .filter((task) => isToolroomReturnTask(task) && !taskKeys.includes(task.id));
+      tasks = withToolroomReturnTasks([...tasks, ...storedReturns]);
       const storedByTaskKey = new Map((storedRows ?? []).map((row) => [String(row.task_key), String(row.id)]));
       const importedRows = tasks.map((task, index) => toDbTask(task, session.id, index, access.user.name));
-      const rowsToInsert = importedRows.filter((row) => !storedByTaskKey.has(String(row.task_key)));
+      const rowsToInsert = importedRows.filter((row) => !storedByTaskKey.has(String(row.task_key)))
+        .map((row) => isToolroomReturnTask(fromDbTask(row)) ? { ...row, id: toolroomRowUuid(session.id, row.task_key) } : row);
 
       // The production database may not yet have the unique index required by Supabase upsert.
       // Updating known rows by their primary key makes repeated imports work with both schemas.
@@ -531,7 +666,7 @@ export async function POST(request: NextRequest) {
         if (insertError) throw insertError;
       }
       const staleIds = (storedRows ?? [])
-        .filter((row) => String(row.task_key) !== PROCESS_ENGINEERS_SETTINGS_KEY && !taskKeys.includes(String(row.task_key)))
+        .filter((row) => !isModuleSettings(row as Record<string, unknown>) && !taskKeys.includes(String(row.task_key)))
         .map((row) => String(row.id));
       if (staleIds.length) {
         const { error: retainError } = await supabaseAdmin
@@ -540,6 +675,8 @@ export async function POST(request: NextRequest) {
           .in('id', staleIds);
         if (retainError) throw retainError;
       }
+      const syncedRows = await syncToolroomReturns(session.id, access.user.name);
+      tasks = withToolroomReturnTasks(syncedRows.filter((row) => !isModuleSettings(row as Record<string, unknown>)).map((row) => fromDbTask(row as Record<string, unknown>)));
       await saveHistorySnapshot(session, tasks as unknown as Array<Record<string, unknown>>);
       return NextResponse.json({ session, tasks });
     }
@@ -552,6 +689,7 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
       if (sessionError) throw sessionError;
       if (!session) return NextResponse.json({ code: 'NO_PLAN' }, { status: 409 });
+      await syncToolroomReturns(session.id, access.user.name);
       const storedTask = toDbTask(body.task, session.id, 0, access.user.name);
       const updates = omitFields(storedTask, ['session_id', 'task_key', 'position_no'] as const);
       const { error: taskError } = await supabaseAdmin
@@ -560,11 +698,7 @@ export async function POST(request: NextRequest) {
         .eq('session_id', session.id)
         .eq('task_key', body.task.id);
       if (taskError) throw taskError;
-      const { data: taskRows, error: taskRowsError } = await supabaseAdmin
-        .from('przygotowanie_produkcji_tasks')
-        .select('*')
-        .eq('session_id', session.id);
-      if (taskRowsError) throw taskRowsError;
+      const taskRows = await syncToolroomReturns(session.id, access.user.name);
       await saveHistorySnapshot({ ...session, session_date: todayKey(), created_by: access.user.name }, (taskRows ?? []) as Array<Record<string, unknown>>);
       return NextResponse.json({ task: body.task });
     }
@@ -577,6 +711,8 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
       if (sessionError) throw sessionError;
       if (!session) return NextResponse.json({ code: 'NO_PLAN' }, { status: 409 });
+
+      await syncToolroomReturns(session.id, access.user.name);
 
       for (let attempt = 0; attempt < 6; attempt += 1) {
         const { data: currentRow, error: readError } = await supabaseAdmin
@@ -602,15 +738,10 @@ export async function POST(request: NextRequest) {
         if (updateError) throw updateError;
         if (!updatedRow) continue;
 
-        const { data: taskRows, error: taskRowsError } = await supabaseAdmin
-          .from('przygotowanie_produkcji_tasks')
-          .select('*')
-          .eq('session_id', session.id)
-          .order('position_no');
-        if (taskRowsError) throw taskRowsError;
-        const currentTasks = (taskRows ?? [])
-          .filter((row) => !isProcessEngineersSettings(row as Record<string, unknown>))
-          .map((row) => fromDbTask(row as Record<string, unknown>));
+        const taskRows = await syncToolroomReturns(session.id, access.user.name);
+        const currentTasks = withToolroomReturnTasks((taskRows ?? [])
+          .filter((row) => !isModuleSettings(row as Record<string, unknown>))
+          .map((row) => fromDbTask(row as Record<string, unknown>)));
         const { error: sessionUpdateError } = await supabaseAdmin
           .from('przygotowanie_produkcji_sessions')
           .update({ updated_at: new Date().toISOString() })

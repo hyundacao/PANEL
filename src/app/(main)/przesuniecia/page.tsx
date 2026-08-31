@@ -2,9 +2,11 @@
 
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { RotateCcw } from 'lucide-react';
 import type { LocationOption, TransferKind } from '@/lib/api/types';
 import {
   addTransfer,
+  cancelTransfer,
   getCatalog,
   getLocations,
   getMaterialLocations,
@@ -19,6 +21,15 @@ import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useToastStore } from '@/components/ui/Toast';
 import { formatKg, parseQtyInput } from '@/lib/utils/format';
+import { useUiStore } from '@/lib/store/ui';
+import { isReadOnly } from '@/lib/auth/access';
+
+const transferQueryKeys = new Set([
+  'transfers', 'material-locations', 'material-totals', 'locations', 'location-detail',
+  'dashboard', 'dashboard-month-stats', 'monthly-delta', 'monthly-breakdown', 'top-catalog',
+  'totals-history', 'daily-history', 'reports', 'report-period', 'report-yearly',
+  'report-period-overall', 'report-yearly-overall', 'audit'
+]);
 
 type TransferForm = {
   kind: TransferKind;
@@ -56,6 +67,8 @@ export default function TransfersPage() {
   const today = getTodayKey();
   const toast = useToastStore((state) => state.push);
   const queryClient = useQueryClient();
+  const user = useUiStore((state) => state.user);
+  const readOnly = isReadOnly(user, 'PRZEMIALY');
   const [form, setForm] = useState<TransferForm>(initialForm);
   const [showMaterialSuggestions, setShowMaterialSuggestions] = useState(false);
   const [showFromSuggestions, setShowFromSuggestions] = useState(false);
@@ -107,11 +120,7 @@ export default function TransfersPage() {
   const mutation = useMutation({
     mutationFn: addTransfer,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['transfers'] });
-      queryClient.invalidateQueries({ queryKey: ['material-locations'] });
-      queryClient.invalidateQueries({ queryKey: ['material-totals'] });
-      queryClient.invalidateQueries({ queryKey: ['locations'] });
-      queryClient.invalidateQueries({ queryKey: ['location-detail'] });
+      queryClient.invalidateQueries({ predicate: (query) => transferQueryKeys.has(String(query.queryKey[0])) });
       setForm(initialForm);
       toast({ title: 'Zapisano przesunięcie.', tone: 'success' });
     },
@@ -248,6 +257,24 @@ export default function TransfersPage() {
     }));
   };
 
+  const { mutate: cancel, isPending: cancelling } = useMutation({
+    mutationFn: cancelTransfer,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ predicate: (query) => transferQueryKeys.has(String(query.queryKey[0])) });
+      toast({ title: 'Cofnięto przesunięcie. Stany i statystyki zostały skorygowane.', tone: 'success' });
+    },
+    onError: (error: Error) => {
+      const messages: Record<string, string> = {
+        INSUFFICIENT_STOCK: 'Nie można cofnąć ruchu: w magazynie odbiorczym brakuje tej ilości. Materiał mógł już zostać zużyty lub przesunięty dalej.',
+        TRANSFER_NOT_FOUND: 'Nie znaleziono przesunięcia. Odśwież historię.',
+        MISSING_LOCATION: 'Brakuje magazynu powiązanego z tym przesunięciem. Nie zmieniono stanów.',
+        FORBIDDEN: 'Nie masz uprawnień do cofania przesunięć.',
+        MIGRATION_REQUIRED_TRANSFER_CANCELLATION: 'Najpierw uruchom migrację migrate_regrind_transfer_cancellation.sql w bazie danych.'
+      };
+      toast({ title: 'Nie cofnięto przesunięcia.', description: messages[error.message] ?? 'Spróbuj ponownie lub odśwież historię.', tone: 'error' });
+    }
+  });
+
   const handleAdd = () => {
     const qtyValue = parseQtyInput(form.qty);
     if (!qtyValue || qtyValue <= 0) {
@@ -354,10 +381,32 @@ export default function TransfersPage() {
         </span>,
         fromLabel,
         toLabel,
-        noteParts || '-'
+        noteParts || '-',
+        transfer.cancelledAt ? (
+          <span key={`${transfer.id}-cancelled`} title={`Cofnięte: ${formatDateTime(transfer.cancelledAt)} (${transfer.cancelledBy || '-'})`}>
+            <Badge>Cofnięte</Badge>
+          </span>
+        ) : readOnly ? '-' : (
+          <Button
+            key={`${transfer.id}-cancel`}
+            variant="ghost"
+            className="h-11 w-11 rounded-lg p-0"
+            title="Cofnij przesunięcie"
+            aria-label={`Cofnij przesunięcie: ${material?.name ?? transfer.materialId}, ${formatKg(transfer.qty)}`}
+            disabled={cancelling || mutation.isPending}
+            onClick={() => {
+              const confirmed = window.confirm(
+                `Cofnąć przesunięcie?\n${material?.name ?? transfer.materialId}: ${formatKg(transfer.qty)}\n${fromLabel} -> ${toLabel}\n\nBieżące stany zostaną skorygowane, a ruch nie będzie liczony w statystykach przyjęć i wydań. W historii pozostanie oznaczony jako cofnięty.`
+              );
+              if (confirmed) cancel(transfer.id);
+            }}
+          >
+            <RotateCcw size={17} aria-hidden="true" />
+          </Button>
+        )
       ];
     });
-  }, [catalog, locations, transfers]);
+  }, [catalog, locations, transfers, readOnly, cancelling, cancel, mutation.isPending]);
 
   return (
     <div className="space-y-8">
@@ -580,7 +629,7 @@ export default function TransfersPage() {
           >
             Wyczyść
           </Button>
-          <Button onClick={handleAdd} disabled={mutation.isPending}>
+          <Button onClick={handleAdd} disabled={readOnly || mutation.isPending || cancelling}>
             Zapisz przesunięcie
           </Button>
         </div>
@@ -600,7 +649,7 @@ export default function TransfersPage() {
           />
         ) : (
           <DataTable
-            columns={['Data', 'Typ', 'Przemiał', 'Ilość', 'Skąd', 'Dokąd', 'Uwagi']}
+            columns={['Data', 'Typ', 'Przemiał', 'Ilość', 'Skąd', 'Dokąd', 'Uwagi', 'Cofnięcie']}
             rows={transferRows}
           />
         )}

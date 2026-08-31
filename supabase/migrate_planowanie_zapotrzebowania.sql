@@ -1,13 +1,13 @@
 begin;
 
 insert into public.warehouses (id, name, order_no, include_in_spis, include_in_stats, is_active) values
-  ('bakoma', 'Bakoma', 3, true, true, true),
-  ('lakiernia', 'Lakiernia', 4, true, true, true)
+  ('bakoma', 'Bakoma', 3, true, false, true),
+  ('lakiernia', 'Lakiernia', 4, true, false, true)
 on conflict (id) do update set
   name = excluded.name,
   order_no = excluded.order_no,
   include_in_spis = true,
-  include_in_stats = true,
+  include_in_stats = false,
   is_active = true;
 
 create table if not exists public.material_planning_state (

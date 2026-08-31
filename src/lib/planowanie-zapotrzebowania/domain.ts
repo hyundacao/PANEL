@@ -64,6 +64,17 @@ export const nextPlanVersionNumber = (
   planDate: string
 ) => Math.max(0, ...versions.filter((version) => version.planDate === planDate).map((version) => version.versionNo)) + 1;
 
+export const latestPlanVersion = <T extends { planDate: string; versionNo: number }>(
+  versions: readonly T[],
+  planDate: string
+): T | undefined => {
+  let latest: T | undefined;
+  for (const version of versions) {
+    if (version.planDate === planDate && (!latest || version.versionNo > latest.versionNo)) latest = version;
+  }
+  return latest;
+};
+
 export const diffPlanItems = (
   previous: ComparablePlanItem[],
   current: ComparablePlanItem[]
@@ -197,4 +208,21 @@ export const correctedQuantity = (
   if (mode === 'exact') return amount;
   if (mode === 'increase') return Math.max(0, current + amount);
   return Math.max(0, current - amount);
+};
+
+export const setRemainingQuantity = <T extends { totalQty: number; remainingQty: number }>(
+  item: T,
+  quantity: number
+): T => {
+  const remainingQty = correctedQuantity(item.remainingQty, 'exact', quantity);
+  const produced = Math.max(0, item.totalQty - (item.remainingQty ?? item.totalQty));
+  return { ...item, totalQty: produced + remainingQty, remainingQty };
+};
+
+export const coalesceQuantityCorrection = <T extends {
+  id: string; previousValue: number; newValue: number; difference: number;
+}>(corrections: T[], correction: T): T[] => {
+  const previousValue = corrections.find((entry) => entry.id === correction.id)?.previousValue ?? correction.previousValue;
+  const others = corrections.filter((entry) => entry.id !== correction.id);
+  return [{ ...correction, previousValue, difference: correction.newValue - previousValue }, ...others];
 };

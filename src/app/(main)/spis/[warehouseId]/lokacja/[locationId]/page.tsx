@@ -26,6 +26,7 @@ import { useUiStore } from '@/lib/store/ui';
 import { isReadOnly } from '@/lib/auth/access';
 import { useToastStore } from '@/components/ui/Toast';
 import { formatKg, parseQtyInput } from '@/lib/utils/format';
+import { getRegrindStockWrite } from '@/lib/utils/regrindStockInput';
 import { Check, ChevronRight, PackagePlus, Search, X } from 'lucide-react';
 
 type MaterialFormState = {
@@ -129,6 +130,10 @@ export default function LocationDetailPage() {
 
   const invalidateDashboard = () => {
     queryClient.invalidateQueries({ queryKey: ['dashboard', today] });
+    queryClient.invalidateQueries({ queryKey: ['dashboard-month-stats'] });
+    queryClient.invalidateQueries({ queryKey: ['reports'] });
+    queryClient.invalidateQueries({ queryKey: ['report-period-overall'] });
+    queryClient.invalidateQueries({ queryKey: ['report-yearly-overall'] });
     queryClient.invalidateQueries({ queryKey: ['monthly-delta', today] });
     queryClient.invalidateQueries({ queryKey: ['monthly-breakdown', today] });
     queryClient.invalidateQueries({ queryKey: ['material-totals'] });
@@ -147,6 +152,8 @@ export default function LocationDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['locations', warehouseId, today] });
       invalidateDashboard();
       if (variables.qty === 0) {
+        setMeasureDrafts((prev) => ({ ...prev, [variables.materialId]: { qty: '', comment: '' } }));
+        setEditingMeasurementId(null);
         toast({
           title: 'Wyzerowano pozycję',
           description: 'Ubytek został policzony w raporcie.',
@@ -340,19 +347,27 @@ export default function LocationDetailPage() {
     await mutation.mutateAsync({ locationId, materialId: item.materialId, qty: 0, comment: item.comment });
   };
 
-  const handleAddMeasure = async (item: { materialId: string }) => {
+  const handleAddMeasure = async (item: { materialId: string; todayQty: number | null }) => {
     const draft = getMeasureDraft(item.materialId);
-    const qty = parseQtyInput(draft.qty);
-    if (qty === null || qty <= 0) {
-      toast({ title: 'Nieprawidłowa ilość', description: 'Wpisz ilość większą od zera.', tone: 'error' });
+    const write = getRegrindStockWrite(draft.qty);
+    if (!write) {
+      toast({ title: 'Nieprawidłowa ilość', description: 'Wpisz poprawną ilość w kg: zero lub więcej.', tone: 'error' });
       return;
     }
-    await addMeasureMutation.mutateAsync({
+    const payload = {
       locationId,
       materialId: item.materialId,
-      qty,
+      qty: write.qty,
       comment: draft.comment
-    });
+    };
+    if (write.action === 'upsertEntry') {
+      if ((item.todayQty ?? 0) > 0 && !window.confirm(
+        `Ustawić dzisiejszy stan tej pozycji na 0 kg? Zastąpi to dotychczasowe dzisiejsze pomiary (${formatKg(item.todayQty ?? 0)}).`
+      )) return;
+      await mutation.mutateAsync(payload);
+      return;
+    }
+    await addMeasureMutation.mutateAsync(payload);
   };
 
   const catalogList = useMemo(() => catalog ?? [], [catalog]);
@@ -889,7 +904,7 @@ export default function LocationDetailPage() {
                       />
                       <Button
                         onClick={() => handleAddMeasure(item)}
-                        disabled={!getMeasureDraft(item.materialId).qty || addMeasureMutation.isPending}
+                        disabled={!getMeasureDraft(item.materialId).qty || addMeasureMutation.isPending || mutation.isPending}
                         className={`${glowClass} h-12 min-h-12 w-full rounded-lg px-3`}
                       >
                         Dopisz do sumy
@@ -1067,7 +1082,7 @@ export default function LocationDetailPage() {
                     />
                     <Button
                       onClick={() => handleAddMeasure(item)}
-                      disabled={!getMeasureDraft(item.materialId).qty || addMeasureMutation.isPending}
+                      disabled={!getMeasureDraft(item.materialId).qty || addMeasureMutation.isPending || mutation.isPending}
                       className={`${glowClass} h-12 min-h-12 rounded-lg px-3 text-sm`}
                     >
                       Dodaj
