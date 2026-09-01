@@ -12,7 +12,7 @@ const ts = require('typescript');
 const source = readFileSync(pageFile,'utf8');
 const ast = ts.createSourceFile('page.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const directQuantityEditing = source.includes('const updatePlanQuantity =');
-const names = ['uid','numberValue','normalize','splitProductFields','stationKey','applyStationMappings','clonePlanItems','documentStatusLabel','parseStoredState','parsePlanRows','planItemSignature',
+const names = ['uid','numberValue','normalize','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','splitProductFields','stationKey','applyStationMappings','clonePlanItems','cloneMaterials','documentStatusLabel','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
   'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','itemProductionQty','createOrRefreshPickingDocument','changePickingDocumentStatus','deriveReturnsForDate'];
 if (directQuantityEditing) names.push('updatePlanNorm');
 const definitions = new Map();
@@ -196,7 +196,7 @@ test('reopening repairs legacy duplicate labels in daily plans, versions, archiv
   const h=setup(); h.importSelectedSheet();
   const product=productLabels[1];
   const legacy={...h.ctx.state.plan[0],name:product.raw,index:product.raw,remainingQty:37,shiftNorm:123,technologyId:'tech-kept',workingMaterials:[{id:'mat-kept',usage:0.15}],manualOverride:true,notes:'Keep this note',sourceDetail:product.raw};
-  const state={...h.ctx.state,plan:[legacy],dailyPlans:{'2026-08-31':[legacy],'2026-08-30':[legacy]},planVersions:[{...h.ctx.state.planVersions[0],items:[legacy]}],archive:[{id:'archive-kept',status:'suspended',planItem:legacy}],technologies:[{id:'tech-kept',productName:product.raw,productIndex:product.raw,shiftNorm:123,materials:legacy.workingMaterials}]};
+  const state={...h.ctx.state,plan:[legacy],dailyPlans:{'2026-08-31':[legacy],'2026-08-30':[legacy]},planVersions:[{...h.ctx.state.planVersions[0],items:[legacy]}],archive:[{id:'archive-kept',status:'suspended',planItem:legacy}],technologies:[{id:'tech-kept',productName:product.raw,productIndex:product.raw,description:'Import: WĘGRY',shiftNorm:123,materials:legacy.workingMaterials}]};
   const reloaded=h.parseStoredState(JSON.parse(JSON.stringify(state)));
   for(const item of [reloaded.plan[0],reloaded.dailyPlans['2026-08-31'][0],reloaded.dailyPlans['2026-08-30'][0],reloaded.planVersions[0].items[0],reloaded.archive[0].planItem]) {
     assert.equal(item.name,product.name);
@@ -207,7 +207,37 @@ test('reopening repairs legacy duplicate labels in daily plans, versions, archiv
   assert.equal(reloaded.technologies[0].productName,product.name);
   assert.equal(reloaded.technologies[0].productIndex,product.index);
   assert.equal(reloaded.technologies[0].id,'tech-kept');
+  assert.equal(reloaded.technologies[0].description,'');
   assert.equal(state.plan[0].name,product.raw,'do not mutate the original state');
+});
+
+test('saving a working copy updates the existing base without creating an alternative',()=>{
+  const h=setup();
+  const technologies=[
+    {id:'base',productIndex:'A100',productName:'PART',variant:'base',alternativeNo:0,shiftNorm:100,materials:[{id:'old'}],archived:false},
+    {id:'selected',productIndex:'A100',productName:'PART',variant:'alternative',alternativeNo:1,shiftNorm:120,materials:[{id:'selected'}],archived:false},
+    {id:'other',productIndex:'B200',productName:'OTHER',variant:'base',alternativeNo:0,shiftNorm:90,materials:[],archived:false}
+  ];
+  const materials=[{id:'new-material',usage:0.25}];
+  const result=h.updateBaseTechnologyFromWorkingCopy(technologies,'selected',materials,250);
+  assert.equal(result.baseId,'base');
+  assert.equal(result.technologies.length,technologies.length);
+  assert.equal(result.technologies.find((technology)=>technology.id==='base').variant,'base');
+  assert.equal(result.technologies.find((technology)=>technology.id==='base').shiftNorm,250);
+  assert.equal(result.technologies.find((technology)=>technology.id==='base').materials[0].usage,0.25);
+  assert.equal(result.technologies.find((technology)=>technology.id==='selected').variant,'alternative');
+  assert.equal(technologies[0].shiftNorm,100,'do not mutate the original library');
+});
+
+test('an exact material name resolves its index using warehouse priority',()=>{
+  const h=setup();
+  const items=[
+    {id:'m51',name:'POKRYWA WYMIENNIKÓW CIEPŁA T27SCO',index:'M-51-OLD',warehouseCode:'M-51'},
+    {id:'m4',name:'POKRYWA WYMIENNIKÓW CIEPŁA T27SCO',index:'M-4-INDEX',warehouseCode:'M-4'},
+    {id:'m1',name:'POKRYWA WYMIENNIKÓW CIEPŁA T27SCO',index:'M-1-INDEX',warehouseCode:'M-1'}
+  ];
+  assert.equal(h.findExactCatalogItem(items,'name','pokrywa wymienników ciepła t27sco').index,'M-1-INDEX');
+  assert.equal(h.findExactCatalogItem(items,'name','pokrywa wymienników'),undefined);
 });
 
 test('actual import handler retains every row, source text and version snapshot',()=>{

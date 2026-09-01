@@ -68,6 +68,24 @@ test('header keeps date, range and workbook selectors without repeated statistic
   assert.doesNotMatch(html, />Nowa</);
 });
 
+test('main plan exposes a direct picking document action for a concrete zone', () => {
+  let created = 0;
+  const h = createHeaderFixture({ createPickingDocumentFromPlan: () => { created += 1; } });
+  const action = button(h, 'Utwórz dokument do wypisania');
+  assert.ok(action);
+  assert.equal(action.props.disabled, false);
+  action.props.onClick();
+  assert.equal(created, 1);
+
+  control(h, 'Strefa planu').props.onChange({ target: { value: 'all' } });
+  assert.equal(button(h, 'Utwórz dokument do wypisania').props.disabled, true);
+  assert.match(h.html(), /Wybierz konkretną strefę, aby przygotować jej dokument/);
+
+  h.ctx.editablePickingDocumentExists = true;
+  control(h, 'Strefa planu').props.onChange({ target: { value: 'bakoma' } });
+  assert.ok(button(h, 'Przelicz i pokaż dokument'));
+});
+
 test('today, tomorrow, saved dates and custom calendar select the matching daily plan', () => {
   const h = createHeaderFixture();
   const original = h.ctx.state.plan;

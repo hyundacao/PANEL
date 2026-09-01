@@ -85,6 +85,7 @@ export const createHeaderFixture = (overrides = {}) => {
     readOnly: false, showChanges: false, showDatePicker: false, customHorizon: false, showAllPlanAreas: false, view: 'plan', deriveReturnsForDate: () => [],
     saveInfo: { status: 'saved', pending: false, backupAvailable: true, error: '' },
     missingTechnologyCount: 2, unassignedCount: 0, fileInputRef: { current: null }, expandedPlan: '',
+    editablePickingDocumentExists: false, createPickingDocumentFromPlan: () => {},
     pending: null, sheetName: '', lastPlanWorkbook: null, planUploadModeRef: { current: 'plan' }, importSelectedSheet: () => {},
     renderPendingImport: () => null, renderCalculationDetails: () => null, technologiesFor: () => [],
     areaName: () => 'Bakoma', handleWorkbook: () => {}, selectTechnology: () => {}, addTechnology: () => {},

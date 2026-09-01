@@ -83,6 +83,7 @@ const REPORT_HISTORY_DAYS_SHORT = 4;
 const REPORT_HISTORY_DAYS_TWO_MONTHS = 60;
 const CATALOG_TABLE_INITIAL_LIMIT = 150;
 const CATALOG_TABLE_INCREMENT = 150;
+const PRIORITY_WAREHOUSE_CODES = ['M1', 'M4', 'M10', 'M11'] as const;
 const ERP_ORIGINALS_PROXY_NOT_CONFIGURED = 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED';
 const ERP_SNAPSHOT_MIGRATION_REQUIRED = 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS';
 const originalInventoryTabTileClassName =
@@ -289,9 +290,33 @@ const normalizeCatalogNameKey = (value: unknown) =>
 
 const tokenizeCatalogSearch = (value: unknown) =>
   normalizeCatalogNameKey(value)
-    .split(' ')
+    .split(/[^a-z0-9]+/)
     .map((token) => token.trim())
     .filter(Boolean);
+
+const normalizeCatalogCodeSearchKey = (value: unknown) =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+
+const getCatalogWarehousePriority = (...values: unknown[]) => {
+  let warehouseCode = '';
+  for (const value of values) {
+    const match = normalizeCatalogCodeSearchKey(value).match(/m\d+/);
+    if (match) {
+      warehouseCode = match[0].toUpperCase();
+      break;
+    }
+  }
+
+  const preferredIndex = PRIORITY_WAREHOUSE_CODES.indexOf(
+    warehouseCode as (typeof PRIORITY_WAREHOUSE_CODES)[number]
+  );
+  if (preferredIndex >= 0) return preferredIndex;
+  if (warehouseCode) return 100;
+  return 500;
+};
 
 const matchesCatalogSearch = (
   query: unknown,
@@ -318,6 +343,15 @@ const matchesCatalogSearch = (
     return true;
   }
 
+  const compactQuery = normalizeCatalogCodeSearchKey(query);
+  const compactCodes = [indexCode, warehouseCode].map(normalizeCatalogCodeSearchKey);
+  if (
+    compactQuery.length >= 2 &&
+    compactCodes.some((code) => code.includes(compactQuery))
+  ) {
+    return true;
+  }
+
   const haystackTokens = [
     ...tokenizeCatalogSearch(name),
     ...normalizedIndex.split(/[^a-z0-9]+/).filter(Boolean),
@@ -326,9 +360,16 @@ const matchesCatalogSearch = (
   const queryTokens = tokenizeCatalogSearch(query);
   if (queryTokens.length === 0) return false;
 
-  return queryTokens.every((queryToken) =>
-    haystackTokens.some((haystackToken) => haystackToken.includes(queryToken))
-  );
+  return queryTokens.every((queryToken) => {
+    if (haystackTokens.some((haystackToken) => haystackToken.includes(queryToken))) {
+      return true;
+    }
+    const compactToken = normalizeCatalogCodeSearchKey(queryToken);
+    return (
+      compactToken.length >= 2 &&
+      compactCodes.some((code) => code.includes(compactToken))
+    );
+  });
 };
 
 const parseSnapshotQty = (value: unknown) => {
@@ -1447,11 +1488,13 @@ export default function SpisRzeczywisty() {
     });
     return [...deduped.values()]
       .sort((a, b) => {
+        const warehousePriority =
+          getCatalogWarehousePriority(a.warehouseCode, a.indexCode) -
+          getCatalogWarehousePriority(b.warehouseCode, b.indexCode);
+        if (warehousePriority !== 0) return warehousePriority;
         const aExistsInSpis = existingByName.has(normalizeCatalogNameKey(a.name));
         const bExistsInSpis = existingByName.has(normalizeCatalogNameKey(b.name));
         if (aExistsInSpis !== bExistsInSpis) return aExistsInSpis ? -1 : 1;
-        if (a.isMag55 !== b.isMag55) return a.isMag55 ? 1 : -1;
-        if (Boolean(a.warehouseCode) !== Boolean(b.warehouseCode)) return a.warehouseCode ? -1 : 1;
         const nameCompare = collator.compare(a.name, b.name);
         if (nameCompare !== 0) return nameCompare;
         return collator.compare(a.warehouseCode ?? '', b.warehouseCode ?? '');
@@ -1461,9 +1504,17 @@ export default function SpisRzeczywisty() {
   const filteredCatalog = useMemo(() => {
     if (activeTab !== 'kartoteki') return [];
     if (!normalizeCatalogNameKey(deferredCatalogSearch)) return catalog;
-    return catalog.filter((item) =>
-      matchesCatalogSearch(deferredCatalogSearch, item.name, item.indexCode, item.warehouseCode)
-    );
+    return catalog
+      .filter((item) =>
+        matchesCatalogSearch(deferredCatalogSearch, item.name, item.indexCode, item.warehouseCode)
+      )
+      .sort((a, b) => {
+        const warehousePriority =
+          getCatalogWarehousePriority(a.warehouseCode, a.indexCode) -
+          getCatalogWarehousePriority(b.warehouseCode, b.indexCode);
+        if (warehousePriority !== 0) return warehousePriority;
+        return collator.compare(a.name, b.name);
+      });
   }, [activeTab, catalog, deferredCatalogSearch]);
   const visibleCatalogRows = useMemo(
     () => filteredCatalog.slice(0, catalogVisibleCount),
@@ -1992,6 +2043,19 @@ export default function SpisRzeczywisty() {
           option.warehouseCodes.join(' ')
         )
       )
+      .sort((a, b) => {
+        const priorityA = Math.min(
+          ...[...a.warehouseCodes, ...a.indexCodes].map((value) =>
+            getCatalogWarehousePriority(value)
+          )
+        );
+        const priorityB = Math.min(
+          ...[...b.warehouseCodes, ...b.indexCodes].map((value) =>
+            getCatalogWarehousePriority(value)
+          )
+        );
+        return priorityA - priorityB;
+      })
       .slice(0, 8);
   }, [reportOptions, reportQuery]);
 
@@ -2759,7 +2823,7 @@ export default function SpisRzeczywisty() {
                       applyNameToForm(event.target.value);
                       setShowNameSuggestions(true);
                     }}
-                    placeholder="np. BOREALIS HF700SA"
+                    placeholder="Nazwa lub indeks, np. panel 772"
                     className={form.name ? 'min-h-[46px] pr-10' : 'min-h-[46px]'}
                     onFocus={() => setShowNameSuggestions(true)}
                     onKeyDown={(event) => {
@@ -2803,7 +2867,14 @@ export default function SpisRzeczywisty() {
                             suggestion.isMag55 && 'bg-[rgba(244,114,182,0.10)] hover:bg-[rgba(244,114,182,0.16)]'
                           )}
                         >
-                          <span>{suggestion.name}</span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">{suggestion.name}</span>
+                            {suggestion.indexCode && (
+                              <span className="block truncate text-xs text-dim">
+                                {suggestion.indexCode}
+                              </span>
+                            )}
+                          </span>
                           {suggestion.warehouseCode && (
                             <span
                               className={cn(

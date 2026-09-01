@@ -2639,9 +2639,27 @@ const fetchOriginalCatalogFromErpProxy = async (): Promise<OriginalInventoryCata
         row.index_code,
         row.indeks,
         row.index,
-        row.symbol
+        row.symbol,
+        row.code,
+        row.kod,
+        row.materialCode,
+        row.material_code,
+        row.itemCode,
+        row.item_code,
+        row.sku
       );
-      const warehouseCode = extractOriginalInventoryWarehouseCode(indexCode);
+      const warehouseCode =
+        extractOriginalInventoryWarehouseCode(
+          firstNonEmptyText(
+            row.warehouseCode,
+            row.warehouse_code,
+            row.warehouse,
+            row.magazyn,
+            row.mag,
+            row.storageCode,
+            row.storage_code
+          )
+        ) ?? extractOriginalInventoryWarehouseCode(indexCode);
       const id = buildErpOriginalCatalogId(
         row.id ?? row.materialId ?? row.erpId ?? row.code ?? row.indexCode ?? indexCode,
         name,
