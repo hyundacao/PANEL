@@ -386,6 +386,8 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     !pathname.startsWith('/admin') &&
     Boolean(activeWarehouse && warehouseFromPath);
   const isReportsPath = pathname.startsWith('/raporty');
+  const usePlanningGraphiteBackground =
+    pathname.startsWith('/planowanie-zapotrzebowania') && searchParams.get('view') !== 'spis';
   const isActivePath = (href: string) => {
     if (href.startsWith('/planowanie-zapotrzebowania')) {
       const [, query = ''] = href.split('?');
@@ -472,7 +474,9 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
               ? 'px-2 py-2 md:px-2.5 md:py-2.5'
               : showMobileNav
                 ? 'px-2 py-3 md:px-6 md:py-6'
-                : 'px-4 py-4 md:px-6 md:py-6'
+                : 'px-4 py-4 md:px-6 md:py-6',
+            usePlanningGraphiteBackground &&
+              "isolate bg-[#1C1F24] before:pointer-events-none before:absolute before:inset-0 before:z-0 before:bg-[url('/material-planning-demand-bg.png')] before:bg-[length:100%_auto] before:bg-top before:bg-no-repeat before:opacity-[0.16] before:content-[''] [&>*]:relative [&>*]:z-[1]"
           )}
         >
           {isDashboardPath ? (
@@ -609,7 +613,9 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
               className={cn(
                 'min-h-full max-md:border-0 max-md:bg-transparent max-md:p-0 max-md:shadow-none max-md:backdrop-blur-0',
                 isReportsPath &&
-                  'border-0 bg-transparent p-0 shadow-none backdrop-blur-0 md:p-0'
+                  'border-0 bg-transparent p-0 shadow-none backdrop-blur-0 md:p-0',
+                usePlanningGraphiteBackground &&
+                  'rounded-none border-0 bg-transparent p-0 shadow-none backdrop-blur-0 md:p-0'
               )}
             >
               {children}

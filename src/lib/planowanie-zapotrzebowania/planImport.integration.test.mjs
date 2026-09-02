@@ -12,7 +12,7 @@ const ts = require('typescript');
 const source = readFileSync(pageFile,'utf8');
 const ast = ts.createSourceFile('page.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const directQuantityEditing = source.includes('const updatePlanQuantity =');
-const names = ['uid','numberValue','normalize','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','splitProductFields','stationKey','applyStationMappings','clonePlanItems','cloneMaterials','documentStatusLabel','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
+const names = ['uid','numberValue','normalize','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','splitProductFields','stationKey','applyStationMappings','normalizedMaterialUnit','isKilogramUnit','isGramUnit','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','documentStatusLabel','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
   'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','itemProductionQty','createOrRefreshPickingDocument','changePickingDocumentStatus','deriveReturnsForDate'];
 if (directQuantityEditing) names.push('updatePlanNorm');
 const definitions = new Map();
@@ -58,6 +58,24 @@ const setQuantity = (h,item,value) => {
   if(directQuantityEditing) h.updatePlanQuantity(item.id,value,'edit-'+item.id);
   else { h.ctx.quantityInputs[item.id]=String(value); h.applyQuantityCorrection(item,'exact'); }
 };
+
+test('technology mass factors are edited in grams without changing stored kilograms',()=>{
+  const h=setup();
+  const material={id:'mat',code:'MAT',name:'Material',category:'Tworzywo',usage:0.075,unit:'kg',logisticQty:1000};
+  assert.equal(h.technologyUsageInputUnit(material),'g');
+  assert.equal(h.technologyUsageForEditor(material),75);
+  assert.ok(Math.abs(h.technologyUsageFromEditor(material,138.2)-0.1382)<1e-12);
+
+  const storedInGrams={...material,usage:7.11,unit:'g'};
+  const converted=h.technologyMaterialWithUnit(storedInGrams,'kg');
+  assert.ok(Math.abs(converted.usage-0.00711)<1e-12);
+  assert.equal(h.technologyUsageForEditor(converted),7.11);
+
+  const counted={...material,usage:2,unit:'szt.'};
+  assert.equal(h.technologyUsageInputUnit(counted),'szt.');
+  assert.equal(h.technologyUsageForEditor(counted),2);
+  assert.equal(h.technologyUsageFromEditor(counted,3),3);
+});
 
 test('uploading a plan waits for card selection and imports only that card',async()=>{
   const h=setup();

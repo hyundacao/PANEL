@@ -2863,14 +2863,14 @@ export default function SpisRzeczywisty() {
                             setShowNameSuggestions(false);
                           }}
                           className={cn(
-                            'flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]',
+                            'flex w-full items-start justify-between gap-3 px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]',
                             suggestion.isMag55 && 'bg-[rgba(244,114,182,0.10)] hover:bg-[rgba(244,114,182,0.16)]'
                           )}
                         >
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate">{suggestion.name}</span>
+                            <span className="block whitespace-normal break-words leading-5">{suggestion.name}</span>
                             {suggestion.indexCode && (
-                              <span className="block truncate text-xs text-dim">
+                              <span className="block break-all text-xs text-dim">
                                 {suggestion.indexCode}
                               </span>
                             )}
@@ -2878,7 +2878,7 @@ export default function SpisRzeczywisty() {
                           {suggestion.warehouseCode && (
                             <span
                               className={cn(
-                                'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                                'shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold',
                                 suggestion.isMag55
                                   ? 'border-[rgba(244,114,182,0.45)] bg-[rgba(244,114,182,0.16)] text-[rgb(251,207,232)]'
                                   : 'border-border bg-surface2 text-dim'
