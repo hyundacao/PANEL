@@ -2868,9 +2868,9 @@ export default function SpisRzeczywisty() {
                           )}
                         >
                           <span className="min-w-0 flex-1">
-                            <span className="block whitespace-normal break-words leading-5">{suggestion.name}</span>
+                            <span className="block whitespace-normal break-words font-bold leading-5 text-title">{suggestion.name}</span>
                             {suggestion.indexCode && (
-                              <span className="block break-all text-xs text-dim">
+                              <span className="block break-all text-xs font-semibold text-dim">
                                 {suggestion.indexCode}
                               </span>
                             )}
