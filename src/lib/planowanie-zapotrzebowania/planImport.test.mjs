@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { knownRemainingQuantity, parsePlanQuantity, planningSections, quantityNeedsReview, readPlanningRows } from './planImport.ts';
+import { knownRemainingQuantity, parsePlanQuantity, planningSections, quantityNeedsReview, readPlanningRows, splitPlanningRowOutputs } from './planImport.ts';
 
 const header = ['Data / Lp.', '', 'ILOŚĆ:', 'ST.', 'NORMA', 'CZĘŚĆ DNIÓWKI', 'UWAGI:'];
 const detail = 'QUICK LIFT ADJUSTER SIDE LEFT, QUICK LIFT ADJUSTER SIDE RIGHT (A28963702, A28963701 )';
@@ -40,6 +40,83 @@ test('keeps all detail rows including missing, zero, invalid amounts and missing
   assert.equal(imported[0].sourceDetail,detail);
   assert.deepEqual(planningSections(imported).flatMap(section=>section.items),imported);
   assert.deepEqual(planningSections(imported).map(section=>section.title), ['Plan bieżący','AWARYJNIE','NARZĘDZIOWNIA','LAKIERNIA','PLANOWANE ZMIANY FORM']);
+});
+
+test('splits one mould run into independently calculated products in source order', () => {
+  const source = 'QUICKLIFT DORIS LEFT ASSEMBLY (D0159752_010), QUICKLIFT DORIS RIGHT ASSEMBLY (D0159752_010) (A18192709, A18192710)';
+  const [row] = readPlanningRows([header, ['1', source, '9 720, 9 720', 'WTR 34', 1485]]);
+  const outputs = splitPlanningRowOutputs(row);
+
+  assert.deepEqual(outputs.map((output) => ({
+    index: output.index,
+    name: output.name,
+    quantity: output.totalQty,
+    order: output.productionOutputOrder,
+    count: output.productionOutputCount
+  })), [
+    { index: 'A18192709', name: 'QUICKLIFT DORIS LEFT ASSEMBLY (D0159752_010)', quantity: 9720, order: 0, count: 2 },
+    { index: 'A18192710', name: 'QUICKLIFT DORIS RIGHT ASSEMBLY (D0159752_010)', quantity: 9720, order: 1, count: 2 }
+  ]);
+  assert.deepEqual(outputs.map((output) => output.sourceQuantity), ['9720', '9720']);
+  assert.ok(outputs.every((output) => output.productionSourceQuantity === '9 720, 9 720'));
+});
+
+test('keeps plus signs inside product names when commas separate mould outputs', () => {
+  const [row] = readPlanningRows([header, [
+    '1',
+    'PLV QUICK LIFT SLIDER LEFT + WHEEL DORIS 229, PLV QUICK LIFT SLIDER RIGHT + WHEEL DORIS 229 (A18208403, A18208404)',
+    '10 950, 10 950',
+    'WTR 18',
+    1300
+  ]]);
+  const outputs = splitPlanningRowOutputs(row);
+  assert.deepEqual(outputs.map((output) => output.index), ['A18208403', 'A18208404']);
+  assert.deepEqual(outputs.map((output) => output.name), [
+    'PLV QUICK LIFT SLIDER LEFT + WHEEL DORIS 229',
+    'PLV QUICK LIFT SLIDER RIGHT + WHEEL DORIS 229'
+  ]);
+  assert.deepEqual(outputs.map((output) => output.totalQty), [10950, 10950]);
+  const recovered = splitPlanningRowOutputs({ ...row, totalQty: 0, quantityStatus: 'unrecognized' });
+  assert.deepEqual(recovered.map((output) => output.index), ['A18208403', 'A18208404']);
+});
+
+test('adds exact quantity components separately for each labelled mould output', () => {
+  const source = 'L - 234 + 1 560                    P - 420 + 2 400';
+  const parsed = parsePlanQuantity(source);
+  assert.equal(parsed.quantityStatus, 'parsed');
+  assert.deepEqual(parsed.quantityParts, [
+    { label: 'L', quantity: 1794 },
+    { label: 'P', quantity: 2820 }
+  ]);
+  assert.equal(parsed.totalQty, 4614);
+});
+
+test('splits three simultaneous outputs and never sums them into one product', () => {
+  const [row] = readPlanningRows([header, [
+    '1',
+    'DETAL LEFT, DETAL CENTER, DETAL RIGHT (A100, A200, A300)',
+    '9 700, 9 700, 9 700',
+    'WTR 12',
+    1485
+  ]]);
+  const outputs = splitPlanningRowOutputs(row);
+  assert.deepEqual(outputs.map((output) => output.index), ['A100', 'A200', 'A300']);
+  assert.deepEqual(outputs.map((output) => output.totalQty), [9700, 9700, 9700]);
+  assert.ok(outputs.every((output) => output.norm === 1485));
+});
+
+test('stops calculation when names, indices and quantities do not align', () => {
+  const [row] = readPlanningRows([header, [
+    '1',
+    'DETAL LEFT, DETAL RIGHT (A100, A200)',
+    '9 700, 9 700, 9 700',
+    'WTR 12',
+    1485
+  ]]);
+  const [output] = splitPlanningRowOutputs(row);
+  assert.equal(output.totalQty, 0);
+  assert.equal(output.quantityStatus, 'unrecognized');
+  assert.equal(output.sourceQuantity, row.sourceQuantity);
 });
 
 test('preserves panel context, sheet row offsets and does not move later standard sections', () => {

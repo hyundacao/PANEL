@@ -35,7 +35,7 @@ import SpisRzeczywisty from '@/components/planowanie-zapotrzebowania/SpisRzeczyw
 import { PlanningSaveNotice, PlanningSaveStatus } from '@/components/planowanie-zapotrzebowania/PlanningSaveStatus';
 import { usePlanningAutosave } from '@/lib/planowanie-zapotrzebowania/usePlanningAutosave';
 import { PlanQuantity, PlanQuantityWarnings } from '@/components/planowanie-zapotrzebowania/PlanQuantity';
-import { knownRemainingQuantity, planningSections, quantityNeedsReview, readPlanningRows, type PlanQuantityStatus, type PlanSourceFields } from '@/lib/planowanie-zapotrzebowania/planImport';
+import { knownRemainingQuantity, planningSections, quantityNeedsReview, readPlanningRows, splitPlanningRowOutputs, type PlanQuantityStatus, type PlanSourceFields } from '@/lib/planowanie-zapotrzebowania/planImport';
 import { isReadOnly } from '@/lib/auth/access';
 import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
@@ -122,6 +122,7 @@ type PlanItem = PlanSourceFields & {
   scopeMode?: ItemScopeMode;
   scopeShifts?: number;
   scopeQuantity?: number;
+  productionGroupId?: string;
 };
 
 
@@ -427,7 +428,7 @@ const applyDefaultTechnologyAssignments = (plan: PlanItem[], technologies: Techn
   return {
     ...item,
     technologyId: technology.id,
-    shiftNorm: technology.shiftNorm || item.shiftNorm,
+    shiftNorm: item.productionGroupId && item.shiftNorm > 0 ? item.shiftNorm : technology.shiftNorm || item.shiftNorm,
     workingMaterials: cloneMaterials(technology.materials),
     manualOverride: false
   };
@@ -587,6 +588,19 @@ const emptyState = (): AppState => ({
   planName: '', planSheet: '', planImportedAt: '', inventorySourceDate: '', inventorySyncedAt: '', technologies: [], plan: [], dailyPlans: {}, planVersions: [], quantityCorrections: [], documents: [], returnStatuses: {}, inventory: [], pickingDone: {}, archive: []
 });
 
+const emptyTechnologyDraft = (): Technology => ({
+  id: '',
+  productIndex: '',
+  productName: '',
+  variant: 'base',
+  alternativeNo: 1,
+  description: '',
+  notes: '',
+  shiftNorm: 0,
+  materials: [],
+  archived: false
+});
+
 const cleanImportedTechnologyDescription = (value: unknown) => {
   const description = String(value ?? '').trim();
   return /^Import\s*:/i.test(description) ? '' : description;
@@ -598,6 +612,14 @@ const parseStoredState = (value: unknown): AppState | null => {
   if (!Array.isArray(record.plan) || !Array.isArray(record.technologies)) return null;
   const stationMappings = Array.isArray(record.stationMappings) ? record.stationMappings : [];
   const storedAreas = Array.isArray(record.areas) ? record.areas : [];
+  const protectedPlanItemIds = new Set(
+    (Array.isArray(record.documents) ? record.documents : [])
+      .filter((document) => document.status === 'handed' || document.status === 'issued')
+      .flatMap((document) => Array.isArray(document.rows) ? document.rows : [])
+      .flatMap((row) => Array.isArray(row.sources) ? row.sources : [])
+      .map((source) => source.planItemId)
+      .filter(Boolean)
+  );
   const cleanPlanItem = (item: PlanItem): PlanItem => {
     const product = splitProductFields(item.name, item.index);
     return {
@@ -611,7 +633,32 @@ const parseStoredState = (value: unknown): AppState | null => {
       scopeQuantity: Math.max(0, numberValue(item.scopeQuantity))
     };
   };
-  const plan = applyStationMappings(record.plan.map(cleanPlanItem), stationMappings);
+  const cleanPlanItems = (items: PlanItem[]) => applyStationMappings(items.flatMap((item) => {
+    if (protectedPlanItemIds.has(item.id)) return [cleanPlanItem(item)];
+    const outputs = splitPlanningRowOutputs({
+      ...item,
+      norm: item.shiftNorm,
+      planGroup: item.planGroup ?? 'standard',
+      plannedDate: item.plannedDate ?? ''
+    });
+    if (outputs.length < 2) return [cleanPlanItem(item)];
+    const remainingRatio = item.totalQty > 0
+      ? Math.min(1, Math.max(0, item.remainingQty / item.totalQty))
+      : 1;
+    const productionGroupId = item.productionGroupId || `production-${item.runId || item.id}`;
+    return outputs.map((output, position) => cleanPlanItem({
+      ...item,
+      ...output,
+      id: position === 0 ? item.id : `${item.id}-output-${position + 1}`,
+      runId: position === 0 ? item.runId : `${item.runId || item.id}-output-${position + 1}`,
+      productionGroupId,
+      remainingQty: output.totalQty * remainingRatio,
+      technologyId: '',
+      workingMaterials: null,
+      manualOverride: false
+    }));
+  }), stationMappings);
+  const plan = cleanPlanItems(record.plan);
   const technologies = record.technologies.map((technology) => {
     const product = splitProductFields(technology.productName, technology.productIndex);
     const normalizedTechnology = {
@@ -634,14 +681,14 @@ const parseStoredState = (value: unknown): AppState | null => {
   const dailyPlans: Record<string, PlanItem[]> = record.dailyPlans && typeof record.dailyPlans === 'object'
     ? Object.fromEntries(Object.entries(record.dailyPlans).map(([date, items]) => [
       date,
-      Array.isArray(items) ? applyStationMappings(items.map(cleanPlanItem), stationMappings) : []
+      Array.isArray(items) ? cleanPlanItems(items) : []
     ]))
     : {};
   if (!Object.keys(dailyPlans).length && plan.length) dailyPlans[selectedPlanDate] = plan;
   const storedVersions = Array.isArray(record.planVersions) ? record.planVersions : [];
   const planVersions: PlanVersion[] = storedVersions.length ? storedVersions.map((planVersion) => ({
     ...planVersion,
-    items: Array.isArray(planVersion.items) ? planVersion.items.map(cleanPlanItem) : [],
+    items: Array.isArray(planVersion.items) ? cleanPlanItems(planVersion.items) : [],
     differences: Array.isArray(planVersion.differences) ? planVersion.differences : []
   })) : (plan.length ? [{
     id: uid('version'),
@@ -697,6 +744,9 @@ const technologyMatchesProduct = (technology: Technology, productIndex: string, 
   );
 };
 
+const selectedTechnologyForEditor = (technologies: Technology[], editingTechnologyId: string) =>
+  technologies.find((technology) => technology.id === editingTechnologyId) ?? null;
+
 const updateBaseTechnologyFromWorkingCopy = (
   technologies: Technology[],
   selectedTechnologyId: string,
@@ -725,15 +775,29 @@ const planItemSignature = (item: Pick<PlanItem, 'index' | 'station' | 'planGroup
   `${item.planGroup ?? 'standard'}|${normalize(item.plannedDate)}|${normalize(item.index)}|${normalize(item.station)}`;
 
 const parsePlanRows = (rows: unknown[][], mappings: StationMapping[], rowOffset = 0): PlanItem[] =>
-  readPlanningRows(rows, rowOffset).map((row, position) => {
-    const product = splitProductFields(row.name, row.index);
+  readPlanningRows(rows, rowOffset).flatMap((row, position) => {
+    const outputs = splitPlanningRowOutputs(row);
+    const productionGroupId = outputs.length > 1 ? uid('production') : '';
     const mapping = mappings.find((item) => stationKey(item.station) === stationKey(row.station));
-    return {
-      ...row, name: product.name, index: product.index,
-      id: `plan-${Date.now().toString(36)}-${position + 1}`, runId: uid('run'), areaId: mapping?.areaId ?? '',
-      remainingQty: row.totalQty, shiftNorm: numberValue(row.norm), included: row.planGroup !== 'planned',
-      technologyId: '', workingMaterials: null, manualOverride: false, continuationCandidateId: ''
-    };
+    return outputs.map((output, outputPosition) => {
+      const product = splitProductFields(output.name, output.index);
+      return {
+        ...output,
+        name: product.name,
+        index: product.index,
+        id: `plan-${Date.now().toString(36)}-${position + 1}-${outputPosition + 1}`,
+        runId: uid('run'),
+        areaId: mapping?.areaId ?? '',
+        remainingQty: output.totalQty,
+        shiftNorm: numberValue(output.norm),
+        included: output.planGroup !== 'planned',
+        technologyId: '',
+        workingMaterials: null,
+        manualOverride: false,
+        continuationCandidateId: '',
+        productionGroupId: productionGroupId || undefined
+      };
+    });
   });
 
 const parseInventoryRows = (rows: unknown[][], areas: Area[]): InventoryItem[] => {
@@ -882,11 +946,13 @@ const ProductCatalogField = ({
           <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-40 max-h-72 overflow-y-auto rounded-xl border border-borderStrong bg-[rgba(13,13,16,0.98)] p-1.5 normal-case tracking-normal shadow-2xl">
             {suggestions.map((item) => (
               <button
-                key={item.id}
+                key={`${item.id}|${item.index}|${item.name}`}
                 type="button"
                 className="block w-full rounded-lg px-3 py-2.5 text-left transition hover:bg-brandSoft focus:bg-brandSoft focus:outline-none"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => selectItem(item)}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  selectItem(item);
+                }}
               >
                 <span className={cn('block text-sm font-bold', mode === 'name' ? 'catalog-label' : 'text-title')}>{mode === 'name' ? item.name : item.index}</span>
                 <span className={cn('mt-0.5 block text-xs font-medium', mode === 'index' ? 'catalog-label' : 'text-muted')}>
@@ -1214,6 +1280,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const [expandedDocument, setExpandedDocument] = useState('');
   const [expandedMaterial, setExpandedMaterial] = useState('');
   const [editingTechnologyId, setEditingTechnologyId] = useState('');
+  const [technologyDraft, setTechnologyDraft] = useState<Technology>(emptyTechnologyDraft);
   const [productCatalog, setProductCatalog] = useState<ProductCatalogItem[]>([]);
   const [productCatalogLoading, setProductCatalogLoading] = useState(false);
   const productCatalogRequestedRef = useRef(false);
@@ -1345,7 +1412,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       plan: current.plan.map((item) => {
         if (item.id !== itemId) return item;
         const technology = current.technologies.find((entry) => entry.id === technologyId);
-        return { ...item, technologyId, shiftNorm: technology?.shiftNorm || item.shiftNorm, workingMaterials: technology ? cloneMaterials(technology.materials) : null, manualOverride: false };
+        return { ...item, technologyId, shiftNorm: item.productionGroupId && item.shiftNorm > 0 ? item.shiftNorm : technology?.shiftNorm || item.shiftNorm, workingMaterials: technology ? cloneMaterials(technology.materials) : null, manualOverride: false };
       })
     }));
   };
@@ -1504,6 +1571,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     }
     const imported = parsePlanRows(rows, state.stationMappings, XLSX.utils.decode_range(sheet['!ref'] || 'A1').s.r);
     if (!imported.length) return flash('Nie znaleziono rozpoznawalnych pozycji planu.');
+    const importedProductionCount = new Set(imported.map((item) => item.productionGroupId || item.id)).size;
     let importedVersionNo = 1;
     let differenceCount = 0;
     updateState((current) => {
@@ -1604,7 +1672,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     setLastPlanWorkbook(pending);
     setPending(null);
     setShowChanges(differenceCount > 0);
-    flash(`Zaimportowano wersję ${importedVersionNo}: ${imported.length} pozycji, ${differenceCount} zmian. Wszystkie wiersze z detalami zachowano. Ilości z pliku do sprawdzenia: ${imported.filter(quantityNeedsReview).length}.`);
+    flash(`Zaimportowano wersję ${importedVersionNo}: ${importedProductionCount} produkcji, ${imported.length} detali, ${differenceCount} zmian. Ilości z pliku do sprawdzenia: ${imported.filter(quantityNeedsReview).length}.`);
   };
 
   const selectPlanDate = (planDate: string) => {
@@ -1659,10 +1727,14 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     if (!Number.isFinite(shiftNorm) || shiftNorm < 0) return;
     updateState((current) => {
       const item = current.plan.find((row) => row.id === itemId);
-      if (!item || item.shiftNorm === shiftNorm) return current;
+      if (!item) return current;
+      const belongsToProduction = (row: PlanItem) => item.productionGroupId
+        ? row.productionGroupId === item.productionGroupId
+        : row.id === itemId;
+      if (current.plan.filter(belongsToProduction).every((row) => row.shiftNorm === shiftNorm)) return current;
       return {
         ...current,
-        plan: current.plan.map((row) => row.id === itemId ? { ...row, shiftNorm } : row),
+        plan: current.plan.map((row) => belongsToProduction(row) ? { ...row, shiftNorm } : row),
         documents: current.documents.map((document) => document.planDate === current.selectedPlanDate && document.status === 'draft'
           ? { ...document, status: 'outdated' as const }
           : document)
@@ -1740,6 +1812,12 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     openView('technologie');
   };
 
+  const startTechnologyDraft = () => {
+    setEditingTechnologyId('');
+    setTechnologyDraft(emptyTechnologyDraft());
+    setTechnologyPanel('editor');
+  };
+
   const editTechnology = (technologyId: string, patch: Partial<Technology>) => {
     updateState((current) => ({ ...current, technologies: current.technologies.map((technology) => technology.id === technologyId ? { ...technology, ...patch } : technology) }));
   };
@@ -1762,7 +1840,6 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     if (!technology) return;
     const label = technology.productIndex || technology.productName || 'tę technologię';
     if (!window.confirm(`Usunąć trwale technologię „${label}”?`)) return;
-    const nextTechnology = state.technologies.find((item) => item.id !== technologyId && !item.archived);
     updateState((current) => ({
       ...current,
       technologies: current.technologies.filter((item) => item.id !== technologyId),
@@ -1770,7 +1847,8 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         ? { ...item, technologyId: '', workingMaterials: null, manualOverride: false }
         : item)
     }));
-    setEditingTechnologyId(nextTechnology?.id ?? '');
+    setEditingTechnologyId('');
+    setTechnologyDraft(emptyTechnologyDraft());
     flash('Technologia została usunięta. Przypisania w bieżącym planie wyczyszczono.');
   };
 
@@ -1808,6 +1886,68 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       return;
     }
     editTechnology(technologyId, mode === 'name' ? { productName: value } : { productIndex: value });
+  };
+
+  const selectProductForTechnologyDraft = (item: ProductCatalogItem) => {
+    const existing = state.technologies
+      .filter((technology) => technologyMatchesProduct(technology, item.index, item.name))
+      .sort((left, right) => Number(left.archived) - Number(right.archived)
+        || Number(left.variant !== 'base') - Number(right.variant !== 'base')
+        || left.alternativeNo - right.alternativeNo)[0];
+    if (existing) {
+      setEditingTechnologyId(existing.id);
+      return;
+    }
+    setTechnologyDraft((current) => ({
+      ...current,
+      productIndex: item.index,
+      productName: item.name,
+      shiftNorm: current.shiftNorm || planShiftNormForProduct(item.index, item.name)
+    }));
+  };
+
+  const editTechnologyDraftProductField = (mode: 'index' | 'name', value: string) => {
+    const normalizedValue = normalize(value);
+    const exactMatches = normalizedValue
+      ? productCatalog.filter((item) => normalize(mode === 'name' ? item.name : item.index) === normalizedValue)
+      : [];
+    if (exactMatches.length === 1) {
+      selectProductForTechnologyDraft(exactMatches[0]);
+      return;
+    }
+    setTechnologyDraft((current) => ({
+      ...current,
+      ...(mode === 'name' ? { productName: value } : { productIndex: value })
+    }));
+  };
+
+  const saveTechnologyDraft = () => {
+    const productIndex = technologyDraft.productIndex.trim();
+    const productName = technologyDraft.productName.trim();
+    if (!productIndex || !productName) {
+      flash('Wybierz indeks i nazwę produktu przed zapisaniem technologii.');
+      return;
+    }
+    const existing = state.technologies.find((technology) =>
+      technologyMatchesProduct(technology, productIndex, productName)
+    );
+    if (existing) {
+      setEditingTechnologyId(existing.id);
+      flash('Ta technologia już istnieje. Wczytano ją do edycji.');
+      return;
+    }
+    const technology: Technology = {
+      ...technologyDraft,
+      id: uid('tech'),
+      productIndex,
+      productName,
+      variant: 'base',
+      alternativeNo: 1,
+      archived: false
+    };
+    updateState((current) => ({ ...current, technologies: [...current.technologies, technology] }));
+    setEditingTechnologyId(technology.id);
+    flash('Technologia została dodana do biblioteki.');
   };
 
   const updateWorkingMaterial = (itemId: string, materialId: string, patch: Partial<TechnologyMaterial>) => {
@@ -1904,49 +2044,68 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
 
   const renderPlanTable = (items: PlanItem[], title: string, subtitle: string, tone: PlanGroup) => {
     if (!items.length) return null;
+    const productionGroups: Record<string, PlanItem[]> = {};
+    items.forEach((item) => {
+      if (!item.productionGroupId) return;
+      productionGroups[item.productionGroupId] = [...(productionGroups[item.productionGroupId] ?? []), item];
+    });
+    const planGridColumns = 'grid-cols-[56px_minmax(260px,1.6fr)_112px_96px_184px_80px_minmax(280px,1.35fr)_56px]';
     return <section className={cn('overflow-hidden border-y border-border', tone === 'emergency' && 'border-[rgba(239,68,68,0.42)]', tone === 'planned' && 'border-[rgba(183,122,255,0.45)]')}>
       <div className={cn('flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3', tone === 'planned' && 'border-[rgba(183,122,255,0.25)]')}>
         <div>
           <p className={cn('font-bold text-title', tone === 'emergency' && 'text-red-300', tone === 'planned' && 'text-[#debaff]')}>{title}</p>
           <p className="mt-0.5 text-xs text-muted">{subtitle}</p>
         </div>
-        <Badge tone={tone === 'emergency' ? 'danger' : tone === 'planned' ? 'info' : 'default'}>{items.length}</Badge>
+        <Badge tone={tone === 'emergency' ? 'danger' : tone === 'planned' ? 'info' : 'default'}>{items.length} detali</Badge>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1020px] table-fixed text-sm">
-          <thead className="sticky top-0 z-10 bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim">
-            <tr>
-              <th className="w-14 p-3">Uwzgl.</th><th className="w-[260px] p-3">Indeks / nazwa</th><th className="w-28 p-3">Stanowisko</th>
-              <th className="w-20 p-3">Strefa</th><th className="w-48 p-3 text-right">Ilość do zrobienia</th>
-              <th className="w-16 p-3 text-right">Norma</th><th className="w-[320px] p-3">Technologia</th><th className="w-14 p-3"><span className="sr-only">Szczegóły</span></th>
-            </tr>
-          </thead>
-          <tbody>{items.map((item) => {
+        <div className="min-w-[1124px] pb-2 text-sm">
+          <div className={cn('sticky top-0 z-10 grid items-center border-b border-border bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim', planGridColumns)}>
+            <div className="p-3">Uwzgl.</div><div className="p-3">Indeks / nazwa</div><div className="p-3">Stanowisko</div>
+            <div className="p-3">Strefa</div><div className="p-3 text-right">Ilość do zrobienia</div>
+            <div className="p-3 text-right">Norma</div><div className="p-3">Technologia</div><div className="p-3"><span className="sr-only">Szczegóły</span></div>
+          </div>
+          <div>{items.map((item) => {
             const variants = technologiesFor(item);
             const changes = currentPlanChanges.filter((difference) => difference.itemId === item.id);
             const quantityChange = changes.find((difference) => difference.kind === 'quantity_increased' || difference.kind === 'quantity_decreased');
             const corrected = state.quantityCorrections.some((correction) => correction.planDate === state.selectedPlanDate && correction.itemId === item.id && !correction.revertedAt);
             const expanded = expandedPlan === item.id;
+            const productionItems = item.productionGroupId ? productionGroups[item.productionGroupId] ?? [item] : [item];
+            const firstProductionOutput = !item.productionGroupId || productionItems[0]?.id === item.id;
+            const productionIncluded = productionItems.every((entry) => entry.included);
+            const readyTechnologies = productionItems.filter((entry) => entry.technologyId).length;
             return <Fragment key={item.id}>
-              <tr className={cn('border-t border-border align-top transition', !item.included && 'bg-[rgba(255,255,255,0.018)] text-dim', tone === 'planned' && 'border-[rgba(183,122,255,0.2)]')}>
-                <td className="p-3"><button type="button" title={item.included ? 'Wyłącz z obliczeń' : 'Uwzględnij w obliczeniach'} aria-pressed={item.included} disabled={readOnly} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, included: !row.included } : row) }))} className={cn('flex h-11 w-11 items-center justify-center rounded-lg border disabled:cursor-not-allowed', item.included ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_18%,transparent)] text-success' : 'border-border text-dim')}>{item.included ? <Check className="h-4 w-4" /> : null}</button></td>
-                <td className="p-3">
+              {item.productionGroupId && firstProductionOutput ? <div className="mx-2 mb-2 mt-3 flex min-h-14 items-center gap-3 border-y border-r border-borderStrong border-l-4 border-l-brand bg-[rgba(255,255,255,0.045)] px-3 py-2.5">
+                <button type="button" title={productionIncluded ? 'Wyłącz całą wspólną produkcję z obliczeń' : 'Uwzględnij całą wspólną produkcję w obliczeniach'} aria-pressed={productionIncluded} disabled={readOnly} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.productionGroupId === item.productionGroupId ? { ...row, included: !productionIncluded } : row) }))} className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border disabled:cursor-not-allowed', productionIncluded ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_18%,transparent)] text-success' : 'border-border text-dim')}>{productionIncluded ? <Check className="h-4 w-4" /> : null}</button>
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5"><Badge tone="info">Wspólna forma</Badge><span className="font-bold text-title">{productionItems.length} {productionItems.length < 5 ? 'detale' : 'detali'}</span><span className="h-4 w-px bg-[rgba(255,255,255,0.16)]" aria-hidden="true" /><span className="text-xs font-semibold text-muted">{item.station || 'Brak stanowiska'} · {item.areaId ? areaName(item.areaId) : 'Brak strefy'} · {fmt(item.shiftNorm)} szt. każdego detalu / zmianę</span></div>
+                <Badge tone={readyTechnologies === productionItems.length ? 'success' : 'warning'}>Technologie {readyTechnologies}/{productionItems.length}</Badge>
+              </div> : null}
+              <div data-plan-item={item.id} data-expanded={expanded ? 'true' : 'false'} className={cn('relative mx-2 mb-2 overflow-hidden rounded-lg border transition', expanded ? 'mb-4 border-[rgba(255,122,26,0.58)] shadow-[0_16px_34px_-30px_rgba(255,106,0,0.9)]' : 'border-border', tone === 'emergency' && !expanded && 'border-[rgba(239,68,68,0.35)]', tone === 'planned' && !expanded && 'border-[rgba(183,122,255,0.28)]')}>
+                {expanded ? <span className="absolute inset-y-0 left-0 z-10 w-1 bg-brand" aria-hidden="true" /> : null}
+                <div className={cn('grid items-start', planGridColumns, expanded ? 'bg-[rgba(255,255,255,0.055)]' : 'bg-[rgba(7,8,11,0.5)]', !item.included && 'text-dim')}>
+                <div className="p-3">{item.productionGroupId ? <span title={`Detal ${(item.productionOutputOrder ?? 0) + 1} z ${item.productionOutputCount}`} className={cn('flex h-9 w-9 items-center justify-center rounded-lg border text-xs font-black', expanded ? 'border-brand bg-brandSoft text-brand' : 'border-border text-muted')}>{(item.productionOutputOrder ?? 0) + 1}</span> : <button type="button" title={item.included ? 'Wyłącz z obliczeń' : 'Uwzględnij w obliczeniach'} aria-pressed={item.included} disabled={readOnly} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, included: !row.included } : row) }))} className={cn('flex h-11 w-11 items-center justify-center rounded-lg border disabled:cursor-not-allowed', item.included ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_18%,transparent)] text-success' : 'border-border text-dim')}>{item.included ? <Check className="h-4 w-4" /> : null}</button>}</div>
+                <div className="p-3">
                   <div className="flex flex-wrap items-center gap-1.5"><p className="break-words font-normal text-title">{item.index}</p>{tone === 'emergency' ? <Badge tone="danger">Awaryjna</Badge> : null}{tone === 'planned' ? <Badge tone="info">Przyszła</Badge> : null}{corrected ? <Badge tone="warning">Zmieniona ręcznie</Badge> : null}{changes.map((change) => <Badge key={change.id} tone={change.kind === 'new' ? 'success' : change.kind === 'quantity_decreased' ? 'warning' : 'info'}>{differenceLabel[change.kind]}</Badge>)}</div>
                   {normalize(item.name) !== normalize(item.index) ? <p className="catalog-label mt-1 break-words font-bold">{item.name}</p> : null}
                   {item.notes ? <p className="mt-1 whitespace-pre-line break-words text-xs text-muted">{item.notes}</p> : null}
                   {item.plannedDate ? <p className="mt-1 text-xs text-[#debaff]">Termin: {item.plannedDate}</p> : null}
-                </td>
-                <td className="p-3 font-semibold text-title">{item.station || 'Nie podano'}</td>
-                <td className="p-3">{item.areaId ? <Badge tone="info">{areaName(item.areaId)}</Badge> : <Badge tone="warning">Brak przypisu</Badge>}</td>
-                <td className="p-3 text-right"><PlanQuantity item={item} />{quantityChange && !quantityNeedsReview(item) ? <p className={cn('mt-1 text-xs font-bold', quantityChange.difference > 0 ? 'text-success' : 'text-warning')}>{quantityChange.difference > 0 ? '+' : ''}{fmt(quantityChange.difference)}</p> : null}</td>
-                <td className="p-3 text-right">{fmt(item.shiftNorm)}</td>
-                <td className="p-3">{variants.length ? <SelectField value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}><option value="">Wybierz technologię</option>{variants.map((technology) => <option key={technology.id} value={technology.id}>{technologySelectLabel(technology)}</option>)}</SelectField> : <Button variant="outline" className="min-h-11" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj</Button>}{!item.technologyId ? <p className="mt-1 text-xs font-bold text-danger">Brak technologii</p> : item.manualOverride ? <p className="mt-1 text-xs font-bold text-warning">Technologia robocza</p> : <p className="mt-1 text-xs text-success">Gotowa</p>}</td>
-                <td className="p-3"><button type="button" title={expanded ? 'Zwiń pozycję' : 'Rozwiń pozycję'} aria-expanded={expanded} className="flex h-11 w-11 items-center justify-center rounded-lg border border-border text-muted hover:border-brand hover:text-title" onClick={() => setExpandedPlan(expanded ? '' : item.id)}>{expanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}</button></td>
-              </tr>
-              {expanded ? <tr className="border-t border-border"><td colSpan={8} className="p-0">{renderCalculationDetails(item)}</td></tr> : null}
+                </div>
+                <div className="p-3 font-semibold text-title">{item.station || 'Nie podano'}</div>
+                <div className="p-3">{item.areaId ? <Badge tone="info">{areaName(item.areaId)}</Badge> : <Badge tone="warning">Brak przypisu</Badge>}</div>
+                <div className="p-3 text-right"><PlanQuantity item={item} />{quantityChange && !quantityNeedsReview(item) ? <p className={cn('mt-1 text-xs font-bold', quantityChange.difference > 0 ? 'text-success' : 'text-warning')}>{quantityChange.difference > 0 ? '+' : ''}{fmt(quantityChange.difference)}</p> : null}</div>
+                <div className="p-3 text-right">{fmt(item.shiftNorm)}</div>
+                <div className="p-3">{variants.length ? <SelectField value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}><option value="">Wybierz technologię</option>{variants.map((technology) => <option key={technology.id} value={technology.id}>{technologySelectLabel(technology)}</option>)}</SelectField> : <Button variant="outline" className="min-h-11" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj</Button>}{!item.technologyId ? <p className="mt-1 text-xs font-bold text-danger">Brak technologii</p> : item.manualOverride ? <p className="mt-1 text-xs font-bold text-warning">Technologia robocza</p> : <p className="mt-1 text-xs text-success">Gotowa</p>}</div>
+                <div className="p-3"><button type="button" title={expanded ? 'Zwiń pozycję' : 'Rozwiń pozycję'} aria-expanded={expanded} className={cn('flex h-11 w-11 items-center justify-center rounded-lg border text-muted hover:border-brand hover:text-title', expanded ? 'border-brand bg-brandSoft text-title' : 'border-border')} onClick={() => setExpandedPlan(expanded ? '' : item.id)}>{expanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}</button></div>
+                </div>
+              {expanded ? <>
+                <div data-plan-details={item.id} className="border-t border-borderStrong bg-[rgba(23,25,36,0.72)]">{renderCalculationDetails(item)}</div>
+                <div data-plan-separator={item.id} aria-hidden="true" className="h-2 border-t border-[rgba(255,122,26,0.22)] bg-[rgba(5,6,9,0.78)]" />
+              </> : null}
+              </div>
             </Fragment>;
-          })}</tbody>
-        </table>
+          })}</div>
+        </div>
       </div>
     </section>;
   };
@@ -2077,31 +2236,132 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     </div> : <EmptyState title={`Brak planu na ${formatPlanDate(state.selectedPlanDate)}`} description="Wgraj pierwszy plan dla wybranej daty. Poprzednie dni i wersje pozostaną w historii." />}
   </div>;
 
-  const renderTechnologies=() => {
+  const renderTechnologies = () => {
     const normalizedSearch = normalize(technologySearch);
     const filteredTechnologies = state.technologies.filter((technology) => (
       technologyFilter === 'archived' ? technology.archived : !technology.archived
     ) && (!normalizedSearch || normalize(`${technology.productIndex} ${technology.productName}`).includes(normalizedSearch)))
       .sort((left, right) => left.productName.localeCompare(right.productName, 'pl') || left.alternativeNo - right.alternativeNo);
-    const selected = state.technologies.find((technology) => technology.id === editingTechnologyId)
-      ?? filteredTechnologies[0];
+    const selected = selectedTechnologyForEditor(state.technologies, editingTechnologyId);
+    const editorTechnology = selected ?? technologyDraft;
+    const isDraft = selected === null;
+    const updateEditorTechnology = (patch: Partial<Technology>) => {
+      if (selected) editTechnology(selected.id, patch);
+      else setTechnologyDraft((current) => ({ ...current, ...patch }));
+    };
+    const changeEditorProduct = (mode: 'index' | 'name', value: string) => {
+      if (selected) editTechnologyProductField(selected.id, mode, value);
+      else editTechnologyDraftProductField(mode, value);
+    };
+    const selectEditorProduct = (item: ProductCatalogItem) => {
+      if (selected) assignTechnologyProduct(selected.id, item.index, item.name);
+      else selectProductForTechnologyDraft(item);
+    };
+
     return <div className="space-y-5">
-      {renderHeader('Biblioteka technologii','Technologie są wprowadzane ręcznie i pozostają w bibliotece. Bazowa jest zawsze pierwsza, kolejne warianty to Alternatywna 1, 2, 3...')}
+      {renderHeader('Biblioteka technologii', 'Technologie są wprowadzane ręcznie i pozostają w bibliotece. Bazowa jest zawsze pierwsza, kolejne warianty to Alternatywna 1, 2, 3...')}
       <Tabs value={technologyPanel} onValueChange={(value) => setTechnologyPanel(value as 'editor' | 'list')} className="space-y-5">
         <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
           <TabsList className="w-fit">
-            <TabsTrigger value="editor" className="flex min-h-10 items-center gap-2 px-4"><PencilLine className="h-4 w-4" />Edytor technologii</TabsTrigger>
-            <TabsTrigger value="list" className="flex min-h-10 items-center gap-2 px-4"><ListFilter className="h-4 w-4" />Technologie ({state.technologies.filter((technology) => !technology.archived).length})</TabsTrigger>
+            <TabsTrigger value="editor" onClick={startTechnologyDraft} className="flex min-h-10 items-center gap-2 px-4">
+              <PencilLine className="h-4 w-4" />Edytor technologii
+            </TabsTrigger>
+            <TabsTrigger value="list" className="flex min-h-10 items-center gap-2 px-4">
+              <ListFilter className="h-4 w-4" />Technologie ({state.technologies.filter((technology) => !technology.archived).length})
+            </TabsTrigger>
           </TabsList>
-          {!readOnly ? <Button onClick={() => addTechnology()}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button> : null}
+          {!readOnly ? <Button onClick={startTechnologyDraft}><Plus className="mr-2 h-4 w-4" />Nowa technologia</Button> : null}
         </div>
+
         <TabsContent value="list" className="space-y-4">
-          <Card className="space-y-3"><div className="relative"><Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-dim" /><Input className="min-h-14 pl-12 text-base" placeholder="Szukaj po indeksie lub nazwie produktu" value={technologySearch} onChange={(event) => setTechnologySearch(event.target.value)} /></div><div className="flex flex-wrap gap-2"><Button variant={technologyFilter === 'active' ? 'secondary' : 'outline'} onClick={() => setTechnologyFilter('active')}>Aktywne ({state.technologies.filter((technology) => !technology.archived).length})</Button><Button variant={technologyFilter === 'archived' ? 'secondary' : 'outline'} onClick={() => setTechnologyFilter('archived')}>Archiwalne ({state.technologies.filter((technology) => technology.archived).length})</Button></div></Card>
-          <Card className="space-y-3"><div className="flex items-center justify-between"><SectionTitle title={technologyFilter === 'active' ? 'Aktywne technologie' : 'Archiwalne technologie'} subtitle={`${filteredTechnologies.length} wyników`} /></div><div className="grid max-h-[68vh] gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">{filteredTechnologies.map((technology) => <button key={technology.id} onClick={() => { setEditingTechnologyId(technology.id); setTechnologyPanel('editor'); }} className={cn('w-full rounded-xl border p-3 text-left transition',selected?.id===technology.id? 'border-[rgba(255,122,26,0.75)] bg-brandSoft':'border-border bg-[rgba(255,255,255,0.025)] hover:border-borderStrong')}><div className="flex items-center justify-between gap-2"><Badge tone={technology.variant==='base'? 'success':'info'}>{technologyLabel(technology)}</Badge><span className="text-xs text-dim">{fmt(technology.shiftNorm)} / zm.</span></div><p className="mt-2 break-words font-bold text-title">{technology.productIndex||'Nowy indeks'}</p><p className="catalog-label mt-1 line-clamp-2 text-xs font-semibold">{technology.productName||technology.description||'Uzupełnij dane technologii'}</p></button>)}{!filteredTechnologies.length ? <p className="py-8 text-center text-sm text-muted sm:col-span-2 xl:col-span-3">Brak technologii spełniających kryteria.</p> : null}</div></Card>
+          <Card className="space-y-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-dim" />
+              <Input className="min-h-14 pl-12 text-base" placeholder="Szukaj po indeksie lub nazwie produktu" value={technologySearch} onChange={(event) => setTechnologySearch(event.target.value)} />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant={technologyFilter === 'active' ? 'secondary' : 'outline'} onClick={() => setTechnologyFilter('active')}>Aktywne ({state.technologies.filter((technology) => !technology.archived).length})</Button>
+              <Button variant={technologyFilter === 'archived' ? 'secondary' : 'outline'} onClick={() => setTechnologyFilter('archived')}>Archiwalne ({state.technologies.filter((technology) => technology.archived).length})</Button>
+            </div>
+          </Card>
+          <Card className="space-y-3">
+            <SectionTitle title={technologyFilter === 'active' ? 'Aktywne technologie' : 'Archiwalne technologie'} subtitle={`${filteredTechnologies.length} wyników`} />
+            <div className="grid max-h-[68vh] gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+              {filteredTechnologies.map((technology) => <button
+                key={technology.id}
+                onClick={() => { setEditingTechnologyId(technology.id); setTechnologyPanel('editor'); }}
+                className={cn('w-full rounded-xl border p-3 text-left transition', selected?.id === technology.id ? 'border-[rgba(255,122,26,0.75)] bg-brandSoft' : 'border-border bg-[rgba(255,255,255,0.025)] hover:border-borderStrong')}
+              >
+                <div className="flex items-center justify-between gap-2"><Badge tone={technology.variant === 'base' ? 'success' : 'info'}>{technologyLabel(technology)}</Badge><span className="text-xs text-dim">{fmt(technology.shiftNorm)} / zm.</span></div>
+                <p className="mt-2 break-words font-bold text-title">{technology.productIndex || 'Nowy indeks'}</p>
+                <p className="catalog-label mt-1 line-clamp-2 text-xs font-semibold">{technology.productName || technology.description || 'Uzupełnij dane technologii'}</p>
+              </button>)}
+              {!filteredTechnologies.length ? <p className="py-8 text-center text-sm text-muted sm:col-span-2 xl:col-span-3">Brak technologii spełniających kryteria.</p> : null}
+            </div>
+          </Card>
         </TabsContent>
+
         <TabsContent value="editor" className="space-y-4">
-          {selected && !readOnly ? <div className="flex flex-wrap justify-end gap-2">{selected.archived ? <Button variant="secondary" onClick={() => editTechnology(selected.id, { archived: false })}><RefreshCw className="mr-2 h-4 w-4" />Przywróć technologię</Button> : null}<Button variant="outline" className="border-[color:color-mix(in_srgb,var(--danger)_48%,transparent)] text-danger hover:border-danger" onClick={() => deleteTechnology(selected.id)}><Trash2 className="mr-2 h-4 w-4" />Usuń technologię</Button></div> : null}
-        {selected? <Card className="space-y-5"><div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><SectionTitle title={`${technologyLabel(selected)} · ${selected.productIndex||'Nowa technologia'}`} subtitle="Ta karta jest wzorcem wielokrotnego użytku. Korekty konkretnej produkcji wykonuje się w planie lub obliczeniach." /><div className="flex flex-wrap items-center gap-2">{!readOnly ? <PlanningSaveStatus info={saveInfo} /> : null}{!readOnly && selected.variant !== 'base' ? <Button variant="outline" onClick={() => setTechnologyAsBase(selected.id)}><Star className="mr-2 h-4 w-4" />Ustaw jako bazową</Button> : null}<Button variant="ghost" className="text-danger" onClick={() => editTechnology(selected.id,{ archived: true })}><Archive className="mr-2 h-4 w-4" />Archiwizuj</Button></div></div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3"><ProductCatalogField label="Indeks produktu" mode="index" value={selected.productIndex} items={productCatalog} loading={productCatalogLoading} onChange={(value) => editTechnologyProductField(selected.id,'index',value)} onSelect={(item) => assignTechnologyProduct(selected.id,item.index,item.name)} /><ProductCatalogField label="Nazwa produktu" mode="name" value={selected.productName} items={productCatalog} loading={productCatalogLoading} onChange={(value) => editTechnologyProductField(selected.id,'name',value)} onSelect={(item) => assignTechnologyProduct(selected.id,item.index,item.name)} /><Field label="Rodzaj wersji"><SelectField value={selected.variant} onChange={(event) => event.target.value === 'base' ? setTechnologyAsBase(selected.id) : editTechnology(selected.id,{ variant: 'alternative',alternativeNo: selected.alternativeNo||1 })}><option value="base">Bazowa</option><option value="alternative">Alternatywna</option></SelectField></Field>{selected.variant==='alternative'? <Field label="Numer alternatywy"><Input type="number" min="1" value={selected.alternativeNo} onChange={(event) => editTechnology(selected.id,{ alternativeNo: Math.max(1,Math.floor(numberValue(event.target.value))) })} /></Field>:null}<Field label="Norma na zmianę (8h)"><Input type="number" value={selected.shiftNorm} onChange={(event) => editTechnology(selected.id,{ shiftNorm: Math.max(0,numberValue(event.target.value)) })} /></Field><Field label="Krótki opis"><Input placeholder="np. Pakowanie w karton rozmiar 5" value={selected.description} onChange={(event) => editTechnology(selected.id,{ description: event.target.value })} /></Field><label className="space-y-1.5 text-xs font-semibold uppercase tracking-wide text-dim md:col-span-2 xl:col-span-3"><span>Uwagi (opcjonalne)</span><textarea className="min-h-20 w-full rounded-xl border border-border bg-[rgba(0,0,0,0.4)] p-3 text-sm font-normal normal-case tracking-normal text-body focus:border-[rgba(255,106,0,0.55)] focus:outline-none" value={selected.notes} onChange={(event) => editTechnology(selected.id,{ notes: event.target.value })} /></label></div><div className="flex items-center justify-between"><SectionTitle title="Materiały technologii" subtitle="Przelicznik masy na jedną sztukę jest podawany w gramach. Ilość logistyczna nie zaokrągla pobrania do pełnej palety." /><Button variant="outline" onClick={() => editTechnology(selected.id,{ materials: [...selected.materials,{ id: uid('mat'),code: '',name: '',category: 'Pozostałe',usage: 0,unit: 'kg',logisticQty: 1 }] })}><Plus className="mr-2 h-4 w-4" />Dodaj materiał</Button></div><div className="overflow-x-auto"><table className="w-full min-w-[1320px] table-fixed text-sm"><colgroup><col className="w-[210px]" /><col className="w-[520px]" /><col className="w-[160px]" /><col className="w-[150px]" /><col className="w-[90px]" /><col className="w-[140px]" /><col className="w-[50px]" /></colgroup><thead className="text-left text-xs uppercase text-dim"><tr><th className="p-2">Kod</th><th className="p-2">Nazwa materiału</th><th className="p-2">Rodzaj</th><th className="p-2">Przelicznik / szt.</th><th className="p-2">J.m. wyniku</th><th className="p-2">Na palecie / w opakowaniu</th><th></th></tr></thead><tbody>{selected.materials.map((material) => <tr key={material.id} className="border-t border-border"><td className="p-2"><Input list="material-code-suggestions" value={material.code} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,code: event.target.value }:row) })} /></td><td className="p-2"><Input list="material-name-suggestions" title={material.name} value={material.name} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,name: event.target.value }:row) })} /></td><td className="p-2"><SelectField value={material.category} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,category: event.target.value as MaterialCategory }:row) })}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td><td className="p-2"><div className="flex items-center gap-1"><Input aria-label={`Przelicznik na sztukę (${technologyUsageInputUnit(material)})`} type="number" step="0.001" value={technologyUsageForEditor(material)} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,usage: technologyUsageFromEditor(row,Math.max(0,numberValue(event.target.value))) }:row) })} /><span className="min-w-5 text-xs font-bold text-title">{technologyUsageInputUnit(material)}</span></div></td><td className="p-2"><Input value={material.unit} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? technologyMaterialWithUnit(row,event.target.value):row) })} /></td><td className="p-2"><Input type="number" value={material.logisticQty} onChange={(event) => editTechnology(selected.id,{ materials: selected.materials.map((row) => row.id===material.id? { ...row,logisticQty: numberValue(event.target.value) }:row) })} /></td><td className="p-2"><Button variant="ghost" className="min-h-[38px] px-3 text-danger" onClick={() => editTechnology(selected.id,{ materials: selected.materials.filter((row) => row.id!==material.id) })}><Trash2 className="h-4 w-4" /></Button></td></tr>)}</tbody></table></div></Card>:<EmptyState title="Brak technologii" description="Dodaj pierwszą technologię bazową dla produktu." />}
+          {selected && !readOnly ? <div className="flex flex-wrap justify-end gap-2">
+            {selected.archived ? <Button variant="secondary" onClick={() => editTechnology(selected.id, { archived: false })}><RefreshCw className="mr-2 h-4 w-4" />Przywróć technologię</Button> : null}
+            <Button variant="outline" className="border-[color:color-mix(in_srgb,var(--danger)_48%,transparent)] text-danger hover:border-danger" onClick={() => deleteTechnology(selected.id)}><Trash2 className="mr-2 h-4 w-4" />Usuń technologię</Button>
+          </div> : null}
+
+          <Card className="space-y-5">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <SectionTitle
+                title={isDraft ? 'Nowa technologia' : `${technologyLabel(editorTechnology)} · ${editorTechnology.productIndex}`}
+                subtitle={isDraft ? 'Niezapisany szkic' : 'Technologia zapisana w bibliotece'}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                {isDraft ? <Badge tone="warning">Niezapisana</Badge> : !readOnly ? <PlanningSaveStatus info={saveInfo} /> : null}
+                {!readOnly && isDraft ? <Button onClick={saveTechnologyDraft} disabled={!editorTechnology.productIndex.trim() || !editorTechnology.productName.trim()}><Check className="mr-2 h-4 w-4" />Zapisz technologię</Button> : null}
+                {!readOnly && selected && selected.variant !== 'base' ? <Button variant="outline" onClick={() => setTechnologyAsBase(selected.id)}><Star className="mr-2 h-4 w-4" />Ustaw jako bazową</Button> : null}
+                {!readOnly && selected ? <Button variant="ghost" className="text-danger" onClick={() => editTechnology(selected.id, { archived: true })}><Archive className="mr-2 h-4 w-4" />Archiwizuj</Button> : null}
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              <ProductCatalogField label="Indeks produktu" mode="index" value={editorTechnology.productIndex} items={productCatalog} loading={productCatalogLoading} onChange={(value) => changeEditorProduct('index', value)} onSelect={selectEditorProduct} />
+              <ProductCatalogField label="Nazwa produktu" mode="name" value={editorTechnology.productName} items={productCatalog} loading={productCatalogLoading} onChange={(value) => changeEditorProduct('name', value)} onSelect={selectEditorProduct} />
+              <Field label="Rodzaj wersji">
+                <SelectField value={editorTechnology.variant} disabled={isDraft} onChange={(event) => {
+                  if (!selected) return;
+                  if (event.target.value === 'base') setTechnologyAsBase(selected.id);
+                  else editTechnology(selected.id, { variant: 'alternative', alternativeNo: selected.alternativeNo || 1 });
+                }}>
+                  <option value="base">Bazowa</option><option value="alternative">Alternatywna</option>
+                </SelectField>
+              </Field>
+              {editorTechnology.variant === 'alternative' ? <Field label="Numer alternatywy"><Input type="number" min="1" value={editorTechnology.alternativeNo} onChange={(event) => updateEditorTechnology({ alternativeNo: Math.max(1, Math.floor(numberValue(event.target.value))) })} /></Field> : null}
+              <Field label="Norma na zmianę (8h)"><Input type="number" value={editorTechnology.shiftNorm} onChange={(event) => updateEditorTechnology({ shiftNorm: Math.max(0, numberValue(event.target.value)) })} /></Field>
+              <Field label="Krótki opis"><Input placeholder="np. Pakowanie w karton rozmiar 5" value={editorTechnology.description} onChange={(event) => updateEditorTechnology({ description: event.target.value })} /></Field>
+              <label className="space-y-1.5 text-xs font-semibold uppercase tracking-wide text-dim md:col-span-2 xl:col-span-3">
+                <span>Uwagi (opcjonalne)</span>
+                <textarea className="min-h-20 w-full rounded-xl border border-border bg-[rgba(0,0,0,0.4)] p-3 text-sm font-normal normal-case tracking-normal text-body focus:border-[rgba(255,106,0,0.55)] focus:outline-none" value={editorTechnology.notes} onChange={(event) => updateEditorTechnology({ notes: event.target.value })} />
+              </label>
+            </div>
+
+            <div className="flex items-center justify-between gap-3">
+              <SectionTitle title="Materiały technologii" subtitle="Przelicznik masy na jedną sztukę jest podawany w gramach. Ilość logistyczna nie zaokrągla pobrania do pełnej palety." />
+              {!readOnly ? <Button variant="outline" onClick={() => updateEditorTechnology({ materials: [...editorTechnology.materials, { id: uid('mat'), code: '', name: '', category: 'Pozostałe', usage: 0, unit: 'kg', logisticQty: 1 }] })}><Plus className="mr-2 h-4 w-4" />Dodaj materiał</Button> : null}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1320px] table-fixed text-sm">
+                <colgroup><col className="w-[210px]" /><col className="w-[520px]" /><col className="w-[160px]" /><col className="w-[150px]" /><col className="w-[90px]" /><col className="w-[140px]" /><col className="w-[50px]" /></colgroup>
+                <thead className="text-left text-xs uppercase text-dim"><tr><th className="p-2">Kod</th><th className="p-2">Nazwa materiału</th><th className="p-2">Rodzaj</th><th className="p-2">Przelicznik / szt.</th><th className="p-2">J.m. wyniku</th><th className="p-2">Na palecie / w opakowaniu</th><th></th></tr></thead>
+                <tbody>{editorTechnology.materials.map((material) => <tr key={material.id} className="border-t border-border">
+                  <td className="p-2"><Input list="material-code-suggestions" value={material.code} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? { ...row, code: event.target.value } : row) })} /></td>
+                  <td className="p-2"><Input list="material-name-suggestions" title={material.name} value={material.name} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? { ...row, name: event.target.value } : row) })} /></td>
+                  <td className="p-2"><SelectField value={material.category} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? { ...row, category: event.target.value as MaterialCategory } : row) })}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td>
+                  <td className="p-2"><div className="flex items-center gap-1"><Input aria-label={`Przelicznik na sztukę (${technologyUsageInputUnit(material)})`} type="number" step="0.001" value={technologyUsageForEditor(material)} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? { ...row, usage: technologyUsageFromEditor(row, Math.max(0, numberValue(event.target.value))) } : row) })} /><span className="min-w-5 text-xs font-bold text-title">{technologyUsageInputUnit(material)}</span></div></td>
+                  <td className="p-2"><Input value={material.unit} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? technologyMaterialWithUnit(row, event.target.value) : row) })} /></td>
+                  <td className="p-2"><Input type="number" value={material.logisticQty} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? { ...row, logisticQty: numberValue(event.target.value) } : row) })} /></td>
+                  <td className="p-2">{!readOnly ? <Button variant="ghost" className="min-h-[38px] px-3 text-danger" onClick={() => updateEditorTechnology({ materials: editorTechnology.materials.filter((row) => row.id !== material.id) })}><Trash2 className="h-4 w-4" /></Button> : null}</td>
+                </tr>)}</tbody>
+              </table>
+            </div>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>;
@@ -2119,39 +2379,43 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     const hasCorrection = state.quantityCorrections.some((correction) => correction.planDate === state.selectedPlanDate && correction.itemId === item.id && !correction.revertedAt);
     const updateScope = (patch: Pick<PlanItem, 'scopeMode' | 'scopeShifts' | 'scopeQuantity'>) => updateState((current) => ({
       ...current,
-      plan: current.plan.map((row) => row.id === item.id ? { ...row, ...patch } : row)
+      plan: current.plan.map((row) => (item.productionGroupId
+        ? row.productionGroupId === item.productionGroupId
+        : row.id === item.id) ? { ...row, ...patch } : row)
     }));
 
-    return <div className="space-y-5 bg-[rgba(255,255,255,0.012)] p-4 md:p-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0 break-words"><SectionTitle title={<><span>{item.index}</span><span className="catalog-label"> · {item.name}</span></>} /></div>
-        <div className="w-full shrink-0 lg:w-64">
-          <SelectField className="min-h-11 rounded-lg shadow-none" aria-label="Zakres obliczeń pozycji" disabled={readOnly} value={item.scopeMode ?? 'global'} onChange={(event) => updateScope({ scopeMode: event.target.value as ItemScopeMode, scopeShifts: item.scopeShifts, scopeQuantity: item.scopeQuantity })}>
-            <option value="global">{state.calculationMode === 'all' ? 'Z planu: cała produkcja' : `Z planu: ${fmt(state.horizonShifts)} zm.`}</option>
-            <option value="all">Cała produkcja</option>
-            <option value="shifts">Inna liczba zmian</option>
-            <option value="quantity">Wybrana liczba sztuk</option>
-          </SelectField>
-        </div>
+    return <div className="space-y-4 px-5 py-4 md:px-6 md:py-5">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-borderStrong pb-3">
+        {item.productionGroupId ? <Badge tone="info">Detal {(item.productionOutputOrder ?? 0) + 1} z {item.productionOutputCount}</Badge> : null}
+        <span className="font-bold text-title">{item.index}</span>
+        {normalize(item.name) !== normalize(item.index) ? <span className="catalog-label break-words font-bold">{item.name}</span> : null}
       </div>
 
-      <section className="space-y-3 border-t border-border pt-4">
-        <div className="grid max-w-[536px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)_44px] items-end gap-3">
+      <section className="space-y-3">
+        <div className="grid max-w-[940px] grid-cols-[210px_210px_44px_minmax(260px,1fr)] items-end gap-3">
           <PlanAmountField key={item.id + '-quantity'} label="Do zrobienia (szt.)" value={quantityReview ? null : remaining} disabled={readOnly} onChange={(value, editId) => updatePlanQuantity(item.id, value, editId)} />
           <PlanAmountField key={item.id + '-norm'} label="Norma na zmianę (szt.)" value={norm} disabled={readOnly} onChange={(value) => updatePlanNorm(item.id, value)} />
           <Button title="Cofnij ostatnią zmianę ilości" aria-label="Cofnij ostatnią zmianę ilości" variant="ghost" className="h-11 w-11 p-0" disabled={readOnly || !hasCorrection} onClick={() => undoLastCorrection(item)}><Undo2 className="h-4 w-4" /></Button>
+          <Field label="Zakres obliczeń">
+            <SelectField className="min-h-11 rounded-lg shadow-none" aria-label="Zakres obliczeń pozycji" disabled={readOnly} value={item.scopeMode ?? 'global'} onChange={(event) => updateScope({ scopeMode: event.target.value as ItemScopeMode, scopeShifts: item.scopeShifts, scopeQuantity: item.scopeQuantity })}>
+              <option value="global">{state.calculationMode === 'all' ? 'Z planu: cała produkcja' : `Z planu: ${fmt(state.horizonShifts)} zm.`}</option>
+              <option value="all">Cała produkcja</option>
+              <option value="shifts">Inna liczba zmian</option>
+              <option value="quantity">Wybrana liczba sztuk</option>
+            </SelectField>
+          </Field>
         </div>
         {quantityReview ? <div role="status" className="text-sm text-warning"><PlanQuantity item={item} /></div> : null}
-        {item.scopeMode === 'shifts' || item.scopeMode === 'quantity' ? <div className="grid max-w-[480px] grid-cols-2 gap-3">
+        {item.scopeMode === 'shifts' || item.scopeMode === 'quantity' ? <div className="max-w-[210px]">
           {item.scopeMode === 'shifts'
             ? <PlanAmountField key={item.id + '-shifts'} label="Liczba zmian do obliczeń" min={0.5} value={item.scopeShifts ?? state.horizonShifts} disabled={readOnly} onChange={(value) => updateScope({ scopeMode: 'shifts', scopeShifts: value, scopeQuantity: item.scopeQuantity })} />
             : <PlanAmountField key={item.id + '-scope'} label="Sztuki do obliczeń" value={item.scopeQuantity ?? 0} disabled={readOnly} onChange={(value) => updateScope({ scopeMode: 'quantity', scopeShifts: item.scopeShifts, scopeQuantity: value })} />}
         </div> : null}
       </section>
 
-      <section className="space-y-3 border-t border-border pt-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-xs font-black uppercase text-dim">Technologia</h3><p className="mt-1 text-sm text-muted">Zmiany robocze dotyczą tylko tej pozycji i nie nadpisują biblioteki.</p></div>{technology ? <SelectField className="max-w-md" value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}>{technologiesFor(item).map((variant) => <option key={variant.id} value={variant.id}>{technologySelectLabel(variant)}</option>)}</SelectField> : null}</div>
+      <section className="space-y-3 border-t border-borderStrong pt-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-xs font-black uppercase text-title">Technologia indeksu</h3><p className="mt-1 text-sm text-muted">Zmiany w tym miejscu dotyczą tylko tej pozycji.</p></div>{technology ? <SelectField className="max-w-md" value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}>{technologiesFor(item).map((variant) => <option key={variant.id} value={variant.id}>{technologySelectLabel(variant)}</option>)}</SelectField> : null}</div>
 
-      {!technology ? <div className="flex flex-col gap-3 rounded-xl border border-[rgba(245,158,11,0.4)] bg-[rgba(245,158,11,0.07)] p-4 sm:flex-row sm:items-center sm:justify-between"><p className="text-sm font-semibold text-warning">Najpierw wybierz lub dodaj technologię dla tej pozycji.</p><Button variant="outline" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button></div> : <>
+      {!technology ? <div className="flex min-h-12 flex-wrap items-center justify-between gap-3 border-l-2 border-warning bg-[rgba(245,158,11,0.055)] px-3 py-2.5"><p className="text-sm font-semibold text-warning">Brak technologii dla tego indeksu.</p><Button variant="outline" className="min-h-10 py-2" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button></div> : <>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2"><Badge tone={item.manualOverride ? 'warning' : 'success'}>{item.manualOverride ? 'Technologia robocza zmieniona' : technologyLabel(technology)}</Badge>{cleanImportedTechnologyDescription(technology.description) ? <span className="text-xs text-muted">{cleanImportedTechnologyDescription(technology.description)}</span> : null}</div>
           {item.manualOverride ? <Button variant="ghost" onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, workingMaterials: cloneMaterials(technology.materials), manualOverride: false } : row) }))}><RefreshCw className="mr-2 h-4 w-4" />Przywróć wybraną</Button> : null}
@@ -2210,7 +2474,10 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                   return (
                     <Fragment key={item.id}>
                       <tr className={cn('border-t border-border', expanded && 'bg-[rgba(255,255,255,0.035)]')}>
-                        <td className="p-3"><p className="font-bold text-title">{item.index}</p><p className="catalog-label font-semibold">{item.name}</p></td>
+                        <td className="p-3">
+                          {item.productionGroupId ? <p className="mb-1 text-[11px] font-black uppercase text-brand">Wspólna forma · detal {(item.productionOutputOrder ?? 0) + 1}/{item.productionOutputCount}</p> : null}
+                          <p className="font-bold text-title">{item.index}</p><p className="catalog-label font-semibold">{item.name}</p>
+                        </td>
                         <td className="p-3"><p>{item.station || 'Nie podano'}</p><p className="mt-1 text-xs text-muted">{item.areaId ? areaName(item.areaId) : 'Brak przypisu - sprawdź ustawienia'}</p></td>
                         <td className="min-w-[260px] p-3">
                           {variants.length ? (
@@ -2247,7 +2514,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         </Card>
 
         <div className="grid gap-3 sm:grid-cols-3">
-          <Stat label="Produkcja w zakresie" value={`${fmt(scopeItems.filter((item) => item.areaId === state.selectedAreaId && item.technologyId).reduce((sum, item) => sum + itemProductionQty(item), 0))} szt.`} />
+          <Stat label="Detale w zakresie" value={`${fmt(scopeItems.filter((item) => item.areaId === state.selectedAreaId && item.technologyId).reduce((sum, item) => sum + itemProductionQty(item), 0))} szt.`} />
           <Stat label="Pozycje materiałowe" value={String(requirements.length)} />
           <Stat label="Do pobrania" value={String(documentRows.length)} tone={documentRows.length ? 'warning' : 'success'} />
         </div>
@@ -2360,14 +2627,30 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   }
 
   const changePickingDocumentStatus = (documentId: string, nextStatus: PickingDocumentStatus) => {
+    if (readOnly) return;
     const document = state.documents.find((item) => item.id === documentId);
     if (!document) return;
     if (nextStatus === 'handed' && state.plan.some((item) => item.included && quantityNeedsReview(item) && (item.areaId === document.areaId || !item.areaId))) {
       return flash('Przed przekazaniem dokumentu wyjaśnij ilości albo wyłącz wskazane pozycje z obliczeń.');
     }
+    if (nextStatus === 'handed' && document.rows.some((row) => !row.confirmed)) {
+      return flash('Najpierw zaznacz po lewej wszystkie pozycje jako wypisane do dokumentu.');
+    }
+    if (nextStatus === 'draft' && (document.status === 'handed' || document.status === 'issued')) {
+      const latestActive = state.documents.find((item) =>
+        item.planDate === document.planDate &&
+        item.areaId === document.areaId &&
+        item.status !== 'cancelled' &&
+        item.status !== 'outdated'
+      );
+      if (latestActive?.id !== document.id) {
+        return flash('Najpierw zakończ lub anuluj nowszy dokument dla tej strefy.');
+      }
+    }
     const allowed =
       (nextStatus === 'handed' && document.status === 'draft') ||
       (nextStatus === 'issued' && document.status === 'handed') ||
+      (nextStatus === 'draft' && (document.status === 'handed' || document.status === 'issued')) ||
       (nextStatus === 'cancelled' && ['draft', 'outdated', 'handed'].includes(document.status));
     if (!allowed) {
       flash('Ta zmiana statusu nie jest dozwolona.');
@@ -2381,10 +2664,11 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         rows: nextStatus === 'issued' ? item.rows.map((row) => ({ ...row, confirmed: true })) : item.rows
       } : item)
     }));
-    flash(`Dokument ma teraz status: ${documentStatusLabel[nextStatus]}.`);
+    flash(nextStatus === 'draft' ? 'Dokument został cofnięty do edycji.' : `Dokument ma teraz status: ${documentStatusLabel[nextStatus]}.`);
   };
 
   const togglePickingConfirmation = (documentId: string, rowKey: string) => {
+    if (readOnly) return;
     const document = state.documents.find((item) => item.id === documentId);
     if (!document || document.status !== 'draft') return;
     updateState((current) => ({
@@ -2515,18 +2799,15 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         <div className="grid gap-3 lg:grid-cols-[minmax(220px,0.6fr)_minmax(260px,1fr)_auto] lg:items-end">
           <Field label="Data planu"><Input type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
           <Field label="Strefa"><SelectField value={state.selectedAreaId} onChange={(event) => selectPlanningArea(event.target.value)}>{state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField></Field>
-          <Button onClick={createOrRefreshPickingDocument}><FilePlus2 className="mr-2 h-4 w-4" />{documents.some((document) => document.status === 'draft' || document.status === 'outdated') ? 'Przelicz dokument roboczy' : 'Utwórz dokument'}</Button>
-        </div>
-        <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-3">
-          <Stat label="Do wydania teraz" value={`${documentRows.length} pozycji`} tone={documentRows.length ? 'warning' : 'success'} />
-          <Stat label="Dokumenty dla strefy" value={String(documents.length)} />
-          <Stat label="Aktualna wersja planu" value={currentPlanVersion ? `Wersja ${currentPlanVersion.versionNo}` : 'Brak'} />
+          {!readOnly ? <Button onClick={createOrRefreshPickingDocument}><FilePlus2 className="mr-2 h-4 w-4" />{documents.some((document) => document.status === 'draft' || document.status === 'outdated') ? 'Przelicz dokument roboczy' : 'Utwórz dokument'}</Button> : null}
         </div>
       </Card>
 
       {documents.length ? documents.map((document) => {
         const expanded = expandedDocument === document.id;
         const locked = document.status === 'handed' || document.status === 'issued';
+        const confirmedRows = document.rows.filter((row) => row.confirmed).length;
+        const allRowsConfirmed = document.rows.length > 0 && confirmedRows === document.rows.length;
         return <Card key={document.id} className="overflow-hidden p-0">
           <div className="flex flex-col gap-3 border-b border-border px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
             <button type="button" className="flex min-w-0 items-center gap-3 text-left" onClick={() => setExpandedDocument(expanded ? '' : document.id)}>
@@ -2536,20 +2817,22 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone={document.kind === 'correction' ? 'warning' : 'info'}>{document.kind === 'correction' ? 'Korekta' : 'Podstawowy'}</Badge>
               <Badge tone={documentTone(document.status)}>{documentStatusLabel[document.status]}</Badge>
-              {(document.status === 'draft' || document.status === 'outdated') ? <Button variant="outline" onClick={createOrRefreshPickingDocument}><RefreshCw className="mr-2 h-4 w-4" />Przelicz</Button> : null}
-              {document.status === 'draft' ? <Button variant="secondary" onClick={() => changePickingDocumentStatus(document.id, 'handed')}><PackageCheck className="mr-2 h-4 w-4" />Przekaż</Button> : null}
-              {document.status === 'handed' ? <Button variant="secondary" onClick={() => changePickingDocumentStatus(document.id, 'issued')}><Check className="mr-2 h-4 w-4" />Oznacz jako wydany</Button> : null}
-              {['draft', 'outdated', 'handed'].includes(document.status) ? <Button variant="ghost" className="text-danger" onClick={() => changePickingDocumentStatus(document.id, 'cancelled')}><X className="mr-2 h-4 w-4" />Anuluj</Button> : null}
+              <Badge tone={allRowsConfirmed ? 'success' : 'warning'}>{allRowsConfirmed ? `Wszystko wypisane · ${confirmedRows}/${document.rows.length}` : `Wypisano ${confirmedRows}/${document.rows.length}`}</Badge>
+              {!readOnly && (document.status === 'draft' || document.status === 'outdated') ? <Button variant="outline" onClick={createOrRefreshPickingDocument}><RefreshCw className="mr-2 h-4 w-4" />Przelicz</Button> : null}
+              {!readOnly && document.status === 'draft' ? <Button variant="secondary" onClick={() => changePickingDocumentStatus(document.id, 'handed')}><PackageCheck className="mr-2 h-4 w-4" />Przekaż</Button> : null}
+              {!readOnly && document.status === 'handed' ? <Button variant="secondary" onClick={() => changePickingDocumentStatus(document.id, 'issued')}><Check className="mr-2 h-4 w-4" />Oznacz jako wydany</Button> : null}
+              {!readOnly && locked ? <Button variant="outline" onClick={() => changePickingDocumentStatus(document.id, 'draft')}><Undo2 className="mr-2 h-4 w-4" />Cofnij do edycji</Button> : null}
+              {!readOnly && ['draft', 'outdated', 'handed'].includes(document.status) ? <Button variant="ghost" className="text-danger" onClick={() => changePickingDocumentStatus(document.id, 'cancelled')}><X className="mr-2 h-4 w-4" />Anuluj</Button> : null}
               <Button title="Pobierz dokument CSV" variant="ghost" className="min-h-11 px-3" onClick={() => exportPickingDocument(document)}><FileDown className="h-4 w-4" /></Button>
             </div>
           </div>
           {expanded ? <div className="overflow-x-auto">
-            <table className="w-full min-w-[1120px] text-sm">
-              <thead className="sticky top-0 z-10 bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim"><tr><th className="w-14 p-3"><span className="sr-only">Źródła</span></th><th className="p-3">Materiał</th><th className="p-3 text-right">Zapotrzebowanie</th><th className="p-3 text-right">Stan strefy</th><th className="p-3 text-right">Już wydano</th><th className="p-3 text-right">Oczekuje</th><th className="p-3 text-right">Wydać teraz</th><th className="p-3">J.m.</th><th className="p-3">Potwierdzenie</th></tr></thead>
+            <table className="w-full min-w-[920px] text-sm">
+              <thead className="sticky top-0 z-10 bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim"><tr><th className="w-24 p-3 text-center">Wypisane</th><th className="w-14 p-3"><span className="sr-only">Źródła</span></th><th className="p-3">Materiał</th><th className="p-3 text-right">Zapotrzebowanie</th><th className="p-3 text-right">Stan strefy</th><th className="p-3 text-right">Wydać teraz</th><th className="p-3">J.m.</th></tr></thead>
               <tbody>{document.rows.map((row) => {
                 const sourceKey = `${document.id}|${row.key}`;
                 const sourcesExpanded = expandedMaterial === sourceKey;
-                return <Fragment key={row.key}><tr className="border-t border-border"><td className="p-3"><button type="button" title={sourcesExpanded ? 'Ukryj źródła zapotrzebowania' : 'Pokaż indeksy źródłowe'} className="flex h-11 w-11 items-center justify-center rounded-lg border border-border text-muted" onClick={() => setExpandedMaterial(sourcesExpanded ? '' : sourceKey)}>{sourcesExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button></td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td><td className="p-3 text-right">{fmt(row.demand)}</td><td className="p-3 text-right">{fmt(row.areaStock)}</td><td className="p-3 text-right">{fmt(row.issuedBefore)}</td><td className="p-3 text-right text-warning">{fmt(row.pendingBefore)}</td><td className="p-3 text-right text-lg font-black text-title">{fmt(row.toIssue)}</td><td className="p-3">{row.unit}</td><td className="p-3"><button type="button" disabled={locked || document.status !== 'draft'} onClick={() => togglePickingConfirmation(document.id, row.key)} className={cn('flex min-h-11 items-center gap-2 rounded-lg border px-3 font-bold', row.confirmed ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success' : 'border-border text-muted', (locked || document.status !== 'draft') && 'cursor-default opacity-80')}><Check className="h-4 w-4" />{document.status === 'issued' ? 'Wydano' : row.confirmed ? 'Sprawdzone' : 'Do potwierdzenia'}</button></td></tr>{sourcesExpanded ? <tr className="border-t border-border bg-[rgba(255,255,255,0.025)]"><td colSpan={9} className="px-5 py-4"><p className="text-xs font-bold uppercase text-dim">Źródła zapotrzebowania</p><div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{row.sources.map((source) => <div key={`${source.planItemId}-${source.index}`} className="border-l-2 border-brand pl-3"><p className="font-bold text-title">{source.index}</p><p className="catalog-label break-words text-sm font-semibold">{source.name}</p><p className="mt-1 text-xs text-dim">{fmt(source.demand)} {row.unit}</p></div>)}</div></td></tr> : null}</Fragment>;
+                return <Fragment key={row.key}><tr className="border-t border-border"><td className="p-3"><button type="button" aria-label={row.confirmed ? `Odznacz jako wypisane: ${row.name}` : `Zaznacz jako wypisane: ${row.name}`} aria-pressed={row.confirmed} title={row.confirmed ? 'Pozycja wypisana — kliknij, aby cofnąć' : 'Zaznacz pozycję jako wypisaną'} disabled={readOnly || locked || document.status !== 'draft'} onClick={() => togglePickingConfirmation(document.id, row.key)} className={cn('mx-auto flex h-11 w-11 items-center justify-center rounded-lg border', row.confirmed ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success' : 'border-border text-muted', (readOnly || locked || document.status !== 'draft') && 'cursor-default opacity-80')}>{row.confirmed ? <Check className="h-4 w-4" /> : null}</button></td><td className="p-3"><button type="button" title={sourcesExpanded ? 'Ukryj źródła zapotrzebowania' : 'Pokaż indeksy źródłowe'} className="flex h-11 w-11 items-center justify-center rounded-lg border border-border text-muted" onClick={() => setExpandedMaterial(sourcesExpanded ? '' : sourceKey)}>{sourcesExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button></td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td><td className="p-3 text-right">{fmt(row.demand)}</td><td className="p-3 text-right">{fmt(row.areaStock)}</td><td className="p-3 text-right text-lg font-black text-title">{fmt(row.toIssue)}</td><td className="p-3">{row.unit}</td></tr>{sourcesExpanded ? <tr className="border-t border-border bg-[rgba(255,255,255,0.025)]"><td colSpan={7} className="px-5 py-4"><p className="text-xs font-bold uppercase text-dim">Źródła zapotrzebowania</p><div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{row.sources.map((source) => <div key={`${source.planItemId}-${source.index}`} className="border-l-2 border-brand pl-3"><p className="font-bold text-title">{source.index}</p><p className="catalog-label break-words text-sm font-semibold">{source.name}</p><p className="mt-1 text-xs text-dim">{fmt(source.demand)} {row.unit}</p></div>)}</div></td></tr> : null}</Fragment>;
               })}</tbody>
             </table>
           </div> : null}

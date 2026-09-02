@@ -12,8 +12,8 @@ const ts = require('typescript');
 const source = readFileSync(pageFile,'utf8');
 const ast = ts.createSourceFile('page.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const directQuantityEditing = source.includes('const updatePlanQuantity =');
-const names = ['uid','numberValue','normalize','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','splitProductFields','stationKey','applyStationMappings','normalizedMaterialUnit','isKilogramUnit','isGramUnit','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','documentStatusLabel','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
-  'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','itemProductionQty','createOrRefreshPickingDocument','changePickingDocumentStatus','deriveReturnsForDate'];
+const names = ['uid','numberValue','normalize','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','splitProductFields','stationKey','applyStationMappings','normalizedMaterialUnit','isKilogramUnit','isGramUnit','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','documentStatusLabel','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
+  'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','itemProductionQty','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','deriveReturnsForDate'];
 if (directQuantityEditing) names.push('updatePlanNorm');
 const definitions = new Map();
 const areaCalculationNames = ['technologyForItem','materialsForItem','demandByArea','sharedAreaIds','materialSupply','requirementsForArea'];
@@ -260,13 +260,86 @@ test('an exact material name resolves its index using warehouse priority',()=>{
 
 test('actual import handler retains every row, source text and version snapshot',()=>{
   const h=setup(); h.importSelectedSheet();
-  assert.equal(h.ctx.state.plan.length,3);
-  assert.equal(h.ctx.state.planVersions[0].items.length,3);
-  assert.equal(h.ctx.state.plan[0].totalQty,7369);
-  assert.equal(h.ctx.state.plan[0].sourceQuantity,rows[1][2]);
-  assert.equal(h.ctx.state.plan[1].quantityStatus,'missing');
-  assert.equal(h.ctx.state.plan[2].quantityStatus,'unrecognized');
-  assert.match(h.messages.at(-1),/3 pozycji/);
+  const [left,right,housing,unknown]=h.ctx.state.plan;
+  assert.equal(h.ctx.state.plan.length,4);
+  assert.equal(h.ctx.state.planVersions[0].items.length,4);
+  assert.deepEqual(Array.from(h.ctx.state.plan,(item)=>item.index),['A100','A200','B100','C100']);
+  assert.deepEqual(Array.from(h.ctx.state.plan,(item)=>item.totalQty),[3594,3775,0,0]);
+  assert.ok(left.productionGroupId);
+  assert.equal(left.productionGroupId,right.productionGroupId);
+  assert.deepEqual([left.productionOutputOrder,right.productionOutputOrder],[0,1]);
+  assert.ok([left,right].every((item)=>item.productionSourceQuantity===rows[1][2]));
+  assert.equal(housing.quantityStatus,'missing');
+  assert.equal(unknown.quantityStatus,'unrecognized');
+  assert.match(h.messages.at(-1),/3 produkcji, 4 detali/);
+});
+
+test('one mould run assigns each output its own base technology and aggregates shared material demand',()=>{
+  const h=setup();
+  const mouldRows=[rows[0],[
+    '1',
+    'PLV QUICK LIFT SLIDER LEFT + WHEEL DORIS 229, PLV QUICK LIFT SLIDER RIGHT + WHEEL DORIS 229 (A18208403, A18208404)',
+    '10 950, 10 950',
+    'WTR 18',
+    1300
+  ]];
+  h.ctx.pending={...h.ctx.pending,workbook:{SheetNames:['Plan'],Sheets:{Plan:{rows:mouldRows}}}};
+  const material=(id,usage)=>({id,code:'ABS-01',name:'ABS',category:'Tworzywo',usage,unit:'kg',logisticQty:1});
+  h.ctx.state.technologies=[
+    {id:'left-tech',productIndex:'A18208403',productName:'PLV QUICK LIFT SLIDER LEFT + WHEEL DORIS 229',variant:'base',shiftNorm:100,materials:[material('left-mat',0.1)],archived:false},
+    {id:'right-tech',productIndex:'A18208404',productName:'PLV QUICK LIFT SLIDER RIGHT + WHEEL DORIS 229',variant:'base',shiftNorm:200,materials:[material('right-mat',0.2)],archived:false},
+    {id:'combined-tech',productIndex:'A18208403, A18208404',productName:'PLV QUICK LIFT SLIDER LEFT + WHEEL DORIS 229, PLV QUICK LIFT SLIDER RIGHT + WHEEL DORIS 229',variant:'base',shiftNorm:999,materials:[],archived:false}
+  ];
+  h.importSelectedSheet();
+  const [left,right]=h.ctx.state.plan;
+  assert.deepEqual([left.index,right.index],['A18208403','A18208404']);
+  assert.deepEqual([left.technologyId,right.technologyId],['left-tech','right-tech']);
+  assert.deepEqual([left.shiftNorm,right.shiftNorm],[1300,1300]);
+  assert.equal(left.productionGroupId,right.productionGroupId);
+  assert.ok(!h.ctx.state.plan.some((item)=>item.technologyId==='combined-tech'));
+
+  h.ctx.state.calculationMode='horizon';
+  h.ctx.state.horizonShifts=1;
+  left.areaId='hala-2';
+  right.areaId='hala-2';
+  h.ctx.state.areas=[{id:'hala-2',name:'Hala 2'}];
+  h.ctx.state.inventory=[];
+  h.ctx.needsMaterialBalances=true;
+  h.ctx.documentLedger=new Map();
+  h.ctx.CATEGORY_ORDER=new Map();
+  const code=ts.transpileModule('(()=>{'+[...areaCalculationDefinitions.values()].join('\n')+';return requirementsForArea;})()',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  const requirementsForArea=vm.runInContext(code,h.ctx);
+  const [requirement]=requirementsForArea('hala-2');
+  assert.equal(h.itemProductionQty(left),1300);
+  assert.equal(h.itemProductionQty(right),1300);
+  assert.ok(Math.abs(requirement.demand-390)<1e-9);
+  assert.deepEqual(Array.from(requirement.sources,(source)=>source.planItemId),[left.id,right.id]);
+});
+
+test('reopening upgrades an unissued legacy composite row but preserves issued document references',()=>{
+  const h=setup();
+  const legacy={
+    id:'legacy',runId:'legacy-run',index:'A100, A200',name:'LEFT + RIGHT',station:'WTR 34',areaId:'hala-2',
+    included:true,technologyId:'combined-tech',workingMaterials:[],manualOverride:false,continuationCandidateId:'',
+    totalQty:7369,remainingQty:3684.5,shiftNorm:1400,quantityStatus:'parsed',sourceQuantity:'L - 3 594 P - 3 775',
+    quantityParts:[{label:'L',quantity:3594},{label:'P',quantity:3775}],planGroup:'standard',plannedDate:'',notes:''
+  };
+  const technology=(id,index,name,norm)=>({id,productIndex:index,productName:name,variant:'base',shiftNorm:norm,materials:[],archived:false});
+  const technologies=[technology('left-tech','A100','LEFT',100),technology('right-tech','A200','RIGHT',200)];
+  const rawState={...h.ctx.state,plan:[legacy],technologies,dailyPlans:{'2026-08-31':[legacy]},planVersions:[],documents:[]};
+  const restored=h.preparePlanningAutosaveState(h.parseStoredState(JSON.parse(JSON.stringify(rawState))));
+  assert.deepEqual(Array.from(restored.plan,(item)=>item.index),['A100','A200']);
+  assert.deepEqual(Array.from(restored.plan,(item)=>item.technologyId),['left-tech','right-tech']);
+  assert.deepEqual(Array.from(restored.plan,(item)=>item.remainingQty),[1797,1887.5]);
+  assert.ok(restored.plan.every((item)=>item.shiftNorm===1400));
+  assert.equal(restored.plan[0].productionGroupId,restored.plan[1].productionGroupId);
+  assert.equal(restored.dailyPlans['2026-08-31'].length,2);
+  assert.equal(restored.planVersions[0].items.length,2);
+
+  const issuedState={...rawState,documents:[{status:'issued',rows:[{sources:[{planItemId:'legacy'}]}]}]};
+  const protectedState=h.parseStoredState(JSON.parse(JSON.stringify(issuedState)));
+  assert.equal(protectedState.plan.length,1);
+  assert.equal(protectedState.plan[0].id,'legacy');
 });
 
 test('first import is a baseline and only later additions are marked as new',()=>{
@@ -291,44 +364,50 @@ test('same-sheet reimport keeps IDs, working technology, exclusions and manual i
   h.ctx.state.plan[0].technologyId='tech-1';
   h.ctx.state.plan[0].workingMaterials=[{id:'mat-1',usage:0.2}];
   const id=h.ctx.state.plan[0].id;
-  setQuantity(h,h.ctx.state.plan[1],500);
+  setQuantity(h,h.ctx.state.plan.find((item)=>item.index==='B100'),500);
   h.ctx.pending=originalPending; h.importSelectedSheet();
-  assert.equal(h.ctx.state.plan.length,3);
+  assert.equal(h.ctx.state.plan.length,4);
   assert.equal(h.ctx.state.plan[0].id,id);
   assert.equal(h.ctx.state.plan[0].included,false);
   assert.equal(h.ctx.state.plan[0].technologyId,'tech-1');
   assert.equal(h.ctx.state.plan[0].workingMaterials[0].usage,0.2);
-  assert.equal(h.ctx.state.plan[1].totalQty,500);
-  assert.equal(h.ctx.state.plan[1].sourceQuantity,'');
-  assert.equal(h.ctx.state.plan[1].quantityStatus,'manual');
+  const housing=h.ctx.state.plan.find((item)=>item.index==='B100');
+  assert.equal(housing.totalQty,500);
+  assert.equal(housing.sourceQuantity,'');
+  assert.equal(housing.quantityStatus,'manual');
+  assert.equal(h.ctx.state.plan[0].productionGroupId,h.ctx.state.plan[1].productionGroupId);
   assert.equal(h.ctx.state.archive.length,0);
 });
 
 test('actual quantity correction can confirm explicit zero and undo it back to an unresolved amount',()=>{
   const h=setup(); h.importSelectedSheet();
-  const item=h.ctx.state.plan[1];
+  const item=h.ctx.state.plan.find((entry)=>entry.index==='B100');
   setQuantity(h,item,0);
-  assert.equal(h.ctx.state.plan[1].quantityStatus,'manual');
-  assert.equal(h.ctx.state.plan[1].sourceQuantity,'');
-  assert.equal(h.ctx.state.plan[1].totalQty,0);
-  h.undoLastCorrection(h.ctx.state.plan[1]);
-  assert.equal(h.ctx.state.plan[1].quantityStatus,'missing');
+  const updated=h.ctx.state.plan.find((entry)=>entry.index==='B100');
+  assert.equal(updated.quantityStatus,'manual');
+  assert.equal(updated.sourceQuantity,'');
+  assert.equal(updated.totalQty,0);
+  h.undoLastCorrection(updated);
+  assert.equal(h.ctx.state.plan.find((entry)=>entry.index==='B100').quantityStatus,'missing');
 });
 
 test('actual reload cleaner preserves quantities, raw fields and warning state',()=>{
   const h=setup(); h.importSelectedSheet();
   const reloaded=h.parseStoredState(JSON.parse(JSON.stringify(h.ctx.state)));
-  assert.equal(reloaded.plan.length,3);
-  assert.equal(reloaded.plan[0].sourceQuantity,rows[1][2]);
-  assert.equal(reloaded.plan[0].quantityParts.length,2);
-  assert.equal(reloaded.plan[2].sourceQuantity,'DO RANA');
-  assert.equal(reloaded.plan[2].quantityStatus,'unrecognized');
+  assert.equal(reloaded.plan.length,4);
+  assert.deepEqual(Array.from(reloaded.plan.slice(0,2),(item)=>item.sourceQuantity),['L - 3594','P - 3775']);
+  assert.ok(reloaded.plan.slice(0,2).every((item)=>item.productionSourceQuantity===rows[1][2]));
+  assert.ok(reloaded.plan.slice(0,2).every((item)=>item.quantityParts.length===0));
+  assert.equal(reloaded.plan[3].sourceQuantity,'DO RANA');
+  assert.equal(reloaded.plan[3].quantityStatus,'unrecognized');
 });
 
 test('actual calculation never counts unknown quantity or restores a finished zero balance',()=>{
   const h=setup(); h.importSelectedSheet();
-  assert.equal(h.itemProductionQty(h.ctx.state.plan[0]),7369);
-  assert.equal(h.itemProductionQty(h.ctx.state.plan[1]),0);
+  assert.equal(h.itemProductionQty(h.ctx.state.plan[0]),3594);
+  assert.equal(h.itemProductionQty(h.ctx.state.plan[1]),3775);
+  assert.equal(h.itemProductionQty(h.ctx.state.plan[2]),0);
+  assert.equal(h.itemProductionQty(h.ctx.state.plan[3]),0);
   assert.equal(h.itemProductionQty({...h.ctx.state.plan[0],remainingQty:0}),0);
 });
 
@@ -344,9 +423,80 @@ test('actual document actions reject unresolved included rows, but allow deliber
   assert.equal(h.ctx.state.documents[0].status,'handed');
 });
 
+test('document checklist must be complete before handoff and issued document can return to editing',()=>{
+  const h=setup();
+  const rows=[
+    {key:'MAT-1',name:'Material 1',confirmed:false,toIssue:10},
+    {key:'MAT-2',name:'Material 2',confirmed:false,toIssue:20}
+  ];
+  h.ctx.state.documents=[{id:'doc-1',documentNo:'DOC-1',planDate:'2026-08-31',areaId:'hala-2',status:'draft',rows}];
+
+  h.changePickingDocumentStatus('doc-1','handed');
+  assert.equal(h.ctx.state.documents[0].status,'draft');
+  assert.match(h.messages.at(-1),/zaznacz po lewej wszystkie pozycje/i);
+
+  h.togglePickingConfirmation('doc-1','MAT-1');
+  assert.deepEqual(Array.from(h.ctx.state.documents[0].rows,(row)=>row.confirmed),[true,false]);
+  h.changePickingDocumentStatus('doc-1','handed');
+  assert.equal(h.ctx.state.documents[0].status,'draft');
+
+  h.togglePickingConfirmation('doc-1','MAT-2');
+  h.changePickingDocumentStatus('doc-1','handed');
+  assert.equal(h.ctx.state.documents[0].status,'handed');
+  h.changePickingDocumentStatus('doc-1','issued');
+  assert.equal(h.ctx.state.documents[0].status,'issued');
+
+  h.changePickingDocumentStatus('doc-1','draft');
+  assert.equal(h.ctx.state.documents[0].status,'draft');
+  assert.match(h.messages.at(-1),/cofnięty do edycji/i);
+  assert.deepEqual(Array.from(h.ctx.state.documents[0].rows,(row)=>row.confirmed),[true,true]);
+  h.togglePickingConfirmation('doc-1','MAT-1');
+  assert.deepEqual(Array.from(h.ctx.state.documents[0].rows,(row)=>row.confirmed),[false,true]);
+});
+
+test('reopening cannot change a read-only, cancelled or older document',()=>{
+  const h=setup();
+  const row={key:'MAT',name:'Material',confirmed:true,toIssue:10};
+  const newer={id:'newer',planDate:'2026-08-31',areaId:'hala-2',status:'draft',rows:[row]};
+  const older={id:'older',planDate:'2026-08-31',areaId:'hala-2',status:'issued',rows:[row]};
+  h.ctx.state.documents=[newer,older];
+  h.changePickingDocumentStatus('older','draft');
+  assert.equal(h.ctx.state.documents[1].status,'issued');
+  assert.match(h.messages.at(-1),/nowszy dokument/i);
+
+  h.ctx.state.documents=[{...older,status:'cancelled'}];
+  h.changePickingDocumentStatus('older','draft');
+  assert.equal(h.ctx.state.documents[0].status,'cancelled');
+
+  h.ctx.state.documents=[older];
+  h.ctx.readOnly=true;
+  h.changePickingDocumentStatus('older','draft');
+  h.togglePickingConfirmation('older','MAT');
+  assert.equal(h.ctx.state.documents[0].status,'issued');
+  assert.equal(h.ctx.state.documents[0].rows[0].confirmed,true);
+});
+
+test('document table places the written checkmarks first and exposes progress plus edit rollback',()=>{
+  const documentSource=source.slice(source.indexOf('const renderDocumentV2 ='),source.indexOf('const renderReturnsV2 ='));
+  const tableSource=documentSource.slice(documentSource.indexOf('<table'),documentSource.indexOf('</table>'));
+  assert.ok(tableSource.indexOf('>Wypisane<')>=0);
+  assert.ok(tableSource.indexOf('>Wypisane<')<tableSource.indexOf('>Materiał<'));
+  assert.ok(tableSource.indexOf('aria-pressed={row.confirmed}')<tableSource.indexOf("title={sourcesExpanded ?"));
+  assert.ok(!tableSource.includes('>Potwierdzenie<'));
+  assert.ok(!tableSource.includes('>Już wydano<'));
+  assert.ok(!tableSource.includes('>Oczekuje<'));
+  assert.match(tableSource,/colSpan=\{7\}/);
+  assert.ok(!documentSource.includes('Do wydania teraz'));
+  assert.ok(!documentSource.includes('Dokumenty dla strefy'));
+  assert.ok(!documentSource.includes('Aktualna wersja planu'));
+  assert.match(documentSource,/Wszystko wypisane/);
+  assert.match(documentSource,/Cofnij do edycji/);
+  assert.match(documentSource,/changePickingDocumentStatus\(document\.id, 'draft'\)/);
+});
+
 test('unknown active production must not produce a false return of issued material',()=>{
   const h=setup(); h.importSelectedSheet();
-  const item=h.ctx.state.plan[1]; item.areaId='hala-2';
+  const item=h.ctx.state.plan.find((entry)=>entry.index==='B100'); item.areaId='hala-2';
   h.ctx.state.documents=[{planDate:'2026-08-31',areaId:'hala-2',status:'issued',rows:[{key:'MAT',code:'MAT',name:'Material',category:'Tworzywo',unit:'kg',toIssue:100,sources:[{planItemId:item.id,index:item.index,name:item.name,demand:100}]}]}];
   assert.equal(h.deriveReturnsForDate('2026-08-31').length,0);
   item.included=false;
@@ -364,7 +514,8 @@ test('direct quantity editing groups typed digits and preserves the source and i
   for(const quantity of [1,12,120])h.updatePlanQuantity(id,quantity,'set-120');
   const edited=h.ctx.state.plan[0];
   assert.equal(edited.remainingQty,120);
-  assert.equal(edited.sourceQuantity,rows[1][2]);
+  assert.equal(edited.sourceQuantity,'L - 3594');
+  assert.equal(edited.productionSourceQuantity,rows[1][2]);
   assert.equal(h.itemProductionQty(edited),120);
   assert.equal(h.ctx.state.quantityCorrections.length,2);
   assert.equal(h.ctx.state.quantityCorrections[0].previousValue,90);
@@ -384,10 +535,13 @@ test('direct norm editing affects only the production and respects an explicit z
   h.ctx.state.calculationMode='horizon';
   h.updatePlanNorm(id,500);
   assert.equal(h.ctx.state.plan[0].shiftNorm,500);
+  assert.equal(h.ctx.state.plan[1].shiftNorm,500);
   assert.equal(h.ctx.state.technologies[0].shiftNorm,1400);
   assert.equal(h.itemProductionQty(h.ctx.state.plan[0]),1750);
+  assert.equal(h.itemProductionQty(h.ctx.state.plan[1]),1750);
   h.updatePlanNorm(id,0);
   assert.equal(h.itemProductionQty(h.ctx.state.plan[0]),0);
+  assert.equal(h.itemProductionQty(h.ctx.state.plan[1]),0);
   h.updatePlanNorm(id,-100);
   assert.equal(h.ctx.state.plan[0].shiftNorm,0);
 });

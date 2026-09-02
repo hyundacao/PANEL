@@ -25,6 +25,43 @@ test('plan row renders an unresolved identical index and name only once', () => 
   assert.ok(!h.html().includes('>unresolved product (r4 600)<'));
 });
 
+test('product autocomplete selects the exact pressed suggestion', () => {
+  const h = createHeaderFixture();
+  const items = [
+    { id: 'catalog-1', index: 'M-1-ETY-SEN-8434', name: 'ETYKIETA PLASTIK BORDER EDGE 45X80X1000 SENUKAI 4772013258278' },
+    { id: 'catalog-2', index: 'M-1-ETY-SEN-8436', name: 'ETYKIETA PLASTIK BORDER EDGE 70X80X1000 SENUKAI 4772013258285' },
+    { id: 'catalog-3', index: '8001128772', name: 'MAX BO VG1 CP BODY 07020 + HANDLE - LOGOCLIP' },
+    { id: 'catalog-4', index: '1772', name: 'WPUST Z BOCZNYM ODPŁYWEM 150X150X86 BRĄZ' }
+  ];
+  let selected = null;
+  const field = h.productCatalogField({
+    label: 'Nazwa produktu', mode: 'name', value: '772 bo', items, loading: false,
+    onChange: () => {}, onSelect: (item) => { selected = item; }
+  });
+  const options = nodes(field).filter((node) => node.type === 'button');
+  assert.equal(options.length, 4);
+  let prevented = false;
+  options[3].props.onMouseDown({ preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(selected, items[3]);
+});
+
+test('technology editor starts with an empty unpersisted draft instead of the first library item', () => {
+  const h = createHeaderFixture();
+  const technologies = [{
+    id: 'existing-tech', productIndex: '8001128772', productName: 'MAX BO VG1',
+    variant: 'base', alternativeNo: 1, description: '', notes: '', shiftNorm: 700,
+    materials: [], archived: false
+  }];
+  const initial = h.technologyEditorState(technologies, '');
+  assert.equal(initial.selected, null);
+  assert.equal(initial.draft.id, '');
+  assert.equal(initial.draft.productIndex, '');
+  assert.equal(initial.draft.productName, '');
+  assert.equal(initial.draft.materials.length, 0);
+  assert.equal(h.technologyEditorState(technologies, 'existing-tech').selected, technologies[0]);
+});
+
 test('plan emphasizes the product name in bold orange and keeps the index and notes lighter', () => {
   const h = createHeaderFixture();
   h.ctx.state.plan = [{ ...h.ctx.state.plan[0], index: '8001227999', name: 'T27SC1R LID HEX NUPS COMPLETE', notes: 'Uwagi bez zmian' }];
@@ -52,6 +89,43 @@ test('plan row keeps a distinct product index above its full qualified name', ()
     assert.equal(html.split(name).length - 1, 1);
     assert.ok(html.indexOf(index) < html.indexOf(name));
   }
+});
+
+test('one mould run is rendered as one group with separate detail technologies', () => {
+  const h = createHeaderFixture();
+  h.ctx.state.plan = h.ctx.state.plan.slice(0, 2).map((item, index) => ({
+    ...item,
+    included: true,
+    productionGroupId: 'production-1',
+    productionOutputOrder: index,
+    productionOutputCount: 2,
+    shiftNorm: 1485
+  }));
+  const rendered = h.render();
+  const html = h.html();
+  assert.equal((html.match(/Wspólna forma/g) || []).length, 1);
+  assert.match(html, /Technologie 0\/2/);
+  assert.match(html, /1485 szt\. każdego detalu \/ zmianę/);
+  const groupToggle = nodes(rendered).find((node) => node.props?.title === 'Wyłącz całą wspólną produkcję z obliczeń');
+  assert.ok(groupToggle);
+  groupToggle.props.onClick();
+  assert.ok(h.ctx.state.plan.every((item) => !item.included));
+});
+
+test('expanded plan index has a visible bounded block and an end separator', () => {
+  const h = createHeaderFixture();
+  const item = h.ctx.state.plan[0];
+  h.ctx.expandedPlan = item.id;
+  const rendered = h.render();
+  const row = nodes(rendered).find((node) => node.props?.['data-plan-item'] === item.id);
+  const details = nodes(rendered).find((node) => node.props?.['data-plan-details'] === item.id);
+  const separator = nodes(rendered).find((node) => node.props?.['data-plan-separator'] === item.id);
+  assert.equal(row.props['data-expanded'], 'true');
+  assert.match(row.props.className, /rounded-lg/);
+  assert.match(row.props.className, /rgba\(255,122,26,0\.58\)/);
+  assert.match(details.props.className, /border-t/);
+  assert.match(separator.props.className, /\bh-2\b/);
+  assert.doesNotMatch(h.html(), /Indeks produkcyjny/);
 });
 
 test('header keeps date, range and workbook selectors without repeated statistics cards', () => {
@@ -277,7 +351,7 @@ test('read-only users can show the whole plan and an empty plan remains empty', 
   assert.equal(h.ctx.state.selectedAreaId, 'bakoma');
   h.ctx.state.plan = [];
   assert.match(h.html(), /Brak planu na/);
-  assert.doesNotMatch(h.html(), /<tbody>/);
+  assert.equal(nodes(h.render()).filter((node) => node.props?.['data-plan-item']).length, 0);
 });
 
 test('bulk selection changes only visible rows, including unassigned, in one update', () => {
@@ -305,7 +379,9 @@ test('bulk selection changes only visible rows, including unassigned, in one upd
   control(h, 'Zaznacz wszystkie').props.onClick();
   assert.equal(writes, 2);
   assert.equal(h.ctx.state.plan[1], hidden);
-  const withoutSelection = (plan) => JSON.stringify(plan.map(({ included, ...item }) => item));
+  const withoutSelection = (plan) => JSON.stringify(plan.map((item) => Object.fromEntries(
+    Object.entries(item).filter(([key]) => key !== 'included')
+  )));
   assert.equal(withoutSelection(h.ctx.state.plan), withoutSelection(original.plan));
   assert.equal(h.ctx.state.selectedAreaId, original.selectedAreaId);
   assert.deepEqual(JSON.parse(JSON.stringify(h.ctx.state.dailyPlans)), original.dailyPlans);
@@ -419,8 +495,8 @@ test('unassigned quantity warnings remain visible without a second copy of the p
   h.ctx.state.plan = [{ ...h.ctx.state.plan[0], areaId: '', quantityStatus: 'missing' }];
   const html = h.html();
   assert.match(html, /Ilość do wyjaśnienia/);
-  const rows = nodes(h.render()).filter((node) => node.type === 'tr');
-  assert.equal(rows.length, 2, 'one table header and one unassigned detail');
+  const rows = nodes(h.render()).filter((node) => node.props?.['data-plan-item']);
+  assert.equal(rows.length, 1, 'one unassigned detail block');
   assert.doesNotMatch(html, /Bez przypisanej strefy/);
 });
 

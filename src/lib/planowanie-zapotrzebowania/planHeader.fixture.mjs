@@ -35,7 +35,8 @@ const names = [
   'tomorrow', 'savedPlanDates', 'customRangeVisible', 'globalRangeChoice', 'PlanAmountField',
   'pendingPlanWorkbook', 'planImportWorkbook', 'planImportSheet',
   'areaName', 'selectPlanningArea', 'selectPlanAreaFilter', 'selectedAreaPlan', 'visibleAreaPlan', 'setVisiblePlanIncluded', 'unassignedPlan', 'missingTechnologyCount', 'unassignedCount',
-  'renderPlanTable', 'renderPlan', 'SectionTitle', 'renderHeader', 'renderHistoryV2'
+  'renderPlanTable', 'renderPlan', 'SectionTitle', 'renderHeader', 'renderHistoryV2', 'ProductCatalogField',
+  'emptyTechnologyDraft', 'selectedTechnologyForEditor'
 ];
 const definitions = new Map();
 const visit = (node) => {
@@ -46,7 +47,7 @@ const visit = (node) => {
 };
 visit(ast);
 for (const name of names) if (!definitions.has(name)) throw new Error('Missing fixture function: ' + name);
-const compiled = compile('{\n' + [...definitions.values()].join('\n') + '\nObject.assign(exports, { renderPlan, renderHistoryV2 });\n}', 'fixture.tsx');
+const compiled = compile('{\n' + [...definitions.values()].join('\n') + '\nObject.assign(exports, { renderPlan, renderHistoryV2, ProductCatalogField, emptyTechnologyDraft, selectedTechnologyForEditor });\n}', 'fixture.tsx');
 
 export const createHeaderFixture = (overrides = {}) => {
   const plan = ['MAX CP+TH PRINTED F1_WQ35G2D0ES_A', 'MAX CP+TH PRINTED F1_WQ33G2D00', 'MAINT. DOOR CUBIC POPIEL'].map((name, index) => ({
@@ -101,8 +102,34 @@ export const createHeaderFixture = (overrides = {}) => {
   ctx.setExpandedCalculation = (value) => { ctx.expandedCalculation = value; };
   ctx.setPending = (value) => { ctx.pending = value; };
   ctx.setSheetName = (value) => { ctx.sheetName = value; };
-  const render = (view = 'plan') => { vm.runInContext('{\n' + compiled + '\n}', ctx); return view === 'historia' ? ctx.exports.renderHistoryV2() : ctx.exports.renderPlan(); };
-  return { ctx, render, html: (view) => renderToStaticMarkup(render(view)) };
+  const loadFixtureExports = () => {
+    if (typeof ctx.exports.renderPlan !== 'function') vm.runInContext('{\n' + compiled + '\n}', ctx);
+  };
+  const render = (view = 'plan') => {
+    vm.runInContext('{\n' + compiled + '\n}', ctx);
+    return view === 'historia' ? ctx.exports.renderHistoryV2() : ctx.exports.renderPlan();
+  };
+  const productCatalogField = (props) => {
+    loadFixtureExports();
+    const previousUseState = ctx.useState;
+    const previousUseMemo = ctx.useMemo;
+    ctx.useState = () => [true, () => {}];
+    ctx.useMemo = (factory) => factory();
+    try {
+      return ctx.exports.ProductCatalogField(props);
+    } finally {
+      ctx.useState = previousUseState;
+      ctx.useMemo = previousUseMemo;
+    }
+  };
+  const technologyEditorState = (technologies, editingTechnologyId) => {
+    loadFixtureExports();
+    return {
+      selected: ctx.exports.selectedTechnologyForEditor(technologies, editingTechnologyId),
+      draft: ctx.exports.emptyTechnologyDraft()
+    };
+  };
+  return { ctx, render, html: (view) => renderToStaticMarkup(render(view)), productCatalogField, technologyEditorState };
 };
 
 export const headerPreview = (overrides = {}) => '<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><style>body{margin:0;background:#0c0d10;color:#dce1e7;font-family:Arial,sans-serif;letter-spacing:0}main{max-width:1440px;margin:auto;padding:24px}@media(max-width:600px){main{padding:16px}}</style></head><body><main>'

@@ -11,6 +11,9 @@ export type PlanSourceFields = {
   sourceNotes?: string;
   quantityStatus?: PlanQuantityStatus;
   quantityParts?: PlanQuantityPart[];
+  productionOutputOrder?: number;
+  productionOutputCount?: number;
+  productionSourceQuantity?: string;
 };
 
 const text = (value: unknown) => String(value ?? '');
@@ -23,6 +26,13 @@ const numericQuantity = (value: string): number | null => {
   if (!/^\d+(?:[ \t\u00a0\u202f]+\d{3})*(?:[,.]\d+)?$/.test(number)) return null;
   const parsed = Number(number.replace(/[ \t\u00a0\u202f]/g, '').replace(',', '.'));
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+};
+
+const additiveQuantity = (value: string): number | null => {
+  const parts = value.split(/\s*\+\s*/);
+  const quantities = parts.map(numericQuantity);
+  if (!parts.length || quantities.some((quantity) => quantity === null)) return null;
+  return quantities.reduce<number>((sum, quantity) => sum + quantity!, 0);
 };
 
 export const parsePlanQuantity = (value: unknown): {
@@ -44,7 +54,7 @@ export const parsePlanQuantity = (value: unknown): {
     for (let index = 0; index < markers.length; index += 1) {
       const marker = markers[index];
       const raw = trimmed.slice(marker.index! + marker[0].length, markers[index + 1]?.index).trim().replace(/[,;/+]$/, '').trim();
-      const quantity = numericQuantity(raw);
+      const quantity = additiveQuantity(raw);
       const label = /^(L|LEFT|LEWA|LEWY)$/i.test(marker[1]) ? 'L' : 'P';
       if (quantity === null || parts.some((part) => part.label === label)) return result(0, 'unrecognized');
       parts.push({ label, quantity });
@@ -80,6 +90,95 @@ type ImportGroup = 'standard' | 'emergency' | 'planned';
 export type ImportedPlanningRow = PlanSourceFields & {
   name: string; index: string; station: string; norm: unknown; notes: string;
   totalQty: number; planGroup: ImportGroup; plannedDate: string;
+};
+
+const isProductIndex = (value: string) =>
+  /^[a-z0-9]+(?:[._/-][a-z0-9]+)*$/i.test(value) && /\d{3}/.test(value);
+
+const readIndexList = (value: string) => {
+  const parts = value.trim().replace(/^\(|\)$/g, '').split(/\s*[,;+]\s*/).map((part) => part.trim());
+  return parts.length > 1 && parts.every(isProductIndex) ? parts : [];
+};
+
+const findIndexGroup = (value: string) => {
+  const groups = [...value.matchAll(/\(([^()]*)\)/g)];
+  for (let position = groups.length - 1; position >= 0; position -= 1) {
+    const indices = readIndexList(groups[position][1]);
+    if (indices.length > 1) return { match: groups[position], indices };
+  }
+  return null;
+};
+
+const splitTopLevelNamesBy = (value: string, separator: (character: string, position: number) => boolean) => {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let position = 0; position < value.length; position += 1) {
+    const character = value[position];
+    if (character === '(') depth += 1;
+    else if (character === ')') depth = Math.max(0, depth - 1);
+    if (depth === 0 && separator(character, position)) {
+      const part = value.slice(start, position).trim();
+      if (part) parts.push(part);
+      start = position + 1;
+    }
+  }
+  const last = value.slice(start).trim();
+  if (last) parts.push(last);
+  return parts;
+};
+
+const splitTopLevelNames = (value: string, expectedCount: number) => {
+  const commaSeparated = splitTopLevelNamesBy(value, (character) => character === ',' || character === ';');
+  if (commaSeparated.length > 1) return commaSeparated;
+  const plusSeparated = splitTopLevelNamesBy(value, (character, position) => character === '+'
+    && /\s/.test(value[position - 1] ?? '') && /\s/.test(value[position + 1] ?? ''));
+  return plusSeparated.length === expectedCount ? plusSeparated : commaSeparated;
+};
+
+// A single mould run may produce several different details at once. Preserve one
+// production row, but expose every output as an independently calculated product.
+export const splitPlanningRowOutputs = (row: ImportedPlanningRow): ImportedPlanningRow[] => {
+  const directIndices = readIndexList(text(row.index));
+  const namedIndexGroup = findIndexGroup(text(row.name));
+  const indexedIndexGroup = findIndexGroup(text(row.index));
+  const indices = directIndices.length
+    ? directIndices
+    : namedIndexGroup?.indices ?? indexedIndexGroup?.indices ?? [];
+  if (indices.length < 2) return [row];
+
+  let namesSource = text(row.name).trim();
+  if (namedIndexGroup && namedIndexGroup.indices.join('|') === indices.join('|')) {
+    const match = namedIndexGroup.match;
+    namesSource = `${namesSource.slice(0, match.index)} ${namesSource.slice(match.index! + match[0].length)}`
+      .replace(/\s+/g, ' ').trim();
+  }
+  const names = splitTopLevelNames(namesSource, indices.length);
+  const reparsedQuantity = parsePlanQuantity(row.sourceQuantity);
+  const quantities = reparsedQuantity.quantityStatus === 'parsed'
+    ? reparsedQuantity.quantityParts
+    : row.quantityParts ?? [];
+  if (row.quantityStatus === 'manual') return [row];
+  if (row.quantityStatus !== 'parsed' && reparsedQuantity.quantityStatus !== 'parsed') return [row];
+  if (names.length !== indices.length || quantities.length !== indices.length) {
+    return [{ ...row, totalQty: 0, quantityStatus: 'unrecognized' }];
+  }
+
+  return indices.map((index, position) => {
+    const quantity = quantities[position];
+    const formattedQuantity = quantity.quantity.toLocaleString('pl-PL', { maximumFractionDigits: 3 });
+    return {
+      ...row,
+      name: names[position],
+      index,
+      totalQty: quantity.quantity,
+      sourceQuantity: quantity.label ? `${quantity.label} - ${formattedQuantity}` : formattedQuantity,
+      quantityParts: [],
+      productionOutputOrder: position,
+      productionOutputCount: indices.length,
+      productionSourceQuantity: row.sourceQuantity
+    };
+  });
 };
 
 // Section headings are retained as sections, not artificial production tasks.
