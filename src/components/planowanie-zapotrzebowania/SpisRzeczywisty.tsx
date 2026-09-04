@@ -40,6 +40,10 @@ import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { parseQtyInput } from '@/lib/utils/format';
 import { cn } from '@/lib/utils/cn';
 import {
+  getOriginalInventorySpisIndex2,
+  matchesOriginalInventorySpisSearch
+} from '@/lib/utils/originalInventorySpisSearch';
+import {
   BarChart3,
   ClipboardList,
   Database,
@@ -96,7 +100,7 @@ const ERP_ORIGINALS_INTEGRATION_PLACEHOLDER =
     'ENV: ERP_ORIGINALS_PROXY_URL',
     'ENV: ERP_ORIGINALS_PROXY_TOKEN (opcjonalny)',
     'ENV: ERP_ORIGINALS_PROXY_TIMEOUT_MS (opcjonalny, domyslnie 10000 ms)',
-    'Response: [] lub { items: [] }, pola: id/name/unit/createdAt/indexCode?/warehouseCode?'
+    'Response: [] lub { items: [] }, pola: id/name/unit/createdAt/indexCode?/indexCode2?/warehouseCode?'
   ].join('\n');
 
 const isErpOriginalsSourceError = (error: unknown) =>
@@ -1349,14 +1353,15 @@ export default function SpisRzeczywisty() {
       unit: string;
       warehouseCode: string | null;
       indexCode: string | null;
+      indexCode2: string | null;
       isMag55: boolean;
     }> = [];
     const registerIndexedName = (
       name: string,
       warehouseCode: string | null | undefined,
-      indexCode: string | null | undefined
+      indexCode2: string | null | undefined
     ) => {
-      if (warehouseCode || indexCode) {
+      if (warehouseCode || indexCode2) {
         namesWithIndexedSuggestions.add(normalizeCatalogNameKey(name));
       }
     };
@@ -1365,21 +1370,21 @@ export default function SpisRzeczywisty() {
       registerIndexedName(
         item.name,
         item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null,
-        item.indexCode ? String(item.indexCode).trim() : null
+        getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2) || null
       )
     );
     erpCatalogItems.forEach((item) =>
       registerIndexedName(
         item.name,
         item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null,
-        item.indexCode ? String(item.indexCode).trim() : null
+        getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2) || null
       )
     );
     catalog.forEach((item) =>
       registerIndexedName(
         item.name,
         item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null,
-        item.indexCode ? String(item.indexCode).trim() : null
+        getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2) || null
       )
     );
 
@@ -1387,7 +1392,8 @@ export default function SpisRzeczywisty() {
       const nameKey = normalizeCatalogNameKey(item.name);
       const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
       const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
-      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode ?? ''}`;
+      const indexCode2 = getOriginalInventorySpisIndex2(indexCode, item.indexCode2) || null;
+      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
       list.push({
@@ -1395,6 +1401,7 @@ export default function SpisRzeczywisty() {
         unit: item.unit,
         warehouseCode,
         indexCode,
+        indexCode2,
         isMag55: warehouseCode === 'M-55'
       });
     });
@@ -1402,7 +1409,8 @@ export default function SpisRzeczywisty() {
       const nameKey = normalizeCatalogNameKey(item.name);
       const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
       const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
-      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode ?? ''}`;
+      const indexCode2 = getOriginalInventorySpisIndex2(indexCode, item.indexCode2) || null;
+      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
       list.push({
@@ -1410,6 +1418,7 @@ export default function SpisRzeczywisty() {
         unit: item.unit,
         warehouseCode,
         indexCode,
+        indexCode2,
         isMag55: warehouseCode === 'M-55'
       });
     });
@@ -1424,6 +1433,7 @@ export default function SpisRzeczywisty() {
         unit: item.unit,
         warehouseCode: null,
         indexCode: null,
+        indexCode2: null,
         isMag55: false
       });
     });
@@ -1431,8 +1441,9 @@ export default function SpisRzeczywisty() {
       const nameKey = normalizeCatalogNameKey(item.name);
       const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
       const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
-      if (!warehouseCode && !indexCode && namesWithIndexedSuggestions.has(nameKey)) return;
-      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode ?? ''}`;
+      const indexCode2 = getOriginalInventorySpisIndex2(indexCode, item.indexCode2) || null;
+      if (!warehouseCode && !indexCode2 && namesWithIndexedSuggestions.has(nameKey)) return;
+      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
       list.push({
@@ -1440,20 +1451,21 @@ export default function SpisRzeczywisty() {
         unit: item.unit,
         warehouseCode,
         indexCode,
+        indexCode2,
         isMag55: warehouseCode === 'M-55'
       });
     });
     const deduped = new Map<string, (typeof list)[number]>();
     list.forEach((item) => {
-      const key = `${normalizeCatalogNameKey(item.name)}|${item.warehouseCode ?? ''}`;
+      const key = `${normalizeCatalogNameKey(item.name)}|${item.warehouseCode ?? ''}|${item.indexCode2 ?? ''}`;
       const current = deduped.get(key);
       if (!current) {
         deduped.set(key, item);
         return;
       }
       const currentScore =
-        (current.warehouseCode ? 4 : 0) + (current.indexCode ? 2 : 0) + (current.unit ? 1 : 0);
-      const nextScore = (item.warehouseCode ? 4 : 0) + (item.indexCode ? 2 : 0) + (item.unit ? 1 : 0);
+        (current.warehouseCode ? 4 : 0) + (current.indexCode2 ? 2 : 0) + (current.unit ? 1 : 0);
+      const nextScore = (item.warehouseCode ? 4 : 0) + (item.indexCode2 ? 2 : 0) + (item.unit ? 1 : 0);
       if (nextScore > currentScore) {
         deduped.set(key, item);
       }
@@ -1471,17 +1483,17 @@ export default function SpisRzeczywisty() {
   const filteredNameSuggestions = useMemo(() => {
     if (!normalizeCatalogNameKey(form.name)) return [];
     const filtered = nameSuggestions
-      .filter((item) => matchesCatalogSearch(form.name, item.name, item.indexCode, item.warehouseCode))
+      .filter((item) => matchesOriginalInventorySpisSearch(form.name, item.name, item.indexCode2));
     const deduped = new Map<string, (typeof filtered)[number]>();
     filtered.forEach((item) => {
-      const key = `${normalizeCatalogNameKey(item.name)}|${item.warehouseCode ?? ''}`;
+      const key = `${normalizeCatalogNameKey(item.name)}|${item.warehouseCode ?? ''}|${item.indexCode2 ?? ''}`;
       const current = deduped.get(key);
       if (!current) {
         deduped.set(key, item);
         return;
       }
-      const currentScore = (current.indexCode ? 1 : 0) + (current.warehouseCode ? 2 : 0);
-      const nextScore = (item.indexCode ? 1 : 0) + (item.warehouseCode ? 2 : 0);
+      const currentScore = (current.indexCode2 ? 1 : 0) + (current.warehouseCode ? 2 : 0);
+      const nextScore = (item.indexCode2 ? 1 : 0) + (item.warehouseCode ? 2 : 0);
       if (nextScore > currentScore) {
         deduped.set(key, item);
       }
@@ -2813,7 +2825,7 @@ export default function SpisRzeczywisty() {
               <>
               <div className="lg:col-span-2">
                 <label className="text-xs uppercase tracking-wide text-dim">
-                  Wyszukiwarka / nazwa
+                  Wyszukiwarka / nazwa / indeks 2
                 </label>
                 <div className="relative">
                   <Input
@@ -2823,7 +2835,7 @@ export default function SpisRzeczywisty() {
                       applyNameToForm(event.target.value);
                       setShowNameSuggestions(true);
                     }}
-                    placeholder="Nazwa lub indeks, np. panel 772"
+                    placeholder="Nazwa lub indeks 2, np. STAREX 8178"
                     className={form.name ? 'min-h-[46px] pr-10' : 'min-h-[46px]'}
                     onFocus={() => setShowNameSuggestions(true)}
                     onKeyDown={(event) => {
@@ -2855,7 +2867,7 @@ export default function SpisRzeczywisty() {
                     <div className="absolute z-20 mt-2 w-full rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
                       {filteredNameSuggestions.map((suggestion) => (
                         <button
-                          key={`${suggestion.name}|${suggestion.warehouseCode ?? ''}|${suggestion.indexCode ?? ''}`}
+                          key={`${suggestion.name}|${suggestion.warehouseCode ?? ''}|${suggestion.indexCode2 ?? ''}`}
                           type="button"
                           onMouseDown={(event) => {
                             event.preventDefault();
@@ -2869,9 +2881,9 @@ export default function SpisRzeczywisty() {
                         >
                           <span className="min-w-0 flex-1">
                             <span className="catalog-label block whitespace-normal break-words font-bold leading-5">{suggestion.name}</span>
-                            {suggestion.indexCode && (
+                            {suggestion.indexCode2 && (
                               <span className="block break-all text-xs font-semibold text-dim">
-                                {suggestion.indexCode}
+                                Indeks 2: {suggestion.indexCode2}
                               </span>
                             )}
                           </span>

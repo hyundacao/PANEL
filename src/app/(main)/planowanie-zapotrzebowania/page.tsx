@@ -41,9 +41,7 @@ import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
 
 import {
-  allocateAmountByDemand,
   calculateIssueBalance,
-  calculateReturnSurplus,
   calculateScopedQuantity,
   coalesceQuantityCorrection,
   diffPlanItems,
@@ -204,13 +202,9 @@ type MaterialReturnRow = {
   name: string;
   category: MaterialCategory;
   unit: string;
-  planItemId: string;
-  index: string;
-  productName: string;
   areaId: string;
   reason: string;
-  issued: number;
-  currentNeed: number;
+  inventoried: number;
   surplus: number;
   destination: string;
   status: 'open' | 'completed';
@@ -375,6 +369,13 @@ const materialMatches = (
   );
   return sameIdentity && normalize(material.unit) === normalize(stock.unit);
 };
+const materialIdentityMatches = (
+  material: Pick<TechnologyMaterial, 'code' | 'name'>,
+  stock: Pick<TechnologyMaterial, 'code' | 'name'>
+) => Boolean(
+  (normalize(material.code) && normalize(material.code) === normalize(stock.code)) ||
+  (normalize(material.name) && normalize(material.name) === normalize(stock.name))
+);
 const normalizedMaterialUnit = (unit: unknown) => normalize(unit).replaceAll('.', '');
 const isKilogramUnit = (unit: unknown) => ['kg', 'kilogram', 'kilogramy', 'kilograma'].includes(normalizedMaterialUnit(unit));
 const isGramUnit = (unit: unknown) => ['g', 'gram', 'gramy', 'grama'].includes(normalizedMaterialUnit(unit));
@@ -414,6 +415,10 @@ const clonePlanItems = (items: PlanItem[]) => items.map((item) => ({
   workingMaterials: item.workingMaterials ? item.workingMaterials.map((material) => ({ ...material })) : null
 }));
 const documentStatusLabel: Record<PickingDocumentStatus, string> = { draft: 'Roboczy', handed: 'Przekazany', issued: 'Wydany', cancelled: 'Anulowany', outdated: 'Nieaktualny' };
+const pickingRowWasWritten = (
+  document: Pick<PickingDocument, 'status'>,
+  row: Pick<PickingDocumentRow, 'confirmed'>
+) => document.status === 'issued' || (document.status !== 'cancelled' && Boolean(row.confirmed));
 const differenceLabel: Record<PlanDifference['kind'], string> = { new: 'Nowa', removed: 'Usunięta', quantity_increased: 'Zwiększona', quantity_decreased: 'Zmniejszona', station_changed: 'Zmiana stanowiska', norm_changed: 'Zmiana normy' };
 const cloneMaterials = (items: TechnologyMaterial[]) => items.map((item) => ({ ...item, id: uid('mat') }));
 
@@ -614,8 +619,8 @@ const parseStoredState = (value: unknown): AppState | null => {
   const storedAreas = Array.isArray(record.areas) ? record.areas : [];
   const protectedPlanItemIds = new Set(
     (Array.isArray(record.documents) ? record.documents : [])
-      .filter((document) => document.status === 'handed' || document.status === 'issued')
-      .flatMap((document) => Array.isArray(document.rows) ? document.rows : [])
+      .flatMap((document) => (Array.isArray(document.rows) ? document.rows : [])
+        .filter((row) => document.status === 'handed' || pickingRowWasWritten(document, row)))
       .flatMap((row) => Array.isArray(row.sources) ? row.sources : [])
       .map((source) => source.planItemId)
       .filter(Boolean)
@@ -1436,12 +1441,17 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const documentLedger = new Map<string, { issued: number; pending: number }>();
   if (needsMaterialBalances) {
     state.documents
-      .filter((document) => document.planDate === state.selectedPlanDate && (document.status === 'issued' || document.status === 'handed'))
+      .filter((document) => document.planDate === state.selectedPlanDate && (
+        document.status === 'issued' ||
+        document.status === 'handed' ||
+        document.rows.some((row) => pickingRowWasWritten(document, row))
+      ))
       .forEach((document) => document.rows.forEach((row) => {
+        if (document.status !== 'issued' && document.status !== 'handed' && !pickingRowWasWritten(document, row)) return;
         const key = `${document.areaId}|${row.key}`;
         const current = documentLedger.get(key) ?? { issued: 0, pending: 0 };
         if (document.status === 'issued') current.issued += row.toIssue;
-        if (document.status === 'handed') current.pending += row.toIssue;
+        else current.pending += row.toIssue;
         documentLedger.set(key, current);
       }));
   }
@@ -1791,7 +1801,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   useEffect(() => {
     if (
       !hydrated ||
-      !(['plan', 'dokument', 'zwroty'] as View[]).includes(view)
+      !(['plan', 'dokument', 'zwroty', 'historia'] as View[]).includes(view)
     ) {
       return;
     }
@@ -2720,72 +2730,44 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
           .filter((version) => version.planDate === planDate)
           .sort((left, right) => right.versionNo - left.versionNo)[0]?.items
         ?? [];
-    const allocations = new Map<string, {
-      materialKey: string;
-      code: string;
-      name: string;
-      category: MaterialCategory;
-      unit: string;
-      planItemId: string;
-      index: string;
-      productName: string;
-      areaId: string;
-      issued: number;
-    }>();
-    state.documents
-      .filter((document) => document.planDate === planDate && document.status === 'issued')
-      .forEach((document) => document.rows.forEach((row) => {
-        allocateAmountByDemand(row.toIssue, row.sources).forEach((source) => {
-          const key = `${document.areaId}|${row.key}|${source.planItemId}`;
-          const current = allocations.get(key) ?? {
-            materialKey: row.key,
-            code: row.code,
-            name: row.name,
-            category: row.category,
-            unit: row.unit,
-            planItemId: source.planItemId,
-            index: source.index,
-            productName: source.name,
-            areaId: document.areaId,
-            issued: 0
-          };
-          current.issued += source.allocated;
-          allocations.set(key, current);
-        });
-      }));
+    if (!datePlan.length) return [];
 
-    return [...allocations.values()].map((allocation) => {
-      const item = datePlan.find((entry) => entry.id === allocation.planItemId);
-      // An unknown need is not a surplus; keep issued material pending clarification.
-      if (item?.included && quantityNeedsReview(item)) return null;
-      const material = item ? materialsForItem(item).find((entry) => materialKey(entry) === allocation.materialKey) : undefined;
-      const currentNeed = item && item.included && item.areaId === allocation.areaId && material
-        ? itemProductionQty(item) * material.usage
-        : 0;
-      const surplus = calculateReturnSurplus(allocation.issued, currentNeed);
-      if (surplus <= 0.000001) return null;
-      let reason = 'Zmniejszenie ilości produkcji';
-      if (!item || !item.included) reason = 'Pozycja usunięta lub wyłączona z planu';
-      else if (!material) reason = 'Zmiana technologii lub materiału';
-      let destination = 'Zwrot do magazynu';
-      if (planDate === state.selectedPlanDate) {
-        const targetArea = state.areas
-          .filter((area) => !area.shared && area.id !== allocation.areaId)
-          .find((area) => requirementsForArea(area.id).some((requirement) => requirement.key === allocation.materialKey && requirement.toIssue > 0));
-        if (targetArea) destination = `Przesunięcie do: ${targetArea.name}`;
-      }
-      const id = `${planDate}|${allocation.areaId}|${allocation.materialKey}|${allocation.planItemId}`;
-      return {
-        id,
-        planDate,
-        ...allocation,
-        reason,
-        currentNeed,
-        surplus,
-        destination,
-        status: state.returnStatuses[id] ?? 'open'
-      } satisfies MaterialReturnRow;
-    }).filter((row): row is MaterialReturnRow => Boolean(row));
+    const plannedMaterials = datePlan
+      .filter((item) => item.included)
+      .flatMap((item) => materialsForItem(item))
+      .filter((material) => Boolean(normalize(material.code) || normalize(material.name)));
+    if (!plannedMaterials.length) return [];
+
+    const inventoriedByMaterial = new Map<string, InventoryItem>();
+    state.inventory.forEach((inventoryItem) => {
+      if (inventoryItem.qty <= 0.000001) return;
+      if (state.areas.find((area) => area.id === inventoryItem.areaId)?.shared) return;
+      const key = `${inventoryItem.areaId}|${materialKey(inventoryItem)}`;
+      const current = inventoriedByMaterial.get(key);
+      if (current) current.qty += inventoryItem.qty;
+      else inventoriedByMaterial.set(key, { ...inventoryItem });
+    });
+
+    return [...inventoriedByMaterial.entries()]
+      .filter(([, inventoryItem]) => !plannedMaterials.some((material) => materialIdentityMatches(material, inventoryItem)))
+      .map(([inventoryKey, inventoryItem]) => {
+        const id = `${planDate}|${inventoryKey}`;
+        return {
+          id,
+          planDate,
+          materialKey: materialKey(inventoryItem),
+          code: inventoryItem.code,
+          name: inventoryItem.name,
+          category: inventoryItem.category ?? 'Pozostałe',
+          unit: inventoryItem.unit,
+          areaId: inventoryItem.areaId,
+          reason: 'Brak w technologiach aktualnego planu',
+          inventoried: inventoryItem.qty,
+          surplus: inventoryItem.qty,
+          destination: 'Zwrot do magazynu',
+          status: state.returnStatuses[id] ?? 'open'
+        } satisfies MaterialReturnRow;
+      });
   };
 
   const renderDocumentV2 = () => {
@@ -2844,14 +2826,37 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const renderReturnsV2 = () => {
     const returnRows = deriveReturnsForDate(state.selectedPlanDate);
     const openRows = returnRows.filter((row) => row.status === 'open');
+    const activeTechnologyMaterialCount = state.plan
+      .filter((item) => item.included)
+      .flatMap((item) => materialsForItem(item))
+      .filter((material) => Boolean(normalize(material.code) || normalize(material.name)))
+      .length;
+    const inventoriedAreaRows = state.inventory.filter((item) => (
+      item.qty > 0.000001 && !state.areas.find((area) => area.id === item.areaId)?.shared
+    ));
+    const returnsEmptyState = !state.inventory.length
+      ? <EmptyState title="Brak danych ze Spisu rzeczywistego" description="Po wykonaniu spisu wróć do tej zakładki i odśwież dane." />
+      : !state.plan.length
+        ? <EmptyState title="Brak wgranego planu" description="Zwroty można wyznaczyć dopiero po wgraniu planu produkcyjnego." />
+        : !activeTechnologyMaterialCount
+          ? <EmptyState title="Brak przypisanych technologii" description="Najpierw przypisz technologie do pozycji uwzględnionych w planie." />
+          : <EmptyState title="Brak materiałów do zwrotu" description="Każdy materiał ze Spisu rzeczywistego występuje w co najmniej jednej technologii aktualnego planu." />;
     return <div className="space-y-5">
-      {renderHeader('Zwroty', 'Nadwyżki powstają wyłącznie z materiałów wcześniej oznaczonych jako wydane. Zmniejszenie lub usunięcie planu nigdy nie tworzy ujemnego wydania.')}
+      {renderHeader('Zwroty', 'Materiały ze Spisu rzeczywistego, których nie ma w żadnej technologii aktualnego planu.')}
       <PlanQuantityWarnings items={state.plan.filter((item) => item.included)} calculations />
       <Card className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-[minmax(220px,360px)_1fr] sm:items-end"><Field label="Data planu"><Input type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field><p className="text-sm text-muted">Propozycja przesunięcia uwzględnia bieżące braki innych stref dla tej samej daty.</p></div>
-        <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-3"><Stat label="Otwarte zwroty" value={String(openRows.length)} tone={openRows.length ? 'warning' : 'success'} /><Stat label="Łącznie pozycji" value={String(returnRows.length)} /><Stat label="Data" value={formatPlanDate(state.selectedPlanDate)} /></div>
+        <div className="grid gap-3 sm:grid-cols-[minmax(220px,360px)_1fr_auto] sm:items-end">
+          <Field label="Data planu"><Input type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
+          <p className="text-sm text-muted">Spis z dnia: <span className="font-bold text-title">{state.inventorySourceDate ? formatPlanDate(state.inventorySourceDate) : 'brak danych'}</span>{state.inventorySyncedAt ? ` · pobrano ${state.inventorySyncedAt}` : ''}</p>
+          <Button variant="outline" onClick={() => void syncOriginalInventory()}><RefreshCw className="mr-2 h-4 w-4" />Odśwież spis</Button>
+        </div>
+        <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-3">
+          <Stat label="Do zwrotu" value={String(openRows.length)} tone={openRows.length ? 'warning' : 'success'} />
+          <Stat label="Pozycje spisane" value={String(inventoriedAreaRows.length)} />
+          <Stat label="Data planu" value={formatPlanDate(state.selectedPlanDate)} />
+        </div>
       </Card>
-      {returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[1220px] text-sm"><thead className="sticky top-0 z-10 bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim"><tr><th className="p-3">Materiał</th><th className="p-3">Indeks produkcyjny</th><th className="p-3">Strefa</th><th className="p-3">Przyczyna</th><th className="p-3 text-right">Wydano</th><th className="p-3 text-right">Aktualna potrzeba</th><th className="p-3 text-right">Nadwyżka</th><th className="p-3">Proponowane miejsce</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className={cn('border-t border-border', row.status === 'completed' && 'bg-[color:color-mix(in_srgb,var(--success)_7%,transparent)]')}><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td><td className="p-3"><p className="font-bold text-title">{row.index}</p><p className="catalog-label break-words text-xs font-semibold">{row.productName}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3">{row.reason}</td><td className="p-3 text-right">{fmt(row.issued)} {row.unit}</td><td className="p-3 text-right">{fmt(row.currentNeed)} {row.unit}</td><td className="p-3 text-right text-lg font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Badge tone={row.destination.startsWith('Przesunięcie') ? 'info' : 'default'}>{row.destination}</Badge></td><td className="p-3"><Button variant={row.status === 'completed' ? 'ghost' : 'secondary'} onClick={() => updateState((current) => ({ ...current, returnStatuses: { ...current.returnStatuses, [row.id]: row.status === 'completed' ? 'open' : 'completed' } }))}>{row.status === 'completed' ? <Undo2 className="mr-2 h-4 w-4" /> : <Check className="mr-2 h-4 w-4" />}{row.status === 'completed' ? 'Przywróć' : 'Wykonano'}</Button></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak materiałów do zwrotu" description="Zwroty pojawią się po wydaniu materiału i późniejszym zmniejszeniu, usunięciu lub zmianie technologii pozycji planu." />}
+      {returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="sticky top-0 z-10 bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim"><tr><th className="p-3">Materiał</th><th className="p-3">Strefa</th><th className="p-3 text-right">Do zwrotu</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className={cn('border-t border-border', row.status === 'completed' && 'bg-[color:color-mix(in_srgb,var(--success)_7%,transparent)]')}><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3 text-right text-lg font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Button variant={row.status === 'completed' ? 'ghost' : 'secondary'} onClick={() => updateState((current) => ({ ...current, returnStatuses: { ...current.returnStatuses, [row.id]: row.status === 'completed' ? 'open' : 'completed' } }))}>{row.status === 'completed' ? <Undo2 className="mr-2 h-4 w-4" /> : <Check className="mr-2 h-4 w-4" />}{row.status === 'completed' ? 'Przywróć' : 'Wykonano'}</Button></td></tr>)}</tbody></table></div></Card> : returnsEmptyState}
     </div>;
   };
 
@@ -2859,10 +2864,9 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     const versions = [...state.planVersions].sort((left, right) => right.planDate.localeCompare(left.planDate) || right.versionNo - left.versionNo);
     const corrections = [...state.quantityCorrections].sort((left, right) => right.createdAt.localeCompare(left.createdAt, 'pl'));
     const documents = [...state.documents].sort((left, right) => right.planDate.localeCompare(left.planDate) || right.createdAt.localeCompare(left.createdAt, 'pl'));
-    const returnDates = [...new Set(state.documents.filter((document) => document.status === 'issued').map((document) => document.planDate))];
-    const returnRows = returnDates.flatMap(deriveReturnsForDate);
+    const returnRows = deriveReturnsForDate(state.selectedPlanDate);
     return <div className="space-y-5">
-      {renderHeader('Historia', 'Wersje planów, korekty, dokumenty i zwroty pozostają zapisane. Kolejny import nie usuwa wcześniejszych danych.')}
+      {renderHeader('Historia', 'Wersje planów, korekty i dokumenty pozostają zapisane. Zwroty pokazują bieżące porównanie planu ze Spisem rzeczywistym.')}
 
       <section className="space-y-3">
         <SectionTitle title="Wersje planów" subtitle={`${versions.length} zapisanych wersji`} />
@@ -2894,7 +2898,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
 
       <section className="space-y-3"><SectionTitle title="Dokumenty i wydania" subtitle={`${documents.length} dokumentów`} />{documents.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-[rgba(255,255,255,0.035)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Dokument</th><th className="p-3">Data / strefa</th><th className="p-3">Wersja i zakres</th><th className="p-3">Utworzył</th><th className="p-3">Typ</th><th className="p-3">Status</th><th className="p-3 text-right">Pozycje</th></tr></thead><tbody>{documents.map((document) => <tr key={document.id} className="border-t border-border"><td className="p-3 font-black text-title">{document.documentNo}</td><td className="p-3"><p>{formatPlanDate(document.planDate)}</p><p className="text-xs text-muted">{areaName(document.areaId)}</p></td><td className="p-3"><p>Wersja {document.planVersionNo || '—'}</p><p className="text-xs text-muted">{document.scopeLabel}</p></td><td className="p-3"><p>{document.createdBy}</p><p className="text-xs text-muted">{document.createdAt}</p></td><td className="p-3"><Badge tone={document.kind === 'correction' ? 'warning' : 'info'}>{document.kind === 'correction' ? 'Korekta' : 'Podstawowy'}</Badge></td><td className="p-3"><Badge tone={documentTone(document.status)}>{documentStatusLabel[document.status]}</Badge></td><td className="p-3 text-right">{document.rows.length}</td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak dokumentów" description="Dokumenty podstawowe i korekty pojawią się po ich utworzeniu." />}</section>
 
-      <section className="space-y-3"><SectionTitle title="Zwroty" subtitle={`${returnRows.length} wykrytych pozycji`} />{returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[880px] text-sm"><thead className="bg-[rgba(255,255,255,0.035)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data</th><th className="p-3">Materiał</th><th className="p-3">Indeks</th><th className="p-3">Przyczyna</th><th className="p-3 text-right">Nadwyżka</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className="border-t border-border"><td className="p-3">{formatPlanDate(row.planDate)}</td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label text-xs font-semibold">{row.name}</p></td><td className="p-3">{row.index}</td><td className="p-3">{row.reason}</td><td className="p-3 text-right font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Badge tone={row.status === 'completed' ? 'success' : 'warning'}>{row.status === 'completed' ? 'Wykonany' : 'Otwarty'}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak zwrotów" description="Historia zwrotów pojawi się po zmianie planu następującej po wydaniu materiałów." />}</section>
+      <section className="space-y-3"><SectionTitle title="Zwroty" subtitle={`${returnRows.length} wykrytych pozycji dla aktualnego spisu`} />{returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="bg-[rgba(255,255,255,0.035)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data planu</th><th className="p-3">Materiał</th><th className="p-3">Strefa</th><th className="p-3">Przyczyna</th><th className="p-3 text-right">Do zwrotu</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className="border-t border-border"><td className="p-3">{formatPlanDate(row.planDate)}</td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label text-xs font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3">{row.reason}</td><td className="p-3 text-right font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Badge tone={row.status === 'completed' ? 'success' : 'warning'}>{row.status === 'completed' ? 'Wykonany' : 'Otwarty'}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak zwrotów" description="Materiały do zwrotu są wyznaczane z aktualnego Spisu rzeczywistego i technologii planu." />}</section>
 
       {state.archive.length ? <section className="space-y-3"><SectionTitle title="Wstrzymane i zakończone produkcje" subtitle={`${state.archive.length} pozycji`} /><div className="divide-y divide-border border-y border-border">{state.archive.map((entry) => <div key={entry.id} className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between"><div><div className="flex flex-wrap gap-2"><Badge tone={entry.status === 'suspended' ? 'warning' : 'success'}>{entry.status === 'suspended' ? 'Wstrzymana' : 'Zakończona'}</Badge>{entry.planItem.manualOverride ? <Badge tone="info">Technologia robocza</Badge> : null}</div><p className="mt-2 font-bold"><span className="text-title">{entry.planItem.index}</span><span className="catalog-label"> · {entry.planItem.name}</span></p><p className="mt-1 text-sm text-muted">{entry.planItem.station || 'Brak stanowiska'} · {entry.technologyName} · {entry.at}</p><p className="mt-1 text-xs text-dim">{entry.reason}</p></div>{entry.status === 'suspended' && !readOnly ? <Button variant="ghost" onClick={() => updateState((current) => ({ ...current, archive: current.archive.map((row) => row.id === entry.id ? { ...row, status: 'completed', reason: 'Produkcja zakończona ręcznie', at: nowLabel() } : row) }))}><Archive className="mr-2 h-4 w-4" />Zakończ produkcję</Button> : null}</div>)}</div></section> : null}
     </div>;
@@ -2910,7 +2914,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     ['5. Rzeczywisty spis', 'W tej zakładce prowadzisz pełny Spis rzeczywisty. Lokalizacja rozdziela pozycje na Halę 1, Halę 2, Bakomę, Lakiernię i wspólne Silosy. Obliczenia pobierają stąd aktualne ilości hali.'],
     ['6. Silosy', 'Silos jest wspólnym źródłem dla wszystkich hal. Ostrzeżenie liczy łączne zapotrzebowanie wszystkich obszarów, aby ten sam stan nie został obiecany dwa razy.'],
     ['7. Dokument do wypisania', 'Dokument pokazuje wyłącznie materiały, które trzeba dobrać. Osoba wypisująca klika jeden przycisk przy gotowej pozycji; wiersz zaznacza się na zielono.'],
-    ['8. Zwroty i historia', 'Materiały niepotrzebne na danej hali trafiają do zwrotów. Jeśli potrzebuje ich inna hala, pojawia się zalecenie przesunięcia. Produkcja znikająca z planu przechodzi do wstrzymanych i zachowuje technologię roboczą.']
+    ['8. Zwroty i historia', 'Materiał spisany na strefie trafia do zwrotów tylko wtedy, gdy nie występuje w żadnej technologii aktualnego planu. Produkcja znikająca z planu przechodzi do wstrzymanych i zachowuje technologię roboczą.']
   ].map(([title, text]) => <Card key={title}><h2 className="font-black text-title">{title}</h2><p className="mt-2 text-sm leading-6 text-muted">{text}</p></Card>)}</div>;
 
   if (!hydrated) return <div className="py-8 text-sm text-dim" role="status">Wczytywanie planowania...</div>;

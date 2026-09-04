@@ -204,6 +204,7 @@ export type OriginalInventoryCatalogEntry = {
   unit: string;
   createdAt: string;
   indexCode?: string | null;
+  indexCode2?: string | null;
   warehouseCode?: string | null;
 };
 
@@ -262,6 +263,7 @@ export type OriginalInventoryErpSnapshotEntry = {
   availableQty: number;
   unit: string;
   indexCode?: string | null;
+  indexCode2?: string | null;
   warehouseCode?: string | null;
   importedAt: string;
   importedBy: string;

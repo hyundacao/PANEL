@@ -196,9 +196,6 @@ export const allocateAmountByDemand = <T extends { demand: number }>(
   }));
 };
 
-export const calculateReturnSurplus = (issued: number, currentNeed: number) =>
-  Math.max(0, Math.max(0, issued) - Math.max(0, currentNeed));
-
 export const correctedQuantity = (
   current: number,
   mode: 'exact' | 'increase' | 'decrease',

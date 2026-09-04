@@ -3,7 +3,6 @@ import test from 'node:test';
 import {
   allocateAmountByDemand,
   calculateIssueBalance,
-  calculateReturnSurplus,
   calculateScopedQuantity,
   coalesceQuantityCorrection,
   correctedQuantity,
@@ -186,7 +185,7 @@ test('korekta po wzroście 3000 -> 7000 wydaje wyłącznie brakujące 4000', () 
   assert.equal(balance.surplus, 0);
 });
 
-test('zmniejszenie po wcześniejszym wydaniu nie tworzy ujemnego dokumentu i daje zwrot', () => {
+test('zmniejszenie po wcześniejszym wydaniu nie tworzy ujemnego dokumentu', () => {
   const balance = calculateIssueBalance({
     demand: 2000,
     areaStock: 0,
@@ -195,7 +194,6 @@ test('zmniejszenie po wcześniejszym wydaniu nie tworzy ujemnego dokumentu i daj
     pending: 0
   });
   assert.equal(balance.toIssue, 0);
-  assert.equal(calculateReturnSurplus(3000, 2000), 1000);
 });
 
 test('agregowane wydanie jest rozdzielane proporcjonalnie na indeksy źródłowe', () => {

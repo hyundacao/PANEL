@@ -475,6 +475,7 @@ const mapOriginalInventoryCatalogEntry = (row: any): OriginalInventoryCatalogEnt
   unit: row.unit,
   createdAt: row.created_at,
   indexCode: row.index_code ? String(row.index_code).trim() : null,
+  indexCode2: row.index_code2 ? String(row.index_code2).trim() : null,
   warehouseCode: row.warehouse_code ? String(row.warehouse_code).trim() : null
 });
 
@@ -2497,6 +2498,7 @@ const mapOriginalInventoryErpSnapshotEntry = (row: any): OriginalInventoryErpSna
   availableQty: toNumber(row.available_qty ?? row.qty),
   unit: String(row.unit ?? '').trim() || 'kg',
   indexCode: row.index_code ? String(row.index_code).trim() : null,
+  indexCode2: row.index_code2 ? String(row.index_code2).trim() : null,
   warehouseCode: row.warehouse_code ? String(row.warehouse_code).trim() : null,
   importedAt: row.imported_at ?? row.created_at ?? new Date().toISOString(),
   importedBy: String(row.imported_by ?? '').trim() || 'nieznany',
@@ -2648,6 +2650,19 @@ const fetchOriginalCatalogFromErpProxy = async (): Promise<OriginalInventoryCata
         row.item_code,
         row.sku
       );
+      const indexCode2 = firstNonEmptyText(
+        row.indexCode2,
+        row.index_code2,
+        row.index2,
+        row.index_2,
+        row.indeks2,
+        row.indeks_2,
+        row.INDEKS2,
+        row.INDEKS_2,
+        row['Indeks 2'],
+        row.secondaryIndex,
+        row.secondary_index
+      );
       const warehouseCode =
         extractOriginalInventoryWarehouseCode(
           firstNonEmptyText(
@@ -2661,14 +2676,14 @@ const fetchOriginalCatalogFromErpProxy = async (): Promise<OriginalInventoryCata
           )
         ) ?? extractOriginalInventoryWarehouseCode(indexCode);
       const id = buildErpOriginalCatalogId(
-        row.id ?? row.materialId ?? row.erpId ?? row.code ?? row.indexCode ?? indexCode,
+        row.id ?? row.materialId ?? row.erpId ?? row.code ?? row.indexCode2 ?? indexCode2 ?? row.indexCode ?? indexCode,
         name,
         index
       );
       const createdAt = toIsoOrNow(
         row.createdAt ?? row.updatedAt ?? row.timestamp ?? row.date ?? row.modifiedAt
       );
-      const key = `${name.toLowerCase()}|${unit.toLowerCase()}|${indexCode?.toLowerCase() ?? ''}`;
+      const key = `${name.toLowerCase()}|${unit.toLowerCase()}|${indexCode2?.toLowerCase() ?? ''}|${indexCode?.toLowerCase() ?? ''}`;
       if (deduped.has(key)) return;
       deduped.set(key, {
         id,
@@ -2676,6 +2691,7 @@ const fetchOriginalCatalogFromErpProxy = async (): Promise<OriginalInventoryCata
         unit,
         createdAt,
         indexCode: indexCode ?? null,
+        indexCode2: indexCode2 ?? null,
         warehouseCode: warehouseCode ?? null
       });
     });

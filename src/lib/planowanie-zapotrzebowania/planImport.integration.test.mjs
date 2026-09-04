@@ -12,7 +12,7 @@ const ts = require('typescript');
 const source = readFileSync(pageFile,'utf8');
 const ast = ts.createSourceFile('page.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const directQuantityEditing = source.includes('const updatePlanQuantity =');
-const names = ['uid','numberValue','normalize','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','splitProductFields','stationKey','applyStationMappings','normalizedMaterialUnit','isKilogramUnit','isGramUnit','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','documentStatusLabel','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
+const names = ['uid','numberValue','normalize','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','splitProductFields','stationKey','applyStationMappings','materialKey','materialIdentityMatches','normalizedMaterialUnit','isKilogramUnit','isGramUnit','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
   'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','itemProductionQty','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','deriveReturnsForDate'];
 if (directQuantityEditing) names.push('updatePlanNorm');
 const definitions = new Map();
@@ -34,7 +34,7 @@ const rows=[['Lp.','','Ilość','ST.','Norma','','Uwagi'],['1','LEFT + RIGHT (A1
 function setup() {
   const messages=[];
   const ctx=vm.createContext({exports:{},...imports,...domain.exports,
-    state:{plan:[],technologies:[],archive:[],planVersions:[],documents:[],quantityCorrections:[],stationMappings:[],selectedPlanDate:'2026-08-31',selectedAreaId:'hala-2',dailyPlans:{},returnStatuses:{},areas:[],calculationMode:'all',horizonShifts:3.5},
+    state:{plan:[],technologies:[],archive:[],planVersions:[],documents:[],quantityCorrections:[],stationMappings:[],selectedPlanDate:'2026-08-31',selectedAreaId:'hala-2',dailyPlans:{},returnStatuses:{},inventory:[],areas:[],calculationMode:'all',horizonShifts:3.5},
     pending:{fileName:'test.xlsx',purpose:'plan',workbook:{SheetNames:['Plan'],Sheets:{Plan:{rows}}}},sheetName:'Plan',currentUserName:'Test',quantityInputs:{},readOnly:false,
     XLSX:{read:(data)=>data,utils:{sheet_to_json:(sheet)=>sheet.rows,decode_range:()=>({s:{r:0}})}},
     flash:(message)=>messages.push(message),nowLabel:()=>new Date().toISOString(),localDateKey:()=>'2026-08-31',formatPlanDate:(date)=>date,
@@ -340,6 +340,11 @@ test('reopening upgrades an unissued legacy composite row but preserves issued d
   const protectedState=h.parseStoredState(JSON.parse(JSON.stringify(issuedState)));
   assert.equal(protectedState.plan.length,1);
   assert.equal(protectedState.plan[0].id,'legacy');
+
+  const writtenDraftState={...rawState,documents:[{status:'draft',rows:[{confirmed:true,sources:[{planItemId:'legacy'}]}]}]};
+  const protectedWrittenDraft=h.parseStoredState(JSON.parse(JSON.stringify(writtenDraftState)));
+  assert.equal(protectedWrittenDraft.plan.length,1);
+  assert.equal(protectedWrittenDraft.plan[0].id,'legacy');
 });
 
 test('first import is a baseline and only later additions are marked as new',()=>{
@@ -494,13 +499,33 @@ test('document table places the written checkmarks first and exposes progress pl
   assert.match(documentSource,/changePickingDocumentStatus\(document\.id, 'draft'\)/);
 });
 
-test('unknown active production must not produce a false return of issued material',()=>{
+test('an inventoried material absent from every current technology is returned in full',()=>{
   const h=setup(); h.importSelectedSheet();
-  const item=h.ctx.state.plan.find((entry)=>entry.index==='B100'); item.areaId='hala-2';
-  h.ctx.state.documents=[{planDate:'2026-08-31',areaId:'hala-2',status:'issued',rows:[{key:'MAT',code:'MAT',name:'Material',category:'Tworzywo',unit:'kg',toIssue:100,sources:[{planItemId:item.id,index:item.index,name:item.name,demand:100}]}]}];
+  h.ctx.materialsForItem=()=>[{id:'used',code:'USED',name:'Potrzebny materiał',category:'Tworzywo',unit:'kg',usage:0.1,logisticQty:1}];
+  h.ctx.state.areas=[{id:'hala-2',name:'Hala 2'},{id:'silosy',name:'Silosy',shared:true}];
+  h.ctx.state.inventory=[
+    {id:'unused',areaId:'hala-2',code:'UNUSED',name:'Materiał niepotrzebny',category:'Tworzywo',qty:75,unit:'kg'},
+    {id:'used',areaId:'hala-2',code:'USED',name:'Potrzebny materiał',category:'Tworzywo',qty:300,unit:'kg'},
+    {id:'shared',areaId:'silosy',code:'OTHER',name:'Stan wspólny',category:'Tworzywo',qty:900,unit:'kg'}
+  ];
+
+  const returns=h.deriveReturnsForDate('2026-08-31');
+  assert.equal(returns.length,1);
+  const [returned]=returns;
+  assert.equal(returned.code,'UNUSED');
+  assert.equal(returned.surplus,75);
+  assert.equal(returned.inventoried,75);
+  assert.equal(returned.reason,'Brak w technologiach aktualnego planu');
+});
+
+test('an inventoried material still present in technology never becomes a quantity surplus',()=>{
+  const h=setup(); h.importSelectedSheet();
+  h.ctx.materialsForItem=()=>[{id:'needed',code:'TECH-CODE',name:'Ten sam materiał',category:'Tworzywo',unit:'g',usage:0.001,logisticQty:1}];
+  h.ctx.state.inventory=[{id:'stock',areaId:'hala-2',code:'SPIS-CODE',name:'Ten sam materiał',category:'Tworzywo',qty:1000,unit:'kg'}];
   assert.equal(h.deriveReturnsForDate('2026-08-31').length,0);
-  item.included=false;
-  assert.equal(h.deriveReturnsForDate('2026-08-31')[0].surplus,100);
+
+  h.ctx.materialsForItem=()=>[];
+  assert.equal(h.deriveReturnsForDate('2026-08-31').length,0,'incomplete technologies must not mark the whole inventory for return');
 });
 
 test('direct quantity editing groups typed digits and preserves the source and issued documents', {skip: !directQuantityEditing},()=>{
