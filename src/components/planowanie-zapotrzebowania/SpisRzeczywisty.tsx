@@ -40,6 +40,7 @@ import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { parseQtyInput } from '@/lib/utils/format';
 import { cn } from '@/lib/utils/cn';
 import {
+  dedupeOriginalInventorySpisSuggestions,
   getOriginalInventorySpisWarehousePriority,
   getOriginalInventorySpisIndex2,
   matchesOriginalInventorySpisSearch,
@@ -1337,6 +1338,7 @@ export default function SpisRzeczywisty() {
       warehouseCode: string | null;
       indexCode: string | null;
       indexCode2: string | null;
+      hasExplicitIndexCode2: boolean;
       isMag55: boolean;
     }> = [];
     const registerIndexedName = (
@@ -1375,8 +1377,9 @@ export default function SpisRzeczywisty() {
       const nameKey = normalizeCatalogNameKey(item.name);
       const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
       const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
+      const hasExplicitIndexCode2 = Boolean(String(item.indexCode2 ?? '').trim());
       const indexCode2 = getOriginalInventorySpisIndex2(indexCode, item.indexCode2) || null;
-      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}`;
+      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}|${hasExplicitIndexCode2}`;
       if (seen.has(key)) return;
       seen.add(key);
       list.push({
@@ -1385,6 +1388,7 @@ export default function SpisRzeczywisty() {
         warehouseCode,
         indexCode,
         indexCode2,
+        hasExplicitIndexCode2,
         isMag55: warehouseCode === 'M-55'
       });
     });
@@ -1392,8 +1396,9 @@ export default function SpisRzeczywisty() {
       const nameKey = normalizeCatalogNameKey(item.name);
       const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
       const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
+      const hasExplicitIndexCode2 = Boolean(String(item.indexCode2 ?? '').trim());
       const indexCode2 = getOriginalInventorySpisIndex2(indexCode, item.indexCode2) || null;
-      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}`;
+      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}|${hasExplicitIndexCode2}`;
       if (seen.has(key)) return;
       seen.add(key);
       list.push({
@@ -1402,6 +1407,7 @@ export default function SpisRzeczywisty() {
         warehouseCode,
         indexCode,
         indexCode2,
+        hasExplicitIndexCode2,
         isMag55: warehouseCode === 'M-55'
       });
     });
@@ -1417,6 +1423,7 @@ export default function SpisRzeczywisty() {
         warehouseCode: null,
         indexCode: null,
         indexCode2: null,
+        hasExplicitIndexCode2: false,
         isMag55: false
       });
     });
@@ -1424,9 +1431,10 @@ export default function SpisRzeczywisty() {
       const nameKey = normalizeCatalogNameKey(item.name);
       const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
       const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
+      const hasExplicitIndexCode2 = Boolean(String(item.indexCode2 ?? '').trim());
       const indexCode2 = getOriginalInventorySpisIndex2(indexCode, item.indexCode2) || null;
       if (!warehouseCode && !indexCode2 && namesWithIndexedSuggestions.has(nameKey)) return;
-      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}`;
+      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}|${hasExplicitIndexCode2}`;
       if (seen.has(key)) return;
       seen.add(key);
       list.push({
@@ -1435,25 +1443,11 @@ export default function SpisRzeczywisty() {
         warehouseCode,
         indexCode,
         indexCode2,
+        hasExplicitIndexCode2,
         isMag55: warehouseCode === 'M-55'
       });
     });
-    const deduped = new Map<string, (typeof list)[number]>();
-    list.forEach((item) => {
-      const key = `${normalizeCatalogNameKey(item.name)}|${item.warehouseCode ?? ''}|${item.indexCode2 ?? ''}`;
-      const current = deduped.get(key);
-      if (!current) {
-        deduped.set(key, item);
-        return;
-      }
-      const currentScore =
-        (current.warehouseCode ? 4 : 0) + (current.indexCode2 ? 2 : 0) + (current.unit ? 1 : 0);
-      const nextScore = (item.warehouseCode ? 4 : 0) + (item.indexCode2 ? 2 : 0) + (item.unit ? 1 : 0);
-      if (nextScore > currentScore) {
-        deduped.set(key, item);
-      }
-    });
-    const values = [...deduped.values()];
+    const values = dedupeOriginalInventorySpisSuggestions(list);
     const namesWithWarehouseVariant = new Set(
       values
         .filter((item) => Boolean(item.warehouseCode))
@@ -1467,22 +1461,8 @@ export default function SpisRzeczywisty() {
     if (!normalizeCatalogNameKey(form.name)) return [];
     const filtered = nameSuggestions
       .filter((item) => matchesOriginalInventorySpisSearch(form.name, item.name, item.indexCode2));
-    const deduped = new Map<string, (typeof filtered)[number]>();
-    filtered.forEach((item) => {
-      const key = `${normalizeCatalogNameKey(item.name)}|${item.warehouseCode ?? ''}|${item.indexCode2 ?? ''}`;
-      const current = deduped.get(key);
-      if (!current) {
-        deduped.set(key, item);
-        return;
-      }
-      const currentScore = (current.indexCode2 ? 1 : 0) + (current.warehouseCode ? 2 : 0);
-      const nextScore = (item.indexCode2 ? 1 : 0) + (item.warehouseCode ? 2 : 0);
-      if (nextScore > currentScore) {
-        deduped.set(key, item);
-      }
-    });
     return prioritizeOriginalInventorySpisSuggestions(
-      [...deduped.values()],
+      dedupeOriginalInventorySpisSuggestions(filtered),
       existingByName.keys()
     )
       .slice(0, 8);

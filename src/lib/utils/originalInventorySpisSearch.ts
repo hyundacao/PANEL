@@ -36,6 +36,26 @@ type OriginalInventorySpisSuggestion = {
   warehouseCode?: string | null;
   indexCode?: string | null;
   indexCode2?: string | null;
+  hasExplicitIndexCode2?: boolean;
+};
+
+export const dedupeOriginalInventorySpisSuggestions = <T extends OriginalInventorySpisSuggestion>(
+  suggestions: readonly T[]
+) => {
+  const deduped = new Map<string, T>();
+  const score = (item: T) =>
+    Number(Boolean(item.hasExplicitIndexCode2)) * 8 +
+    Number(Boolean(item.indexCode2)) * 4 +
+    Number(Boolean(item.indexCode)) * 2 +
+    Number(Boolean(item.warehouseCode));
+
+  suggestions.forEach((item) => {
+    const key = `${normalizeSearchText(item.name)}|${String(item.warehouseCode ?? '').trim().toUpperCase()}`;
+    const current = deduped.get(key);
+    if (!current || score(item) > score(current)) deduped.set(key, item);
+  });
+
+  return [...deduped.values()];
 };
 
 export const prioritizeOriginalInventorySpisSuggestions = <T extends OriginalInventorySpisSuggestion>(
@@ -83,7 +103,8 @@ export const getOriginalInventorySpisIndex2 = (
   if (!legacy) return '';
   if (!/^m[-\s]?\d+(?:[-\s]|$)/i.test(legacy)) return legacy;
 
-  return legacy.match(/(\d+(?:[-/]\d+)*)$/)?.[1] ?? '';
+  const withoutWarehousePrefix = legacy.replace(/^m[-\s]?\d+(?:[-\s]|$)/i, '');
+  return withoutWarehousePrefix.match(/(\d+(?:[-/]\d+)*)$/)?.[1] ?? '';
 };
 
 export const matchesOriginalInventorySpisSearch = (

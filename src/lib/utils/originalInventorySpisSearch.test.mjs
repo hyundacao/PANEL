@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  dedupeOriginalInventorySpisSuggestions,
   getOriginalInventorySpisWarehousePriority,
   getOriginalInventorySpisIndex2,
   matchesOriginalInventorySpisSearch,
@@ -22,6 +23,29 @@ test('legacy catalog rows expose only the trailing index 2 instead of the wareho
   assert.equal(getOriginalInventorySpisIndex2('M-1-BA-BSHTR-001 -00'), '001-00');
   assert.equal(getOriginalInventorySpisIndex2('M-1-BA-BSHTR- 001 - 00'), '001-00');
   assert.equal(getOriginalInventorySpisIndex2('5949'), '5949');
+  assert.equal(getOriginalInventorySpisIndex2('M-10-8001228788'), '8001228788');
+});
+
+test('the explicit second index wins for duplicate material and warehouse suggestions', () => {
+  const suggestions = dedupeOriginalInventorySpisSuggestions([
+    {
+      name: 'TRAY HANDLE ASSEMBLY WELDED WHITE',
+      warehouseCode: 'M-10',
+      indexCode: 'M-10-8001228788',
+      indexCode2: '8001228788',
+      hasExplicitIndexCode2: false
+    },
+    {
+      name: 'TRAY HANDLE ASSEMBLY WELDED WHITE',
+      warehouseCode: 'M-10',
+      indexCode: 'M-10-8001228788',
+      indexCode2: '10006',
+      hasExplicitIndexCode2: true
+    }
+  ]);
+
+  assert.equal(suggestions.length, 1);
+  assert.equal(suggestions[0].indexCode2, '10006');
 });
 
 test('spis search still matches names and normalized index 2 formatting', () => {
