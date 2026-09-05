@@ -2,14 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import {
+  searchProductCatalog,
+  type ProductCatalogItem,
+  type ProductCatalogSearchMode
+} from '@/lib/planowanie-zapotrzebowania/productCatalogSearch';
 
 export const dynamic = 'force-dynamic';
 
 const MODULE_KEY = 'main';
 const PRODUCT_CATALOG_PAGE_SIZE = 1000;
 const PRODUCT_CATALOG_CACHE_MS = 5 * 60 * 1000;
-
-type ProductCatalogItem = { id: string; name: string; index: string; warehouseCode: string; unit: string };
 
 let productCatalogCache: { items: ProductCatalogItem[]; expiresAt: number } | null = null;
 let productCatalogLoadPromise: Promise<ProductCatalogItem[]> | null = null;
@@ -160,7 +163,23 @@ export async function GET(request: NextRequest) {
   if (access.response) return access.response;
   if (request.nextUrl.searchParams.get('source') === 'product-catalog') {
     try {
-      return NextResponse.json({ items: await loadProductCatalog() });
+      const query = request.nextUrl.searchParams.get('query')?.slice(0, 160) ?? '';
+      const requestedMode = request.nextUrl.searchParams.get('mode');
+      const allowedModes = new Set<ProductCatalogSearchMode>([
+        'product-name',
+        'product-index',
+        'material-name',
+        'material-code'
+      ]);
+      if (!requestedMode || !allowedModes.has(requestedMode as ProductCatalogSearchMode)) {
+        return NextResponse.json({ code: 'INVALID_PRODUCT_CATALOG_SEARCH_MODE' }, { status: 400 });
+      }
+      const requestedLimit = Number(request.nextUrl.searchParams.get('limit') ?? 12);
+      const mode = requestedMode as ProductCatalogSearchMode;
+      const items = query.trim()
+        ? searchProductCatalog(await loadProductCatalog(), query, mode, requestedLimit)
+        : [];
+      return NextResponse.json({ items });
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'UNKNOWN_ERROR';
       return NextResponse.json({ code: 'PRODUCT_CATALOG_LOAD_FAILED', detail }, { status: 500 });

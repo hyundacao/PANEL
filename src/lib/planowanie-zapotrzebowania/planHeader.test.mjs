@@ -62,6 +62,22 @@ test('technology editor starts with an empty unpersisted draft instead of the fi
   assert.equal(h.technologyEditorState(technologies, 'existing-tech').selected, technologies[0]);
 });
 
+test('technology editor draft detects nested material changes without mutating the saved source', () => {
+  const h = createHeaderFixture();
+  const technology = {
+    id: 'existing-tech', productIndex: '8001128772', productName: 'MAX BO VG1',
+    variant: 'base', alternativeNo: 0, description: '', notes: '', shiftNorm: 700,
+    materials: [{ id: 'material-1', code: 'ABS-1', name: 'ABS BLACK', category: 'Tworzywo', usage: 0.064, unit: 'kg', logisticQty: 1 }],
+    archived: false
+  };
+  const editor = h.technologyEditorState([technology], technology.id);
+  const draft = editor.clone(technology);
+  assert.equal(editor.isSame(draft, technology), true);
+  draft.materials[0].usage = 0.072;
+  assert.equal(editor.isSame(draft, technology), false);
+  assert.equal(technology.materials[0].usage, 0.064);
+});
+
 test('plan emphasizes the product name in bold orange and keeps the index and notes lighter', () => {
   const h = createHeaderFixture();
   h.ctx.state.plan = [{ ...h.ctx.state.plan[0], index: '8001227999', name: 'T27SC1R LID HEX NUPS COMPLETE', notes: 'Uwagi bez zmian' }];

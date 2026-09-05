@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, forwardRef, Fragment, useCallback, useContext, useDeferredValue, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, Fragment, useCallback, useDeferredValue, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as XLSX from 'xlsx';
@@ -39,6 +39,10 @@ import { knownRemainingQuantity, planningSections, quantityNeedsReview, readPlan
 import { isReadOnly } from '@/lib/auth/access';
 import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
+import type {
+  ProductCatalogItem,
+  ProductCatalogSearchMode
+} from '@/lib/planowanie-zapotrzebowania/productCatalogSearch';
 
 import {
   calculateIssueBalance,
@@ -280,8 +284,6 @@ type Requirement = {
 };
 
 type PendingWorkbook = { workbook: XLSX.WorkBook; fileName: string; purpose: 'plan' | 'inventory' };
-type ProductCatalogItem = { id: string; index: string; name: string; warehouseCode?: string; unit?: string };
-
 const LOCAL_KEY = 'apka-kamila-planowanie-zapotrzebowania-v1';
 const CATEGORIES: MaterialCategory[] = [
   'Tworzywo',
@@ -474,6 +476,72 @@ const findExactCatalogItem = (items: ProductCatalogItem[], mode: 'code' | 'name'
     })[0];
 };
 
+const PRODUCT_CATALOG_SEARCH_DELAY_MS = 180;
+const productCatalogSearchCache = new Map<string, ProductCatalogItem[]>();
+
+const useProductCatalogSearch = (
+  query: string,
+  mode: ProductCatalogSearchMode,
+  enabled: boolean,
+  limit: number
+) => {
+  const deferredQuery = useDeferredValue(query);
+  const trimmedQuery = deferredQuery.replace(/\s+/g, ' ').trim();
+  const minimumLength = mode === 'material-name' || mode === 'material-code' ? 1 : 2;
+  const active = enabled && trimmedQuery.length >= minimumLength;
+  const searchKey = active ? `${mode}|${limit}|${trimmedQuery.toLocaleLowerCase('pl')}` : '';
+  const [result, setResult] = useState<{
+    key: string;
+    items: ProductCatalogItem[];
+  }>({ key: '', items: [] });
+  const cachedItems = searchKey ? productCatalogSearchCache.get(searchKey) : undefined;
+
+  useEffect(() => {
+    if (!active || !searchKey || productCatalogSearchCache.has(searchKey)) return;
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams({
+        source: 'product-catalog',
+        query: trimmedQuery,
+        mode,
+        limit: String(limit)
+      });
+      fetch(`/api/planowanie-zapotrzebowania?${params.toString()}`, {
+        cache: 'no-store',
+        signal: controller.signal
+      })
+        .then(async (response) => {
+          if (!response.ok) throw new Error('catalog search unavailable');
+          return response.json() as Promise<{ items?: ProductCatalogItem[] }>;
+        })
+        .then((payload) => {
+          if (controller.signal.aborted) return;
+          const items = Array.isArray(payload.items) ? payload.items : [];
+          if (productCatalogSearchCache.size >= 80) {
+            const oldestKey = productCatalogSearchCache.keys().next().value;
+            if (oldestKey) productCatalogSearchCache.delete(oldestKey);
+          }
+          productCatalogSearchCache.set(searchKey, items);
+          setResult({ key: searchKey, items });
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setResult({ key: searchKey, items: [] });
+        });
+    }, PRODUCT_CATALOG_SEARCH_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [active, limit, mode, searchKey, trimmedQuery]);
+
+  return {
+    items: active ? cachedItems ?? (result.key === searchKey ? result.items : []) : [],
+    loading: active && !cachedItems && result.key !== searchKey
+  };
+};
+
 const baseAreas: Area[] = [
   { id: 'hala-1', name: 'Hala 1' },
   { id: 'hala-2', name: 'Hala 2' },
@@ -598,13 +666,44 @@ const emptyTechnologyDraft = (): Technology => ({
   productIndex: '',
   productName: '',
   variant: 'base',
-  alternativeNo: 1,
+  alternativeNo: 0,
   description: '',
   notes: '',
   shiftNorm: 0,
   materials: [],
   archived: false
 });
+
+const cloneTechnologyForEditor = (technology: Technology): Technology => ({
+  ...technology,
+  materials: technology.materials.map((material) => ({ ...material }))
+});
+
+const sameTechnologyEditorValue = (left: Technology, right: Technology) =>
+  left.id === right.id &&
+  left.productIndex === right.productIndex &&
+  left.productName === right.productName &&
+  left.variant === right.variant &&
+  left.alternativeNo === right.alternativeNo &&
+  left.description === right.description &&
+  left.notes === right.notes &&
+  left.shiftNorm === right.shiftNorm &&
+  left.archived === right.archived &&
+  left.materials.length === right.materials.length &&
+  left.materials.every((material, index) => {
+    const other = right.materials[index];
+    return Boolean(other) &&
+      material.id === other.id &&
+      material.code === other.code &&
+      material.name === other.name &&
+      material.category === other.category &&
+      material.usage === other.usage &&
+      material.unit === other.unit &&
+      material.logisticQty === other.logisticQty;
+  });
+
+const TECHNOLOGY_UNSAVED_CHANGES_MESSAGE =
+  'Masz niezapisane zmiany w technologii. Odrzucić je i przejść dalej?';
 
 const cleanImportedTechnologyDescription = (value: unknown) => {
   const description = String(value ?? '').trim();
@@ -972,15 +1071,12 @@ const ProductCatalogField = ({
   );
 };
 
-const MaterialCatalogContext = createContext<ProductCatalogItem[]>([]);
-
 type MaterialCatalogInputProps = React.InputHTMLAttributes<HTMLInputElement> & {
-  items: ProductCatalogItem[];
   mode: 'code' | 'name';
   onCatalogSelect?: (item: ProductCatalogItem) => void;
 };
 
-const MaterialCatalogInput = forwardRef<HTMLInputElement, MaterialCatalogInputProps>(({ items, mode, onCatalogSelect, ...props }, forwardedRef) => {
+const MaterialCatalogInput = forwardRef<HTMLInputElement, MaterialCatalogInputProps>(({ mode, onCatalogSelect, ...props }, forwardedRef) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const blurTimeoutRef = useRef<number | null>(null);
@@ -994,55 +1090,19 @@ const MaterialCatalogInput = forwardRef<HTMLInputElement, MaterialCatalogInputPr
     placement: 'above' | 'below';
   }>({ left: 8, top: 8, width: 320, placement: 'below' });
   const query = String(props.value ?? '');
-  const deferredQuery = useDeferredValue(query);
+  const catalogSearch = useProductCatalogSearch(
+    query,
+    mode === 'code' ? 'material-code' : 'material-name',
+    open,
+    8
+  );
+  const suggestions = catalogSearch.items;
+  const exactSuggestion = useMemo(
+    () => findExactCatalogItem(suggestions, mode, query),
+    [mode, query, suggestions]
+  );
 
   useImperativeHandle(forwardedRef, () => inputRef.current as HTMLInputElement);
-
-  const suggestions = useMemo(() => {
-    if (!mode || !open) return [];
-    const normalizedQuery = normalize(deferredQuery);
-    if (!normalizedQuery) return [];
-    const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
-    const otherWarehouseRank = MATERIAL_WAREHOUSE_PRIORITY.length;
-    const relevanceLevels = 7;
-    const buckets = Array.from(
-      { length: relevanceLevels },
-      () => Array.from({ length: otherWarehouseRank + 1 }, () => [] as ProductCatalogItem[])
-    );
-    for (const item of items) {
-      const code = normalize(item.index);
-      const name = normalize(item.name);
-      const warehouseCode = normalize(item.warehouseCode);
-      if (/(^|[\s(/_-])fw\s*-/.test(name)) continue;
-      const searchable = `${code} ${name} ${warehouseCode}`;
-      if (!tokens.every((token) => searchable.includes(token))) continue;
-      const primary = mode === 'name' ? name : code;
-      const secondary = mode === 'name' ? code : name;
-      const relevance = primary === normalizedQuery
-        ? 0
-        : primary.startsWith(normalizedQuery)
-          ? 1
-          : primary.includes(normalizedQuery)
-            ? 2
-            : secondary === normalizedQuery
-              ? 3
-              : secondary.startsWith(normalizedQuery)
-                ? 4
-                : secondary.includes(normalizedQuery)
-                  ? 5
-                  : 6;
-      const rank = MATERIAL_WAREHOUSE_RANK.get(String(item.warehouseCode ?? '').trim().toUpperCase()) ?? otherWarehouseRank;
-      const bucket = buckets[relevance][rank];
-      if (bucket.length < 8) bucket.push(item);
-    }
-    const ordered: ProductCatalogItem[] = [];
-    for (let relevance = 0; relevance < relevanceLevels && ordered.length < 8; relevance += 1) {
-      for (let rank = 0; rank <= otherWarehouseRank && ordered.length < 8; rank += 1) {
-        ordered.push(...buckets[relevance][rank]);
-      }
-    }
-    return ordered.slice(0, 8);
-  }, [deferredQuery, items, mode, open]);
 
   const positionDropdown = useCallback((input: HTMLInputElement) => {
     const rect = input.getBoundingClientRect();
@@ -1186,9 +1246,9 @@ const MaterialCatalogInput = forwardRef<HTMLInputElement, MaterialCatalogInputPr
         onChange?.(event);
       }}
       onKeyDown={(event) => {
-        if (event.key === 'Enter' && suggestions[0]) {
+        if (event.key === 'Enter' && (exactSuggestion || suggestions[0])) {
           event.preventDefault();
-          selectItem(suggestions[0]);
+          selectItem(exactSuggestion ?? suggestions[0]);
         } else if (event.key === 'Escape') {
           setOpen(false);
         }
@@ -1209,7 +1269,7 @@ const MaterialCatalogInput = forwardRef<HTMLInputElement, MaterialCatalogInputPr
           transform: position.placement === 'above' ? 'translateY(-100%)' : undefined
         }}
       >
-        {suggestions.length ? suggestions.map((item) => <button
+        {catalogSearch.loading ? <p className="px-3 py-3 text-sm text-muted">Wyszukiwanie...</p> : suggestions.length ? suggestions.map((item) => <button
           key={item.id}
           type="button"
           className="block w-full rounded-lg px-3 py-2.5 text-left transition hover:bg-[rgba(255,255,255,0.06)] focus:bg-[rgba(255,255,255,0.06)] focus:outline-none"
@@ -1237,11 +1297,10 @@ type MaterialAwareInputProps = React.InputHTMLAttributes<HTMLInputElement> & {
 };
 
 const Input = forwardRef<HTMLInputElement, MaterialAwareInputProps>(({ onCatalogSelect, ...props }, forwardedRef) => {
-  const items = useContext(MaterialCatalogContext);
   const listId = typeof props.list === 'string' ? props.list : '';
   const mode = listId === 'material-code-suggestions' ? 'code' : listId === 'material-name-suggestions' ? 'name' : null;
   if (!mode) return <BaseInput ref={forwardedRef} {...props} />;
-  return <MaterialCatalogInput ref={forwardedRef} {...props} items={items} mode={mode} onCatalogSelect={onCatalogSelect} />;
+  return <MaterialCatalogInput ref={forwardedRef} {...props} mode={mode} onCatalogSelect={onCatalogSelect} />;
 });
 
 Input.displayName = 'MaterialAwareInput';
@@ -1286,11 +1345,91 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const [expandedMaterial, setExpandedMaterial] = useState('');
   const [editingTechnologyId, setEditingTechnologyId] = useState('');
   const [technologyDraft, setTechnologyDraft] = useState<Technology>(emptyTechnologyDraft);
-  const [productCatalog, setProductCatalog] = useState<ProductCatalogItem[]>([]);
-  const [productCatalogLoading, setProductCatalogLoading] = useState(false);
-  const productCatalogRequestedRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentUserName = user?.username ?? user?.name ?? 'nieznany';
+  const selectedTechnologyEditorSource = useMemo(
+    () => selectedTechnologyForEditor(state.technologies, editingTechnologyId),
+    [editingTechnologyId, state.technologies]
+  );
+  const technologyEditorDirty = useMemo(
+    () => !sameTechnologyEditorValue(
+      technologyDraft,
+      selectedTechnologyEditorSource ?? emptyTechnologyDraft()
+    ),
+    [selectedTechnologyEditorSource, technologyDraft]
+  );
+  const technologyProductIndexSearch = useProductCatalogSearch(
+    technologyDraft.productIndex,
+    'product-index',
+    view === 'technologie' && technologyPanel === 'editor',
+    12
+  );
+  const technologyProductNameSearch = useProductCatalogSearch(
+    technologyDraft.productName,
+    'product-name',
+    view === 'technologie' && technologyPanel === 'editor',
+    12
+  );
+  const resetTechnologyEditor = useCallback(() => {
+    setTechnologyDraft(selectedTechnologyEditorSource
+      ? cloneTechnologyForEditor(selectedTechnologyEditorSource)
+      : emptyTechnologyDraft());
+  }, [selectedTechnologyEditorSource]);
+  const clearTechnologyEditor = useCallback(() => {
+    setEditingTechnologyId('');
+    setTechnologyDraft(emptyTechnologyDraft());
+  }, []);
+  const confirmDiscardTechnologyEditor = useCallback(
+    () => !technologyEditorDirty || window.confirm(TECHNOLOGY_UNSAVED_CHANGES_MESSAGE),
+    [technologyEditorDirty]
+  );
+
+  useEffect(() => {
+    if (view !== 'technologie' || !technologyEditorDirty) return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    const handleDocumentClick = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const anchor = target?.closest<HTMLAnchorElement>('a[href]');
+      if (!anchor || anchor.target === '_blank' || anchor.hasAttribute('download')) return;
+      const destination = new URL(anchor.href, window.location.href);
+      if (destination.href === window.location.href) return;
+      if (!window.confirm(TECHNOLOGY_UNSAVED_CHANGES_MESSAGE)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+      clearTechnologyEditor();
+    };
+    const handleHistoryNavigation = (event: PopStateEvent) => {
+      if (!window.confirm(TECHNOLOGY_UNSAVED_CHANGES_MESSAGE)) {
+        event.stopImmediatePropagation();
+        router.push('/planowanie-zapotrzebowania?view=technologie');
+        return;
+      }
+      clearTechnologyEditor();
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('popstate', handleHistoryNavigation, true);
+    document.addEventListener('click', handleDocumentClick, true);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('popstate', handleHistoryNavigation, true);
+      document.removeEventListener('click', handleDocumentClick, true);
+    };
+  }, [clearTechnologyEditor, router, technologyEditorDirty, view]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
@@ -1313,66 +1452,6 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     setMessage(text);
     window.setTimeout(() => setMessage(''), 3200);
   };
-
-  useEffect(() => {
-    const needsCatalog = view === 'technologie' || Boolean(expandedPlan) || Boolean(expandedCalculation);
-    if (!needsCatalog || productCatalogRequestedRef.current) return;
-    productCatalogRequestedRef.current = true;
-    setProductCatalogLoading(true);
-    fetch('/api/planowanie-zapotrzebowania?source=product-catalog', { cache: 'no-store' })
-      .then(async (response) => {
-        if (!response.ok) throw new Error('catalog unavailable');
-        return response.json() as Promise<{ items?: ProductCatalogItem[] }>;
-      })
-      .then((payload) => {
-        setProductCatalog(Array.isArray(payload.items) ? payload.items : []);
-      })
-      .catch(() => {
-        productCatalogRequestedRef.current = false;
-        setProductCatalog([]);
-      })
-      .finally(() => {
-        setProductCatalogLoading(false);
-      });
-  }, [expandedCalculation, expandedPlan, view]);
-
-  useEffect(() => {
-    if (!hydrated || !productCatalog.length) return;
-    const byCode = new Map(productCatalog.filter((item) => normalize(item.index)).map((item) => [normalize(item.index), item]));
-    const byName = new Map(productCatalog.filter((item) => normalize(item.name)).map((item) => [normalize(item.name), item]));
-    setState((current) => {
-      let changed = false;
-      const repairMaterials = (materials: TechnologyMaterial[]) => {
-        let listChanged = false;
-        const next = materials.map((material) => {
-          const catalogItem = byCode.get(normalize(material.code)) ?? byName.get(normalize(material.name));
-          if (!catalogItem) return material;
-          const patch = catalogMaterialPatch(material, catalogItem);
-          if (
-            patch.code === material.code &&
-            patch.name === material.name &&
-            patch.usage === material.usage &&
-            patch.unit === material.unit &&
-            patch.category === material.category
-          ) return material;
-          listChanged = true;
-          changed = true;
-          return { ...material, ...patch };
-        });
-        return listChanged ? next : materials;
-      };
-      const technologies = current.technologies.map((technology) => {
-        const materials = repairMaterials(technology.materials);
-        return materials === technology.materials ? technology : { ...technology, materials };
-      });
-      const plan = current.plan.map((item) => {
-        if (!item.workingMaterials) return item;
-        const workingMaterials = repairMaterials(item.workingMaterials);
-        return workingMaterials === item.workingMaterials ? item : { ...item, workingMaterials };
-      });
-      return changed ? { ...current, technologies, plan } : current;
-    });
-  }, [hydrated, productCatalog, setState]);
 
   const updateState = (updater: (current: AppState) => AppState) => {
     if (readOnly) return;
@@ -1549,7 +1628,14 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     (document.status === 'draft' || document.status === 'outdated')
   );
 
-  const openView = (next: View) => router.push(next === 'plan' ? '/planowanie-zapotrzebowania' : `/planowanie-zapotrzebowania?view=${next}`);
+  const openView = (next: View) => {
+    if (view === 'technologie' && next !== 'technologie') {
+      if (!confirmDiscardTechnologyEditor()) return false;
+      clearTechnologyEditor();
+    }
+    router.push(next === 'plan' ? '/planowanie-zapotrzebowania' : `/planowanie-zapotrzebowania?view=${next}`);
+    return true;
+  };
 
   const handleWorkbook = async (file: File, purpose: PendingWorkbook['purpose'], preferredSheet?: string) => {
     if (purpose === 'plan' && readOnly) return;
@@ -1811,37 +1897,36 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   }, [hydrated, view]);
 
   const addTechnology = (productIndex = '', productName = '', shiftNorm = 0) => {
+    if (!confirmDiscardTechnologyEditor()) return;
     const same = state.technologies.filter((technology) => normalize(technology.productIndex) === normalize(productIndex));
     const technology: Technology = {
-      id: uid('tech'), productIndex, productName, variant: same.length ? 'alternative' : 'base', alternativeNo: same.filter((item) => item.variant === 'alternative').length + 1,
+      id: '', productIndex, productName, variant: same.length ? 'alternative' : 'base',
+      alternativeNo: same.length
+        ? Math.max(0, ...same.filter((item) => item.variant === 'alternative').map((item) => item.alternativeNo)) + 1
+        : 0,
       description: '', notes: '', shiftNorm: Math.max(0, shiftNorm), materials: [], archived: false
     };
-    updateState((current) => ({ ...current, technologies: [...current.technologies, technology] }));
-    setEditingTechnologyId(technology.id);
+    setEditingTechnologyId('');
+    setTechnologyDraft(technology);
     setTechnologyPanel('editor');
     openView('technologie');
   };
 
   const startTechnologyDraft = () => {
+    if (!confirmDiscardTechnologyEditor()) return;
     setEditingTechnologyId('');
     setTechnologyDraft(emptyTechnologyDraft());
     setTechnologyPanel('editor');
   };
 
-  const editTechnology = (technologyId: string, patch: Partial<Technology>) => {
-    updateState((current) => ({ ...current, technologies: current.technologies.map((technology) => technology.id === technologyId ? { ...technology, ...patch } : technology) }));
-  };
-
-  const setTechnologyAsBase = (technologyId: string) => {
+  const openTechnologyEditor = (technologyId: string) => {
+    if (technologyId === editingTechnologyId && technologyPanel === 'editor') return;
+    if (!confirmDiscardTechnologyEditor()) return;
     const technology = state.technologies.find((item) => item.id === technologyId);
     if (!technology) return;
-    const existingBase = state.technologies.find((item) => (
-      item.id !== technologyId && item.variant === 'base' &&
-      technologyMatchesProduct(item, technology.productIndex, technology.productName)
-    ));
-    if (existingBase) return flash('Dla tego indeksu technologia bazowa już istnieje. Edytuj ją zamiast tworzyć alternatywną bazową.');
-    editTechnology(technologyId, { variant: 'base', alternativeNo: 0 });
-    flash('Technologia została ustawiona jako bazowa.');
+    setEditingTechnologyId(technology.id);
+    setTechnologyDraft(cloneTechnologyForEditor(technology));
+    setTechnologyPanel('editor');
   };
 
   const deleteTechnology = (technologyId: string) => {
@@ -1872,42 +1957,8 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     )?.shiftNorm ?? 0;
   };
 
-  const assignTechnologyProduct = (
-    technologyId: string,
-    productIndex: string,
-    productName: string
-  ) => {
-    const technology = state.technologies.find((item) => item.id === technologyId);
-    const shiftNorm =
-      technology && technology.shiftNorm > 0
-        ? technology.shiftNorm
-        : planShiftNormForProduct(productIndex, productName);
-    editTechnology(technologyId, { productIndex, productName, shiftNorm });
-  };
-
-  const editTechnologyProductField = (technologyId: string, mode: 'index' | 'name', value: string) => {
-    const normalizedValue = normalize(value);
-    const exactMatches = normalizedValue
-      ? productCatalog.filter((item) => normalize(mode === 'name' ? item.name : item.index) === normalizedValue)
-      : [];
-    if (exactMatches.length === 1) {
-      const match = exactMatches[0];
-      assignTechnologyProduct(technologyId, match.index, match.name);
-      return;
-    }
-    editTechnology(technologyId, mode === 'name' ? { productName: value } : { productIndex: value });
-  };
-
-  const selectProductForTechnologyDraft = (item: ProductCatalogItem) => {
-    const existing = state.technologies
-      .filter((technology) => technologyMatchesProduct(technology, item.index, item.name))
-      .sort((left, right) => Number(left.archived) - Number(right.archived)
-        || Number(left.variant !== 'base') - Number(right.variant !== 'base')
-        || left.alternativeNo - right.alternativeNo)[0];
-    if (existing) {
-      setEditingTechnologyId(existing.id);
-      return;
-    }
+  const selectTechnologyEditorProduct = (item: ProductCatalogItem) => {
+    if (readOnly) return;
     setTechnologyDraft((current) => ({
       ...current,
       productIndex: item.index,
@@ -1916,48 +1967,67 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     }));
   };
 
-  const editTechnologyDraftProductField = (mode: 'index' | 'name', value: string) => {
-    const normalizedValue = normalize(value);
-    const exactMatches = normalizedValue
-      ? productCatalog.filter((item) => normalize(mode === 'name' ? item.name : item.index) === normalizedValue)
-      : [];
-    if (exactMatches.length === 1) {
-      selectProductForTechnologyDraft(exactMatches[0]);
-      return;
-    }
+  const editTechnologyEditorProductField = (mode: 'index' | 'name', value: string) => {
+    if (readOnly) return;
     setTechnologyDraft((current) => ({
       ...current,
       ...(mode === 'name' ? { productName: value } : { productIndex: value })
     }));
   };
 
-  const saveTechnologyDraft = () => {
+  const saveTechnologyEditor = () => {
     const productIndex = technologyDraft.productIndex.trim();
     const productName = technologyDraft.productName.trim();
     if (!productIndex || !productName) {
       flash('Wybierz indeks i nazwę produktu przed zapisaniem technologii.');
       return;
     }
-    const existing = state.technologies.find((technology) =>
-      technologyMatchesProduct(technology, productIndex, productName)
-    );
-    if (existing) {
-      setEditingTechnologyId(existing.id);
-      flash('Ta technologia już istnieje. Wczytano ją do edycji.');
+
+    const source = selectedTechnologyForEditor(state.technologies, editingTechnologyId);
+    if (editingTechnologyId && !source) {
+      flash('Nie znaleziono edytowanej technologii. Otwórz ją ponownie z listy.');
       return;
     }
+    const baseConflict = technologyDraft.variant === 'base'
+      ? state.technologies.find((technology) =>
+        technology.id !== source?.id &&
+        technology.variant === 'base' &&
+        technologyMatchesProduct(technology, productIndex, productName)
+      )
+      : undefined;
+    if (baseConflict) {
+      flash('Dla tego produktu technologia bazowa już istnieje. Wybierz ją z listy albo ustaw tę wersję jako alternatywną.');
+      return;
+    }
+    const alternativeConflict = technologyDraft.variant === 'alternative'
+      ? state.technologies.find((technology) =>
+        technology.id !== source?.id &&
+        technology.variant === 'alternative' &&
+        technology.alternativeNo === Math.max(1, technologyDraft.alternativeNo) &&
+        technologyMatchesProduct(technology, productIndex, productName)
+      )
+      : undefined;
+    if (alternativeConflict) {
+      flash(`Alternatywna ${Math.max(1, technologyDraft.alternativeNo)} dla tego produktu już istnieje.`);
+      return;
+    }
+
     const technology: Technology = {
-      ...technologyDraft,
-      id: uid('tech'),
+      ...cloneTechnologyForEditor(technologyDraft),
+      id: source?.id ?? uid('tech'),
       productIndex,
       productName,
-      variant: 'base',
-      alternativeNo: 1,
-      archived: false
+      alternativeNo: technologyDraft.variant === 'base' ? 0 : Math.max(1, technologyDraft.alternativeNo)
     };
-    updateState((current) => ({ ...current, technologies: [...current.technologies, technology] }));
+    updateState((current) => ({
+      ...current,
+      technologies: source
+        ? current.technologies.map((item) => item.id === source.id ? technology : item)
+        : [...current.technologies, technology]
+    }));
     setEditingTechnologyId(technology.id);
-    flash('Technologia została dodana do biblioteki.');
+    setTechnologyDraft(cloneTechnologyForEditor(technology));
+    flash(source ? 'Zmiany technologii zostały zapisane.' : 'Technologia została dodana do biblioteki.');
   };
 
   const updateWorkingMaterial = (itemId: string, materialId: string, patch: Partial<TechnologyMaterial>) => {
@@ -1966,15 +2036,9 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       plan: current.plan.map((item) => item.id === itemId
         ? { ...item, manualOverride: true, workingMaterials: materialsForItem(item).map((material) => {
           if (material.id !== materialId) return material;
-          const next = patch.unit !== undefined && patch.usage === undefined
+          return patch.unit !== undefined && patch.usage === undefined
             ? technologyMaterialWithUnit(material, String(patch.unit))
             : { ...material, ...patch };
-          const exactMatch = patch.name !== undefined
-            ? findExactCatalogItem(productCatalog, 'name', String(patch.name))
-            : patch.code !== undefined
-              ? findExactCatalogItem(productCatalog, 'code', String(patch.code))
-              : undefined;
-          return exactMatch ? { ...next, ...catalogMaterialPatch(next, exactMatch) } : next;
         }) }
         : item)
     }));
@@ -2252,28 +2316,36 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       technologyFilter === 'archived' ? technology.archived : !technology.archived
     ) && (!normalizedSearch || normalize(`${technology.productIndex} ${technology.productName}`).includes(normalizedSearch)))
       .sort((left, right) => left.productName.localeCompare(right.productName, 'pl') || left.alternativeNo - right.alternativeNo);
-    const selected = selectedTechnologyForEditor(state.technologies, editingTechnologyId);
-    const editorTechnology = selected ?? technologyDraft;
+    const selected = selectedTechnologyEditorSource;
+    const editorTechnology = technologyDraft;
     const isDraft = selected === null;
     const updateEditorTechnology = (patch: Partial<Technology>) => {
-      if (selected) editTechnology(selected.id, patch);
-      else setTechnologyDraft((current) => ({ ...current, ...patch }));
+      if (readOnly) return;
+      setTechnologyDraft((current) => ({ ...current, ...patch }));
     };
-    const changeEditorProduct = (mode: 'index' | 'name', value: string) => {
-      if (selected) editTechnologyProductField(selected.id, mode, value);
-      else editTechnologyDraftProductField(mode, value);
-    };
-    const selectEditorProduct = (item: ProductCatalogItem) => {
-      if (selected) assignTechnologyProduct(selected.id, item.index, item.name);
-      else selectProductForTechnologyDraft(item);
+    const selectEditorMaterial = (materialId: string, item: ProductCatalogItem) => {
+      updateEditorTechnology({
+        materials: editorTechnology.materials.map((material) => material.id === materialId
+          ? { ...material, ...catalogMaterialPatch(material, item) }
+          : material)
+      });
     };
 
     return <div className="space-y-5">
       {renderHeader('Biblioteka technologii', 'Technologie są wprowadzane ręcznie i pozostają w bibliotece. Bazowa jest zawsze pierwsza, kolejne warianty to Alternatywna 1, 2, 3...')}
-      <Tabs value={technologyPanel} onValueChange={(value) => setTechnologyPanel(value as 'editor' | 'list')} className="space-y-5">
+      <Tabs value={technologyPanel} onValueChange={(value) => {
+        const nextPanel = value as 'editor' | 'list';
+        if (nextPanel === technologyPanel) return;
+        if (technologyPanel === 'editor' && technologyEditorDirty) {
+          if (!confirmDiscardTechnologyEditor()) return;
+          resetTechnologyEditor();
+        }
+        if (nextPanel === 'editor') clearTechnologyEditor();
+        setTechnologyPanel(nextPanel);
+      }} className="space-y-5">
         <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
           <TabsList className="w-fit">
-            <TabsTrigger value="editor" onClick={startTechnologyDraft} className="flex min-h-10 items-center gap-2 px-4">
+            <TabsTrigger value="editor" className="flex min-h-10 items-center gap-2 px-4">
               <PencilLine className="h-4 w-4" />Edytor technologii
             </TabsTrigger>
             <TabsTrigger value="list" className="flex min-h-10 items-center gap-2 px-4">
@@ -2299,7 +2371,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
             <div className="grid max-h-[68vh] gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
               {filteredTechnologies.map((technology) => <button
                 key={technology.id}
-                onClick={() => { setEditingTechnologyId(technology.id); setTechnologyPanel('editor'); }}
+                onClick={() => openTechnologyEditor(technology.id)}
                 className={cn('w-full rounded-xl border p-3 text-left transition', selected?.id === technology.id ? 'border-[rgba(255,122,26,0.75)] bg-brandSoft' : 'border-border bg-[rgba(255,255,255,0.025)] hover:border-borderStrong')}
               >
                 <div className="flex items-center justify-between gap-2"><Badge tone={technology.variant === 'base' ? 'success' : 'info'}>{technologyLabel(technology)}</Badge><span className="text-xs text-dim">{fmt(technology.shiftNorm)} / zm.</span></div>
@@ -2313,7 +2385,9 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
 
         <TabsContent value="editor" className="space-y-4">
           {selected && !readOnly ? <div className="flex flex-wrap justify-end gap-2">
-            {selected.archived ? <Button variant="secondary" onClick={() => editTechnology(selected.id, { archived: false })}><RefreshCw className="mr-2 h-4 w-4" />Przywróć technologię</Button> : null}
+            {editorTechnology.archived
+              ? <Button variant="secondary" onClick={() => updateEditorTechnology({ archived: false })}><RefreshCw className="mr-2 h-4 w-4" />Przywróć technologię</Button>
+              : <Button variant="ghost" className="text-danger" onClick={() => updateEditorTechnology({ archived: true })}><Archive className="mr-2 h-4 w-4" />Archiwizuj</Button>}
             <Button variant="outline" className="border-[color:color-mix(in_srgb,var(--danger)_48%,transparent)] text-danger hover:border-danger" onClick={() => deleteTechnology(selected.id)}><Trash2 className="mr-2 h-4 w-4" />Usuń technologię</Button>
           </div> : null}
 
@@ -2321,24 +2395,25 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <SectionTitle
                 title={isDraft ? 'Nowa technologia' : `${technologyLabel(editorTechnology)} · ${editorTechnology.productIndex}`}
-                subtitle={isDraft ? 'Niezapisany szkic' : 'Technologia zapisana w bibliotece'}
+                subtitle={technologyEditorDirty ? 'Zmiany istnieją tylko w tym formularzu do czasu zapisu.' : isDraft ? 'Pusty formularz nowej technologii.' : 'Technologia zapisana w bibliotece.'}
               />
               <div className="flex flex-wrap items-center gap-2">
-                {isDraft ? <Badge tone="warning">Niezapisana</Badge> : !readOnly ? <PlanningSaveStatus info={saveInfo} /> : null}
-                {!readOnly && isDraft ? <Button onClick={saveTechnologyDraft} disabled={!editorTechnology.productIndex.trim() || !editorTechnology.productName.trim()}><Check className="mr-2 h-4 w-4" />Zapisz technologię</Button> : null}
-                {!readOnly && selected && selected.variant !== 'base' ? <Button variant="outline" onClick={() => setTechnologyAsBase(selected.id)}><Star className="mr-2 h-4 w-4" />Ustaw jako bazową</Button> : null}
-                {!readOnly && selected ? <Button variant="ghost" className="text-danger" onClick={() => editTechnology(selected.id, { archived: true })}><Archive className="mr-2 h-4 w-4" />Archiwizuj</Button> : null}
+                {technologyEditorDirty
+                  ? <Badge tone="warning">Niezapisane zmiany</Badge>
+                  : !readOnly && selected ? <PlanningSaveStatus info={saveInfo} /> : <Badge tone="info">Nowa technologia</Badge>}
+                {!readOnly && technologyEditorDirty ? <Button variant="outline" onClick={resetTechnologyEditor}><Undo2 className="mr-2 h-4 w-4" />Anuluj zmiany</Button> : null}
+                {!readOnly ? <Button onClick={saveTechnologyEditor} disabled={!technologyEditorDirty || !editorTechnology.productIndex.trim() || !editorTechnology.productName.trim()}><Check className="mr-2 h-4 w-4" />{isDraft ? 'Zapisz technologię' : 'Zapisz zmiany'}</Button> : null}
+                {!readOnly && editorTechnology.variant !== 'base' ? <Button variant="outline" onClick={() => updateEditorTechnology({ variant: 'base', alternativeNo: 0 })}><Star className="mr-2 h-4 w-4" />Ustaw jako bazową</Button> : null}
               </div>
             </div>
 
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <ProductCatalogField label="Indeks produktu" mode="index" value={editorTechnology.productIndex} items={productCatalog} loading={productCatalogLoading} onChange={(value) => changeEditorProduct('index', value)} onSelect={selectEditorProduct} />
-              <ProductCatalogField label="Nazwa produktu" mode="name" value={editorTechnology.productName} items={productCatalog} loading={productCatalogLoading} onChange={(value) => changeEditorProduct('name', value)} onSelect={selectEditorProduct} />
+              <ProductCatalogField label="Indeks produktu" mode="index" value={editorTechnology.productIndex} items={technologyProductIndexSearch.items} loading={technologyProductIndexSearch.loading} onChange={(value) => editTechnologyEditorProductField('index', value)} onSelect={selectTechnologyEditorProduct} />
+              <ProductCatalogField label="Nazwa produktu" mode="name" value={editorTechnology.productName} items={technologyProductNameSearch.items} loading={technologyProductNameSearch.loading} onChange={(value) => editTechnologyEditorProductField('name', value)} onSelect={selectTechnologyEditorProduct} />
               <Field label="Rodzaj wersji">
-                <SelectField value={editorTechnology.variant} disabled={isDraft} onChange={(event) => {
-                  if (!selected) return;
-                  if (event.target.value === 'base') setTechnologyAsBase(selected.id);
-                  else editTechnology(selected.id, { variant: 'alternative', alternativeNo: selected.alternativeNo || 1 });
+                <SelectField value={editorTechnology.variant} onChange={(event) => {
+                  const variant = event.target.value as Technology['variant'];
+                  updateEditorTechnology({ variant, alternativeNo: variant === 'base' ? 0 : Math.max(1, editorTechnology.alternativeNo) });
                 }}>
                   <option value="base">Bazowa</option><option value="alternative">Alternatywna</option>
                 </SelectField>
@@ -2361,8 +2436,8 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                 <colgroup><col className="w-[210px]" /><col className="w-[520px]" /><col className="w-[160px]" /><col className="w-[150px]" /><col className="w-[90px]" /><col className="w-[140px]" /><col className="w-[50px]" /></colgroup>
                 <thead className="text-left text-xs uppercase text-dim"><tr><th className="p-2">Kod</th><th className="p-2">Nazwa materiału</th><th className="p-2">Rodzaj</th><th className="p-2">Przelicznik / szt.</th><th className="p-2">J.m. wyniku</th><th className="p-2">Na palecie / w opakowaniu</th><th></th></tr></thead>
                 <tbody>{editorTechnology.materials.map((material) => <tr key={material.id} className="border-t border-border">
-                  <td className="p-2"><Input list="material-code-suggestions" value={material.code} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? { ...row, code: event.target.value } : row) })} /></td>
-                  <td className="p-2"><Input list="material-name-suggestions" title={material.name} value={material.name} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? { ...row, name: event.target.value } : row) })} /></td>
+                  <td className="p-2"><Input list="material-code-suggestions" value={material.code} onCatalogSelect={(item) => selectEditorMaterial(material.id, item)} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? { ...row, code: event.target.value } : row) })} /></td>
+                  <td className="p-2"><Input list="material-name-suggestions" title={material.name} value={material.name} onCatalogSelect={(item) => selectEditorMaterial(material.id, item)} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? { ...row, name: event.target.value } : row) })} /></td>
                   <td className="p-2"><SelectField value={material.category} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? { ...row, category: event.target.value as MaterialCategory } : row) })}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td>
                   <td className="p-2"><div className="flex items-center gap-1"><Input aria-label={`Przelicznik na sztukę (${technologyUsageInputUnit(material)})`} type="number" step="0.001" value={technologyUsageForEditor(material)} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? { ...row, usage: technologyUsageFromEditor(row, Math.max(0, numberValue(event.target.value))) } : row) })} /><span className="min-w-5 text-xs font-bold text-title">{technologyUsageInputUnit(material)}</span></div></td>
                   <td className="p-2"><Input value={material.unit} onChange={(event) => updateEditorTechnology({ materials: editorTechnology.materials.map((row) => row.id === material.id ? technologyMaterialWithUnit(row, event.target.value) : row) })} /></td>
@@ -2438,7 +2513,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
           const supply = materialSupply(key, material, item.areaId);
           const itemShare = supply.demand > 0 ? Math.min(1, demand / supply.demand) : 0;
           const toIssue = supply.toIssue * itemShare;
-          return <tr key={material.id} className="border-t border-border align-top"><td className="space-y-2 p-2"><Input list="material-code-suggestions" value={material.code} aria-label="Kod materiału" onChange={(event) => updateWorkingMaterial(item.id, material.id, { code: event.target.value })} /><Input list="material-name-suggestions" title={material.name} value={material.name} aria-label="Nazwa materiału" onChange={(event) => updateWorkingMaterial(item.id, material.id, { name: event.target.value })} /></td><td className="p-2"><SelectField value={material.category} onChange={(event) => updateWorkingMaterial(item.id, material.id, { category: event.target.value as MaterialCategory })}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td><td className="p-2"><div className="flex items-center gap-1"><Input aria-label={`Przelicznik na sztukę (${technologyUsageInputUnit(material)})`} className="text-right" type="number" step="0.001" value={technologyUsageForEditor(material)} onChange={(event) => updateWorkingMaterial(item.id, material.id, { usage: technologyUsageFromEditor(material,Math.max(0,numberValue(event.target.value))) })} /><span className="min-w-5 text-xs font-bold text-title">{technologyUsageInputUnit(material)}</span></div></td><td className="p-2 text-right font-semibold">{quantityReview ? '—' : fmt(fullDemand)}</td><td className="p-2 text-right font-black text-title">{quantityReview ? '—' : fmt(demand)}</td><td className="p-2 text-right text-lg font-black text-warning">{quantityReview ? '—' : fmt(toIssue)}</td><td className="p-2"><Input value={material.unit} onChange={(event) => updateWorkingMaterial(item.id, material.id, { unit: event.target.value })} /></td><td className="p-2"><Button title="Usuń materiał z technologii roboczej" variant="ghost" className="min-h-11 px-3 text-danger" onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, manualOverride: true, workingMaterials: materials.filter((entry) => entry.id !== material.id) } : row) }))}><Trash2 className="h-4 w-4" /></Button></td></tr>;
+          return <tr key={material.id} className="border-t border-border align-top"><td className="space-y-2 p-2"><Input list="material-code-suggestions" value={material.code} aria-label="Kod materiału" onCatalogSelect={(catalogItem) => updateWorkingMaterial(item.id, material.id, catalogMaterialPatch(material, catalogItem))} onChange={(event) => updateWorkingMaterial(item.id, material.id, { code: event.target.value })} /><Input list="material-name-suggestions" title={material.name} value={material.name} aria-label="Nazwa materiału" onCatalogSelect={(catalogItem) => updateWorkingMaterial(item.id, material.id, catalogMaterialPatch(material, catalogItem))} onChange={(event) => updateWorkingMaterial(item.id, material.id, { name: event.target.value })} /></td><td className="p-2"><SelectField value={material.category} onChange={(event) => updateWorkingMaterial(item.id, material.id, { category: event.target.value as MaterialCategory })}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td><td className="p-2"><div className="flex items-center gap-1"><Input aria-label={`Przelicznik na sztukę (${technologyUsageInputUnit(material)})`} className="text-right" type="number" step="0.001" value={technologyUsageForEditor(material)} onChange={(event) => updateWorkingMaterial(item.id, material.id, { usage: technologyUsageFromEditor(material,Math.max(0,numberValue(event.target.value))) })} /><span className="min-w-5 text-xs font-bold text-title">{technologyUsageInputUnit(material)}</span></div></td><td className="p-2 text-right font-semibold">{quantityReview ? '—' : fmt(fullDemand)}</td><td className="p-2 text-right font-black text-title">{quantityReview ? '—' : fmt(demand)}</td><td className="p-2 text-right text-lg font-black text-warning">{quantityReview ? '—' : fmt(toIssue)}</td><td className="p-2"><Input value={material.unit} onChange={(event) => updateWorkingMaterial(item.id, material.id, { unit: event.target.value })} /></td><td className="p-2"><Button title="Usuń materiał z technologii roboczej" variant="ghost" className="min-h-11 px-3 text-danger" onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, manualOverride: true, workingMaterials: materials.filter((entry) => entry.id !== material.id) } : row) }))}><Trash2 className="h-4 w-4" /></Button></td></tr>;
         })}</tbody></table></div> : <p className="text-sm text-muted">Technologia nie ma jeszcze materiałów.</p>}
         <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, manualOverride: true, workingMaterials: [...materials, { id: uid('mat'), code: '', name: '', category: 'Pozostałe', usage: 0, unit: 'kg', logisticQty: 1 }] } : row) }))}><Plus className="mr-2 h-4 w-4" />Dodaj materiał</Button><Button variant="secondary" onClick={() => saveWorkingAsBaseTechnology(item)}><Star className="mr-2 h-4 w-4" />Zapisz jako bazową</Button></div>
       </>}
@@ -2931,13 +3006,11 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     instrukcja: renderGuide
   };
 
-  return <MaterialCatalogContext.Provider value={productCatalog}>
-    <div className="space-y-5">
-      {!readOnly ? <PlanningSaveNotice info={saveInfo} retry={retrySave} downloadDraft={downloadDraft} loadLatest={loadLatest} /> : null}
-      {message ? <div className="fixed right-4 top-20 z-50 max-w-sm rounded-2xl border border-[rgba(255,122,26,0.55)] bg-[rgba(12,12,15,0.96)] px-4 py-3 text-sm font-semibold text-title shadow-2xl">{message}</div> : null}
-      {renderer[view]()}
-    </div>
-  </MaterialCatalogContext.Provider>;
+  return <div className="space-y-5">
+    {!readOnly ? <PlanningSaveNotice info={saveInfo} retry={retrySave} downloadDraft={downloadDraft} loadLatest={loadLatest} /> : null}
+    {message ? <div className="fixed right-4 top-20 z-50 max-w-sm rounded-2xl border border-[rgba(255,122,26,0.55)] bg-[rgba(12,12,15,0.96)] px-4 py-3 text-sm font-semibold text-title shadow-2xl">{message}</div> : null}
+    {renderer[view]()}
+  </div>;
 }
 
 export default function MaterialPlanningPage() {

@@ -40,8 +40,10 @@ import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { parseQtyInput } from '@/lib/utils/format';
 import { cn } from '@/lib/utils/cn';
 import {
+  getOriginalInventorySpisWarehousePriority,
   getOriginalInventorySpisIndex2,
-  matchesOriginalInventorySpisSearch
+  matchesOriginalInventorySpisSearch,
+  prioritizeOriginalInventorySpisSuggestions
 } from '@/lib/utils/originalInventorySpisSearch';
 import {
   BarChart3,
@@ -87,7 +89,6 @@ const REPORT_HISTORY_DAYS_SHORT = 4;
 const REPORT_HISTORY_DAYS_TWO_MONTHS = 60;
 const CATALOG_TABLE_INITIAL_LIMIT = 150;
 const CATALOG_TABLE_INCREMENT = 150;
-const PRIORITY_WAREHOUSE_CODES = ['M1', 'M4', 'M10', 'M11'] as const;
 const ERP_ORIGINALS_PROXY_NOT_CONFIGURED = 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED';
 const ERP_SNAPSHOT_MIGRATION_REQUIRED = 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS';
 const originalInventoryTabTileClassName =
@@ -303,24 +304,6 @@ const normalizeCatalogCodeSearchKey = (value: unknown) =>
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '');
-
-const getCatalogWarehousePriority = (...values: unknown[]) => {
-  let warehouseCode = '';
-  for (const value of values) {
-    const match = normalizeCatalogCodeSearchKey(value).match(/m\d+/);
-    if (match) {
-      warehouseCode = match[0].toUpperCase();
-      break;
-    }
-  }
-
-  const preferredIndex = PRIORITY_WAREHOUSE_CODES.indexOf(
-    warehouseCode as (typeof PRIORITY_WAREHOUSE_CODES)[number]
-  );
-  if (preferredIndex >= 0) return preferredIndex;
-  if (warehouseCode) return 100;
-  return 500;
-};
 
 const matchesCatalogSearch = (
   query: unknown,
@@ -1498,19 +1481,10 @@ export default function SpisRzeczywisty() {
         deduped.set(key, item);
       }
     });
-    return [...deduped.values()]
-      .sort((a, b) => {
-        const warehousePriority =
-          getCatalogWarehousePriority(a.warehouseCode, a.indexCode) -
-          getCatalogWarehousePriority(b.warehouseCode, b.indexCode);
-        if (warehousePriority !== 0) return warehousePriority;
-        const aExistsInSpis = existingByName.has(normalizeCatalogNameKey(a.name));
-        const bExistsInSpis = existingByName.has(normalizeCatalogNameKey(b.name));
-        if (aExistsInSpis !== bExistsInSpis) return aExistsInSpis ? -1 : 1;
-        const nameCompare = collator.compare(a.name, b.name);
-        if (nameCompare !== 0) return nameCompare;
-        return collator.compare(a.warehouseCode ?? '', b.warehouseCode ?? '');
-      })
+    return prioritizeOriginalInventorySpisSuggestions(
+      [...deduped.values()],
+      existingByName.keys()
+    )
       .slice(0, 8);
   }, [existingByName, form.name, nameSuggestions]);
   const filteredCatalog = useMemo(() => {
@@ -1522,8 +1496,8 @@ export default function SpisRzeczywisty() {
       )
       .sort((a, b) => {
         const warehousePriority =
-          getCatalogWarehousePriority(a.warehouseCode, a.indexCode) -
-          getCatalogWarehousePriority(b.warehouseCode, b.indexCode);
+          getOriginalInventorySpisWarehousePriority(a.warehouseCode, a.indexCode) -
+          getOriginalInventorySpisWarehousePriority(b.warehouseCode, b.indexCode);
         if (warehousePriority !== 0) return warehousePriority;
         return collator.compare(a.name, b.name);
       });
@@ -2058,12 +2032,12 @@ export default function SpisRzeczywisty() {
       .sort((a, b) => {
         const priorityA = Math.min(
           ...[...a.warehouseCodes, ...a.indexCodes].map((value) =>
-            getCatalogWarehousePriority(value)
+            getOriginalInventorySpisWarehousePriority(value)
           )
         );
         const priorityB = Math.min(
           ...[...b.warehouseCodes, ...b.indexCodes].map((value) =>
-            getCatalogWarehousePriority(value)
+            getOriginalInventorySpisWarehousePriority(value)
           )
         );
         return priorityA - priorityB;

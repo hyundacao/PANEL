@@ -36,7 +36,7 @@ const names = [
   'pendingPlanWorkbook', 'planImportWorkbook', 'planImportSheet',
   'areaName', 'selectPlanningArea', 'selectPlanAreaFilter', 'selectedAreaPlan', 'visibleAreaPlan', 'setVisiblePlanIncluded', 'unassignedPlan', 'missingTechnologyCount', 'unassignedCount',
   'renderPlanTable', 'renderPlan', 'SectionTitle', 'renderHeader', 'renderHistoryV2', 'ProductCatalogField',
-  'emptyTechnologyDraft', 'selectedTechnologyForEditor'
+  'emptyTechnologyDraft', 'selectedTechnologyForEditor', 'cloneTechnologyForEditor', 'sameTechnologyEditorValue'
 ];
 const definitions = new Map();
 const visit = (node) => {
@@ -47,7 +47,7 @@ const visit = (node) => {
 };
 visit(ast);
 for (const name of names) if (!definitions.has(name)) throw new Error('Missing fixture function: ' + name);
-const compiled = compile('{\n' + [...definitions.values()].join('\n') + '\nObject.assign(exports, { renderPlan, renderHistoryV2, ProductCatalogField, emptyTechnologyDraft, selectedTechnologyForEditor });\n}', 'fixture.tsx');
+const compiled = compile('{\n' + [...definitions.values()].join('\n') + '\nObject.assign(exports, { renderPlan, renderHistoryV2, ProductCatalogField, emptyTechnologyDraft, selectedTechnologyForEditor, cloneTechnologyForEditor, sameTechnologyEditorValue });\n}', 'fixture.tsx');
 
 export const createHeaderFixture = (overrides = {}) => {
   const plan = ['MAX CP+TH PRINTED F1_WQ35G2D0ES_A', 'MAX CP+TH PRINTED F1_WQ33G2D00', 'MAINT. DOOR CUBIC POPIEL'].map((name, index) => ({
@@ -126,7 +126,9 @@ export const createHeaderFixture = (overrides = {}) => {
     loadFixtureExports();
     return {
       selected: ctx.exports.selectedTechnologyForEditor(technologies, editingTechnologyId),
-      draft: ctx.exports.emptyTechnologyDraft()
+      draft: ctx.exports.emptyTechnologyDraft(),
+      clone: ctx.exports.cloneTechnologyForEditor,
+      isSame: ctx.exports.sameTechnologyEditorValue
     };
   };
   return { ctx, render, html: (view) => renderToStaticMarkup(render(view)), productCatalogField, technologyEditorState };

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:planning": "node --experimental-strip-types --test src/lib/planowanie-zapotrzebowania/domain.test.mjs src/lib/planowanie-zapotrzebowania/autosave.test.mjs src/lib/planowanie-zapotrzebowania/planImport.test.mjs src/lib/planowanie-zapotrzebowania/planImport.integration.test.mjs src/lib/planowanie-zapotrzebowania/planHeader.test.mjs"
+    "test:planning": "node --experimental-strip-types --test src/lib/planowanie-zapotrzebowania/domain.test.mjs src/lib/planowanie-zapotrzebowania/autosave.test.mjs src/lib/planowanie-zapotrzebowania/planImport.test.mjs src/lib/planowanie-zapotrzebowania/planImport.integration.test.mjs src/lib/planowanie-zapotrzebowania/planHeader.test.mjs src/lib/planowanie-zapotrzebowania/productCatalogSearch.test.mjs"
   },
   "dependencies": {
     "@radix-ui/react-select": "^2.2.6",
