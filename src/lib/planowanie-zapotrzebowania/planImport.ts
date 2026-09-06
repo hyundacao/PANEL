@@ -136,6 +136,14 @@ const splitTopLevelNames = (value: string, expectedCount: number) => {
   return plusSeparated.length === expectedCount ? plusSeparated : commaSeparated;
 };
 
+const groupedOutputQuantities = (value: unknown, expectedCount: number): PlanQuantityPart[] => {
+  const groups = text(value).trim().split(/,\s+|\s*;\s*|\r?\n+/).map((part) => part.trim()).filter(Boolean);
+  if (groups.length !== expectedCount) return [];
+  const quantities = groups.map(additiveQuantity);
+  if (quantities.some((quantity) => quantity === null)) return [];
+  return quantities.map((quantity) => ({ label: '', quantity: quantity! }));
+};
+
 // A single mould run may produce several different details at once. Preserve one
 // production row, but expose every output as an independently calculated product.
 export const splitPlanningRowOutputs = (row: ImportedPlanningRow): ImportedPlanningRow[] => {
@@ -145,7 +153,14 @@ export const splitPlanningRowOutputs = (row: ImportedPlanningRow): ImportedPlann
   const indices = directIndices.length
     ? directIndices
     : namedIndexGroup?.indices ?? indexedIndexGroup?.indices ?? [];
-  if (indices.length < 2) return [row];
+  if (indices.length < 2) {
+    const reparsedQuantity = parsePlanQuantity(row.sourceQuantity);
+    return row.quantityStatus === 'unrecognized' &&
+      reparsedQuantity.quantityStatus === 'parsed' &&
+      reparsedQuantity.totalQty === row.totalQty
+      ? [{ ...row, quantityStatus: 'parsed' }]
+      : [row];
+  }
 
   let namesSource = text(row.name).trim();
   if (namedIndexGroup && namedIndexGroup.indices.join('|') === indices.join('|')) {
@@ -155,7 +170,8 @@ export const splitPlanningRowOutputs = (row: ImportedPlanningRow): ImportedPlann
   }
   const names = splitTopLevelNames(namesSource, indices.length);
   const reparsedQuantity = parsePlanQuantity(row.sourceQuantity);
-  const quantities = reparsedQuantity.quantityStatus === 'parsed'
+  const groupedQuantities = groupedOutputQuantities(row.sourceQuantity, indices.length);
+  const quantities = groupedQuantities.length ? groupedQuantities : reparsedQuantity.quantityStatus === 'parsed'
     ? reparsedQuantity.quantityParts
     : row.quantityParts ?? [];
   if (row.quantityStatus === 'manual') return [row];
@@ -172,6 +188,7 @@ export const splitPlanningRowOutputs = (row: ImportedPlanningRow): ImportedPlann
       name: names[position],
       index,
       totalQty: quantity.quantity,
+      quantityStatus: 'parsed',
       sourceQuantity: quantity.label ? `${quantity.label} - ${formattedQuantity}` : formattedQuantity,
       quantityParts: [],
       productionOutputOrder: position,

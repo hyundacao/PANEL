@@ -3,6 +3,18 @@ export type PlanningScope =
   | { mode: 'quantity'; quantity: number }
   | { mode: 'all' };
 
+export type TechnologyProductionMode = 'planned' | 'continuous' | 'linked';
+
+export const effectiveProducerQuantity = (
+  plannedQuantity: number,
+  allocatedQuantity: number,
+  productionMode: TechnologyProductionMode
+) => {
+  const planned = Math.max(0, Number.isFinite(plannedQuantity) ? plannedQuantity : 0);
+  const allocated = Math.max(0, Number.isFinite(allocatedQuantity) ? allocatedQuantity : 0);
+  return productionMode === 'linked' ? Math.max(planned, allocated) : planned;
+};
+
 export type ComparablePlanItem = {
   id: string;
   index: string;

@@ -94,6 +94,62 @@ test('a burst of clicks or typing saves only the latest value after 700 ms', asy
   assert.equal(h.backups.at(-1).pending, false);
 });
 
+test('manual editing never writes until it is explicitly committed', async () => {
+  const h = setup();
+  const backupsBefore = h.backups.length;
+  h.queue.beginManual();
+  h.queue.setSnapshot({ quantity: 200 }, true);
+  h.queue.setSnapshot({ quantity: 300 }, true);
+  await h.clock.tick(60000);
+  await h.queue.flush();
+  assert.equal(h.writes.length, 0);
+  assert.equal(h.backups.length, backupsBefore);
+  assert.equal(h.queue.getDraft().pending, true);
+  assert.equal(h.queue.isManual(), true);
+  await h.queue.commitManual();
+  assert.deepEqual(h.writes, [{ state: { quantity: 300 }, revision: 4 }]);
+  assert.equal(h.queue.getInfo().status, 'saved');
+  assert.equal(h.queue.isManual(), false);
+});
+
+test('manual commit waits for an older in-flight save and then writes the edited snapshot', async () => {
+  const calls = [];
+  const resolvers = [];
+  const h = setup({ write: (state, revision) => {
+    calls.push({ state, revision });
+    return new Promise((resolve) => resolvers.push(resolve));
+  } });
+  h.queue.setSnapshot({ quantity: 150 }, true);
+  await h.clock.tick(700);
+  h.queue.beginManual();
+  h.queue.setSnapshot({ quantity: 300 }, true);
+  const committed = h.queue.commitManual();
+  assert.deepEqual(calls, [{ state: { quantity: 150 }, revision: 4 }]);
+  resolvers.shift()(5);
+  await drain();
+  assert.deepEqual(calls, [
+    { state: { quantity: 150 }, revision: 4 },
+    { state: { quantity: 300 }, revision: 5 }
+  ]);
+  resolvers.shift()(6);
+  await committed;
+  assert.equal(h.queue.getInfo().status, 'saved');
+  assert.equal(h.queue.isManual(), false);
+});
+
+test('discarding manual edits restores the checkpoint without writing it', async () => {
+  const h = setup();
+  h.queue.beginManual();
+  h.queue.setSnapshot({ quantity: 900 }, true);
+  await h.clock.tick(60000);
+  const restored = h.queue.discardManual();
+  assert.deepEqual(restored, { quantity: 100 });
+  assert.deepEqual(h.queue.getDraft(), { state: { quantity: 100 }, revision: 4, pending: false });
+  assert.equal(h.queue.isManual(), false);
+  await h.clock.tick(60000);
+  assert.equal(h.writes.length, 0);
+});
+
 test('new edits during a request stay pending and use the acknowledged revision next', async () => {
   const calls = [];
   let resolveWrite;

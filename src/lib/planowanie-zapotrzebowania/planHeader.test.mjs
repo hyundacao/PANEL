@@ -137,25 +137,104 @@ test('expanded plan index has a visible bounded block and an end separator', () 
   const details = nodes(rendered).find((node) => node.props?.['data-plan-details'] === item.id);
   const separator = nodes(rendered).find((node) => node.props?.['data-plan-separator'] === item.id);
   assert.equal(row.props['data-expanded'], 'true');
-  assert.match(row.props.className, /rounded-lg/);
+  assert.match(row.props.className, /border-y/);
   assert.match(row.props.className, /rgba\(255,122,26,0\.58\)/);
   assert.match(details.props.className, /border-t/);
   assert.match(separator.props.className, /\bh-2\b/);
   assert.doesNotMatch(h.html(), /Indeks produkcyjny/);
 });
 
-test('header keeps date, range and workbook selectors without repeated statistics cards', () => {
+test('expanded plan edits expose one explicit save action', () => {
+  const h = createHeaderFixture({ calculationEditorDirty: true });
+  h.ctx.expandedPlan = h.ctx.state.plan[0].id;
+  const html = h.html();
+  assert.match(html, /Niezapisane zmiany/);
+  assert.equal(html.split('Zapisz zmiany').length - 1, 1);
+  assert.match(html, /Odrzuć niezapisane zmiany/);
+  assert.equal(html.split('>Odrzuć<').length - 1, 1);
+});
+
+test('expanded plan can start a described emergency variant from its working recipe', () => {
+  const h = createHeaderFixture();
+  const item = h.ctx.state.plan[0];
+  const base = {
+    id: 'base-tech', productIndex: item.index, productName: item.name,
+    variant: 'base', alternativeNo: 0, description: '', notes: '', shiftNorm: 380,
+    materials: [{ id: 'base-material', code: 'ABS-1', name: 'ABS BLACK', category: 'Tworzywo', usage: 0.12, unit: 'kg', logisticQty: 1 }],
+    emergencyMaterials: [], archived: false
+  };
+  h.ctx.state.technologies = [base];
+  h.ctx.state.plan[0] = { ...item, technologyId: base.id, workingMaterials: base.materials };
+  h.ctx.expandedPlan = item.id;
+  h.ctx.technologiesFor = () => [base];
+  h.ctx.technologyForItem = () => base;
+  h.ctx.materialsForItem = () => [];
+
+  const addEmergency = button(h, 'Zapisz jako awaryjną');
+  assert.ok(addEmergency);
+  addEmergency.props.onClick();
+  assert.match(h.html(), /Opis wariantu · Awaryjna 1/);
+  assert.ok(control(h, 'Opis nowego wariantu awaryjnego'));
+  assert.match(h.html(), /Utwórz wariant/);
+});
+
+test('working recipe becomes the next numbered emergency technology without changing earlier variants', () => {
+  const h = createHeaderFixture();
+  const materials = [{ id: 'working-material', code: 'KAR-2', name: 'Karton zastępczy', category: 'Karton', usage: 0.025, unit: 'szt.', logisticQty: 1 }];
+  const technologies = [
+    { id: 'base', productIndex: '8001', productName: 'DETAL', variant: 'base', alternativeNo: 0, description: '', notes: 'Uwaga', shiftNorm: 400, materials: [], emergencyMaterials: [], archived: false },
+    { id: 'alt-1', productIndex: '8001', productName: 'DETAL', variant: 'alternative', alternativeNo: 1, description: 'Pierwsza', notes: '', shiftNorm: 400, materials: [], emergencyMaterials: [], archived: false }
+  ];
+  const result = h.createAlternative(technologies, 'base', materials, 450, '  Karton 600x400  ');
+
+  assert.equal(result.technologies.length, 3);
+  assert.equal(result.technology.variant, 'alternative');
+  assert.equal(result.technology.alternativeNo, 2);
+  assert.equal(result.technology.description, 'Karton 600x400');
+  assert.equal(result.technology.shiftNorm, 450);
+  assert.equal(result.technology.materials[0].name, 'Karton zastępczy');
+  assert.notEqual(result.technology.materials[0].id, materials[0].id);
+  assert.equal(technologies.length, 2);
+});
+
+test('header groups plan controls and source metadata without repeated statistics cards', () => {
   const h = createHeaderFixture();
   assert.ok(control(h, 'Dzień produkcji'));
   assert.ok(control(h, 'Zapotrzebowanie na'));
   assert.ok(control(h, 'Strefa planu'));
-  assert.ok(control(h, 'Karta / arkusz Excela'));
+  assert.equal(control(h, 'Karta / arkusz Excela'), undefined);
   const html = h.html();
   assert.match(html, /Plan produkcyjny/);
+  assert.match(html, /Wgrany plik|Arkusz|Ostatni import/);
+  assert.equal((html.match(/Produkty do realizacji/g) || []).length, 1);
   assert.match(html, /Zapisano/);
-  assert.doesNotMatch(html, /Osobny moduł produkcyjny|Pozycje planu|Globalny zakres obliczeń|Pokaż zmiany/);
+  assert.doesNotMatch(html, /Osobny moduł produkcyjny|Globalny zakres obliczeń|Pokaż zmiany/);
   assert.doesNotMatch(html, /<details[^>]*\sopen(?:[=>\s])/);
   assert.doesNotMatch(html, />Nowa</);
+});
+
+test('primary plan controls stay symmetrical and list tools stay beside the products', () => {
+  const h = createHeaderFixture();
+  for (const label of ['Dzień produkcji', 'Zapotrzebowanie na']) {
+    assert.match(control(h, label).props.className, /h-\[52px\]/);
+    assert.match(control(h, label).props.className, /min-h-\[52px\]/);
+  }
+  const documentAction = button(h, 'Utwórz dokument do wypisania');
+  assert.match(documentAction.props.className, /h-\[52px\]/);
+  assert.match(documentAction.props.className, /min-h-\[52px\]/);
+
+  const listFilters = nodes(h.render()).find((node) => node.props?.['data-plan-list-filters']);
+  assert.ok(listFilters);
+  assert.ok(nodes(listFilters).some((node) => node.props?.['aria-label'] === 'Wyszukaj produkt w planie'));
+  assert.ok(nodes(listFilters).some((node) => node.props?.['aria-label'] === 'Strefa planu'));
+  assert.equal(control(h, 'Zaznacz wszystkie'), undefined);
+  assert.equal(control(h, 'Odznacz wszystkie'), undefined);
+  const includeAll = control(h, 'Zaznacz wszystkie widoczne pozycje');
+  assert.ok(includeAll);
+  assert.equal(includeAll.props.role, 'checkbox');
+  assert.equal(includeAll.props['aria-checked'], 'mixed');
+  assert.match(h.html(), /Produkty do realizacji.*3 pozycje/);
+  assert.match(h.html(), /Stanowisko \/ strefa/);
 });
 
 test('main plan exposes a direct picking document action for a concrete zone', () => {
@@ -169,11 +248,46 @@ test('main plan exposes a direct picking document action for a concrete zone', (
 
   control(h, 'Strefa planu').props.onChange({ target: { value: 'all' } });
   assert.equal(button(h, 'Utwórz dokument do wypisania').props.disabled, true);
-  assert.match(h.html(), /Wybierz konkretną strefę, aby przygotować jej dokument/);
+  assert.equal(control(h, 'Strefa planu').props.value, 'all');
 
   h.ctx.editablePickingDocumentExists = true;
   control(h, 'Strefa planu').props.onChange({ target: { value: 'bakoma' } });
   assert.ok(button(h, 'Przelicz i pokaż dokument'));
+});
+
+test('document action explains when an active row has no usable quantity', () => {
+  const h = createHeaderFixture();
+  h.ctx.state.plan[0].quantityStatus = 'missing';
+  h.ctx.state.plan[0].sourceQuantity = '';
+  const blocked = button(h, 'Uzupełnij ilości (1)');
+  assert.ok(blocked);
+  assert.equal(blocked.props.disabled, true);
+  assert.equal(blocked.props.title, 'Najpierw uzupełnij ilości aktywnych pozycji');
+
+  h.ctx.state.plan[0].included = false;
+  assert.equal(button(h, 'Utwórz dokument do wypisania').props.disabled, false);
+});
+
+test('continuous production replaces a missing final quantity with output for the selected shift range', () => {
+  const technology = {
+    id: 'continuous-tray', productIndex: 'M-10-8001128941', productName: 'TRAY HANDLE BO CLIPPED VG1 VZF07020',
+    productionMode: 'continuous', shiftNorm: 1600, materials: []
+  };
+  const h = createHeaderFixture({
+    technologyForItem: (item) => item.technologyId === technology.id ? technology : undefined,
+    technologiesFor: (item) => item.index === technology.productIndex ? [technology] : [],
+    itemProductionQty: (item) => item.technologyId === technology.id ? 5600 : 0
+  });
+  h.ctx.state.plan = [{
+    ...h.ctx.state.plan[0], id: 'tray', index: technology.productIndex, name: technology.productName,
+    technologyId: technology.id, totalQty: 0, remainingQty: 0, shiftNorm: 0,
+    sourceQuantity: '', quantityStatus: 'missing', included: true
+  }];
+  const html = h.html();
+  assert.match(html, /Ciągła/);
+  assert.match(html, /5[\s\u00a0]?600 szt\. w zakresie/);
+  assert.doesNotMatch(html, /Brak ilości w pliku|Uzupełnij ilości \(1\)/);
+  assert.ok(button(h, 'Utwórz dokument do wypisania'));
 });
 
 test('today, tomorrow, saved dates and custom calendar select the matching daily plan', () => {
@@ -208,12 +322,12 @@ test('range presets, entire production and a custom 9.5 shifts preserve individu
   assert.equal(h.ctx.state.plan[0].scopeQuantity, 12);
 });
 
-test('saved custom ranges stay visible and first-version new labels are suppressed only for the baseline', () => {
+test('saved custom ranges stay visible without plan-version difference labels', () => {
   const h = createHeaderFixture({ state: { horizonShifts: 9.5 } });
   assert.equal(control(h, 'Zapotrzebowanie na').props.value, 'custom');
   assert.doesNotMatch(h.html(), />Nowa</);
   h.ctx.state.planVersions[0].versionNo = 2;
-  assert.match(h.html(), />Nowa</);
+  assert.doesNotMatch(h.html(), />Nowa</);
 });
 
 test('read-only users can choose a day but cannot import or change range', () => {
@@ -221,12 +335,12 @@ test('read-only users can choose a day but cannot import or change range', () =>
   assert.equal(control(h, 'Zapotrzebowanie na').props.disabled, true);
   assert.equal(control(h, 'Status wersji'), undefined);
   assert.ok(!control(h, 'Dzień produkcji').props.disabled);
-  assert.equal(control(h, 'Karta / arkusz Excela').props.disabled, true);
+  assert.equal(control(h, 'Karta / arkusz Excela'), undefined);
   assert.doesNotMatch(h.html(), /Wgraj plan|Wgraj aktualizację|Wczytaj kartę|Zapisano/);
 });
 
-test('plan details keep import metadata without manual version statuses', () => {
-  const h = createHeaderFixture({ showChanges: true });
+test('plan header keeps compact import metadata without differences or manual version statuses', () => {
+  const h = createHeaderFixture();
   for (const status of ['draft', 'ready', 'active', 'superseded']) {
     h.ctx.state.planVersions[0].status = status;
     assert.equal(control(h, 'Status wersji'), undefined);
@@ -235,27 +349,20 @@ test('plan details keep import metadata without manual version statuses', () => 
     assert.match(html, /Wersja 1/);
     assert.match(html, /31\.08\.2026, 08:15/);
     assert.match(html, /Plan produkcji 31\.08\.2026\.xlsx/);
-    assert.match(html, /Pierwsza wersja planu/);
+    assert.doesNotMatch(html, /Szczegóły planu|Pierwsza wersja planu|legacy-new/);
   }
 });
 
-test('history marks newest version separately for each day and preserves differences', () => {
-  const h = createHeaderFixture();
-  const original = h.ctx.state.planVersions[0];
-  h.ctx.state.planVersions = [
-    { ...original, id: 'old', versionNo: 1, status: 'active' },
-    { ...original, id: 'tomorrow', planDate: '2026-09-01', versionNo: 1, status: 'draft' },
-    { ...original, id: 'latest', versionNo: 2, status: 'superseded', differences: [{ ...original.differences[0], index: 'ADDED-123' }] }
-  ];
-  const text = (node) => typeof node === 'string' || typeof node === 'number' ? String(node)
-    : Array.isArray(node) ? node.map(text).join(' ') : node?.props ? text(node.props.children) : '';
-  const rows = nodes(h.render('historia')).filter((node) => node.type === 'tr' && node.key);
-  for (const row of rows) assert.match(text(row), row.key === 'old' ? /Poprzednia wersja/ : /Aktualna wersja/);
-  const html = h.html('historia');
-  assert.doesNotMatch(html, /Roboczy|Gotowy|Aktywny|Zastąpiony/);
-  assert.equal((html.match(/Aktualna wersja/g) || []).length, 2);
-  assert.equal((html.match(/Poprzednia wersja/g) || []).length, 1);
-  assert.match(html, /ADDED-123/);
+test('planning module does not expose the history tile or accept its query view', () => {
+  const pageSource = readFileSync(new URL('../../app/(main)/planowanie-zapotrzebowania/page.tsx', import.meta.url), 'utf8');
+  const desktopNavigation = readFileSync(new URL('../../components/layout/Sidebar.tsx', import.meta.url), 'utf8');
+  const mobileNavigation = readFileSync(new URL('../../app/(main)/layout.tsx', import.meta.url), 'utf8');
+  const acceptedViews = pageSource.match(/requestedView && \[([^\]]+)]\.includes\(requestedView\)/)?.[1] ?? '';
+
+  assert.doesNotMatch(acceptedViews, /historia/);
+  assert.doesNotMatch(desktopNavigation, /planowanie-zapotrzebowania\?view=historia/);
+  assert.doesNotMatch(mobileNavigation, /planowanie-zapotrzebowania\?view=historia/);
+  assert.doesNotMatch(pageSource, /8\. Zwroty i historia/);
 });
 
 test('upload plan stays available beside update and each action opens the file chooser', () => {
@@ -280,16 +387,16 @@ test('choosing a workbook card waits for explicit import and can be cancelled', 
   let imported = 0;
   const h = createHeaderFixture({ pending: workbook, importSelectedSheet: () => { imported += 1; } });
   const originalPlan = h.ctx.state.plan;
-  assert.equal(control(h, 'Karta / arkusz Excela').props.disabled, false);
-  assert.equal(button(h, 'Wczytaj kartę').props.disabled, true);
+  assert.equal(Boolean(control(h, 'Karta / arkusz Excela').props.disabled), false);
+  assert.equal(button(h, 'Wczytaj arkusz').props.disabled, true);
   control(h, 'Karta / arkusz Excela').props.onChange({ target: { value: '01.09' } });
   assert.equal(h.ctx.sheetName, '01.09');
   assert.equal(imported, 0);
   assert.equal(h.ctx.state.plan, originalPlan);
-  assert.equal(button(h, 'Wczytaj kartę').props.disabled, false);
-  button(h, 'Wczytaj kartę').props.onClick();
+  assert.equal(button(h, 'Wczytaj arkusz').props.disabled, false);
+  button(h, 'Wczytaj arkusz').props.onClick();
   assert.equal(imported, 1);
-  nodes(h.render()).find((node) => node.props?.children === 'Anuluj').props.onClick();
+  button(h, 'Anuluj').props.onClick();
   assert.equal(h.ctx.pending, null);
   assert.equal(h.ctx.state.plan, originalPlan);
 });
@@ -298,13 +405,13 @@ test('last imported workbook keeps its other cards available without uploading t
   const workbook = { purpose: 'plan', fileName: 'plans.xlsx', workbook: { SheetNames: ['31.08', '01.09'], Sheets: {} } };
   const h = createHeaderFixture({ lastPlanWorkbook: workbook });
   assert.equal(control(h, 'Karta / arkusz Excela').props.value, '31.08');
-  assert.equal(button(h, 'Wczytaj kartę').props.disabled, true);
+  assert.equal(button(h, 'Wczytaj arkusz'), undefined);
   control(h, 'Karta / arkusz Excela').props.onChange({ target: { value: '01.09' } });
   assert.equal(h.ctx.pending, workbook);
-  assert.equal(button(h, 'Wczytaj kartę').props.disabled, false);
+  assert.equal(button(h, 'Wczytaj arkusz').props.disabled, false);
 });
 
-test('zone filter keeps plan selections intact and counts only the chosen zone', () => {
+test('zone filter keeps plan selections intact and counts only matching products', () => {
   const h = createHeaderFixture();
   h.ctx.state.plan[1].areaId = 'hala-1';
   h.ctx.state.plan[2].areaId = '';
@@ -313,7 +420,7 @@ test('zone filter keeps plan selections intact and counts only the chosen zone',
   h.ctx.updateState = () => { throw new Error('A view filter must not queue an autosave'); };
   const options = nodes(control(h, 'Strefa planu')).filter((node) => node.type === 'option').map((node) => node.props.value);
   assert.deepEqual(options, ['all', 'hala-1', 'hala-2', 'bakoma', 'lakiernia', 'narzedziownia']);
-  assert.match(h.html(), /1 z 1/);
+  assert.match(h.html(), /2 pozycje/);
   assert.doesNotMatch(h.html(), /900197691/);
   assert.match(h.html(), /900197692/);
   assert.doesNotMatch(h.html(), /Bez przypisanej strefy/);
@@ -325,9 +432,27 @@ test('zone filter keeps plan selections intact and counts only the chosen zone',
   assert.equal(JSON.stringify(h.ctx.state.plan), before);
   control(h, 'Strefa planu').props.onChange({ target: { value: 'hala-2' } });
   assert.doesNotMatch(h.html(), /Brak pozycji w strefie: Hala 2/);
-  assert.match(h.html(), /0 z 0/);
+  assert.match(h.html(), /1 pozycja/);
   assert.match(h.html(), /900197692/);
   assert.doesNotMatch(h.html(), /Bez przypisanej strefy/);
+});
+
+test('plan search requires every fragment and checks index, name and station', () => {
+  const h = createHeaderFixture();
+  const search = control(h, 'Wyszukaj produkt w planie');
+  search.props.onChange({ target: { value: 'max 691' } });
+  let html = h.html();
+  assert.match(html, /900197691/);
+  assert.doesNotMatch(html, /900197690|900197692/);
+  assert.match(html, /1 pozycja/);
+
+  control(h, 'Wyszukaj produkt w planie').props.onChange({ target: { value: 'st 1 maint' } });
+  html = h.html();
+  assert.match(html, /900197692/);
+  assert.doesNotMatch(html, /900197690|900197691/);
+
+  control(h, 'Wyszukaj produkt w planie').props.onChange({ target: { value: 'nieistniejący produkt' } });
+  assert.match(h.html(), /Brak produktów pasujących do wyszukiwania/);
 });
 
 test('all-zone view shows the entire plan once without changing production or document zone', () => {
@@ -342,10 +467,9 @@ test('all-zone view shows the entire plan once without changing production or do
   control(h, 'Strefa planu').props.onChange({ target: { value: 'all' } });
   assert.equal(control(h, 'Strefa planu').props.value, 'all');
   const allOption = nodes(control(h, 'Strefa planu')).find((node) => node.type === 'option' && node.props.value === 'all');
-  assert.equal(allOption.props.children, 'Ogół — cały plan');
+  assert.equal(allOption.props.children, 'Wszystkie strefy');
   const html = h.html();
-  assert.match(html, /6 z 7/);
-  assert.match(html, /pozycji całego planu zaznaczonych/);
+  assert.match(html, /7 pozycji/);
   for (let index = 0; index < areas.length; index += 1) {
     assert.equal(html.split(`ALL_ZONE_ROW_${index}`).length - 1, 1);
     if (index > 0) assert.ok(html.indexOf(`ALL_ZONE_ROW_${index - 1}`) < html.indexOf(`ALL_ZONE_ROW_${index}`));
@@ -360,6 +484,50 @@ test('all-zone view shows the entire plan once without changing production or do
   for (const index of [0, 2, 3, 4, 5]) assert.ok(!filtered.includes(`ALL_ZONE_ROW_${index}`));
 });
 
+test('returns have an independent zone filter with an all-zones overview', () => {
+  const areaLabels = { 'hala-1': 'Hala 1', 'hala-2': 'Hala 2', bakoma: 'Bakoma', lakiernia: 'Lakiernia', narzedziownia: 'Narzędziownia' };
+  const returnRows = [
+    { id: 'return-h1', planDate: '2026-08-31', code: 'RETURN-H1', name: 'Zwrot z hali 1', category: 'Tworzywo', unit: 'kg', areaId: 'hala-1', surplus: 12, status: 'open' },
+    { id: 'return-h2', planDate: '2026-08-31', code: 'RETURN-H2', name: 'Zwrot z hali 2', category: 'Karton', unit: 'szt.', areaId: 'hala-2', surplus: 8, status: 'completed' },
+    { id: 'return-bakoma', planDate: '2026-08-31', code: 'RETURN-BAKOMA', name: 'Zwrot z Bakomy', category: 'Pozostałe', unit: 'szt.', areaId: 'bakoma', surplus: 4, status: 'open' }
+  ];
+  const h = createHeaderFixture({
+    deriveReturnsForDate: () => returnRows,
+    areaName: (areaId) => areaLabels[areaId] ?? 'Brak przypisu',
+    state: {
+      inventory: returnRows.map((row) => ({ ...row, qty: row.surplus })),
+      inventorySourceDate: '2026-08-31',
+      inventorySyncedAt: '31.08.2026, 12:00'
+    }
+  });
+  h.ctx.materialsForItem = () => [{ code: 'USED', name: 'Materiał planowany' }];
+  h.ctx.updateState = () => { throw new Error('A return view filter must not change saved planning data'); };
+
+  const zoneFilter = () => nodes(h.render('zwroty')).find((node) => node.props?.['aria-label'] === 'Strefa zwrotów');
+  assert.deepEqual(nodes(zoneFilter()).filter((node) => node.type === 'option').map((node) => node.props.value), [
+    'all', 'hala-1', 'hala-2', 'bakoma', 'lakiernia', 'narzedziownia'
+  ]);
+  assert.equal(zoneFilter().props.value, 'all');
+  let html = h.html('zwroty');
+  for (const row of returnRows) assert.match(html, new RegExp(row.code));
+
+  zoneFilter().props.onChange({ target: { value: 'hala-1' } });
+  assert.equal(h.ctx.returnAreaFilter, 'hala-1');
+  assert.equal(h.ctx.state.selectedAreaId, 'bakoma', 'return filtering must not replace the plan/document zone');
+  html = h.html('zwroty');
+  assert.match(html, /RETURN-H1/);
+  assert.doesNotMatch(html, /RETURN-H2|RETURN-BAKOMA/);
+
+  zoneFilter().props.onChange({ target: { value: 'narzedziownia' } });
+  html = h.html('zwroty');
+  assert.match(html, /Brak zwrotów w strefie: Narzędziownia/);
+  assert.doesNotMatch(html, /RETURN-H1|RETURN-H2|RETURN-BAKOMA/);
+
+  zoneFilter().props.onChange({ target: { value: 'all' } });
+  assert.equal(zoneFilter().props.value, 'all');
+  assert.match(h.html('zwroty'), /RETURN-H1/);
+});
+
 test('read-only users can show the whole plan and an empty plan remains empty', () => {
   const h = createHeaderFixture({ readOnly: true });
   control(h, 'Strefa planu').props.onChange({ target: { value: 'all' } });
@@ -370,105 +538,42 @@ test('read-only users can show the whole plan and an empty plan remains empty', 
   assert.equal(nodes(h.render()).filter((node) => node.props?.['data-plan-item']).length, 0);
 });
 
-test('bulk selection changes only visible rows, including unassigned, in one update', () => {
-  const h = createHeaderFixture();
-  h.ctx.state.plan[1].areaId = 'hala-1';
-  h.ctx.state.plan[2].areaId = '';
-  h.ctx.state.plan[0].workingMaterials = [{ id: 'material', name: 'Test', qtyPerUnit: 0.5 }];
-  const original = JSON.parse(JSON.stringify(h.ctx.state));
-  const hidden = h.ctx.state.plan[1];
-  const update = h.ctx.updateState;
-  let writes = 0;
-  h.ctx.updateState = (updater) => { writes += 1; update(updater); };
-  control(h, 'Odznacz wszystkie').props.onClick();
-  assert.equal(writes, 1);
-  assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.included), [false, true, false]);
-  assert.equal(h.ctx.state.plan[1], hidden);
-  assert.equal(control(h, 'Odznacz wszystkie').props.disabled, true);
-  assert.equal(control(h, 'Zaznacz wszystkie').props.disabled, false);
-  control(h, 'Odznacz wszystkie').props.onClick();
-  assert.equal(writes, 1, 'no redundant save when every visible row is already cleared');
-  control(h, 'Zaznacz wszystkie').props.onClick();
-  assert.equal(writes, 2);
-  assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.included), [true, true, true]);
-  assert.equal(control(h, 'Zaznacz wszystkie').props.disabled, true);
-  control(h, 'Zaznacz wszystkie').props.onClick();
-  assert.equal(writes, 2);
-  assert.equal(h.ctx.state.plan[1], hidden);
-  const withoutSelection = (plan) => JSON.stringify(plan.map((item) => Object.fromEntries(
-    Object.entries(item).filter(([key]) => key !== 'included')
-  )));
-  assert.equal(withoutSelection(h.ctx.state.plan), withoutSelection(original.plan));
-  assert.equal(h.ctx.state.selectedAreaId, original.selectedAreaId);
-  assert.deepEqual(JSON.parse(JSON.stringify(h.ctx.state.dailyPlans)), original.dailyPlans);
-  assert.deepEqual(JSON.parse(JSON.stringify(h.ctx.state.planVersions)), original.planVersions);
-});
-
-test('all-plan bulk selection covers every zone and every plan section', () => {
-  const h = createHeaderFixture();
-  const base = h.ctx.state.plan[0];
-  const areas = ['hala-1', 'hala-2', 'hala-3', 'bakoma', 'lakiernia', 'narzedziownia', ''];
-  h.ctx.state.plan = areas.map((areaId, index) => ({ ...base, id: `bulk-${index}`, areaId,
-    included: index % 2 === 0, planGroup: index === 5 ? 'planned' : index === 4 ? 'emergency' : 'standard' }));
-  const order = Array.from(h.ctx.state.plan, (item) => item.id);
-  control(h, 'Strefa planu').props.onChange({ target: { value: 'all' } });
-  control(h, 'Odznacz wszystkie').props.onClick();
-  assert.ok(h.ctx.state.plan.every((item) => item.included === false));
-  assert.match(h.html(), /0 z 7/);
-  assert.equal(nodes(h.render()).filter((node) => node.props?.['aria-pressed'] === false).length, 7);
-  control(h, 'Zaznacz wszystkie').props.onClick();
-  assert.ok(h.ctx.state.plan.every((item) => item.included === true));
-  assert.match(h.html(), /7 z 7/);
-  assert.equal(nodes(h.render()).filter((node) => node.props?.['aria-pressed'] === true).length, 7);
-  assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.id), order);
-  assert.equal(h.ctx.state.selectedAreaId, 'bakoma');
-});
-
-test('individual selection remains available after clearing or selecting every row', () => {
+test('each product remains individually included or excluded from calculations', () => {
   const h = createHeaderFixture();
   const rowButtons = () => nodes(h.render()).filter((node) => node.type === 'button' && typeof node.props?.['aria-pressed'] === 'boolean');
-  control(h, 'Odznacz wszystkie').props.onClick();
-  rowButtons()[1].props.onClick();
-  assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.included), [false, true, false]);
-  assert.equal(rowButtons()[1].props['aria-pressed'], true);
-  control(h, 'Zaznacz wszystkie').props.onClick();
   rowButtons()[0].props.onClick();
-  assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.included), [false, true, true]);
+  assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.included), [false, true, false]);
   assert.equal(rowButtons()[0].props['aria-pressed'], false);
   control(h, 'Dzień produkcji').props.onChange({ target: { value: '2026-09-01' } });
   control(h, 'Dzień produkcji').props.onChange({ target: { value: '2026-08-31' } });
-  assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.included), [false, true, true]);
+  assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.included), [false, true, false]);
 });
 
-test('read-only and empty zone views cannot change selections in bulk', () => {
+test('include-column checkbox selects or clears every currently visible product', () => {
+  const h = createHeaderFixture();
+  const partial = control(h, 'Zaznacz wszystkie widoczne pozycje');
+  assert.equal(partial.props['aria-checked'], 'mixed');
+  partial.props.onClick();
+  assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.included), [true, true, true]);
+
+  const selected = control(h, 'Odznacz wszystkie widoczne pozycje');
+  assert.equal(selected.props['aria-checked'], true);
+  selected.props.onClick();
+  assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.included), [false, false, false]);
+
+  control(h, 'Wyszukaj produkt w planie').props.onChange({ target: { value: '691' } });
+  control(h, 'Zaznacz wszystkie widoczne pozycje').props.onClick();
+  assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.included), [false, true, false]);
+});
+
+test('read-only users cannot change individual calculation inclusion', () => {
   const readOnly = createHeaderFixture({ readOnly: true });
-  readOnly.ctx.updateState = () => { throw new Error('Read-only bulk selection must not write'); };
-  for (const label of ['Zaznacz wszystkie', 'Odznacz wszystkie']) {
-    assert.equal(control(readOnly, label).props.disabled, true);
-    control(readOnly, label).props.onClick();
-  }
   for (const node of nodes(readOnly.render()).filter((node) => typeof node.props?.['aria-pressed'] === 'boolean')) {
     assert.equal(node.props.disabled, true);
   }
-  const empty = createHeaderFixture();
-  control(empty, 'Strefa planu').props.onChange({ target: { value: 'hala-1' } });
-  empty.ctx.updateState = () => { throw new Error('An empty view must not write'); };
-  for (const label of ['Zaznacz wszystkie', 'Odznacz wszystkie']) {
-    assert.equal(control(empty, label).props.disabled, true);
-    control(empty, label).props.onClick();
-  }
-  empty.ctx.state.plan = [];
-  assert.equal(control(empty, 'Zaznacz wszystkie'), undefined);
-  assert.equal(control(empty, 'Odznacz wszystkie'), undefined);
-});
-
-test('a delayed bulk update cannot change another production day', () => {
-  const h = createHeaderFixture();
-  let queued;
-  h.ctx.updateState = (updater) => { queued = updater; };
-  control(h, 'Odznacz wszystkie').props.onClick();
-  const otherDay = { ...h.ctx.state, selectedPlanDate: '2026-09-01' };
-  assert.equal(queued(otherDay), otherDay);
+  const includeAll = control(readOnly, 'Zaznacz wszystkie widoczne pozycje');
+  assert.equal(includeAll.props.disabled, true);
+  assert.equal(includeAll.props['aria-checked'], 'mixed');
 });
 
 test('unassigned rows stay in the main list, in source order, exactly once in every zone', () => {
@@ -510,7 +615,7 @@ test('unassigned quantity warnings remain visible without a second copy of the p
   const h = createHeaderFixture();
   h.ctx.state.plan = [{ ...h.ctx.state.plan[0], areaId: '', quantityStatus: 'missing' }];
   const html = h.html();
-  assert.match(html, /Ilość do wyjaśnienia/);
+  assert.match(html, /Brak ilości: 1/);
   const rows = nodes(h.render()).filter((node) => node.props?.['data-plan-item']);
   assert.equal(rows.length, 1, 'one unassigned detail block');
   assert.doesNotMatch(html, /Bez przypisanej strefy/);
@@ -527,9 +632,9 @@ test('zone filtering retains emergency and unchecked planned rows, but excludes 
   ];
   const html = h.html();
   for (const index of ['ACTIVE', 'EMERGENCY', 'PLANNED']) assert.match(html, new RegExp(index));
-  assert.doesNotMatch(html, /OTHER_ZONE|Ilość do wyjaśnienia/);
-  assert.match(html, /2 z 3/);
-  assert.match(html, /Brak technologii: 2/);
+  assert.doesNotMatch(html, /OTHER_ZONE|Brak ilości:/);
+  assert.match(html, /3 pozycje/);
+  assert.match(html, /Produkty do realizacji/);
 });
 
 test('read-only users can filter zones, but shared storage and invalid zones cannot be selected', () => {

@@ -61,6 +61,22 @@ test('splits one mould run into independently calculated products in source orde
   assert.ok(outputs.every((output) => output.productionSourceQuantity === '9 720, 9 720'));
 });
 
+test('sums each additive quantity separately when one mould produces two products', () => {
+  const source = 'QUICKLIFT DORIS LEFT ASSEMBLY (D0159752_010), QUICKLIFT DORIS RIGHT ASSEMBLY (D0159752_010) (A18192709, A18192710)';
+  const [row] = readPlanningRows([header, ['1', source, '5 960 + 7 776, 5 960 + 7 776', 'WTR 34', 1485]]);
+  const outputs = splitPlanningRowOutputs(row);
+
+  assert.deepEqual(outputs.map((output) => output.index), ['A18192709', 'A18192710']);
+  assert.deepEqual(outputs.map((output) => output.totalQty), [13736, 13736]);
+  assert.ok(outputs.every((output) => output.quantityStatus === 'parsed'));
+  assert.deepEqual(outputs.map((output) => output.name), [
+    'QUICKLIFT DORIS LEFT ASSEMBLY (D0159752_010)',
+    'QUICKLIFT DORIS RIGHT ASSEMBLY (D0159752_010)'
+  ]);
+  const [restoredOutput] = splitPlanningRowOutputs({ ...outputs[0], quantityStatus: 'unrecognized' });
+  assert.equal(restoredOutput.quantityStatus, 'parsed');
+});
+
 test('keeps plus signs inside product names when commas separate mould outputs', () => {
   const [row] = readPlanningRows([header, [
     '1',

@@ -16,6 +16,7 @@ test('creates one return directly below the matching index and station',()=>{
   const child=result[1];
   assert.equal(child.station,source.station);assert.equal(child.detail,source.detail);
   assert.deepEqual(child.teams,['mechanics']);assert.deepEqual(child.kinds,['powrot-formy-narzedziownia']);
+  assert.deepEqual(child.teamProgress,{});
   assert.equal(child.notes.mechanics,undefined);assert.equal(child.notes.processAssignee,undefined);
   assert.equal(child.isCurrentPlan,false);assert.equal(child.material,'');assert.equal(child.done,false);
   assert.equal(result.filter(task=>task.isCurrentPlan).length,2);
@@ -38,6 +39,28 @@ test('return keeps its own note, completion and cancellation, not the source sta
   assert.equal(result[1].detail,'Poprawiona nazwa');assert.equal(result[1].quantity,'3000');
   assert.ok(result[1].kinds.includes('anulowane'));assert.ok(!result[0].kinds.includes('anulowane'));
   assert.equal(withToolroomReturnTasks([parent('done',{done:true})])[1].done,false);
+});
+
+test('parent process stays blocked until the separate return is completed',()=>{
+  const completion={completedAt:'2026-09-06T08:00:00.000Z',completedBy:'Test'};
+  const source=parent('gated',{teamProgress:{mechanics:completion,process:completion},done:true});
+  let [normalized,child]=withToolroomReturnTasks([source]);
+  assert.equal(normalized.toolroomReturnDone,false);
+  assert.ok(normalized.teamProgress.mechanics);
+  assert.equal(normalized.teamProgress.process,undefined);
+  assert.equal(normalized.done,false);
+
+  child={...child,teamProgress:{mechanics:completion},done:true};
+  [normalized]=withToolroomReturnTasks([source,child]);
+  assert.equal(normalized.toolroomReturnDone,true);
+  assert.ok(normalized.teamProgress.process);
+  assert.equal(normalized.done,true);
+
+  child={...child,teamProgress:{},done:false};
+  [normalized]=withToolroomReturnTasks([source,child]);
+  assert.equal(normalized.toolroomReturnDone,false);
+  assert.equal(normalized.teamProgress.process,undefined);
+  assert.equal(normalized.done,false);
 });
 
 test('removing the sending assignment or the whole source does not remove an existing return',()=>{

@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { ChevronDown, Copy, Pencil, Plus, Settings2, Trash2, Upload, Wrench, X } from 'lucide-react';
+import { CalendarDays, Check, ChevronDown, Copy, LockKeyhole, Pencil, Plus, Settings2, Trash2, Upload, Wrench, X } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -13,12 +13,26 @@ import { Input } from '@/components/ui/Input';
 import { SelectField } from '@/components/ui/Select';
 import { Tabs, TabsContent } from '@/components/ui/Tabs';
 import { TeamCommentsSettings } from '@/components/production-preparation/TeamCommentsSettings';
-import { defaultTeamComments, normalizeTeamComments, productionMetricsForTask, teamCommentForTask, type TeamComment, type TeamComments } from '@/lib/utils/productionTeamComments';
+import { defaultTeamComments, normalizeTeamComments, productionMetricsForTask, teamCommentForTask, type ProductionTeam, type TeamComment, type TeamComments } from '@/lib/utils/productionTeamComments';
 import { cn } from '@/lib/utils/cn';
-import { isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, withToolroomReturnTasks } from '@/lib/utils/productionToolroomTasks';
+import { getWarsawProductionPlanDate, isProductionPlanDate } from '@/lib/utils/productionPlanDate';
+import { normalizeProductionWorkPlanView, teamsForProductionWorkPlan } from '@/lib/utils/productionWorkPlan';
+import {
+  canProductionTeamStart,
+  isProductionStartupTeam,
+  isProductionTaskDone,
+  isProductionTeamDone,
+  productionTeamCompletion,
+  productionTeamProgressForTask,
+  productionWaitingTeams,
+  productionWaitsForToolroomReturn,
+  setProductionTeamCompletion,
+  type ProductionTeamProgress
+} from '@/lib/utils/productionWorkProgress';
+import { TOOLROOM_RETURN_LABEL, isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, withToolroomReturnTasks } from '@/lib/utils/productionToolroomTasks';
 import { readProductionPlanSheet, readProductionPlanWorkbook, type ProductionPlanWorkbook } from '@/lib/utils/productionPlanWorkbook';
 
-type Team = 'mechanics' | 'process' | 'distribution' | 'graphics' | 'technician' | 'additional';
+type Team = ProductionTeam;
 type WorkKind = 'zmiana-formy' | 'forma-narzedziownia' | 'powrot-formy-narzedziownia' | 'rozruch' | 'wznowienie' | 'zmiana-koloru' | 'zmiana-grafiki' | 'regulacja' | 'proby' | 'przeglad-a' | 'anulowane' | 'inne';
 type ReportKind = WorkKind | 'przygotowanie-stanowiska' | 'wznowienie-procesu';
 type PlanGroup = 'standard' | 'emergency' | 'planned';
@@ -36,6 +50,8 @@ type Task = {
   kinds: WorkKind[];
   teams: Team[];
   notes: TaskNotes;
+  teamProgress: ProductionTeamProgress;
+  toolroomReturnDone?: boolean;
   done: boolean;
   material: string;
   materialType: string;
@@ -68,11 +84,12 @@ type TaskMutation = {
   removeTeams?: Team[];
   setNotes?: Record<string, string | null>;
   setNotesIfMissing?: Record<string, string>;
+  setTeamDone?: { team: Team; done: boolean };
   clearWork?: boolean;
 };
 
 type StoredPlan = {
-  session: { file_name?: string | null; plan_sheet?: string | null; updated_at?: string | null } | null;
+  session: { session_date?: string; file_name?: string | null; plan_sheet?: string | null; updated_at?: string | null } | null;
   tasks: Task[];
   unchanged?: boolean;
   processEngineers?: string[];
@@ -117,6 +134,71 @@ const teamOptions: Array<{ id: Team; label: string; color: string }> = [
   { id: 'technician', label: 'Technik uruchomienia', color: '#20c8cc' },
   { id: 'additional', label: 'Informacja dodatkowa', color: '#f2c14a' }
 ];
+
+const teamLabel = (team: Team) => teamOptions.find((option) => option.id === team)?.label ?? team;
+
+const productionWaitingLabels = (task: Task, team: Team) => {
+  const waitsForReturn = productionWaitsForToolroomReturn(task, team);
+  const labels = productionWaitingTeams(task, team)
+    .filter((waitingTeam) => !(waitsForReturn && waitingTeam === 'mechanics' && isProductionTeamDone(task, 'mechanics')))
+    .map(teamLabel);
+  if (waitsForReturn) labels.push(TOOLROOM_RETURN_LABEL);
+  return labels;
+};
+
+const TeamProgressStatus = ({ task, team }: { task: Task; team: Team }) => {
+  if (team === 'additional' || task.kinds.includes('anulowane')) return null;
+  const completion = productionTeamCompletion(task, team);
+  if (completion) {
+    const details = [completion.completedBy, completion.completedAt
+      ? new Date(completion.completedAt).toLocaleString('pl-PL')
+      : ''].filter(Boolean).join(' · ');
+    return <p className={cn('mt-2 flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide text-emerald-300', team === 'process' && 'process-status-done')} title={details || 'Praca wykonana'}><Check className="h-4 w-4" />Wykonane</p>;
+  }
+  const waitingLabels = productionWaitingLabels(task, team);
+  if (waitingLabels.length > 0) {
+    return <p className={cn('mt-2 flex items-start gap-1.5 text-xs font-bold', team === 'process' ? 'process-status-blocked text-red-300' : 'text-slate-400')}><LockKeyhole className="mt-0.5 h-3.5 w-3.5 shrink-0" />Czeka na: {waitingLabels.join(', ')}</p>;
+  }
+  if (isProductionStartupTeam(team)) {
+    return <p className={cn('mt-2 flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide', team === 'process' ? 'process-status-ready text-amber-300' : 'text-emerald-300')}><Check className="h-4 w-4" />Można zacząć</p>;
+  }
+  return <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-dim">Do zrobienia</p>;
+};
+
+const TeamDoneButton = ({ task, team, onToggle }: { task: Task; team: Team; onToggle: () => void }) => {
+  if (team === 'additional' || task.kinds.includes('anulowane')) return null;
+  const done = isProductionTeamDone(task, team);
+  const waitingLabels = productionWaitingLabels(task, team);
+  const disabled = !done && !canProductionTeamStart(task, team);
+  const mobileLabel = done ? 'Cofnij' : disabled ? 'Czeka' : 'Gotowe';
+  const title = done
+    ? `Cofnij wykonanie: ${teamLabel(team)}`
+    : disabled
+      ? `Najpierw: ${waitingLabels.join(', ')}`
+      : `Oznacz jako wykonane: ${teamLabel(team)}`;
+  return <button
+    aria-label={title}
+    className={cn(
+      'flex h-11 w-auto min-w-11 shrink-0 touch-manipulation items-center justify-center rounded-lg border px-3 transition active:scale-[0.98] md:h-8 md:w-8 md:min-w-0 md:rounded md:px-0',
+      done
+        ? 'border-emerald-400/70 bg-emerald-500/25 text-emerald-200 hover:bg-emerald-500/35'
+        : disabled
+          ? team === 'process'
+            ? 'cursor-not-allowed border-red-500/65 bg-red-500/15 text-red-300'
+            : 'cursor-not-allowed border-border bg-surface2 text-slate-600 opacity-70'
+          : team === 'process'
+            ? 'border-amber-400/70 bg-amber-500/15 text-amber-200 hover:border-amber-300 hover:bg-amber-500/25'
+            : 'border-emerald-500/55 bg-emerald-500/10 text-emerald-300 hover:border-emerald-300 hover:bg-emerald-500/20'
+    )}
+    disabled={disabled}
+    onClick={onToggle}
+    title={title}
+    type="button"
+  >
+    {disabled ? <LockKeyhole className="h-5 w-5 md:h-4 md:w-4" /> : <Check className="h-5 w-5 md:h-4 md:w-4" strokeWidth={done ? 3 : 2} />}
+    <span className="ml-1.5 text-[11px] font-bold md:hidden">{mobileLabel}</span>
+  </button>;
+};
 
 const defaultProcessEngineers = ['Adam', 'Mirek', 'Zbyszek', 'Paweł', 'Bogdan'];
 const defaultProcessEngineerRoster: ProcessEngineerRosterEntry[] = defaultProcessEngineers.map((name) => ({ name, shift: '1', active: true }));
@@ -262,7 +344,7 @@ const WorkKindTrendCharts = ({ series }: { series: WorkKindSeries[] }) => <secti
 
 const WorkHistoryDashboard = ({ history, onDeleteDay }: { history: PlanHistory[]; onDeleteDay: (planDate: string) => void }) => <section className="work-history-dashboard space-y-4">
   <div className="border-b border-border pb-4"><p className="font-semibold text-title">Historia przypisanych prac</p><p className="mt-1 text-sm text-dim">Snapshoty zadań dla zespołów. Nie jest to historia plików Excel.</p></div>
-  {history.length === 0 ? <Card><p className="text-sm text-dim">Brak zapisanych prac. Snapshot pojawi się po pierwszym przypisaniu zadania.</p></Card> : history.map((entry) => <Card className="overflow-hidden p-0" key={entry.plan_date}><div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4"><div><p className="font-semibold text-title">{new Date(`${entry.plan_date}T12:00:00`).toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}</p><p className="mt-1 text-sm text-dim">{entry.tasks.length} przypisanych prac</p></div><button aria-label={`Usuń dzień ${entry.plan_date} z historii`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-red-500/45 text-red-300 transition hover:bg-red-500/10" onClick={() => onDeleteDay(entry.plan_date)} title="Usuń cały dzień z historii" type="button"><Trash2 className="h-4 w-4" /></button></div><div className="grid gap-px bg-border xl:grid-cols-3">{teamOptions.map((team) => { const queue = entry.tasks.filter((task) => task.teams.includes(team.id)); return <div className="min-h-28 bg-surface p-4" key={team.id}><div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold" style={{ color: team.color }}>{team.label}</p><Badge>{queue.length}</Badge></div>{queue.length === 0 ? <p className="text-xs text-dim">Brak przypisanych prac.</p> : <div className="space-y-2">{queue.map((task, index) => { const labels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((kind) => kind.id === id)?.label).filter(Boolean).join(', '); return <div className="rounded border border-border bg-bg p-2.5" key={`${task.station}-${task.detail}-${index}`}><p className="text-xs font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">{labels || 'Zadanie'}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{task.done && <p className="mt-1 text-xs font-semibold text-emerald-400">Wykonane</p>}</div>; })}</div>}</div>; })}</div></Card>)}</section>;
+  {history.length === 0 ? <Card><p className="text-sm text-dim">Brak zapisanych prac. Snapshot pojawi się po pierwszym przypisaniu zadania.</p></Card> : history.map((entry) => <Card className="overflow-hidden p-0" key={entry.plan_date}><div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4"><div><p className="font-semibold text-title">{new Date(`${entry.plan_date}T12:00:00`).toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}</p><p className="mt-1 text-sm text-dim">{entry.tasks.length} przypisanych prac</p></div><button aria-label={`Usuń dzień ${entry.plan_date} z historii`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-red-500/45 text-red-300 transition hover:bg-red-500/10" onClick={() => onDeleteDay(entry.plan_date)} title="Usuń cały dzień z historii" type="button"><Trash2 className="h-4 w-4" /></button></div><div className="grid gap-px bg-border xl:grid-cols-3">{teamOptions.map((team) => { const queue = entry.tasks.filter((task) => task.teams.includes(team.id)); return <div className="min-h-28 bg-surface p-4" key={team.id}><div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold" style={{ color: team.color }}>{team.label}</p><Badge>{queue.length}</Badge></div>{queue.length === 0 ? <p className="text-xs text-dim">Brak przypisanych prac.</p> : <div className="space-y-2">{queue.map((task, index) => { const labels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((kind) => kind.id === id)?.label).filter(Boolean).join(', '); return <div className="rounded border border-border bg-bg p-2.5" key={`${task.station}-${task.detail}-${index}`}><p className="text-xs font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">{labels || 'Zadanie'}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{isProductionTeamDone(task, team.id) && <p className="mt-1 text-xs font-semibold text-emerald-400">Wykonane</p>}</div>; })}</div>}</div>; })}</div></Card>)}</section>;
 
 const hasYellowFill = (cell: XLSX.CellObject | undefined) => {
   const style = cell?.s as { fill?: { fgColor?: { rgb?: string } }; fgColor?: { rgb?: string } } | undefined;
@@ -338,6 +420,7 @@ const parseTasks = (workbook: XLSX.WorkBook, sheetName: string): Task[] => {
       kinds: [],
       teams: [],
       notes: {},
+      teamProgress: {},
       done: false,
       // Planned rows are informational and do not enter the material schedule.
       material: row.plannedDate,
@@ -380,6 +463,7 @@ const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
       kinds: previous.isCurrentPlan ? previous.kinds : previous.kinds.filter((kind) => kind !== 'anulowane'),
       teams: previous.teams,
       notes: previous.notes,
+      teamProgress: previous.teamProgress,
       done: previous.done,
       material: imported.planGroup === 'planned' ? imported.material : previous.material,
       materialType: previous.materialType,
@@ -398,6 +482,22 @@ const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
 
 export default function PrzygotowanieProdukcjiPage() {
   const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const requestedPlanDate = searchParams.get('date');
+  const selectedPlanDate = isProductionPlanDate(requestedPlanDate)
+    ? requestedPlanDate
+    : getWarsawProductionPlanDate();
+  const todayPlanDate = getWarsawProductionPlanDate();
+  const selectedPlanDateLabel = useMemo(
+    () => new Date(`${selectedPlanDate}T12:00:00`).toLocaleDateString('pl-PL', {
+      weekday: 'long',
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric'
+    }),
+    [selectedPlanDate]
+  );
   const [workbookSource, setWorkbookSource] = useState<ProductionPlanWorkbook | null>(null);
   const [selectedSheetName, setSelectedSheetName] = useState('');
   const [readingWorkbook, setReadingWorkbook] = useState(false);
@@ -440,7 +540,16 @@ export default function PrzygotowanieProdukcjiPage() {
     .filter((engineer) => engineer.active)
     .sort((left, right) => left.shift.localeCompare(right.shift))
     .map((engineer) => engineer.name), [processEngineerRoster]);
-  const activeView = searchParams.get('view') === 'material' ? 'material' : searchParams.get('view') === 'work-plan' ? 'work-plan' : searchParams.get('view') === 'history' ? 'history' : searchParams.get('view') === 'report' ? 'report' : searchParams.get('view') === 'management' ? 'management' : 'plan';
+  const requestedView = searchParams.get('view');
+  const workPlanView = normalizeProductionWorkPlanView(requestedView);
+  const activeView = requestedView === 'material' ? 'material' : workPlanView ? 'work-plan' : requestedView === 'history' ? 'history' : requestedView === 'report' ? 'report' : requestedView === 'management' ? 'management' : 'plan';
+  const visibleWorkPlanTeamIds = teamsForProductionWorkPlan(workPlanView);
+  const visibleWorkPlanTeams = teamOptions.filter((team) => visibleWorkPlanTeamIds.includes(team.id));
+  const selectedManualTaskTeams = manualTaskTeams.filter((team) => visibleWorkPlanTeamIds.includes(team));
+  const workPlanTitle = workPlanView === 'work-plan-preparation' ? 'Przygotowanie produkcji' : 'Technologia';
+  const workPlanDescription = workPlanView === 'work-plan-preparation'
+    ? 'Rozdzielcy, technicy uruchomienia i informacje dodatkowe.'
+    : 'Mechanicy, inżynierowie procesu i graficy.';
   const activeViewRef = useRef(activeView);
   const refreshCurrentPlanRef = useRef<(() => void) | null>(null);
   const lastSyncAttemptRef = useRef(0);
@@ -462,19 +571,34 @@ export default function PrzygotowanieProdukcjiPage() {
     let active = true;
     let initialized = false;
     let requestInFlight = false;
+    sessionVersionRef.current = '';
+    lastSyncAttemptRef.current = 0;
+    setLoadingSavedPlan(true);
+    setSaveState('saved');
+    setSaveError(null);
+    setFileName('');
+    setSheetName('');
+    setTasks([]);
+    setEditingQueueTask(null);
+    setExpandedPlannedTasks([]);
+    setShowManualTaskForm(false);
+    setManualTaskText('');
+    setManualTaskTeams([]);
     const loadCurrentPlan = async () => {
       if (planImportInFlightRef.current || requestInFlight || (initialized && document.visibilityState !== 'visible')) return;
       const importVersion = planImportVersionRef.current;
       const commentsVersion = teamCommentsSaveVersionRef.current;
-      const syncInterval = activeViewRef.current === 'plan' ? 5000 : 60000;
+      const syncInterval = activeViewRef.current === 'plan' || activeViewRef.current === 'work-plan' ? 5000 : 60000;
       if (initialized && Date.now() - lastSyncAttemptRef.current < syncInterval) return;
       lastSyncAttemptRef.current = Date.now();
       requestInFlight = true;
       try {
-        const syncQuery = initialized
-          ? `?sync=1${sessionVersionRef.current ? `&since=${encodeURIComponent(sessionVersionRef.current)}` : ''}`
-          : '';
-        const response = await fetch(`/api/przygotowanie-produkcji${syncQuery}`, { cache: 'no-store' });
+        const query = new URLSearchParams({ date: selectedPlanDate });
+        if (initialized) {
+          query.set('sync', '1');
+          if (sessionVersionRef.current) query.set('since', sessionVersionRef.current);
+        }
+        const response = await fetch(`/api/przygotowanie-produkcji?${query.toString()}`, { cache: 'no-store' });
         if (!response.ok) throw new Error('Nie udało się wczytać ustawień komentarzy. Odśwież widok, aby spróbować ponownie.');
         const data = await response.json() as StoredPlan;
         if (!active || planImportInFlightRef.current || importVersion !== planImportVersionRef.current) return;
@@ -493,7 +617,14 @@ export default function PrzygotowanieProdukcjiPage() {
           setProcessEngineerRoster(roster);
           setProcessEngineerDrafts(roster.map((engineer, index) => ({ ...engineer, id: `engineer-${index}-${engineer.name}`, originalName: engineer.name })));
         }
-        if (!data.session) return;
+        if (!data.session) {
+          sessionVersionRef.current = '';
+          setFileName('');
+          setSheetName('');
+          setTasks([]);
+          return;
+        }
+        if (data.session.session_date && data.session.session_date !== selectedPlanDate) return;
         sessionVersionRef.current = data.session.updated_at ?? '';
         setFileName(data.session.file_name ?? '');
         setSheetName(data.session.plan_sheet ?? '');
@@ -537,7 +668,7 @@ export default function PrzygotowanieProdukcjiPage() {
       document.removeEventListener('visibilitychange', refreshWhenVisible);
       refreshCurrentPlanRef.current = null;
     };
-  }, []);
+  }, [selectedPlanDate]);
 
   useEffect(() => {
     activeViewRef.current = activeView;
@@ -571,7 +702,13 @@ export default function PrzygotowanieProdukcjiPage() {
     setSaveState('saving');
     setSaveError(null);
     try {
-      const saved = await apiRequest<StoredPlan>({ action: 'savePlan', tasks: nextTasks, fileName: nextFileName, sheetName: nextSheetName });
+      const saved = await apiRequest<StoredPlan>({
+        action: 'savePlan',
+        planDate: selectedPlanDate,
+        tasks: nextTasks,
+        fileName: nextFileName,
+        sheetName: nextSheetName
+      });
       sessionVersionRef.current = saved.session?.updated_at ?? '';
       void fetch('/api/przygotowanie-produkcji?history=1')
         .then((response) => response.ok ? response.json() as Promise<{ history: PlanHistory[] }> : Promise.reject())
@@ -587,6 +724,7 @@ export default function PrzygotowanieProdukcjiPage() {
   };
 
   const saveTaskMutation = (taskId: string, mutation: TaskMutation) => {
+    const planDate = selectedPlanDate;
     if (pendingSaveTotalRef.current === 0) taskSaveFailedRef.current = false;
     pendingSaveTotalRef.current += 1;
     pendingTaskSavesRef.current.set(taskId, (pendingTaskSavesRef.current.get(taskId) ?? 0) + 1);
@@ -600,7 +738,7 @@ export default function PrzygotowanieProdukcjiPage() {
       .catch(() => undefined)
       .then(async () => {
         if (parentSave) await parentSave;
-        await apiRequest({ action: 'mutateTask', taskId, mutation });
+        await apiRequest({ action: 'mutateTask', planDate, taskId, mutation });
       });
     taskSaveQueuesRef.current.set(taskId, request);
 
@@ -709,7 +847,7 @@ export default function PrzygotowanieProdukcjiPage() {
   };
   const addManualTask = () => {
     const detail = manualTaskText.trim();
-    if (!detail || manualTaskTeams.length === 0) return;
+    if (!detail || selectedManualTaskTeams.length === 0) return;
     const nextTasks = [...tasks, {
       id: `zadanie-reczne-${Date.now()}`,
       isCurrentPlan: false,
@@ -720,8 +858,9 @@ export default function PrzygotowanieProdukcjiPage() {
       norm: '',
       highlighted: false,
       kinds: ['inne' as WorkKind],
-      teams: manualTaskTeams,
+      teams: selectedManualTaskTeams,
       notes: {},
+      teamProgress: {},
       done: false,
       material: '',
       materialType: '',
@@ -754,7 +893,10 @@ export default function PrzygotowanieProdukcjiPage() {
       if (adding && kind === 'forma-narzedziownia' && !notes.process) {
         notes = { ...notes, process: 'Wznowienie procesu po powrocie z narzędziowni.' };
       }
-      return { ...currentTask, kinds, teams, notes };
+      const nextTask = { ...currentTask, kinds, teams, notes };
+      const teamProgress = productionTeamProgressForTask({ ...nextTask, done: false });
+      const normalizedTask = { ...nextTask, teamProgress };
+      return { ...normalizedTask, done: isProductionTaskDone({ ...normalizedTask, done: false }) };
     });
   };
   const toggleTeam = (task: Task, team: Team) => {
@@ -767,7 +909,11 @@ export default function PrzygotowanieProdukcjiPage() {
       const notes = adding && team === 'distribution' && !currentTask.notes.distribution
         ? { ...currentTask.notes, distribution: 'Przygotować stanowisko' }
         : currentTask.notes;
-      return { ...currentTask, teams, notes };
+      const teamProgress = adding
+        ? productionTeamProgressForTask({ ...currentTask, teams })
+        : setProductionTeamCompletion(currentTask.teamProgress, team, false);
+      const nextTask = { ...currentTask, teams, notes, teamProgress };
+      return { ...nextTask, done: isProductionTaskDone({ ...nextTask, done: false }) };
     });
   };
   const togglePlannedTask = (id: string) => setExpandedPlannedTasks((current) =>
@@ -776,19 +922,18 @@ export default function PrzygotowanieProdukcjiPage() {
   const activeTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station && task.planGroup !== 'planned' && !isPanelGroupHeader(task)), [tasks]);
   const plannedTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station && task.planGroup === 'planned'), [tasks]);
   const reportDays = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
     const allDays = [
       ...history
-        .filter((entry) => entry.plan_date !== today)
+        .filter((entry) => entry.plan_date !== selectedPlanDate)
         .map((entry) => ({ date: entry.plan_date, tasks: entry.tasks })),
-      { date: today, tasks }
+      { date: selectedPlanDate, tasks }
     ];
     if (reportPeriod === 'all') return allDays;
     const from = new Date();
     from.setHours(0, 0, 0, 0);
     from.setDate(from.getDate() - (reportPeriod === 'week' ? 6 : 29));
     return allDays.filter((entry) => new Date(`${entry.date}T12:00:00`) >= from);
-  }, [history, reportPeriod, tasks]);
+  }, [history, reportPeriod, selectedPlanDate, tasks]);
 
   const workReport = useMemo(() => {
     const totals = Object.fromEntries(reportKinds.map((kind) => [kind.id, { total: 0, done: 0 }])) as Record<ReportKind, { total: number; done: number }>;
@@ -855,7 +1000,10 @@ export default function PrzygotowanieProdukcjiPage() {
       const notes = { ...currentTask.notes };
       delete notes[team];
       if (team === 'process') delete notes.processAssignee;
-      return { ...currentTask, teams: currentTask.teams.filter((item) => item !== team), notes };
+      const teams = currentTask.teams.filter((item) => item !== team);
+      const teamProgress = setProductionTeamCompletion(currentTask.teamProgress, team, false);
+      const nextTask = { ...currentTask, teams, notes, teamProgress };
+      return { ...nextTask, done: isProductionTaskDone({ ...nextTask, done: false }) };
     });
   };
 
@@ -924,7 +1072,7 @@ export default function PrzygotowanieProdukcjiPage() {
     try {
       await apiRequest({ action: 'saveProcessEngineers', processEngineers: nextNames, processEngineerRoster: nextRoster });
       if (assignmentsChanged) {
-        await apiRequest({ action: 'savePlan', tasks: nextTasks, fileName, sheetName });
+        await apiRequest({ action: 'savePlan', planDate: selectedPlanDate, tasks: nextTasks, fileName, sheetName });
         setTasks(nextTasks);
       }
       setProcessEngineerRoster(nextRoster);
@@ -958,12 +1106,26 @@ export default function PrzygotowanieProdukcjiPage() {
   const taskMetrics = (task: Task, team: Team) => productionMetricsForTask(teamComments, team, task);
 
   const clearTaskWork = (task: Task) => {
-    mutateTask(task.id, { clearWork: true }, (currentTask) => ({ ...currentTask, kinds: [], teams: [], notes: toolroomLinkNotes(currentTask) }));
+    mutateTask(task.id, { clearWork: true }, (currentTask) => ({
+      ...currentTask,
+      kinds: [],
+      teams: [],
+      notes: toolroomLinkNotes(currentTask),
+      teamProgress: {},
+      done: false
+    }));
   };
 
   const clearAllAssignments = () => {
     if (!window.confirm('Usunąć wszystkie przypisania, uwagi i statusy wykonania z bieżącego planu?')) return;
-    const nextTasks = tasks.map((task) => ({ ...task, kinds: [], teams: [], notes: toolroomLinkNotes(task), done: false }));
+    const nextTasks = tasks.map((task) => ({
+      ...task,
+      kinds: [],
+      teams: [],
+      notes: toolroomLinkNotes(task),
+      teamProgress: {},
+      done: false
+    }));
     setTasks(nextTasks);
     void savePlan(nextTasks, fileName, sheetName);
   };
@@ -982,6 +1144,34 @@ export default function PrzygotowanieProdukcjiPage() {
       setSaveError(message);
       setSaveState('error');
     }
+  };
+
+  const changingPlanDateDisabled =
+    loadingSavedPlan || importing || readingWorkbook || saveState === 'saving' || savingProcessEngineers;
+  const selectPlanDate = (nextDate: string) => {
+    if (!isProductionPlanDate(nextDate) || nextDate === selectedPlanDate || changingPlanDateDisabled) return;
+    if (saveState === 'error' && !window.confirm('Bieżące zmiany nie zostały zapisane. Przejść do innego dnia?')) return;
+    const query = new URLSearchParams(searchParams.toString());
+    query.set('date', nextDate);
+    router.replace(`${pathname}?${query.toString()}`, { scroll: false });
+  };
+
+  const toggleTeamDone = (task: Task, team: Team) => {
+    const currentlyDone = isProductionTeamDone(task, team);
+    if (!currentlyDone && !canProductionTeamStart(task, team)) return;
+    const done = !currentlyDone;
+    mutateTask(task.id, { setTeamDone: { team, done } }, (currentTask) => {
+      const teamProgress = setProductionTeamCompletion(
+        productionTeamProgressForTask(currentTask),
+        team,
+        done,
+        { completedAt: done ? new Date().toISOString() : '', completedBy: '' }
+      );
+      const nextTask = { ...currentTask, teamProgress };
+      const normalizedProgress = productionTeamProgressForTask({ ...nextTask, done: false });
+      const normalizedTask = { ...nextTask, teamProgress: normalizedProgress };
+      return { ...normalizedTask, done: isProductionTaskDone({ ...normalizedTask, done: false }) };
+    });
   };
 
   const copyQueueTask = async (task: Task, team: Team) => {
@@ -1070,26 +1260,7 @@ export default function PrzygotowanieProdukcjiPage() {
         }
 
         .production-queues > div > div:last-child > div > button:first-child {
-          padding: 0.65rem 3.25rem 0.65rem 0.7rem !important;
-        }
-
-        .production-queues > div > div:last-child > div > div:nth-child(2) {
-          position: absolute;
-          top: 0.45rem;
-          right: 0.45rem;
-          gap: 0.25rem;
-          border: 0;
-          padding: 0;
-        }
-
-        .production-queues > div > div:last-child > div > div:nth-child(2) button {
-          width: 1.55rem;
-          height: 1.55rem;
-        }
-
-        .production-queues > div > div:last-child > div > div:nth-child(2) svg {
-          width: 0.8rem;
-          height: 0.8rem;
+          padding: 0.65rem 6rem 0.65rem 0.7rem !important;
         }
 
         .production-queues .space-y-2 > div {
@@ -1097,25 +1268,27 @@ export default function PrzygotowanieProdukcjiPage() {
         }
 
         .production-queues .space-y-2 > div > button:first-child {
-          padding-right: 2.35rem !important;
+          padding-right: 6rem !important;
         }
 
-        .production-queues .flex.justify-end {
+        .production-queues .production-task-actions {
           position: absolute !important;
           top: 0.45rem;
           right: 0.45rem;
-          flex-direction: column;
+          display: flex;
+          flex-direction: row;
           gap: 0.25rem !important;
           border: 0 !important;
           padding: 0 !important;
         }
 
-        .production-queues .flex.justify-end button {
+        .production-queues .production-task-actions button {
           width: 1.55rem !important;
           height: 1.55rem !important;
+          min-width: 0 !important;
         }
 
-        .production-queues .flex.justify-end svg {
+        .production-queues .production-task-actions svg {
           width: 0.8rem !important;
           height: 0.8rem !important;
         }
@@ -1221,9 +1394,112 @@ export default function PrzygotowanieProdukcjiPage() {
           .production-queues > div > div:last-child > div > button {
             padding: 0.625rem;
           }
+
+          .production-queues > div > div:last-child > div > button:first-child,
+          .production-queues .space-y-2 > div > button:first-child {
+            padding: 0.75rem !important;
+          }
+
+          .production-queues .production-task-actions {
+            position: static !important;
+            width: 100%;
+            align-items: stretch;
+            justify-content: stretch;
+            gap: 0.5rem !important;
+            border-top: 1px solid var(--border) !important;
+            background: rgba(255, 255, 255, 0.018);
+            padding: 0.6rem !important;
+          }
+
+          .production-queues .production-task-actions button {
+            width: auto !important;
+            min-width: 2.75rem !important;
+            height: 2.75rem !important;
+            flex: 1 1 0%;
+            border-radius: 0.65rem;
+          }
+
+          .production-queues .production-task-actions svg {
+            width: 1.1rem !important;
+            height: 1.1rem !important;
+          }
+
+          .production-queues select {
+            min-height: 2.75rem;
+            font-size: 1rem;
+          }
+
+          .process-engineer-columns .process-team-actions {
+            padding: 0.6rem;
+          }
+
+          .process-engineer-columns .process-team-actions > button {
+            width: 100%;
+          }
+        }
+      `}</style>
+      <style jsx global>{`
+        .production-queues .space-y-2 > div:has(.process-status-blocked),
+        .process-engineer-columns .divide-y > div:has(.process-status-blocked) {
+          border-color: rgba(239, 68, 68, 0.82) !important;
+          background: rgba(127, 29, 29, 0.24) !important;
+          box-shadow: inset 3px 0 0 rgba(248, 113, 113, 0.9), 0 0 18px rgba(239, 68, 68, 0.16) !important;
+        }
+
+        .production-queues .space-y-2 > div:has(.process-status-ready),
+        .process-engineer-columns .divide-y > div:has(.process-status-ready) {
+          border-color: rgba(251, 191, 36, 0.88) !important;
+          background: rgba(245, 158, 11, 0.12) !important;
+          box-shadow: inset 3px 0 0 rgba(251, 191, 36, 0.95), 0 0 18px rgba(245, 158, 11, 0.18) !important;
         }
       `}</style>
       <Tabs value={activeView} className="space-y-4">
+        {(activeView === 'plan' || activeView === 'work-plan' || activeView === 'material') && (
+          <Card className="overflow-hidden border-[rgba(255,122,0,0.35)] p-0">
+            <div className="flex flex-col gap-4 bg-[linear-gradient(110deg,rgba(255,122,0,0.13),rgba(47,181,240,0.06),transparent)] px-4 py-4 sm:flex-row sm:items-end sm:justify-between sm:px-5">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[rgba(255,122,0,0.45)] bg-[rgba(255,122,0,0.10)]">
+                  <CalendarDays className="h-5 w-5 text-[var(--brand)]" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-dim">Dzień roboczy planu</p>
+                  <p className="mt-1 text-lg font-semibold capitalize text-title">{selectedPlanDateLabel}</p>
+                  <p className="mt-1 text-xs text-dim">
+                    {loadingSavedPlan
+                      ? 'Wczytywanie rozpiski...'
+                      : fileName
+                        ? 'Wyświetlasz i edytujesz zapis tego dnia.'
+                        : 'Brak zapisanej rozpiski — możesz ją utworzyć lub wczytać z Excela.'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-end">
+                <label className="min-w-0 text-xs font-semibold text-dim sm:min-w-56">
+                  Wybierz dzień
+                  <Input
+                    aria-label="Wybierz dzień planu zmian"
+                    className="mt-1 min-h-11 [color-scheme:dark]"
+                    disabled={changingPlanDateDisabled}
+                    onChange={(event) => selectPlanDate(event.target.value)}
+                    type="date"
+                    value={selectedPlanDate}
+                  />
+                </label>
+                {selectedPlanDate !== todayPlanDate && (
+                  <Button
+                    className="min-h-11 px-4"
+                    disabled={changingPlanDateDisabled}
+                    onClick={() => selectPlanDate(todayPlanDate)}
+                    type="button"
+                    variant="outline"
+                  >
+                    Dzisiaj
+                  </Button>
+                )}
+              </div>
+            </div>
+          </Card>
+        )}
         {(activeView === 'plan' || activeView === 'material') && <div className="w-full space-y-3">
           <input ref={fileInputRef} className="hidden" accept=".xlsx,.xls" disabled={importing || readingWorkbook || loadingSavedPlan} onChange={(event) => {
             const file = event.target.files?.[0] ?? null;
@@ -1257,7 +1533,7 @@ export default function PrzygotowanieProdukcjiPage() {
         </div>}
         {saveState === 'error' && <div className="rounded-lg border border-red-500/60 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-300">Plan nie został zapisany. {saveError ?? 'Spróbuj ponownie.'}</div>}
 
-        <TabsContent value={activeView === 'work-plan' ? 'work-plan' : 'plan'} className="space-y-4" inert={importing || undefined}>
+        <TabsContent value={activeView === 'work-plan' ? 'work-plan' : 'plan'} className="space-y-4" inert={importing || loadingSavedPlan || undefined}>
           {(activeView === 'work-plan' || activeTasks.length > 0 || plannedTasks.length > 0) && <>
             {activeView === 'plan' && activeTasks.length > 0 && <Card className="border-0 bg-transparent p-0 shadow-none">
               <div className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold text-title">Pozycje do omówienia</p><p className="mt-1 text-sm text-dim">Wybierz rodzaj pracy, a właściwe zespoły zostaną zaznaczone automatycznie.</p></div><Button className="min-h-10 px-3 py-2 text-xs" onClick={clearAllAssignments} type="button" variant="ghost"><Trash2 className="mr-1.5 h-4 w-4" />Kasuj przypisania</Button></div>
@@ -1329,17 +1605,18 @@ export default function PrzygotowanieProdukcjiPage() {
                 </div>;
               })}</div>
             </Card>}
-            {activeView === 'work-plan' && <Card className="border-border bg-surface2 p-3"><div className="flex items-center justify-between gap-3"><div><p className="font-semibold text-title">Zadania dodatkowe</p><p className="mt-0.5 text-xs text-dim">Dodaj pracę niezwiązaną z konkretnym planem lub maszyną.</p></div><Button className="min-h-9 shrink-0 px-3 py-2 text-xs" onClick={() => setShowManualTaskForm((current) => !current)} type="button" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" />Dodaj zadanie</Button></div>{showManualTaskForm && <div className="mt-3 grid gap-2 border-t border-border pt-3 lg:grid-cols-[minmax(0,1fr)_auto]"><textarea className="min-h-20 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm text-title outline-none focus:border-[rgba(255,122,0,0.65)]" onChange={(event) => setManualTaskText(event.target.value)} placeholder="Np. Posprzątać magazyn lub przekazać formę do narzędziowni" value={manualTaskText} /><div className="space-y-2"><div className="grid grid-cols-2 gap-1.5">{teamOptions.map((team) => <label className={cn('flex min-h-9 items-center gap-2 rounded border border-border px-2 text-xs font-semibold text-dim', manualTaskTeams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] bg-[rgba(255,122,0,0.12)] text-title')} key={team.id}><input checked={manualTaskTeams.includes(team.id)} onChange={() => setManualTaskTeams((current) => current.includes(team.id) ? current.filter((item) => item !== team.id) : [...current, team.id])} type="checkbox" />{team.label}</label>)}</div><div className="flex justify-end gap-2"><Button className="min-h-9 px-3 py-2 text-xs" onClick={() => { setShowManualTaskForm(false); setManualTaskText(''); setManualTaskTeams([]); }} type="button" variant="ghost">Anuluj</Button><Button className="min-h-9 px-3 py-2 text-xs" disabled={!manualTaskText.trim() || manualTaskTeams.length === 0} onClick={addManualTask} type="button" variant="primaryEmber">Dodaj</Button></div></div></div>}</Card>}
-            {activeView === 'work-plan' && <div className="production-queues grid w-full gap-2 text-[11px] lg:grid-cols-6">{teamOptions.map((team) => {
+            {activeView === 'work-plan' && <Card className="overflow-hidden border-[rgba(255,122,0,0.35)] bg-[linear-gradient(110deg,rgba(255,122,0,0.11),rgba(47,181,240,0.05),transparent)] p-4"><p className="text-xs font-semibold uppercase tracking-wide text-[var(--brand)]">Plan pracy</p><h1 className="mt-1 text-xl font-bold text-title">{workPlanTitle}</h1><p className="mt-1 text-sm text-dim">{workPlanDescription}</p></Card>}
+            {activeView === 'work-plan' && <Card className="border-border bg-surface2 p-3"><div className="flex items-center justify-between gap-3"><div><p className="font-semibold text-title">Zadania dodatkowe</p><p className="mt-0.5 text-xs text-dim">Dodaj pracę niezwiązaną z konkretnym planem lub maszyną.</p></div><Button className="min-h-9 shrink-0 px-3 py-2 text-xs" onClick={() => setShowManualTaskForm((current) => !current)} type="button" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" />Dodaj zadanie</Button></div>{showManualTaskForm && <div className="mt-3 grid gap-2 border-t border-border pt-3 lg:grid-cols-[minmax(0,1fr)_auto]"><textarea className="min-h-20 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm text-title outline-none focus:border-[rgba(255,122,0,0.65)]" onChange={(event) => setManualTaskText(event.target.value)} placeholder="Np. Posprzątać magazyn lub przekazać formę do narzędziowni" value={manualTaskText} /><div className="space-y-2"><div className="grid grid-cols-2 gap-1.5">{visibleWorkPlanTeams.map((team) => <label className={cn('flex min-h-9 items-center gap-2 rounded border border-border px-2 text-xs font-semibold text-dim', manualTaskTeams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] bg-[rgba(255,122,0,0.12)] text-title')} key={team.id}><input checked={manualTaskTeams.includes(team.id)} onChange={() => setManualTaskTeams((current) => current.includes(team.id) ? current.filter((item) => item !== team.id) : [...current, team.id])} type="checkbox" />{team.label}</label>)}</div><div className="flex justify-end gap-2"><Button className="min-h-9 px-3 py-2 text-xs" onClick={() => { setShowManualTaskForm(false); setManualTaskText(''); setManualTaskTeams([]); }} type="button" variant="ghost">Anuluj</Button><Button className="min-h-9 px-3 py-2 text-xs" disabled={!manualTaskText.trim() || selectedManualTaskTeams.length === 0} onClick={addManualTask} type="button" variant="primaryEmber">Dodaj</Button></div></div></div>}</Card>}
+            {activeView === 'work-plan' && <div className="production-queues grid w-full gap-2 text-[11px] lg:grid-cols-3">{visibleWorkPlanTeams.map((team) => {
               const queue = tasks.filter((task) => {
                 if (isPanelGroupHeader(task)) return false;
                 if (!task.teams.includes(team.id)) return false;
                 return !(task.kinds.length === 1 && task.kinds[0] === 'przeglad-a' && ['mechanics', 'distribution', 'technician'].includes(team.id));
               });
               const columnCopyId = `column-${team.id}`;
-              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><div className="flex items-center gap-2"><button aria-label={`Kopiuj wszystkie zadania: ${team.label}`} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim transition hover:border-[rgba(255,122,0,0.65)] hover:text-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40" disabled={queue.length === 0} onClick={() => void copyTeamQueue(team.id, queue)} title="Kopiuj całą kolumnę" type="button"><Copy className="h-4 w-4" /></button><Badge>{queue.filter((task) => !task.done).length}</Badge></div></div>{copiedQueueTask === columnCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-400">Skopiowano całą kolumnę.</p>}<div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].filter((id) => id !== 'anulowane').map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; return <div className="rounded-lg border border-border bg-bg" data-cancelled={task.kinds.includes('anulowane') || undefined} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', task.done && 'border-[rgba(34,197,94,0.65)]')} onClick={() => void copyQueueTask(task, team.id)} type="button">{task.kinds.includes('anulowane') && <p className="cancelled-task-label">ANULOWANE</p>}<p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p>{taskMetrics(task, team.id) && <p className="mt-1 text-xs text-body">{taskMetrics(task, team.id)}</p>}<p className="mt-1 text-xs text-body">{[kindLabels, task.notes[team.id]].filter(Boolean).join(': ')}</p>{taskComment(task, team.id) && <p className="mt-1 whitespace-pre-line break-words text-xs text-body">{taskComment(task, team.id)}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button><div className="flex justify-end gap-1.5 border-t border-border p-2"><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-8 w-8 items-center justify-center rounded border border-border text-dim hover:border-[rgba(255,122,0,0.65)] hover:text-title" onClick={() => setEditingQueueTask(editing ? null : copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-4 w-4" /></button><button aria-label="Usuń zadanie z tego działu" className="flex h-8 w-8 items-center justify-center rounded border border-red-500/45 text-red-300 hover:bg-red-500/10" onClick={() => { removeTaskFromTeam(task, team.id); setEditingQueueTask(null); }} title="Usuń zadanie z tego działu" type="button"><X className="h-4 w-4" /></button></div>{team.id === 'process' && <div className="border-t border-border p-2"><SelectField aria-label={`Przypisz inżyniera do zadania ${task.station}`} className="min-h-9 rounded-lg border-[rgba(47,181,240,0.35)] px-2 py-1.5 text-xs" onChange={(event) => assignProcessEngineer(task, event.target.value)} value={task.notes.processAssignee ?? ''}><option value="">Nieprzypisane</option>{(['1', '2'] as const).map((shift) => { const shiftEngineers = processEngineerRoster.filter((engineer) => engineer.active && engineer.shift === shift); return shiftEngineers.length > 0 ? <optgroup key={shift} label={`Zmiana ${shift}`}>{shiftEngineers.map((engineer) => <option key={engineer.name} value={engineer.name}>{engineer.name}</option>)}</optgroup> : null; })}</SelectField></div>}{editing && <div className="space-y-3 border-t border-border p-3"><div className="grid grid-cols-2 gap-1.5">{editableWorkKinds(task).map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTaskNote(task.id, team.id, event.target.value)} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); setEditingQueueTask(null); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
+              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><div className="flex items-center gap-2"><button aria-label={`Kopiuj wszystkie zadania: ${team.label}`} className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-lg border border-border text-dim transition active:scale-[0.98] hover:border-[rgba(255,122,0,0.65)] hover:text-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40 md:h-8 md:w-8 md:rounded" disabled={queue.length === 0} onClick={() => void copyTeamQueue(team.id, queue)} title="Kopiuj całą kolumnę" type="button"><Copy className="h-5 w-5 md:h-4 md:w-4" /></button><Badge>{queue.filter((task) => !isProductionTeamDone(task, team.id)).length}</Badge></div></div>{copiedQueueTask === columnCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-400">Skopiowano całą kolumnę.</p>}<div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].filter((id) => id !== 'anulowane').map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; const teamDone = isProductionTeamDone(task, team.id); const waitingTeams = productionWaitingTeams(task, team.id); const teamReady = isProductionStartupTeam(team.id) && waitingTeams.length === 0 && !teamDone && !task.kinds.includes('anulowane'); return <div className={cn('overflow-hidden rounded-lg border bg-bg transition', teamDone ? 'border-emerald-500/65 bg-emerald-500/[0.08]' : 'border-border', teamReady && 'border-emerald-400/80 bg-emerald-500/[0.07] shadow-[0_0_18px_rgba(34,197,94,0.18)]')} data-cancelled={task.kinds.includes('anulowane') || undefined} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', teamDone && 'bg-emerald-500/[0.04]')} onClick={() => void copyQueueTask(task, team.id)} type="button">{task.kinds.includes('anulowane') && <p className="cancelled-task-label">ANULOWANE</p>}<p className="font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p>{taskMetrics(task, team.id) && <p className="mt-1 text-xs text-body">{taskMetrics(task, team.id)}</p>}<p className="mt-1 text-xs text-body">{[kindLabels, task.notes[team.id]].filter(Boolean).join(': ')}</p>{taskComment(task, team.id) && <p className="mt-1 whitespace-pre-line break-words text-xs text-body">{taskComment(task, team.id)}</p>}<TeamProgressStatus task={task} team={team.id} />{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button>{team.id === 'process' && <div className="border-t border-border p-2"><SelectField aria-label={`Przypisz inżyniera do zadania ${task.station}`} className="min-h-9 rounded-lg border-[rgba(47,181,240,0.35)] px-2 py-1.5 text-xs" onChange={(event) => assignProcessEngineer(task, event.target.value)} value={task.notes.processAssignee ?? ''}><option value="">Nieprzypisane</option>{(['1', '2'] as const).map((shift) => { const shiftEngineers = processEngineerRoster.filter((engineer) => engineer.active && engineer.shift === shift); return shiftEngineers.length > 0 ? <optgroup key={shift} label={`Zmiana ${shift}`}>{shiftEngineers.map((engineer) => <option key={engineer.name} value={engineer.name}>{engineer.name}</option>)}</optgroup> : null; })}</SelectField></div>}<div className="production-task-actions flex justify-end gap-1.5 border-t border-border p-2"><TeamDoneButton onToggle={() => toggleTeamDone(task, team.id)} task={task} team={team.id} /><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-11 w-auto min-w-11 touch-manipulation items-center justify-center rounded-lg border border-border px-3 text-dim transition active:scale-[0.98] hover:border-[rgba(255,122,0,0.65)] hover:text-title md:h-8 md:w-8 md:min-w-0 md:rounded md:px-0" onClick={() => setEditingQueueTask(editing ? null : copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-5 w-5 md:h-4 md:w-4" /><span className="ml-1.5 text-[11px] font-bold md:hidden">{editing ? 'Zamknij' : 'Edytuj'}</span></button><button aria-label="Usuń zadanie z tego działu" className="flex h-11 w-auto min-w-11 touch-manipulation items-center justify-center rounded-lg border border-red-500/45 px-3 text-red-300 transition active:scale-[0.98] hover:bg-red-500/10 md:h-8 md:w-8 md:min-w-0 md:rounded md:px-0" onClick={() => { removeTaskFromTeam(task, team.id); setEditingQueueTask(null); }} title="Usuń zadanie z tego działu" type="button"><X className="h-5 w-5 md:h-4 md:w-4" /><span className="ml-1.5 text-[11px] font-bold md:hidden">Usuń</span></button></div>{editing && <div className="space-y-3 border-t border-border p-3"><div className="grid grid-cols-2 gap-1.5">{editableWorkKinds(task).map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTaskNote(task.id, team.id, event.target.value)} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); setEditingQueueTask(null); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
             })}</div>}
-            {activeView === 'work-plan' && <section className="overflow-hidden border-y border-[rgba(47,181,240,0.3)] bg-[rgba(8,11,16,0.72)]">
+            {workPlanView === 'work-plan-technology' && <section className="overflow-hidden border-y border-[rgba(47,181,240,0.3)] bg-[rgba(8,11,16,0.72)]">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[rgba(47,181,240,0.25)] px-4 py-3">
                 <div className="flex items-center gap-2"><Wrench className="h-4 w-4 text-[#2fb5f0]" /><h2 className="font-semibold text-title">Przydział inżynierów procesu</h2></div>
                 <button className="flex min-h-8 items-center gap-1.5 rounded border border-[rgba(47,181,240,0.35)] px-3 text-xs font-semibold text-[#8bd9f8] transition hover:border-[rgba(47,181,240,0.75)] hover:bg-[rgba(47,181,240,0.08)]" onClick={() => editingProcessEngineers ? setEditingProcessEngineers(false) : beginProcessEngineersEdit()} type="button"><Pencil className="h-3.5 w-3.5" />{editingProcessEngineers ? 'Zamknij edycję' : 'Edytuj skład'}</button>
@@ -1351,7 +1628,7 @@ export default function PrzygotowanieProdukcjiPage() {
                 {processEngineersError && <p className="mt-2 text-xs font-semibold text-red-300">{processEngineersError}</p>}
                 <div className="mt-3 flex flex-wrap justify-end gap-2"><Button className="min-h-9 px-3 py-2 text-xs" onClick={() => setProcessEngineerDrafts((current) => [...current, { id: `new-engineer-${Date.now()}`, originalName: null, name: '', shift: '1', active: true }])} type="button" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" />Dodaj osobę</Button><Button className="min-h-9 px-3 py-2 text-xs" disabled={savingProcessEngineers} onClick={() => void saveProcessEngineers()} type="button" variant="primaryEmber">{savingProcessEngineers ? 'Zapisywanie...' : 'Zapisz skład'}</Button></div>
               </div>}
-              {processEngineers.length === 0 ? <p className="px-4 py-6 text-sm text-dim">Brak dostępnych inżynierów. Użyj „Edytuj skład”, aby dodać osoby na zmianę.</p> : <div className="process-engineer-columns grid divide-y divide-border lg:divide-x lg:divide-y-0" style={{ '--process-engineer-count': Math.max(processEngineers.length, 1) } as React.CSSProperties}>{processEngineers.map((engineer) => { const queue = processTasksByEngineer.get(engineer) ?? []; const rosterEntry = processEngineerRoster.find((item) => item.name === engineer); const engineerCopyId = `engineer-column-${engineer}`; return <div className="min-w-0 px-2 py-2.5" key={engineer}><div className="mb-1.5 flex min-w-0 items-start justify-between gap-1 border-b border-border pb-1.5"><button aria-label={`Kopiuj wszystkie zadania: ${engineer}`} className="group flex min-w-0 items-start gap-1.5 text-left disabled:cursor-not-allowed disabled:opacity-55" disabled={queue.length === 0} onClick={() => void copyProcessEngineerQueue(engineer, queue)} title={queue.length > 0 ? 'Kopiuj wszystkie zadania do jednej kolumny Excela' : 'Brak zadań do skopiowania'} type="button"><Copy className="mt-0.5 h-3 w-3 shrink-0 text-[#2fb5f0] transition group-hover:text-[var(--brand)]" /><span className="min-w-0"><span className="block break-words text-xs font-semibold leading-tight text-[#8bd9f8] group-hover:text-[var(--brand)]">{engineer}</span><span className="mt-0.5 block text-[9px] font-semibold uppercase text-dim">Zmiana {rosterEntry?.shift ?? '1'}</span></span></button><Badge>{queue.length}</Badge></div>{copiedQueueTask === engineerCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-1.5 py-1.5 text-[9px] font-semibold text-emerald-300">Skopiowano {queue.length} {queue.length === 1 ? 'pracę' : 'prace'} do Excela.</p>}<div className="divide-y divide-border">{queue.length === 0 ? <p className="py-2 text-[10px] leading-snug text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `process-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, 'process'))].filter((id) => id !== 'anulowane').map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); return <button aria-label={`Kopiuj zadanie ${task.station}`} className="w-full select-text py-2 text-left" data-cancelled={task.kinds.includes('anulowane') || undefined} key={task.id} onClick={() => void copyQueueTask(task, 'process')} type="button">{task.kinds.includes('anulowane') && <p className="cancelled-task-label">ANULOWANE</p>}<p className="break-words text-[10px] font-semibold leading-snug text-[var(--brand)]">- {task.station} {task.detail}</p>{taskMetrics(task, 'process') && <p className="mt-1 break-words text-[10px] leading-snug text-body">{taskMetrics(task, 'process')}</p>}<p className="mt-1 break-words text-[10px] leading-snug text-body">{[kindLabels, task.notes.process].filter(Boolean).join(': ')}</p>{taskComment(task, 'process') && <p className="mt-1 whitespace-pre-line break-words text-[10px] leading-snug text-body">{taskComment(task, 'process')}</p>}{copiedQueueTask === copyId && <p className="mt-2 text-[10px] font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button>; })}</div></div>; })}</div>}
+              {processEngineers.length === 0 ? <p className="px-4 py-6 text-sm text-dim">Brak dostępnych inżynierów. Użyj „Edytuj skład”, aby dodać osoby na zmianę.</p> : <div className="process-engineer-columns grid divide-y divide-border lg:divide-x lg:divide-y-0" style={{ '--process-engineer-count': Math.max(processEngineers.length, 1) } as React.CSSProperties}>{processEngineers.map((engineer) => { const queue = processTasksByEngineer.get(engineer) ?? []; const rosterEntry = processEngineerRoster.find((item) => item.name === engineer); const engineerCopyId = `engineer-column-${engineer}`; return <div className="min-w-0 px-2 py-2.5" key={engineer}><div className="mb-1.5 flex min-w-0 items-start justify-between gap-1 border-b border-border pb-1.5"><button aria-label={`Kopiuj wszystkie zadania: ${engineer}`} className="group flex min-w-0 items-start gap-1.5 text-left disabled:cursor-not-allowed disabled:opacity-55" disabled={queue.length === 0} onClick={() => void copyProcessEngineerQueue(engineer, queue)} title={queue.length > 0 ? 'Kopiuj wszystkie zadania do jednej kolumny Excela' : 'Brak zadań do skopiowania'} type="button"><Copy className="mt-0.5 h-3 w-3 shrink-0 text-[#2fb5f0] transition group-hover:text-[var(--brand)]" /><span className="min-w-0"><span className="block break-words text-xs font-semibold leading-tight text-[#8bd9f8] group-hover:text-[var(--brand)]">{engineer}</span><span className="mt-0.5 block text-[9px] font-semibold uppercase text-dim">Zmiana {rosterEntry?.shift ?? '1'}</span></span></button><Badge>{queue.filter((task) => !isProductionTeamDone(task, 'process')).length}</Badge></div>{copiedQueueTask === engineerCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-1.5 py-1.5 text-[9px] font-semibold text-emerald-300">Skopiowano {queue.length} {queue.length === 1 ? 'pracę' : 'prace'} do Excela.</p>}<div className="divide-y divide-border">{queue.length === 0 ? <p className="py-2 text-[10px] leading-snug text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `process-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, 'process'))].filter((id) => id !== 'anulowane').map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const teamDone = isProductionTeamDone(task, 'process'); const waitingTeams = productionWaitingTeams(task, 'process'); const teamReady = waitingTeams.length === 0 && !teamDone && !task.kinds.includes('anulowane'); return <div className={cn('my-1 overflow-hidden rounded border transition', teamDone ? 'border-emerald-500/65 bg-emerald-500/[0.08]' : 'border-transparent', teamReady && 'border-emerald-400/80 bg-emerald-500/[0.07] shadow-[0_0_18px_rgba(34,197,94,0.18)]')} data-cancelled={task.kinds.includes('anulowane') || undefined} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className="w-full select-text px-2 py-2 text-left" onClick={() => void copyQueueTask(task, 'process')} type="button">{task.kinds.includes('anulowane') && <p className="cancelled-task-label">ANULOWANE</p>}<p className="break-words text-[10px] font-semibold leading-snug text-[var(--brand)]">- {task.station} {task.detail}</p>{taskMetrics(task, 'process') && <p className="mt-1 break-words text-[10px] leading-snug text-body">{taskMetrics(task, 'process')}</p>}<p className="mt-1 break-words text-[10px] leading-snug text-body">{[kindLabels, task.notes.process].filter(Boolean).join(': ')}</p>{taskComment(task, 'process') && <p className="mt-1 whitespace-pre-line break-words text-[10px] leading-snug text-body">{taskComment(task, 'process')}</p>}<TeamProgressStatus task={task} team="process" />{copiedQueueTask === copyId && <p className="mt-2 text-[10px] font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button><div className="process-team-actions flex justify-end border-t border-border/80 p-1.5"><TeamDoneButton onToggle={() => toggleTeamDone(task, 'process')} task={task} team="process" /></div></div>; })}</div></div>; })}</div>}
             </section>}
           </>}
         </TabsContent>
@@ -1375,7 +1652,7 @@ export default function PrzygotowanieProdukcjiPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="material" className="space-y-4" inert={importing || undefined}>
+        <TabsContent value="material" className="space-y-4" inert={importing || loadingSavedPlan || undefined}>
           {!activeTasks.length ? <EmptyState title="Brak rozpiski" description="Wgraj plan produkcyjny, aby przygotować rozpiszę materiałową." /> : <Card className="overflow-hidden p-0"><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Rozpiska materiałowa</p><p className="mt-1 text-sm text-dim">Materiał, źródło i suszarkę uzupełniasz dla pozycji z importowanego planu.</p></div><div className="overflow-x-auto"><table className="min-w-[1050px] w-full text-left text-sm"><thead className="bg-surface2 text-xs uppercase text-dim"><tr>{['Stanowisko', 'Indeks', 'Materiał', 'Rodzaj', 'Źródło', 'Suszarka', 'Temp.'].map((label) => <th className="border-b border-border px-4 py-3 font-semibold" key={label}>{label}</th>)}</tr></thead><tbody>{activeTasks.map((task) => <tr className={cn('border-b border-border/80', task.highlighted && 'bg-[rgba(245,197,66,0.06)]')} key={task.id}><td className="px-4 py-3 font-bold text-[var(--brand)]">{task.station}</td><td className="max-w-[290px] px-4 py-3 font-semibold text-title">{task.detail}</td><td className="px-2 py-2"><Input value={task.material} onChange={(event) => updateTask(task.id, { material: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.materialType} onChange={(event) => updateTask(task.id, { materialType: event.target.value, temperature: temperatureFor(event.target.value) || task.temperature })} /></td><td className="px-2 py-2"><Input value={task.source} onChange={(event) => updateTask(task.id, { source: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.dryer} onChange={(event) => updateTask(task.id, { dryer: event.target.value })} /></td><td className="px-2 py-2"><Input value={task.temperature} onChange={(event) => updateTask(task.id, { temperature: event.target.value })} /></td></tr>)}</tbody></table></div></Card>}
         </TabsContent>
         <TabsContent value="history" className="work-history space-y-4">

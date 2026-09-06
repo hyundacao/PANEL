@@ -177,6 +177,25 @@ export const usePlanningAutosave = <T,>({
     engineRef.current.setSnapshot(next, true);
   }, []);
 
+  const beginManualSave = useCallback(() => {
+    engineRef.current?.beginManual();
+  }, []);
+
+  const commitManualSave = useCallback(async (): Promise<PlanningSaveInfo | null> => {
+    const engine = engineRef.current;
+    if (!engine || !writableRef.current) return null;
+    await engine.commitManual();
+    return engine.getInfo();
+  }, []);
+
+  const discardManualSave = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const restored = engine.discardManual();
+    stateRef.current = restored;
+    setReactState(restored);
+  }, []);
+
   const retry = useCallback(() => {
     if (engineRef.current?.getDraft().pending) void engineRef.current.retry();
     else {
@@ -199,21 +218,35 @@ export const usePlanningAutosave = <T,>({
 
   const loadLatest = useCallback(async () => {
     const engine = engineRef.current;
-    if (!engine || !window.confirm('Wczytać aktualną wersję z bazy? Niezapisane zmiany pozostaną w lokalnej kopii odzyskiwania. Przed wczytaniem możesz też pobrać kopię do pliku.')) return;
+    if (!engine || !window.confirm('Wczytać aktualną wersję z bazy? Niezapisane zmiany pozostaną w lokalnej kopii odzyskiwania. Przed wczytaniem możesz też pobrać kopię do pliku.')) return false;
     setHydrated(false);
     try {
       const remote = await readRemote();
-      if (engineRef.current !== engine) return;
+      if (engineRef.current !== engine) return false;
       window.localStorage.setItem(cacheKey + '-recovery', JSON.stringify(engine.getDraft()));
       // Hand the confirmed version to the next mount without depending on another cache write.
       restoredDraftRef.current = { state: remote.state ?? initial(), revision: remote.revision, pending: false };
       setInfo(initialInfo);
       setReloadVersion((value) => value + 1);
+      return true;
     } catch {
       setInfo((current) => ({ ...current, error: 'RELOAD_FAILED' }));
       setHydrated(true);
+      return false;
     }
   }, [cacheKey, initial, readRemote]);
 
-  return { state, setState, changeState, hydrated, info, retry, downloadDraft, loadLatest };
+  return {
+    state,
+    setState,
+    changeState,
+    beginManualSave,
+    commitManualSave,
+    discardManualSave,
+    hydrated,
+    info,
+    retry,
+    downloadDraft,
+    loadLatest
+  };
 };

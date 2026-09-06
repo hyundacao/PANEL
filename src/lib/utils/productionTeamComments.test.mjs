@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import { createRequire, Module } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import * as comments from './productionTeamComments.ts';
+import * as planDates from './productionPlanDate.ts';
+import * as workPlan from './productionWorkPlan.ts';
+import * as workProgress from './productionWorkProgress.ts';
 import * as toolroom from './productionToolroomTasks.ts';
 
 const require = createRequire(import.meta.url);
@@ -39,6 +42,133 @@ test('validation rejects invalid values and enabled empty comments', () => {
   assert.equal(validateTeamComment({enabled:false,text:''}), null);
   assert.equal(validateTeamComment({enabled:true,text:'x'.repeat(2000)}), null);
   assert.equal(comments.isProductionTeam('__proto__'), false);
+});
+
+test('production plan dates accept real days and remain attached to module navigation', () => {
+  assert.equal(planDates.isProductionPlanDate('2026-09-03'), true);
+  assert.equal(planDates.isProductionPlanDate('2026-02-29'), false);
+  assert.equal(planDates.isProductionPlanDate('03.09.2026'), false);
+  assert.equal(
+    planDates.withProductionPlanDate('/przygotowanie-produkcji?view=work-plan', '2026-09-03'),
+    '/przygotowanie-produkcji?view=work-plan&date=2026-09-03'
+  );
+  assert.equal(
+    planDates.withProductionPlanDate('/przygotowanie-produkcji', '2026-09-03'),
+    '/przygotowanie-produkcji?date=2026-09-03'
+  );
+  assert.equal(planDates.withProductionPlanDate('/spis', '2026-09-03'), '/spis');
+});
+
+test('work plan is split into technology and production preparation teams', () => {
+  assert.deepEqual(
+    [...workPlan.teamsForProductionWorkPlan('work-plan-technology')],
+    ['mechanics', 'process', 'graphics']
+  );
+  assert.deepEqual(
+    [...workPlan.teamsForProductionWorkPlan('work-plan-preparation')],
+    ['distribution', 'technician', 'additional']
+  );
+  assert.equal(workPlan.normalizeProductionWorkPlanView('work-plan'), 'work-plan-technology');
+  assert.deepEqual(workPlan.teamsForProductionWorkPlan('material'), []);
+});
+
+test('work-plan task actions remain touch-friendly and inside each card on phones', () => {
+  const pageFile=fileURLToPath(new URL('../../app/(main)/przygotowanie-produkcji/page.tsx',import.meta.url));
+  const page=readFileSync(pageFile,'utf8');
+  const mobileStart=page.indexOf('@media (max-width: 767px)');
+  const mobileEnd=page.indexOf('`}</style>',mobileStart);
+  assert.ok(mobileStart>=0&&mobileEnd>mobileStart);
+  const mobileCss=page.slice(mobileStart,mobileEnd);
+  assert.match(mobileCss,/\.production-queues \.production-task-actions \{[\s\S]*?position: static !important;/);
+  assert.match(mobileCss,/\.production-queues \.production-task-actions button \{[\s\S]*?height: 2\.75rem !important;[\s\S]*?flex: 1 1 0%;/);
+  assert.match(mobileCss,/\.production-queues select \{[\s\S]*?font-size: 1rem;/);
+  assert.doesNotMatch(page,/\.production-queues \.flex\.justify-end/);
+  assert.match(page,/md:hidden">\{mobileLabel\}<\/span>/);
+  assert.match(page,/md:hidden">\{editing \? 'Zamknij' : 'Edytuj'\}<\/span>/);
+  assert.match(page,/md:hidden">Usuń<\/span>/);
+  const queueStart=page.indexOf('const columnCopyId = `column-${team.id}`');
+  const queueEnd=page.indexOf("workPlanView === 'work-plan-technology'",queueStart);
+  assert.ok(queueStart>=0&&queueEnd>queueStart);
+  const queueSource=page.slice(queueStart,queueEnd);
+  assert.ok(queueSource.indexOf("team.id === 'process'")<queueSource.indexOf('production-task-actions'));
+});
+
+test('process engineer cards use red blocked, amber ready and green completed states', () => {
+  const pageFile=fileURLToPath(new URL('../../app/(main)/przygotowanie-produkcji/page.tsx',import.meta.url));
+  const page=readFileSync(pageFile,'utf8');
+  assert.match(page,/process-status-blocked text-red-300/);
+  assert.match(page,/process-status-ready text-amber-300/);
+  assert.match(page,/process-status-done/);
+  assert.match(page,/<style jsx global>/);
+  assert.match(page,/:has\(\.process-status-blocked\)[\s\S]*?border-color: rgba\(239, 68, 68, 0\.82\)/);
+  assert.match(page,/:has\(\.process-status-ready\)[\s\S]*?border-color: rgba\(251, 191, 36, 0\.88\)/);
+  assert.match(page,/border-red-500\/65 bg-red-500\/15 text-red-300/);
+  assert.match(page,/border-amber-400\/70 bg-amber-500\/15 text-amber-200/);
+  assert.match(page,/border-emerald-400\/70 bg-emerald-500\/25 text-emerald-200/);
+});
+
+test('work progress unlocks startup teams only after assigned preparation teams finish', () => {
+  const task = {
+    teams: ['mechanics', 'distribution', 'technician', 'process', 'graphics', 'additional'],
+    kinds: ['zmiana-formy'],
+    teamProgress: {},
+    done: false
+  };
+  assert.equal(workProgress.canProductionTeamStart(task, 'mechanics'), true);
+  assert.equal(workProgress.canProductionTeamStart(task, 'distribution'), true);
+  assert.equal(workProgress.canProductionTeamStart(task, 'technician'), true);
+  assert.equal(workProgress.canProductionTeamStart(task, 'process'), false);
+  assert.equal(workProgress.canProductionTeamStart(task, 'graphics'), false);
+  assert.deepEqual(workProgress.productionWaitingTeams(task, 'process'), ['mechanics', 'distribution', 'technician']);
+
+  for (const team of ['mechanics', 'distribution', 'technician']) {
+    task.teamProgress = workProgress.setProductionTeamCompletion(task.teamProgress, team, true);
+  }
+  assert.equal(workProgress.canProductionTeamStart(task, 'process'), true);
+  assert.equal(workProgress.canProductionTeamStart(task, 'graphics'), true);
+  assert.equal(workProgress.isProductionTaskDone(task), false);
+  task.teamProgress = workProgress.setProductionTeamCompletion(task.teamProgress, 'process', true);
+  task.teamProgress = workProgress.setProductionTeamCompletion(task.teamProgress, 'graphics', true);
+  assert.equal(workProgress.isProductionTaskDone(task), true);
+  assert.equal(workProgress.isProductionTeamDone(task, 'additional'), false);
+  task.teamProgress = workProgress.productionTeamProgressForTask({
+    ...task,
+    teamProgress: workProgress.setProductionTeamCompletion(task.teamProgress, 'technician', false),
+    done: false
+  });
+  assert.equal(workProgress.isProductionTeamDone(task, 'process'), false);
+  assert.equal(workProgress.isProductionTeamDone(task, 'graphics'), false);
+
+  const technicianOnly = { teams: ['technician', 'process'], kinds: ['inne'], teamProgress: {}, done: false };
+  assert.deepEqual(workProgress.productionWaitingTeams(technicianOnly, 'process'), ['technician']);
+  technicianOnly.teamProgress = workProgress.setProductionTeamCompletion(technicianOnly.teamProgress, 'technician', true);
+  assert.equal(workProgress.canProductionTeamStart(technicianOnly, 'process'), true);
+  assert.equal(workProgress.canProductionTeamStart({ teams: ['process'], kinds: ['inne'], teamProgress: {} }, 'process'), true);
+  assert.equal(workProgress.canProductionTeamStart({ ...task, kinds: ['anulowane'] }, 'process'), false);
+});
+
+test('toolroom return is a separate mechanic gate for process startup', () => {
+  const task = {
+    teams: ['mechanics', 'process'],
+    kinds: ['forma-narzedziownia'],
+    teamProgress: {
+      mechanics: {completedAt: '2026-09-06T08:00:00.000Z', completedBy: 'Mechanik'},
+      process: {completedAt: '2026-09-06T08:05:00.000Z', completedBy: 'Inżynier'}
+    },
+    toolroomReturnDone: false,
+    done: true
+  };
+  assert.equal(workProgress.productionWaitsForToolroomReturn(task, 'process'), true);
+  assert.deepEqual(workProgress.productionWaitingTeams(task, 'process'), ['mechanics']);
+  assert.equal(workProgress.canProductionTeamStart(task, 'process'), false);
+  assert.equal(workProgress.productionTeamProgressForTask(task).process, undefined);
+  assert.equal(workProgress.isProductionTaskDone(task), false);
+
+  const returned = {...task, toolroomReturnDone: true, done: false};
+  assert.equal(workProgress.productionWaitsForToolroomReturn(returned, 'process'), false);
+  assert.deepEqual(workProgress.productionWaitingTeams(returned, 'process'), []);
+  assert.equal(workProgress.canProductionTeamStart(returned, 'process'), true);
+  assert.ok(workProgress.productionTeamProgressForTask(returned).process);
 });
 
 // Exercise the real route against an isolated in-memory database, never Supabase.
@@ -89,7 +219,9 @@ function testApi() {
     '@/lib/auth/access':{canSeeTab:()=>state.allowed,isReadOnly:()=>state.readOnly},
     '@/lib/auth/session':{getAuthenticatedUser:async()=>({user:state.user,code:'UNAUTHORIZED'})},
     '@/lib/supabase/admin':{supabaseAdmin:{from:table=>new Query(table)}},
+    '@/lib/utils/productionPlanDate':planDates,
     '@/lib/utils/productionTeamComments':comments,
+    '@/lib/utils/productionWorkProgress':workProgress,
     '@/lib/utils/productionToolroomTasks':toolroom
   };
   mod.require=(id)=>{assert.ok(id in stubs,`Unmocked route dependency ${id}`);return stubs[id];};
@@ -255,6 +387,86 @@ test('all actual copy paths use the same saved quantity switch', async () => {
 
 const toolroomSource = () => ({id:'source-1',station:'WTR 49',detail:'MANETA BOSCH (9001434742)',quantity:'1980',norm:'1120',isCurrentPlan:true,planGroup:'standard',highlighted:false,kinds:['forma-narzedziownia'],teams:['mechanics','process'],notes:{mechanics:'Zdjąć formę'},done:false,material:'PP',materialType:'',source:'',dryer:'',temperature:''});
 
+test('API loads and edits the selected production day without changing another day', async () => {
+  const api=testApi();
+  const third={...toolroomSource(),detail:'PLAN 3 WRZEŚNIA',kinds:['rozruch'],teams:['process'],notes:{}};
+  const fourth={...third,detail:'PLAN 4 WRZEŚNIA'};
+  assert.equal((await api.post({action:'savePlan',planDate:'2026-09-03',tasks:[third],fileName:'03.xlsx',sheetName:'Plan'})).status,200);
+  assert.equal((await api.post({action:'savePlan',planDate:'2026-09-04',tasks:[fourth],fileName:'04.xlsx',sheetName:'Plan'})).status,200);
+
+  let thirdDay=await(await api.get('?date=2026-09-03')).json();
+  let fourthDay=await(await api.get('?date=2026-09-04')).json();
+  assert.equal(thirdDay.session.session_date,'2026-09-03');
+  assert.equal(thirdDay.tasks[0].detail,'PLAN 3 WRZEŚNIA');
+  assert.equal(fourthDay.session.session_date,'2026-09-04');
+  assert.equal(fourthDay.tasks[0].detail,'PLAN 4 WRZEŚNIA');
+
+  assert.equal((await api.post({action:'mutateTask',planDate:'2026-09-03',taskId:third.id,mutation:{setNotes:{process:'Edycja starego dnia'}}})).status,200);
+  thirdDay=await(await api.get('?date=2026-09-03')).json();
+  fourthDay=await(await api.get('?date=2026-09-04')).json();
+  assert.equal(thirdDay.tasks[0].notes.process,'Edycja starego dnia');
+  assert.equal(fourthDay.tasks[0].notes.process,undefined);
+  assert.deepEqual(api.db.przygotowanie_produkcji_sessions.map(row=>row.session_date).sort(),['2026-09-03','2026-09-04']);
+});
+
+test('API rejects impossible selected dates before creating a plan', async () => {
+  const api=testApi();
+  assert.equal((await api.get('?date=2026-02-30')).status,400);
+  assert.equal((await api.post({action:'savePlan',planDate:'2026-02-30',tasks:[]})).status,400);
+  assert.equal(api.db.przygotowanie_produkcji_sessions.length,0);
+});
+
+test('API saves completion per department and unlocks process only after preparation', async () => {
+  const api=testApi();
+  const task={
+    ...toolroomSource(),
+    id:'progress-1',
+    kinds:['zmiana-formy'],
+    teams:['mechanics','distribution','technician','process'],
+    notes:{},
+    teamProgress:{},
+    done:false
+  };
+  assert.equal((await api.post({action:'savePlan',tasks:[task]})).status,200);
+
+  const blocked=await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'process',done:true}}});
+  assert.equal(blocked.status,409);
+  assert.deepEqual((await blocked.json()).waitingTeams,['mechanics','distribution','technician']);
+
+  const preparationResponses=await Promise.all([
+    api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'mechanics',done:true}}}),
+    api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'distribution',done:true}}}),
+    api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'technician',done:true}}})
+  ]);
+  assert.deepEqual(preparationResponses.map(response=>response.status),[200,200,200]);
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'process',done:true}}})).status,200);
+
+  let data=await(await api.get()).json();
+  let saved=data.tasks.find(item=>item.id===task.id);
+  assert.equal(saved.done,true);
+  assert.deepEqual(Object.keys(saved.teamProgress).sort(),['distribution','mechanics','process','technician']);
+  assert.ok(Object.values(saved.teamProgress).every(completion=>completion.completedBy==='Test'));
+  assert.equal(saved.notes.__teamProgress,undefined);
+  const raw=api.db.przygotowanie_produkcji_tasks.find(item=>item.task_key===task.id);
+  assert.ok(raw.notes.__teamProgress.process);
+
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'technician',done:false}}})).status,200);
+  data=await(await api.get()).json();
+  saved=data.tasks.find(item=>item.id===task.id);
+  assert.equal(saved.done,false);
+  assert.equal(saved.teamProgress.technician,undefined);
+  assert.equal(saved.teamProgress.process,undefined);
+});
+
+test('API rejects invalid or unassigned department confirmations', async () => {
+  const api=testApi();
+  const task={...toolroomSource(),id:'progress-invalid',kinds:['inne'],teams:['technician'],notes:{},teamProgress:{},done:false};
+  await api.post({action:'savePlan',tasks:[task]});
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'technician',done:'yes'}}})).status,400);
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'process',done:true}}})).status,409);
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'additional',done:true}}})).status,400);
+});
+
 test('API stores two linked work tasks and snapshots both, with just one production row', async()=>{
   const api=testApi();const source=toolroomSource();
   assert.equal((await api.post({action:'savePlan',tasks:[source],fileName:'plan.xlsx',sheetName:'Plan'})).status,200);
@@ -263,6 +475,39 @@ test('API stores two linked work tasks and snapshots both, with just one product
   assert.equal(data.tasks.filter(task=>task.isCurrentPlan).length,1);
   assert.equal(api.db.przygotowanie_produkcji_history[0].tasks.length,2);
   assert.deepEqual(data.tasks[1].teams,['mechanics']);
+});
+
+test('API unlocks process only after the mould returns and never resurrects a reverted completion', async()=>{
+  const api=testApi();
+  const source={...toolroomSource(),id:'toolroom-gate',teamProgress:{}};
+  const childId=toolroom.toolroomReturnId(source.id);
+  assert.equal((await api.post({action:'savePlan',tasks:[source]})).status,200);
+  assert.equal((await api.post({action:'mutateTask',taskId:source.id,mutation:{setTeamDone:{team:'mechanics',done:true}}})).status,200);
+
+  const blocked=await api.post({action:'mutateTask',taskId:source.id,mutation:{setTeamDone:{team:'process',done:true}}});
+  assert.equal(blocked.status,409);
+  const blockedData=await blocked.json();
+  assert.equal(blockedData.waitingForToolroomReturn,true);
+  assert.match(blockedData.message,/Powrót formy z narzędziowni/);
+
+  assert.equal((await api.post({action:'mutateTask',taskId:childId,mutation:{setTeamDone:{team:'mechanics',done:true}}})).status,200);
+  assert.equal((await api.post({action:'mutateTask',taskId:source.id,mutation:{setTeamDone:{team:'process',done:true}}})).status,200);
+  let data=await(await api.get()).json();
+  assert.equal(data.tasks.find(task=>task.id===source.id).toolroomReturnDone,true);
+  assert.ok(data.tasks.find(task=>task.id===source.id).teamProgress.process);
+
+  assert.equal((await api.post({action:'mutateTask',taskId:childId,mutation:{setTeamDone:{team:'mechanics',done:false}}})).status,200);
+  data=await(await api.get()).json();
+  assert.equal(data.tasks.find(task=>task.id===childId).done,false);
+  assert.equal(data.tasks.find(task=>task.id===source.id).toolroomReturnDone,false);
+  assert.equal(data.tasks.find(task=>task.id===source.id).teamProgress.process,undefined);
+
+  assert.equal((await api.post({action:'mutateTask',taskId:childId,mutation:{setTeamDone:{team:'mechanics',done:true}}})).status,200);
+  data=await(await api.get()).json();
+  assert.equal(data.tasks.find(task=>task.id===source.id).toolroomReturnDone,true);
+  assert.equal(data.tasks.find(task=>task.id===source.id).teamProgress.process,undefined);
+  assert.equal(data.tasks.find(task=>task.id===source.id).done,false);
+  assert.equal((await api.post({action:'mutateTask',taskId:source.id,mutation:{setTeamDone:{team:'process',done:true}}})).status,200);
 });
 
 test('API return notes and removal do not modify sending work; old imports do not recreate it', async()=>{

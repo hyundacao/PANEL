@@ -26,26 +26,31 @@ test('legacy catalog rows expose only the trailing index 2 instead of the wareho
   assert.equal(getOriginalInventorySpisIndex2('M-10-8001228788'), '8001228788');
 });
 
-test('the explicit second index wins for duplicate material and warehouse suggestions', () => {
+test('the full index wins for duplicate material and warehouse suggestions', () => {
   const suggestions = dedupeOriginalInventorySpisSuggestions([
     {
       name: 'TRAY HANDLE ASSEMBLY WELDED WHITE',
       warehouseCode: 'M-10',
       indexCode: 'M-10-8001228788',
-      indexCode2: '8001228788',
-      hasExplicitIndexCode2: false
+      indexCode2: '8001228788'
     },
     {
       name: 'TRAY HANDLE ASSEMBLY WELDED WHITE',
       warehouseCode: 'M-10',
       indexCode: 'M-10-8001228788',
-      indexCode2: '10006',
-      hasExplicitIndexCode2: true
+      indexCode2: '10006'
     }
   ]);
 
   assert.equal(suggestions.length, 1);
-  assert.equal(suggestions[0].indexCode2, '10006');
+  assert.equal(suggestions[0].indexCode2, '8001228788');
+});
+
+test('a long ERP index wins over a short secondary value', () => {
+  assert.equal(
+    getOriginalInventorySpisIndex2('M-10-8001103471', '10012'),
+    '8001103471'
+  );
 });
 
 test('spis search still matches names and normalized index 2 formatting', () => {

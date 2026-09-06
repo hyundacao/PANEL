@@ -31,11 +31,11 @@ const sourceFile = path.join(root, 'src/app/(main)/planowanie-zapotrzebowania/pa
 const source = readFileSync(sourceFile, 'utf8');
 const ast = ts.createSourceFile('page.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const names = [
-  'uid', 'normalize', 'clonePlanItems', 'selectPlanDate', 'currentPlanVersion', 'currentPlanChanges',
-  'tomorrow', 'savedPlanDates', 'customRangeVisible', 'globalRangeChoice', 'PlanAmountField',
+  'uid', 'numberValue', 'normalize', 'normalizeLinkedSources', 'clonePlanItems', 'cloneMaterials', 'cleanImportedTechnologyDescription', 'technologyMatchesProduct', 'technologyLabel', 'technologySelectLabel', 'normalizedMaterialUnit', 'isKilogramUnit', 'isGramUnit', 'isThousandPiecesUnit', 'technologyResultUnit', 'technologyResultQuantity', 'roundTechnologyMaterialQuantity', 'linkedSourceSelectionForItem', 'linkedMachineProductQuantity', 'linkedWarehouseProductQuantity', 'linkedSurplusQuantity', 'sameTechnologyMaterials', 'sameLinkedProducts', 'createAlternativeTechnologyFromWorkingCopy', 'selectPlanDate', 'currentPlanVersion',
+  'tomorrow', 'savedPlanDates', 'customRangeVisible', 'globalRangeChoice', 'Field', 'PlanAmountField', 'Stat',
   'pendingPlanWorkbook', 'planImportWorkbook', 'planImportSheet',
-  'areaName', 'selectPlanningArea', 'selectPlanAreaFilter', 'selectedAreaPlan', 'visibleAreaPlan', 'setVisiblePlanIncluded', 'unassignedPlan', 'missingTechnologyCount', 'unassignedCount',
-  'renderPlanTable', 'renderPlan', 'SectionTitle', 'renderHeader', 'renderHistoryV2', 'ProductCatalogField',
+  'areaName', 'selectPlanningArea', 'selectPlanAreaFilter', 'shiftNormForItem', 'planQuantityNeedsReview', 'areaPlan', 'planSearchTokens', 'visibleAreaPlan', 'allVisiblePlanIncluded', 'someVisiblePlanIncluded', 'setVisiblePlanIncluded', 'quantityResolvedPlanItemIds', 'unresolvedActiveCount',
+  'renderPlanTable', 'renderPlan', 'renderCalculationDetails', 'openAlternativeDraft', 'closeAlternativeDraft', 'saveWorkingAsAlternativeTechnology', 'SectionTitle', 'renderHeader', 'renderReturnsV2', 'ProductCatalogField',
   'emptyTechnologyDraft', 'selectedTechnologyForEditor', 'cloneTechnologyForEditor', 'sameTechnologyEditorValue'
 ];
 const definitions = new Map();
@@ -47,7 +47,7 @@ const visit = (node) => {
 };
 visit(ast);
 for (const name of names) if (!definitions.has(name)) throw new Error('Missing fixture function: ' + name);
-const compiled = compile('{\n' + [...definitions.values()].join('\n') + '\nObject.assign(exports, { renderPlan, renderHistoryV2, ProductCatalogField, emptyTechnologyDraft, selectedTechnologyForEditor, cloneTechnologyForEditor, sameTechnologyEditorValue });\n}', 'fixture.tsx');
+const compiled = compile('{\n' + [...definitions.values()].join('\n') + '\nObject.assign(exports, { renderPlan, renderCalculationDetails, renderReturnsV2, ProductCatalogField, emptyTechnologyDraft, selectedTechnologyForEditor, cloneTechnologyForEditor, sameTechnologyEditorValue, createAlternativeTechnologyFromWorkingCopy });\n}', 'fixture.tsx');
 
 export const createHeaderFixture = (overrides = {}) => {
   const plan = ['MAX CP+TH PRINTED F1_WQ35G2D0ES_A', 'MAX CP+TH PRINTED F1_WQ33G2D00', 'MAINT. DOOR CUBIC POPIEL'].map((name, index) => ({
@@ -65,6 +65,7 @@ export const createHeaderFixture = (overrides = {}) => {
       { id: 'narzedziownia', name: 'Narzędziownia' }, { id: 'shared', name: 'Wspólne', shared: true }
     ],
     plan, dailyPlans: { '2026-08-31': plan, '2026-08-30': [] }, quantityCorrections: [], documents: [], archive: [],
+    inventory: [], inventorySourceDate: '', inventorySyncedAt: '', returnStatuses: {}, technologies: [],
     planVersions: [{ id: 'v1', planDate: '2026-08-31', versionNo: 1, status: 'active',
       fileName: 'Plan produkcji 31.08.2026.xlsx', sheetName: '31.08', importedAt: '31.08.2026, 08:15', importedBy: 'Test',
       items: plan, differences: [{ id: 'legacy-new', kind: 'new', itemId: 'item-0', index: plan[0].index, name: plan[0].name }] }],
@@ -83,31 +84,45 @@ export const createHeaderFixture = (overrides = {}) => {
     today: '2026-08-31', dateOffsetKey: () => '2026-09-01',
     formatPlanDate: (date) => date.split('-').reverse().join('.'),
     fmt: (value) => String(value).replace('.', ','),
-    readOnly: false, showChanges: false, showDatePicker: false, customHorizon: false, showAllPlanAreas: false, view: 'plan', deriveReturnsForDate: () => [],
+    readOnly: false, showDatePicker: false, customHorizon: false, showAllPlanAreas: false, returnAreaFilter: 'all', planSearch: '', view: 'plan', deriveReturnsForDate: () => [],
     saveInfo: { status: 'saved', pending: false, backupAvailable: true, error: '' },
-    missingTechnologyCount: 2, unassignedCount: 0, fileInputRef: { current: null }, expandedPlan: '',
+    calculationEditorOpen: false, calculationEditorDirty: false, calculationEditorSaving: false,
+    alternativeDraftItemId: '', alternativeDraftDescription: '',
+    closeCalculationEditorIfAllowed: () => true,
+    fileInputRef: { current: null }, expandedPlan: '', expandedCalculation: '',
     editablePickingDocumentExists: false, createPickingDocumentFromPlan: () => {},
     pending: null, sheetName: '', lastPlanWorkbook: null, planUploadModeRef: { current: 'plan' }, importSelectedSheet: () => {},
-    renderPendingImport: () => null, renderCalculationDetails: () => null, technologiesFor: () => [],
+    renderPendingImport: () => null, technologiesFor: () => [], technologyForItem: () => undefined,
+    materialsForItem: () => [], itemProductionQty: () => 0,
+    selectedLinkedAllocationByProducer: new Map(), fullLinkedAllocationByProducer: new Map(),
+    linkedProducerCandidates: () => [], linkedProducerFor: () => undefined, updateLinkedSourceSelection: () => {},
+    resetCalculationEditorChanges: () => {}, saveCalculationEditorChanges: async () => {}, flash: () => {}, syncOriginalInventory: async () => {},
     areaName: () => 'Bakoma', handleWorkbook: () => {}, selectTechnology: () => {}, addTechnology: () => {},
-    differenceLabel: { new: 'Nowa', removed: 'Usunięta', quantity_increased: 'Zwiększona', quantity_decreased: 'Zmniejszona' },
     ...overrides, state
   });
   ctx.setState = ctx.updateState = (updater) => { ctx.state = updater(ctx.state); };
-  ctx.setShowChanges = (value) => { ctx.showChanges = value; };
   ctx.setShowDatePicker = (value) => { ctx.showDatePicker = value; };
   ctx.setCustomHorizon = (value) => { ctx.customHorizon = value; };
   ctx.setExpandedPlan = (value) => { ctx.expandedPlan = value; };
   ctx.setShowAllPlanAreas = (value) => { ctx.showAllPlanAreas = value; };
+  ctx.setReturnAreaFilter = (value) => { ctx.returnAreaFilter = value; };
+  ctx.setPlanSearch = (value) => { ctx.planSearch = value; };
   ctx.setExpandedCalculation = (value) => { ctx.expandedCalculation = value; };
+  ctx.setAlternativeDraftItemId = (value) => { ctx.alternativeDraftItemId = value; };
+  ctx.setAlternativeDraftDescription = (value) => { ctx.alternativeDraftDescription = value; };
+  ctx.toggleCalculationEditor = (itemId, surface) => {
+    if (surface === 'plan') ctx.expandedPlan = ctx.expandedPlan === itemId ? '' : itemId;
+    else ctx.expandedCalculation = ctx.expandedCalculation === itemId ? '' : itemId;
+  };
   ctx.setPending = (value) => { ctx.pending = value; };
   ctx.setSheetName = (value) => { ctx.sheetName = value; };
   const loadFixtureExports = () => {
     if (typeof ctx.exports.renderPlan !== 'function') vm.runInContext('{\n' + compiled + '\n}', ctx);
   };
   const render = (view = 'plan') => {
+    ctx.calculationEditorOpen = Boolean(ctx.expandedPlan || ctx.expandedCalculation);
     vm.runInContext('{\n' + compiled + '\n}', ctx);
-    return view === 'historia' ? ctx.exports.renderHistoryV2() : ctx.exports.renderPlan();
+    return view === 'zwroty' ? ctx.exports.renderReturnsV2() : ctx.exports.renderPlan();
   };
   const productCatalogField = (props) => {
     loadFixtureExports();
@@ -131,7 +146,11 @@ export const createHeaderFixture = (overrides = {}) => {
       isSame: ctx.exports.sameTechnologyEditorValue
     };
   };
-  return { ctx, render, html: (view) => renderToStaticMarkup(render(view)), productCatalogField, technologyEditorState };
+  const createAlternative = (technologies, selectedTechnologyId, materials, shiftNorm, description) => {
+    loadFixtureExports();
+    return ctx.exports.createAlternativeTechnologyFromWorkingCopy(technologies, selectedTechnologyId, materials, shiftNorm, description);
+  };
+  return { ctx, render, html: (view) => renderToStaticMarkup(render(view)), productCatalogField, technologyEditorState, createAlternative };
 };
 
 export const headerPreview = (overrides = {}) => '<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><style>body{margin:0;background:#0c0d10;color:#dce1e7;font-family:Arial,sans-serif;letter-spacing:0}main{max-width:1440px;margin:auto;padding:24px}@media(max-width:600px){main{padding:16px}}</style></head><body><main>'

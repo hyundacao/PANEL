@@ -15,6 +15,8 @@ type ToolroomTask = {
   kinds: string[];
   teams: string[];
   notes: { toolroomParentId?: string };
+  teamProgress?: Record<string, unknown>;
+  toolroomReturnDone?: boolean;
   done: boolean;
   material: string;
   materialType: string;
@@ -51,18 +53,38 @@ export const withToolroomReturnTasks = <T extends ToolroomTask>(tasks: T[], crea
   }
   const result: T[] = [];
   for (const parent of parents) {
-    result.push(parent);
     const existing = children.get(parent.id);
-    const needsReturn = parent.station !== 'ZADANIE DODATKOWE'
+    const requiresReturn = parent.station !== 'ZADANIE DODATKOWE'
       && parent.kinds.includes('forma-narzedziownia')
-      && parent.teams.includes('mechanics')
       && !parent.kinds.includes('anulowane');
+    const needsReturn = requiresReturn && parent.teams.includes('mechanics');
+    const existingReturnDone = Boolean(
+      existing
+      && existing.teams.includes('mechanics')
+      && !existing.kinds.includes('anulowane')
+      && (existing.done || existing.teamProgress?.mechanics)
+    );
+    const parentProgress = { ...(parent.teamProgress ?? {}) };
+    if (requiresReturn && !existingReturnDone) {
+      delete parentProgress.process;
+      delete parentProgress.graphics;
+    }
+    const parentWithReturnState = {
+      ...parent,
+      toolroomReturnDone: requiresReturn
+        ? existingReturnDone
+        : undefined,
+      teamProgress: parentProgress,
+      done: requiresReturn && !existingReturnDone ? false : parent.done
+    } as T;
+    result.push(parentWithReturnState);
     if (existing) {
       children.delete(parent.id);
       result.push({
         ...existing,
         station: parent.station, detail: parent.detail, quantity: parent.quantity, norm: parent.norm,
         isCurrentPlan: false,
+        toolroomReturnDone: undefined,
         notes: { ...existing.notes, toolroomParentId: parent.id }
       });
     } else if (createMissing && needsReturn) {
@@ -75,6 +97,8 @@ export const withToolroomReturnTasks = <T extends ToolroomTask>(tasks: T[], crea
         kinds: [TOOLROOM_RETURN_KIND],
         teams: ['mechanics'],
         notes: { toolroomParentId: parent.id },
+        teamProgress: {},
+        toolroomReturnDone: undefined,
         done: false,
         material: '', materialType: '', source: '', dryer: '', temperature: ''
       } as T);

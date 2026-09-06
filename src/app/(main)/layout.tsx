@@ -7,6 +7,7 @@ import { Topbar } from '@/components/layout/Topbar';
 import { ContentScrim } from '@/components/ui/ContentScrim';
 import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
+import { withProductionPlanDate } from '@/lib/utils/productionPlanDate';
 import {
   canAccessWarehouse,
   canSeeTab,
@@ -150,7 +151,8 @@ const navItemsFarbyTasmy: MobileNavItem[] = [
 
 const navItemsPrzygotowanieProdukcji: MobileNavItem[] = [
   { label: 'Plan zmian', href: '/przygotowanie-produkcji' },
-  { label: 'Plan pracy', href: '/przygotowanie-produkcji?view=work-plan' },
+  { label: 'Plan pracy — technologia', mobileLabel: 'Praca: technologia', href: '/przygotowanie-produkcji?view=work-plan-technology' },
+  { label: 'Plan pracy — przygotowanie produkcji', mobileLabel: 'Praca: przygotowanie', href: '/przygotowanie-produkcji?view=work-plan-preparation' },
   { label: 'Rozpiska materiałowa', href: '/przygotowanie-produkcji?view=material' },
   { label: 'Historia planów', href: '/przygotowanie-produkcji?view=history' },
   { label: 'Raport prac', href: '/przygotowanie-produkcji?view=report' },
@@ -163,7 +165,6 @@ const navItemsPlanowanieZapotrzebowania: MobileNavItem[] = [
   { label: 'Spis', href: '/planowanie-zapotrzebowania?view=spis', tab: 'planowanie-zapotrzebowania' },
   { label: 'Dokument', href: '/planowanie-zapotrzebowania?view=dokument', tab: 'planowanie-zapotrzebowania' },
   { label: 'Zwroty', href: '/planowanie-zapotrzebowania?view=zwroty', tab: 'planowanie-zapotrzebowania' },
-  { label: 'Historia', href: '/planowanie-zapotrzebowania?view=historia', tab: 'planowanie-zapotrzebowania' },
   { label: 'Ustawienia', href: '/planowanie-zapotrzebowania?view=ustawienia', tab: 'planowanie-zapotrzebowania' }
 ];
 
@@ -397,8 +398,12 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     if (href === '/przygotowanie-produkcji') {
       return pathname === href && !searchParams.get('view');
     }
-    if (href === '/przygotowanie-produkcji?view=work-plan') {
-      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'work-plan';
+    if (href === '/przygotowanie-produkcji?view=work-plan-technology') {
+      const view = searchParams.get('view');
+      return pathname === '/przygotowanie-produkcji' && (view === 'work-plan-technology' || view === 'work-plan');
+    }
+    if (href === '/przygotowanie-produkcji?view=work-plan-preparation') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'work-plan-preparation';
     }
     if (href === '/przygotowanie-produkcji?view=material') {
       return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'material';
@@ -510,7 +515,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                       return (
                         <Link
                           key={item.href}
-                          href={item.href}
+                          href={withProductionPlanDate(item.href, searchParams.get('date'))}
                           className={cn(
                             isPaintTapeMobileNav
                               ? 'relative flex min-h-[48px] min-w-0 items-center justify-center px-2 py-2 text-center text-xs font-bold text-muted transition hover:text-title'
@@ -576,7 +581,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                     return (
                       <Link
                         key={item.href}
-                        href={item.href}
+                        href={withProductionPlanDate(item.href, searchParams.get('date'))}
                         className={cn(
                           isPaintTapeMobileNav
                             ? 'relative flex min-h-[48px] min-w-0 items-center justify-center px-2 py-2 text-center text-xs font-bold text-muted transition hover:text-title'

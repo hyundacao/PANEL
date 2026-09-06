@@ -12,11 +12,11 @@ const ts = require('typescript');
 const source = readFileSync(pageFile,'utf8');
 const ast = ts.createSourceFile('page.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const directQuantityEditing = source.includes('const updatePlanQuantity =');
-const names = ['uid','numberValue','normalize','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','splitProductFields','stationKey','applyStationMappings','materialKey','materialIdentityMatches','normalizedMaterialUnit','isKilogramUnit','isGramUnit','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
-  'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','itemProductionQty','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','deriveReturnsForDate'];
+const names = ['uid','numberValue','normalize','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','PACKAGING_CATEGORIES','splitProductFields','stationKey','applyStationMappings','materialKey','materialIdentityMatches','isPackagingMaterial','technologyMaterialsForMode','migrateLegacyEmergencyTechnologies','normalizedMaterialUnit','isKilogramUnit','isGramUnit','isThousandPiecesUnit','technologyResultUnit','technologyResultQuantity','roundTechnologyMaterialQuantity','canonicalProductIndex','linkedProductKey','linkedProductMatchesPlanItem','linkedSourceSelectionForItem','linkedMachineProductQuantity','linkedWarehouseProductQuantity','linkedSurplusQuantity','normalizeLinkedSources','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
+  'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','shiftNormForItem','plannedItemProductionQty','itemProductionQty','planQuantityNeedsReview','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','deriveReturnsForDate','syncOriginalInventory'];
 if (directQuantityEditing) names.push('updatePlanNorm');
 const definitions = new Map();
-const areaCalculationNames = ['technologyForItem','materialsForItem','demandByArea','sharedAreaIds','materialSupply','requirementsForArea'];
+const areaCalculationNames = ['technologyForItem','materialsForItem','technologyLinksForItem','linkedProducerCandidates','linkedProducerFor','linkedAllocationByProducer','selectedLinkedAllocationByProducer','fullLinkedAllocationByProducer','materialDemandContributionsForItem','demandByArea','sharedAreaIds','materialSupply','requirementsForArea'];
 const areaCalculationDefinitions = new Map();
 function visit(node) {
   if(ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) definitions.set(node.name.getText(ast),`const ${node.getText(ast)};`);
@@ -36,10 +36,12 @@ function setup() {
   const ctx=vm.createContext({exports:{},...imports,...domain.exports,
     state:{plan:[],technologies:[],archive:[],planVersions:[],documents:[],quantityCorrections:[],stationMappings:[],selectedPlanDate:'2026-08-31',selectedAreaId:'hala-2',dailyPlans:{},returnStatuses:{},inventory:[],areas:[],calculationMode:'all',horizonShifts:3.5},
     pending:{fileName:'test.xlsx',purpose:'plan',workbook:{SheetNames:['Plan'],Sheets:{Plan:{rows}}}},sheetName:'Plan',currentUserName:'Test',quantityInputs:{},readOnly:false,
+    calculationEditorOpen:false,closeCalculationEditorIfAllowed:()=>true,inventorySyncRequestRef:{current:0},
     XLSX:{read:(data)=>data,utils:{sheet_to_json:(sheet)=>sheet.rows,decode_range:()=>({s:{r:0}})}},
     flash:(message)=>messages.push(message),nowLabel:()=>new Date().toISOString(),localDateKey:()=>'2026-08-31',formatPlanDate:(date)=>date,
     mergeAreas:(areas)=>areas,emptyState:()=>({plan:[],technologies:[]}),cloneMaterials:(items)=>JSON.parse(JSON.stringify(items)),technologyForItem:()=>undefined,
-    materialsForItem:()=>[{code:'MAT',unit:'kg',usage:1}],materialKey:()=> 'MAT',requirementsForArea:()=>[]
+    materialsForItem:()=>[{code:'MAT',unit:'kg',usage:1}],materialKey:()=> 'MAT',requirementsForArea:()=>[],
+    selectedLinkedAllocationByProducer:new Map(),fullLinkedAllocationByProducer:new Map(),linkedSourceIssuesForArea:()=>[]
   });
   ctx.updateState=(update)=>{ctx.state=update(ctx.state);};
   ctx.setState=(update)=>{ctx.state=update(ctx.state);};
@@ -50,6 +52,7 @@ function setup() {
   ctx.setLastPlanWorkbook=(value)=>{ctx.lastPlanWorkbook=value;};
   ctx.setSheetName=(value)=>{ctx.sheetName=value;};
   ctx.setShowChanges=()=>{};
+  ctx.technologyForItem=(item)=>ctx.state.technologies.find((technology)=>technology.id===item.technologyId);
   vm.runInContext(compiled,ctx);
   return {ctx,messages,...ctx.exports};
 }
@@ -75,6 +78,180 @@ test('technology mass factors are edited in grams without changing stored kilogr
   assert.equal(h.technologyUsageInputUnit(counted),'szt.');
   assert.equal(h.technologyUsageForEditor(counted),2);
   assert.equal(h.technologyUsageFromEditor(counted,3),3);
+
+  const labels={...material,usage:0.0000083,unit:'1000szt.'};
+  assert.equal(h.technologyUsageInputUnit(labels),'szt.');
+  assert.ok(Math.abs(h.technologyUsageForEditor(labels)-0.0083)<1e-12);
+  assert.ok(Math.abs(h.technologyUsageFromEditor(labels,0.0083)-0.0000083)<1e-12);
+  assert.equal(h.technologyResultUnit(labels.unit),'szt.');
+  assert.ok(Math.abs(h.technologyResultQuantity(0.007968,labels.unit)-7.968)<1e-12);
+  assert.equal(h.technologyResultQuantity(7.968,counted.unit),7.968);
+});
+
+test('discrete technology materials round up while mass remains exact',()=>{
+  const h=setup();
+  assert.equal(h.roundTechnologyMaterialQuantity(673.4,'kg'),673.4);
+  assert.equal(h.roundTechnologyMaterialQuantity(77.77,'szt.'),78);
+  assert.equal(h.roundTechnologyMaterialQuantity(21.6,'opak'),22);
+  assert.equal(h.roundTechnologyMaterialQuantity(3.64,'szt.'),4);
+  assert.equal(h.roundTechnologyMaterialQuantity(7.000000000000001,'opak'),7);
+  assert.equal(h.roundTechnologyMaterialQuantity(0.0492,'1000szt.'),0.05);
+  assert.equal(h.technologyResultQuantity(h.roundTechnologyMaterialQuantity(0.0492,'1000szt.'),'1000szt.'),50);
+});
+
+test('requirements round every discrete product source before aggregation',()=>{
+  const h=setup();
+  h.importSelectedSheet();
+  const base={
+    ...h.ctx.state.plan[0],quantityStatus:'parsed',technologyId:'carton-tech',workingMaterials:null,
+    totalQty:10,remainingQty:10,scopeMode:'all',included:true,areaId:'hala-2'
+  };
+  h.ctx.state.plan=[{...base,id:'product-a'},{...base,id:'product-b'}];
+  h.ctx.state.areas=[{id:'hala-2',name:'Hala 2'}];
+  h.ctx.state.inventory=[];
+  h.ctx.state.technologies=[{
+    id:'carton-tech',materials:[{id:'carton',code:'KAR',name:'Karton',category:'Karton',unit:'szt.',usage:0.125,logisticQty:1}]
+  }];
+  h.ctx.needsMaterialBalances=true;
+  h.ctx.documentLedger=new Map();
+  h.ctx.CATEGORY_ORDER=new Map();
+  const code=ts.transpileModule('(()=>{'+[...areaCalculationDefinitions.values()].join('\n')+';return requirementsForArea;})()',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  const requirementsForArea=vm.runInContext(code,h.ctx);
+  const [requirement]=requirementsForArea('hala-2');
+  assert.deepEqual(Array.from(requirement.sources,(source)=>source.demand),[2,2]);
+  assert.equal(requirement.demand,4);
+  assert.equal(requirement.toIssue,4);
+});
+
+test('linked tray production uses full resin output and packages only the warehouse surplus',()=>{
+  const h=setup(); h.importSelectedSheet();
+  h.ctx.state.calculationMode='horizon';
+  h.ctx.state.horizonShifts=1;
+  const panel={
+    ...h.ctx.state.plan[0],id:'panel',index:'8001128772',name:'MAX BO VG1 CP BODY',quantityStatus:'parsed',
+    technologyId:'panel-tech',totalQty:1400,remainingQty:1400,shiftNorm:700,scopeMode:'global',included:true,areaId:'hala-2',
+    linkedSources:{'8001128941':{mode:'production',producerPlanItemId:'tray',productionQuantity:0}}
+  };
+  const tray={
+    ...panel,id:'tray',index:'M-10-8001128941',name:'TRAY HANDLE BO CLIPPED VG1 VZF07020',quantityStatus:'missing',sourceQuantity:'',
+    technologyId:'tray-tech',totalQty:0,remainingQty:0,shiftNorm:0,linkedSources:{}
+  };
+  const material=(id,code,name,category,usage,unit='szt.')=>({id,code,name,category,usage,unit,logisticQty:1});
+  h.ctx.state.plan=[panel,tray];
+  h.ctx.state.areas=[{id:'hala-2',name:'Hala 2'}];
+  h.ctx.state.inventory=[];
+  h.ctx.state.technologies=[
+    {id:'panel-tech',productIndex:'8001128772',productName:panel.name,materials:[material('insert','M-10-8001103471','INSERT','Półwyrób',1)],linkedProducts:[{id:'tray-link',productIndex:'M-10-8001128941',productName:tray.name,usage:1,unit:'szt.'}]},
+    {id:'tray-tech',productIndex:'M-10-8001128941',productName:tray.name,productionMode:'continuous',shiftNorm:1600,materials:[material('resin','ABS-ELIX','ABS ELIX','Tworzywo',0.1092,'kg')],surplusMaterials:[material('carton','CARTON','Karton','Karton',0.0333),material('separator','SEP','Przekładka','Przekładka',10/60)]}
+  ];
+  assert.equal(h.planQuantityNeedsReview(tray),false,'missing final quantity is valid for continuous production');
+  assert.equal(h.itemProductionQty(tray),1600,'continuous output follows rate multiplied by selected shifts');
+  h.ctx.needsMaterialBalances=true;
+  h.ctx.documentLedger=new Map();
+  h.ctx.CATEGORY_ORDER=new Map();
+  const code=ts.transpileModule('(()=>{'+[...areaCalculationDefinitions.values()].join('\n')+';return requirementsForArea;})()',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  const requirementsForArea=vm.runInContext(code,h.ctx);
+  const requirements=new Map(requirementsForArea('hala-2').map((row)=>[row.code,row]));
+  assert.equal(requirements.get('M-10-8001103471').demand,700,'insert follows panel quantity only');
+  assert.equal(requirements.get('M-10-8001103471').fullDemand,1400,'the finite panel still keeps its complete-plan demand');
+  assert.ok(Math.abs(requirements.get('ABS-ELIX').demand-174.72)<1e-12,'resin follows all 1600 trays');
+  assert.equal(requirements.get('CARTON').demand,30,'cartons follow the 900-piece surplus');
+  assert.equal(requirements.get('CARTON').fullDemand,30,'continuous surplus has no artificial complete-plan quantity');
+  assert.equal(requirements.get('SEP').demand,150,'separators follow the 900-piece surplus');
+  assert.equal(requirements.has('M-10-8001128941'),false,'machine-fed tray is not issued from warehouse');
+});
+
+test('linked handle follows basket demand and uses packaging only for a future semifinished surplus',()=>{
+  const h=setup(); h.importSelectedSheet();
+  h.ctx.state.calculationMode='all';
+  const basket={
+    ...h.ctx.state.plan[0],id:'basket',index:'A23587002',name:'IRIS CUTLERY BASKET SPLITABLE ASM',quantityStatus:'parsed',
+    technologyId:'basket-tech',totalQty:100,remainingQty:100,shiftNorm:0,scopeMode:'all',included:true,areaId:'hala-2',
+    linkedSources:{
+      a23586802:{mode:'production',producerPlanItemId:'handle',productionQuantity:0},
+      a23586602:{mode:'warehouse',producerPlanItemId:'',productionQuantity:0}
+    }
+  };
+  const handle={
+    ...basket,id:'handle',index:'A23586802',name:'IRIS CB SPLITABLE HANDLE',quantityStatus:'missing',sourceQuantity:'',
+    technologyId:'handle-tech',totalQty:0,remainingQty:0,linkedSources:{}
+  };
+  const material=(id,code,name,category,usage,unit='szt.')=>({id,code,name,category,usage,unit,logisticQty:1});
+  h.ctx.state.plan=[basket,handle];
+  h.ctx.state.areas=[{id:'hala-2',name:'Hala 2'}];
+  h.ctx.state.inventory=[];
+  h.ctx.state.technologies=[
+    {
+      id:'basket-tech',productIndex:'A23587002',productName:basket.name,
+      materials:[material('basket-resin','PP-GREY','PP COMPOUND GREY','Tworzywo',0.412,'kg')],
+      linkedProducts:[
+        {id:'handle-link',productIndex:'A23586802',productName:handle.name,usage:2,unit:'szt.'},
+        {id:'lid-link',productIndex:'A23586602',productName:'IRIS CB SPLITABLE LID',usage:2,unit:'szt.'}
+      ]
+    },
+    {
+      id:'handle-tech',productIndex:'A23586802',productName:handle.name,productionMode:'linked',
+      materials:[material('handle-resin','PP-GREY','PP COMPOUND GREY','Tworzywo',0.03865,'kg')],
+      surplusMaterials:[
+        material('handle-carton','HANDLE-CARTON','Karton półwyrobu','Karton',0.003),
+        material('handle-separator','HANDLE-SEP','Przekładka półwyrobu','Przekładka',0.1429)
+      ]
+    }
+  ];
+  h.ctx.selectedLinkedAllocationByProducer=new Map([['handle',200]]);
+  h.ctx.fullLinkedAllocationByProducer=new Map([['handle',200]]);
+  assert.equal(h.itemProductionQty(handle),200,'missing own quantity is filled by basket demand');
+  assert.equal(h.planQuantityNeedsReview(handle),false,'linked demand resolves the missing plan quantity');
+
+  h.ctx.needsMaterialBalances=true;
+  h.ctx.documentLedger=new Map();
+  h.ctx.CATEGORY_ORDER=new Map();
+  const code=ts.transpileModule('(()=>{'+[...areaCalculationDefinitions.values()].join('\n')+';return requirementsForArea;})()',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  const requirementsForArea=vm.runInContext(code,h.ctx);
+  let requirements=new Map(requirementsForArea('hala-2').map((row)=>[row.code,row]));
+  assert.ok(Math.abs(requirements.get('PP-GREY').demand-48.93)<1e-12,'resin includes the basket and exactly two handles per basket');
+  assert.equal(requirements.has('HANDLE-CARTON'),false,'direct-fed handles need no semifinished carton');
+  assert.equal(requirements.has('HANDLE-SEP'),false,'direct-fed handles need no semifinished separators');
+  assert.equal(requirements.has('A23586802'),false,'direct-fed handles are not issued from warehouse');
+  assert.equal(requirements.get('A23586602').demand,200,'lids still come from the warehouse');
+
+  Object.assign(handle,{quantityStatus:'parsed',sourceQuantity:'250',totalQty:250,remainingQty:250});
+  requirements=new Map(requirementsForArea('hala-2').map((row)=>[row.code,row]));
+  assert.ok(Math.abs(requirements.get('PP-GREY').demand-50.8625)<1e-12,'resin also covers the 50-piece own-plan surplus');
+  assert.equal(requirements.get('HANDLE-CARTON').demand,1,'only the surplus is packed into cartons');
+  assert.equal(requirements.get('HANDLE-SEP').demand,8,'only the surplus receives separators');
+});
+
+test('legacy emergency packaging becomes a complete, described technology variant',()=>{
+  const h=setup();
+  const row=(id,name,category)=>({id,code:id,name,category,usage:1,unit:'szt.',logisticQty:1});
+  const technology={
+    id:'door',productIndex:'8001188309',productName:'DOOR END',variant:'base',alternativeNo:0,
+    description:'',notes:'',shiftNorm:0,archived:false,
+    materials:[
+      row('abs','ABS','Tworzywo'),
+      row('container','Pojemnik KTP','Opakowanie'),
+      row('label','Etykieta','Opakowanie'),
+      row('separator','Przekładka bazowa','Przekładka')
+    ],
+    emergencyMaterials:[
+      row('carton','Karton awaryjny','Karton'),
+      row('emergency-separator','Przekładka awaryjna','Przekładka')
+    ]
+  };
+
+  const migration=h.migrateLegacyEmergencyTechnologies([technology]);
+  assert.equal(migration.technologies.length,2);
+  const base=migration.technologies.find((item)=>item.variant==='base');
+  const emergency=migration.technologies.find((item)=>item.variant==='alternative');
+  assert.deepEqual(Array.from(base.emergencyMaterials),[]);
+  assert.equal(emergency.alternativeNo,1);
+  assert.match(emergency.description,/Karton awaryjny/);
+  assert.deepEqual(Array.from(emergency.materials,(material)=>material.name),[
+    'ABS','Karton awaryjny','Przekładka awaryjna'
+  ]);
+  assert.equal(migration.alternativeByBaseId.door,emergency.id);
+  assert.equal(technology.materials.length,4,'migration must not mutate the saved base set');
 });
 
 test('uploading a plan waits for card selection and imports only that card',async()=>{
@@ -526,6 +703,25 @@ test('an inventoried material still present in technology never becomes a quanti
 
   h.ctx.materialsForItem=()=>[];
   assert.equal(h.deriveReturnsForDate('2026-08-31').length,0,'incomplete technologies must not mark the whole inventory for return');
+});
+
+test('inventory synchronization follows the selected plan date and ignores an older late response',async()=>{
+  const h=setup();
+  const pending=new Map();
+  h.ctx.fetch=(url)=>new Promise((resolve)=>pending.set(new URL(String(url),'http://localhost').searchParams.get('date'),resolve));
+
+  const friday=h.syncOriginalInventory(false,'2026-09-04');
+  const saturday=h.syncOriginalInventory(false,'2026-09-05');
+  pending.get('2026-09-05')({ok:true,json:async()=>({dateKey:'2026-09-05',syncedAt:'2026-09-05T12:00:00.000Z',rows:[{id:'sat',areaId:'hala-2',code:'SAT',name:'Stan sobotni',qty:5,unit:'kg'}]})});
+  await saturday;
+  pending.get('2026-09-04')({ok:true,json:async()=>({dateKey:'2026-09-04',syncedAt:'2026-09-04T12:00:00.000Z',rows:[{id:'fri',areaId:'hala-2',code:'FRI',name:'Stan piątkowy',qty:4,unit:'kg'}]})});
+  await friday;
+
+  assert.equal(h.ctx.state.inventorySourceDate,'2026-09-05');
+  assert.equal(h.ctx.state.inventory[0].code,'SAT');
+  const syncEffectStart=source.indexOf('void syncOriginalInventory(false, state.selectedPlanDate)');
+  assert.ok(syncEffectStart>=0);
+  assert.match(source.slice(syncEffectStart,syncEffectStart+300),/\[hydrated, state\.selectedPlanDate, view\]/);
 });
 
 test('direct quantity editing groups typed digits and preserves the source and issued documents', {skip: !directQuantityEditing},()=>{

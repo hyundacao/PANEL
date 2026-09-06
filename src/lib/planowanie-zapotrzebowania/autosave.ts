@@ -98,15 +98,26 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
   let closing = false;
   let stopped = false;
   let failures = 0;
+  let manual = false;
+  let manualCheckpoint: {
+    draft: PlanningDraft<T>;
+    generation: number;
+    status: PlanningSaveStatus;
+    error: string;
+    failures: number;
+  } | null = null;
 
   const notify = () => options.onChange({ status, pending: draft.pending, backupAvailable, error });
   const clearSaveTimer = () => {
     if (saveTimer !== null) clock.clearTimeout(saveTimer);
     saveTimer = null;
   };
-  const persist = () => {
+  const clearCacheTimer = () => {
     if (cacheTimer !== null) clock.clearTimeout(cacheTimer);
     cacheTimer = null;
+  };
+  const persist = () => {
+    clearCacheTimer();
     try {
       options.cache(draft);
       backupAvailable = true;
@@ -117,14 +128,14 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
   };
   const schedule = (milliseconds: number) => {
     clearSaveTimer();
-    if (stopped || closing || !draft.pending || status === 'conflict' || status === 'error') return;
+    if (manual || stopped || closing || !draft.pending || status === 'conflict' || status === 'error') return;
     saveTimer = clock.setTimeout(() => { saveTimer = null; void flush(); }, milliseconds);
   };
 
   const flush = (): Promise<void> => {
     clearSaveTimer();
     if (running) return running;
-    if (stopped || !draft.pending || status === 'conflict' || status === 'error') return Promise.resolve();
+    if (manual || stopped || !draft.pending || status === 'conflict' || status === 'error') return Promise.resolve();
     const request = async () => {
       status = 'saving';
       error = '';
@@ -182,12 +193,56 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
   return {
     getDraft: () => draft,
     getInfo: (): PlanningSaveInfo => ({ status, pending: draft.pending, backupAvailable, error }),
+    isManual: () => manual,
+    beginManual() {
+      if (stopped || manual) return;
+      clearSaveTimer();
+      clearCacheTimer();
+      manual = true;
+      manualCheckpoint = {
+        draft: { ...draft },
+        generation,
+        status,
+        error,
+        failures
+      };
+      notify();
+    },
+    async commitManual() {
+      if (stopped || !manual) return;
+      manual = false;
+      await flush();
+      // A save that was already running when manual mode started may only cover
+      // the older snapshot. Commit the current manual snapshot immediately after it.
+      if (draft.pending && status === 'pending') await flush();
+      if (!draft.pending && status === 'saved') {
+        manualCheckpoint = null;
+        return;
+      }
+      manual = true;
+      clearSaveTimer();
+      notify();
+    },
+    discardManual() {
+      if (!manual || !manualCheckpoint) return draft.state;
+      clearSaveTimer();
+      draft = { ...manualCheckpoint.draft };
+      generation = manualCheckpoint.generation;
+      status = manualCheckpoint.status;
+      error = manualCheckpoint.error;
+      failures = manualCheckpoint.failures;
+      manualCheckpoint = null;
+      manual = false;
+      persist();
+      if (draft.pending) schedule(delay);
+      return draft.state;
+    },
     setSnapshot(state: T, changed = false) {
       if (stopped) return;
       draft = { ...draft, state, pending: draft.pending || changed };
       if (changed) generation += 1;
-      if (cacheTimer !== null) clock.clearTimeout(cacheTimer);
-      cacheTimer = clock.setTimeout(persist, 200);
+      clearCacheTimer();
+      if (!manual) cacheTimer = clock.setTimeout(persist, 200);
       if (changed) {
         if (status !== 'conflict' && status !== 'error' && status !== 'offline') status = running ? 'saving' : 'pending';
         if (status !== 'offline') schedule(delay);
@@ -206,7 +261,7 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
       notify();
     },
     retry() {
-      if (status === 'conflict' || stopped) return Promise.resolve();
+      if (manual || status === 'conflict' || stopped) return Promise.resolve();
       status = draft.pending ? 'pending' : 'saved';
       error = '';
       failures = 0;

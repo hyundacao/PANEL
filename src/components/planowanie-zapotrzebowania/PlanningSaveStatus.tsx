@@ -23,13 +23,13 @@ export const PlanningSaveNotice = ({ info, retry, downloadDraft, loadLatest }: {
   const conflict = info.status === 'conflict';
   const migration = info.error === 'CONCURRENCY_MIGRATION_REQUIRED' || info.error === 'MIGRATION_REQUIRED';
   const message = info.error === 'RELOAD_FAILED' ? 'Nie udało się wczytać wersji z bazy. Twoje zmiany nie zostały usunięte.'
-    : conflict ? 'Inna osoba zapisała nowszą wersję. Autozapis jest wstrzymany, aby nie nadpisać jej zmian.'
+    : conflict ? 'Inna osoba zapisała nowszą wersję. Zapis jest wstrzymany, aby nie nadpisać jej zmian.'
       : migration ? 'Autozapis wymaga istniejącej migracji zapisu planowania zapotrzebowania.'
         : info.error === 'UNAUTHORIZED' || info.error === 'FORBIDDEN' ? 'Sesja wygasła lub nie masz prawa do zapisu. Zaloguj się ponownie.'
           : info.error === 'LOAD_FAILED' ? 'Nie udało się pobrać aktualnego planu z bazy.'
             : info.error === 'RETRY_PAUSED' ? 'Kolejne próby zapisu nie powiodły się. Sprawdź połączenie i ponów próbę.'
-              : info.status === 'error' ? 'Nie udało się zapisać zmian w bazie. Autozapis jest wstrzymany; pobierz kopię zmian i ponów próbę.'
-                : 'Nie udało się zapisać zmian w bazie. Autozapis ponowi próbę po przerwie.';
+              : info.status === 'error' ? 'Nie udało się zapisać zmian w bazie. Zapis jest wstrzymany; pobierz kopię zmian i ponów próbę.'
+                : 'Nie udało się zapisać zmian w bazie. Kliknij „Ponów próbę”, gdy połączenie wróci.';
   return <div className="flex flex-col gap-3 border-y border-red-500/40 bg-red-500/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between" role="alert">
     <div className="min-w-0 text-sm text-red-200"><p>{message}</p>{info.pending && <p className="mt-1 text-xs text-dim">{info.backupAvailable ? 'Twoje zmiany są zachowane na tym urządzeniu.' : 'Nie udało się utworzyć kopii lokalnej. Nie zamykaj strony; pobierz kopię zmian.'}</p>}</div>
     <div className="flex shrink-0 flex-wrap gap-2">

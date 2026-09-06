@@ -3,8 +3,29 @@ import { createHash } from 'node:crypto';
 import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
-import { isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, withToolroomReturnTasks } from '@/lib/utils/productionToolroomTasks';
+import {
+  getWarsawProductionPlanDate,
+  isProductionPlanDate,
+  resolveProductionPlanDate
+} from '@/lib/utils/productionPlanDate';
+import { isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, toolroomReturnId, withToolroomReturnTasks } from '@/lib/utils/productionToolroomTasks';
 import { PRODUCTION_TEAMS, TEAM_COMMENT_KEY_PREFIX, defaultTeamComments, isProductionTeam, normalizeTeamComment, validateTeamComment } from '@/lib/utils/productionTeamComments';
+import {
+  PRODUCTION_TEAM_PROGRESS_NOTE_KEY,
+  PRODUCTION_STARTUP_TEAMS,
+  canProductionTeamStart,
+  isProductionActionTeam,
+  isProductionTaskDone,
+  isProductionTeamDone,
+  normalizeProductionTeamProgress,
+  productionActionTeamsForTask,
+  productionTeamProgressForTask,
+  productionWaitingTeams,
+  productionWaitsForToolroomReturn,
+  setProductionTeamCompletion,
+  type ProductionTeamCompletion,
+  type ProductionTeamProgress
+} from '@/lib/utils/productionWorkProgress';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +41,8 @@ type StoredTask = {
   kinds: string[];
   teams: string[];
   notes: Record<string, string>;
+  teamProgress?: ProductionTeamProgress;
+  toolroomReturnDone?: boolean;
   done: boolean;
   material: string;
   materialType: string;
@@ -50,6 +73,7 @@ type StoredTaskMutation = {
   removeTeams?: string[];
   setNotes?: Record<string, string | null>;
   setNotesIfMissing?: Record<string, string>;
+  setTeamDone?: { team?: unknown; done?: unknown };
   clearWork?: boolean;
 };
 
@@ -148,16 +172,12 @@ const readGlobalProcessEngineerRoster = async () => {
   return normalizeProcessEngineerRoster(notes.processEngineerRoster, notes.processEngineers);
 };
 
-const todayKey = () => {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/Warsaw',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).formatToParts(new Date());
-  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? '';
-  return `${part('year')}-${part('month')}-${part('day')}`;
-};
+const todayKey = () => getWarsawProductionPlanDate();
+
+const invalidPlanDate = () => NextResponse.json({
+  code: 'INVALID_PLAN_DATE',
+  message: 'Nieprawidłowa data planu.'
+}, { status: 400 });
 
 const unauthorized = (code: string) => NextResponse.json({ code }, { status: 401 });
 
@@ -285,49 +305,67 @@ const ensureAccess = async (request: NextRequest, write = false) => {
   return { user: auth.user, response: null };
 };
 
-const toDbTask = (task: StoredTask, sessionId: string, position: number, userName: string) => ({
-  session_id: sessionId,
-  task_key: String(task.id),
-  position_no: position,
-  is_current_plan: Boolean(task.isCurrentPlan),
-  plan_group: String(task.planGroup ?? 'standard'),
-  station: String(task.station ?? ''),
-  detail: String(task.detail ?? ''),
-  quantity: String(task.quantity ?? ''),
-  norm: String(task.norm ?? ''),
-  highlighted: Boolean(task.highlighted),
-  kinds: Array.isArray(task.kinds) ? [...new Set(task.kinds.map(String))] : [],
-  teams: Array.isArray(task.teams) ? [...new Set(task.teams.map(String))] : [],
-  notes: task.notes && typeof task.notes === 'object' ? task.notes : {},
-  done: Boolean(task.done),
-  material: String(task.material ?? ''),
-  material_type: String(task.materialType ?? ''),
-  source: String(task.source ?? ''),
-  dryer: String(task.dryer ?? ''),
-  temperature: String(task.temperature ?? ''),
-  updated_at: new Date().toISOString(),
-  updated_by: userName
-});
+const taskNotesFromValue = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key, note]) => key !== PRODUCTION_TEAM_PROGRESS_NOTE_KEY && typeof note === 'string')) as Record<string, string>;
+};
 
-const fromDbTask = (row: Record<string, unknown>): StoredTask => ({
-  id: String(row.task_key ?? ''),
-  isCurrentPlan: row.is_current_plan !== false,
-  planGroup: String(row.plan_group ?? 'standard'),
-  station: String(row.station ?? ''),
-  detail: String(row.detail ?? ''),
-  quantity: String(row.quantity ?? ''),
-  norm: String(row.norm ?? ''),
-  highlighted: Boolean(row.highlighted),
-  kinds: Array.isArray(row.kinds) ? [...new Set(row.kinds.map(String))] : [],
-  teams: Array.isArray(row.teams) ? [...new Set(row.teams.map(String))] : [],
-  notes: row.notes && typeof row.notes === 'object' ? row.notes as Record<string, string> : {},
-  done: Boolean(row.done),
-  material: String(row.material ?? ''),
-  materialType: String(row.material_type ?? ''),
-  source: String(row.source ?? ''),
-  dryer: String(row.dryer ?? ''),
-  temperature: String(row.temperature ?? '')
-});
+const toDbTask = (task: StoredTask, sessionId: string, position: number, userName: string) => {
+  const teamProgress = productionTeamProgressForTask(task);
+  return {
+    session_id: sessionId,
+    task_key: String(task.id),
+    position_no: position,
+    is_current_plan: Boolean(task.isCurrentPlan),
+    plan_group: String(task.planGroup ?? 'standard'),
+    station: String(task.station ?? ''),
+    detail: String(task.detail ?? ''),
+    quantity: String(task.quantity ?? ''),
+    norm: String(task.norm ?? ''),
+    highlighted: Boolean(task.highlighted),
+    kinds: Array.isArray(task.kinds) ? [...new Set(task.kinds.map(String))] : [],
+    teams: Array.isArray(task.teams) ? [...new Set(task.teams.map(String))] : [],
+    notes: { ...taskNotesFromValue(task.notes), [PRODUCTION_TEAM_PROGRESS_NOTE_KEY]: teamProgress },
+    done: isProductionTaskDone({ ...task, teamProgress }),
+    material: String(task.material ?? ''),
+    material_type: String(task.materialType ?? ''),
+    source: String(task.source ?? ''),
+    dryer: String(task.dryer ?? ''),
+    temperature: String(task.temperature ?? ''),
+    updated_at: new Date().toISOString(),
+    updated_by: userName
+  };
+};
+
+const fromDbTask = (row: Record<string, unknown>): StoredTask => {
+  const rawNotes = row.notes && typeof row.notes === 'object' && !Array.isArray(row.notes)
+    ? row.notes as Record<string, unknown>
+    : {};
+  const task: StoredTask = {
+    id: String(row.task_key ?? ''),
+    isCurrentPlan: row.is_current_plan !== false,
+    planGroup: String(row.plan_group ?? 'standard'),
+    station: String(row.station ?? ''),
+    detail: String(row.detail ?? ''),
+    quantity: String(row.quantity ?? ''),
+    norm: String(row.norm ?? ''),
+    highlighted: Boolean(row.highlighted),
+    kinds: Array.isArray(row.kinds) ? [...new Set(row.kinds.map(String))] : [],
+    teams: Array.isArray(row.teams) ? [...new Set(row.teams.map(String))] : [],
+    notes: taskNotesFromValue(rawNotes),
+    teamProgress: rawNotes[PRODUCTION_TEAM_PROGRESS_NOTE_KEY] as ProductionTeamProgress | undefined,
+    done: Boolean(row.done),
+    material: String(row.material ?? ''),
+    materialType: String(row.material_type ?? ''),
+    source: String(row.source ?? ''),
+    dryer: String(row.dryer ?? ''),
+    temperature: String(row.temperature ?? '')
+  };
+  task.teamProgress = productionTeamProgressForTask(task);
+  task.done = isProductionTaskDone(task);
+  return task;
+};
 
 const validWorkKinds = new Set([
   'zmiana-formy', 'forma-narzedziownia', 'powrot-formy-narzedziownia', 'rozruch', 'wznowienie', 'zmiana-koloru',
@@ -336,7 +374,11 @@ const validWorkKinds = new Set([
 const validTeams = new Set(['mechanics', 'process', 'distribution', 'graphics', 'technician', 'additional']);
 const validNoteKeys = new Set([...validTeams, 'processAssignee']);
 
-const applyTaskMutation = (task: StoredTask, mutation: StoredTaskMutation): StoredTask => {
+const applyTaskMutation = (
+  task: StoredTask,
+  mutation: StoredTaskMutation,
+  completion: ProductionTeamCompletion
+): StoredTask => {
   const fields = mutation.fields ?? {};
   const next: StoredTask = {
     ...task,
@@ -355,7 +397,8 @@ const applyTaskMutation = (task: StoredTask, mutation: StoredTaskMutation): Stor
     temperature: fields.temperature === undefined ? task.temperature : String(fields.temperature),
     kinds: mutation.clearWork ? [] : [...task.kinds],
     teams: mutation.clearWork ? [] : [...task.teams],
-    notes: mutation.clearWork ? toolroomLinkNotes(task) : { ...task.notes }
+    notes: mutation.clearWork ? toolroomLinkNotes(task) : { ...task.notes },
+    teamProgress: mutation.clearWork ? {} : productionTeamProgressForTask(task)
   };
 
   const removedKinds = new Set((mutation.removeKinds ?? []).filter((kind) => validWorkKinds.has(kind)));
@@ -376,6 +419,22 @@ const applyTaskMutation = (task: StoredTask, mutation: StoredTaskMutation): Stor
     else next.notes[key] = String(value);
   });
 
+  next.teamProgress = productionTeamProgressForTask({ ...next, done: false });
+  if (typeof fields.done === 'boolean' && mutation.setTeamDone === undefined) {
+    if (!fields.done) next.teamProgress = {};
+    else {
+      for (const team of productionActionTeamsForTask(next)) {
+        next.teamProgress = setProductionTeamCompletion(next.teamProgress, team, true, completion);
+      }
+    }
+  }
+  const teamDone = mutation.setTeamDone;
+  if (teamDone && isProductionActionTeam(teamDone.team) && typeof teamDone.done === 'boolean') {
+    next.teamProgress = setProductionTeamCompletion(next.teamProgress, teamDone.team, teamDone.done, completion);
+  }
+  next.teamProgress = productionTeamProgressForTask({ ...next, done: false });
+  next.done = isProductionTaskDone({ ...next, done: false });
+
   return next;
 };
 
@@ -384,6 +443,94 @@ const applyTaskMutation = (task: StoredTask, mutation: StoredTaskMutation): Stor
 const toolroomRowUuid = (sessionId: string, taskId: string) => {
   const hash = createHash('sha256').update(`${sessionId}\0${taskId}`).digest('hex');
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+};
+
+const requiresToolroomReturn = (task: StoredTask) =>
+  !isToolroomReturnTask(task)
+  && task.station !== 'ZADANIE DODATKOWE'
+  && task.kinds.includes('forma-narzedziownia')
+  && !task.kinds.includes('anulowane');
+
+const withStoredToolroomReturnState = async (sessionId: string, task: StoredTask): Promise<StoredTask> => {
+  if (!requiresToolroomReturn(task)) return task;
+  const { data: returnRow, error } = await supabaseAdmin
+    .from('przygotowanie_produkcji_tasks')
+    .select('*')
+    .eq('session_id', sessionId)
+    .eq('task_key', toolroomReturnId(task.id))
+    .maybeSingle();
+  if (error) throw error;
+  const returnTask = returnRow ? fromDbTask(returnRow as Record<string, unknown>) : null;
+  const toolroomReturnDone = Boolean(
+    returnTask
+    && !returnTask.kinds.includes('anulowane')
+    && isProductionTeamDone(returnTask, 'mechanics')
+  );
+  const enriched = { ...task, toolroomReturnDone };
+  enriched.teamProgress = productionTeamProgressForTask(enriched);
+  enriched.done = isProductionTaskDone(enriched);
+  return enriched;
+};
+
+const storedProgressFromRow = (row: Record<string, unknown>) => {
+  const notes = row.notes && typeof row.notes === 'object' && !Array.isArray(row.notes)
+    ? row.notes as Record<string, unknown>
+    : {};
+  return normalizeProductionTeamProgress(notes[PRODUCTION_TEAM_PROGRESS_NOTE_KEY]);
+};
+
+const clearToolroomParentStartupProgress = async (
+  sessionId: string,
+  parentTaskId: string,
+  userName: string,
+  minimumVersionMs = 0,
+  forceBarrier = false
+): Promise<string | null> => {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const { data: parentRow, error: readError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_tasks')
+      .select('*')
+      .eq('session_id', sessionId)
+      .eq('task_key', parentTaskId)
+      .maybeSingle();
+    if (readError) throw readError;
+    if (!parentRow) return null;
+
+    const storedProgress = storedProgressFromRow(parentRow as Record<string, unknown>);
+    const hasStartupCompletion = PRODUCTION_STARTUP_TEAMS.some((team) => Boolean(storedProgress[team]));
+    if (!forceBarrier && !hasStartupCompletion && parentRow.done !== true) return null;
+
+    const parentTask = {
+      ...fromDbTask(parentRow as Record<string, unknown>),
+      toolroomReturnDone: false,
+      done: false
+    };
+    parentTask.teamProgress = productionTeamProgressForTask(parentTask);
+    parentTask.done = isProductionTaskDone(parentTask);
+    const storedTask = toDbTask(parentTask, sessionId, Number(parentRow.position_no ?? 0), userName);
+    const parentVersionMs = Date.parse(String(parentRow.updated_at ?? ''));
+    const nextVersionMs = Math.max(
+      Date.now(),
+      Number.isFinite(parentVersionMs) ? parentVersionMs + 1 : 0,
+      minimumVersionMs + 1
+    );
+    const updatedAt = new Date(nextVersionMs).toISOString();
+    const { data: updatedRow, error: updateError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_tasks')
+      .update({
+        notes: storedTask.notes,
+        done: storedTask.done,
+        updated_at: updatedAt,
+        updated_by: userName
+      })
+      .eq('id', parentRow.id)
+      .eq('updated_at', parentRow.updated_at)
+      .select('id')
+      .maybeSingle();
+    if (updateError) throw updateError;
+    if (updatedRow) return updatedAt;
+  }
+  throw new Error('Nie udało się wycofać gotowości po cofnięciu powrotu formy. Spróbuj ponownie.');
 };
 
 const syncToolroomReturns = async (sessionId: string, userName: string) => {
@@ -396,6 +543,9 @@ const syncToolroomReturns = async (sessionId: string, userName: string) => {
   const byKey = new Map(workRows.map((row) => [String(row.task_key), row]));
   const tasks = withToolroomReturnTasks(workRows.map((row) => fromDbTask(row as Record<string, unknown>)));
   let changed = false;
+  for (const parent of tasks.filter((task) => !isToolroomReturnTask(task) && task.toolroomReturnDone === false)) {
+    if (await clearToolroomParentStartupProgress(sessionId, parent.id, userName)) changed = true;
+  }
   for (const task of tasks.filter(isToolroomReturnTask)) {
     const existing = byKey.get(task.id);
     if (!existing) {
@@ -440,11 +590,13 @@ export async function GET(request: NextRequest) {
         history: (history ?? []).filter((entry) => Array.isArray(entry.tasks) && entry.tasks.length > 0)
       });
     }
+    const planDate = resolveProductionPlanDate(request.nextUrl.searchParams.get('date'));
+    if (!planDate) return invalidPlanDate();
     const teamComments = await readGlobalTeamComments();
     const { data: session, error: sessionError } = await supabaseAdmin
       .from('przygotowanie_produkcji_sessions')
       .select('id, session_date, file_name, plan_sheet, updated_at')
-      .eq('session_date', todayKey())
+      .eq('session_date', planDate)
       .maybeSingle();
     if (sessionError) throw sessionError;
     const requestedVersion = request.nextUrl.searchParams.get('since');
@@ -547,9 +699,7 @@ export async function POST(request: NextRequest) {
 
     if (body.action === 'deleteHistoryDay') {
       const planDate = String(body.planDate ?? '');
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(planDate)) {
-        return NextResponse.json({ code: 'INVALID_PLAN_DATE' }, { status: 400 });
-      }
+      if (!isProductionPlanDate(planDate)) return invalidPlanDate();
       const { error: historyError } = await supabaseAdmin
         .from('przygotowanie_produkcji_history')
         .update({ tasks: [], file_name: '', plan_sheet: '' })
@@ -623,10 +773,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.action === 'savePlan') {
+      const planDate = resolveProductionPlanDate(body.planDate);
+      if (!planDate) return invalidPlanDate();
       let tasks = Array.isArray(body.tasks) ? body.tasks : [];
       const { data: session, error: sessionError } = await supabaseAdmin
         .from('przygotowanie_produkcji_sessions')
-        .upsert({ session_date: todayKey(), file_name: body.fileName ?? '', plan_sheet: body.sheetName ?? '', created_by: access.user.name, updated_at: now }, { onConflict: 'session_date' })
+        .upsert({ session_date: planDate, file_name: body.fileName ?? '', plan_sheet: body.sheetName ?? '', created_by: access.user.name, updated_at: now }, { onConflict: 'session_date' })
         .select('id, session_date, file_name, plan_sheet, updated_at')
         .single();
       if (sessionError) throw sessionError;
@@ -682,10 +834,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.action === 'updateTask' && body.task) {
+      const planDate = resolveProductionPlanDate(body.planDate);
+      if (!planDate) return invalidPlanDate();
       const { data: session, error: sessionError } = await supabaseAdmin
         .from('przygotowanie_produkcji_sessions')
-        .select('id')
-        .eq('session_date', todayKey())
+        .select('id, session_date, file_name, plan_sheet, created_by, updated_at')
+        .eq('session_date', planDate)
         .maybeSingle();
       if (sessionError) throw sessionError;
       if (!session) return NextResponse.json({ code: 'NO_PLAN' }, { status: 409 });
@@ -699,15 +853,26 @@ export async function POST(request: NextRequest) {
         .eq('task_key', body.task.id);
       if (taskError) throw taskError;
       const taskRows = await syncToolroomReturns(session.id, access.user.name);
-      await saveHistorySnapshot({ ...session, session_date: todayKey(), created_by: access.user.name }, (taskRows ?? []) as Array<Record<string, unknown>>);
+      await saveHistorySnapshot({ ...session, created_by: session.created_by ?? access.user.name }, (taskRows ?? []) as Array<Record<string, unknown>>);
       return NextResponse.json({ task: body.task });
     }
 
     if (body.action === 'mutateTask' && body.taskId && body.mutation) {
+      const teamDoneMutation = body.mutation.setTeamDone;
+      if (teamDoneMutation !== undefined && (
+        !isProductionActionTeam(teamDoneMutation.team) || typeof teamDoneMutation.done !== 'boolean'
+      )) {
+        return NextResponse.json({
+          code: 'INVALID_TEAM_COMPLETION',
+          message: 'Nieprawidłowe potwierdzenie wykonania pracy.'
+        }, { status: 400 });
+      }
+      const planDate = resolveProductionPlanDate(body.planDate);
+      if (!planDate) return invalidPlanDate();
       const { data: session, error: sessionError } = await supabaseAdmin
         .from('przygotowanie_produkcji_sessions')
-        .select('id, session_date, file_name, plan_sheet, created_by')
-        .eq('session_date', todayKey())
+        .select('id, session_date, file_name, plan_sheet, created_by, updated_at')
+        .eq('session_date', planDate)
         .maybeSingle();
       if (sessionError) throw sessionError;
       if (!session) return NextResponse.json({ code: 'NO_PLAN' }, { status: 409 });
@@ -724,9 +889,42 @@ export async function POST(request: NextRequest) {
         if (readError) throw readError;
         if (!currentRow) return NextResponse.json({ code: 'TASK_NOT_FOUND' }, { status: 404 });
 
-        const currentTask = fromDbTask(currentRow as Record<string, unknown>);
-        const nextTask = applyTaskMutation(currentTask, body.mutation);
+        const currentTask = await withStoredToolroomReturnState(
+          session.id,
+          fromDbTask(currentRow as Record<string, unknown>)
+        );
+        if (teamDoneMutation && isProductionActionTeam(teamDoneMutation.team)) {
+          if (!currentTask.teams.includes(teamDoneMutation.team)) {
+            return NextResponse.json({
+              code: 'TEAM_NOT_ASSIGNED',
+              message: 'Ten dział nie jest przypisany do zadania.'
+            }, { status: 409 });
+          }
+          if (teamDoneMutation.done === true && !canProductionTeamStart(currentTask, teamDoneMutation.team)) {
+            const waitingForToolroomReturn = productionWaitsForToolroomReturn(currentTask, teamDoneMutation.team);
+            return NextResponse.json({
+              code: 'TEAM_NOT_READY',
+              message: waitingForToolroomReturn
+                ? 'Najpierw mechanik musi zakończyć „Powrót formy z narzędziowni”.'
+                : 'Najpierw muszą zakończyć pracę wszystkie wymagane działy przygotowania.',
+              waitingTeams: productionWaitingTeams(currentTask, teamDoneMutation.team),
+              waitingForToolroomReturn
+            }, { status: 409 });
+          }
+        }
+        const nextTask = applyTaskMutation(currentTask, body.mutation, {
+          completedAt: now,
+          completedBy: access.user.name
+        });
         const storedTask = toDbTask(nextTask, session.id, Number(currentRow.position_no ?? 0), access.user.name);
+        const currentTaskVersion = Date.parse(String(currentRow.updated_at ?? ''));
+        const currentSessionVersion = Date.parse(String(session.updated_at ?? ''));
+        const nextVersionMs = Math.max(
+          Date.now(),
+          Number.isFinite(currentTaskVersion) ? currentTaskVersion + 1 : 0,
+          Number.isFinite(currentSessionVersion) ? currentSessionVersion + 1 : 0
+        );
+        storedTask.updated_at = new Date(nextVersionMs).toISOString();
         const updates = omitFields(storedTask, ['session_id', 'task_key', 'position_no'] as const);
         const { data: updatedRow, error: updateError } = await supabaseAdmin
           .from('przygotowanie_produkcji_tasks')
@@ -738,17 +936,38 @@ export async function POST(request: NextRequest) {
         if (updateError) throw updateError;
         if (!updatedRow) continue;
 
+        const linkedParentId = toolroomParentId(nextTask);
+        const updatedTaskVersion = Date.parse(storedTask.updated_at);
+        const cascadeUpdatedAt = linkedParentId
+          && (nextTask.kinds.includes('anulowane') || !isProductionTeamDone(nextTask, 'mechanics'))
+          ? await clearToolroomParentStartupProgress(
+              session.id,
+              linkedParentId,
+              access.user.name,
+              Number.isFinite(updatedTaskVersion) ? updatedTaskVersion : Date.now(),
+              true
+            )
+          : null;
         const taskRows = await syncToolroomReturns(session.id, access.user.name);
         const currentTasks = withToolroomReturnTasks((taskRows ?? [])
           .filter((row) => !isModuleSettings(row as Record<string, unknown>))
           .map((row) => fromDbTask(row as Record<string, unknown>)));
+        const latestTaskVersion = Math.max(
+          Date.parse(storedTask.updated_at),
+          cascadeUpdatedAt ? Date.parse(cascadeUpdatedAt) : 0,
+          ...(taskRows ?? []).map((row) => Date.parse(String(row.updated_at ?? ''))).filter(Number.isFinite)
+        );
+        const sessionUpdatedAt = new Date(latestTaskVersion).toISOString();
         const { error: sessionUpdateError } = await supabaseAdmin
           .from('przygotowanie_produkcji_sessions')
-          .update({ updated_at: new Date().toISOString() })
+          .update({ updated_at: sessionUpdatedAt })
           .eq('id', session.id);
         if (sessionUpdateError) throw sessionUpdateError;
         await saveHistorySnapshot(session, currentTasks as unknown as Array<Record<string, unknown>>);
-        return NextResponse.json({ task: fromDbTask(updatedRow as Record<string, unknown>) });
+        return NextResponse.json({
+          task: currentTasks.find((task) => task.id === body.taskId)
+            ?? fromDbTask(updatedRow as Record<string, unknown>)
+        });
       }
 
       return NextResponse.json({

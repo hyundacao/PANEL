@@ -7,10 +7,18 @@ import {
   coalesceQuantityCorrection,
   correctedQuantity,
   diffPlanItems,
+  effectiveProducerQuantity,
   latestPlanVersion,
   nextPlanVersionNumber,
   setRemainingQuantity
 } from './domain.ts';
+
+test('produkcja pod powiązanie uzupełnia brakującą ilość i zachowuje większy plan własny', () => {
+  assert.equal(effectiveProducerQuantity(0, 6580, 'linked'), 6580);
+  assert.equal(effectiveProducerQuantity(8000, 6580, 'linked'), 8000);
+  assert.equal(effectiveProducerQuantity(0, 6580, 'planned'), 0);
+  assert.equal(effectiveProducerQuantity(Number.NaN, Number.POSITIVE_INFINITY, 'linked'), 0);
+});
 
 const item = (patch = {}) => ({
   id: patch.id ?? 'plan-1',

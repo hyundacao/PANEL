@@ -22,6 +22,7 @@ import {
   RotateCcw
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
+import { withProductionPlanDate } from '@/lib/utils/productionPlanDate';
 import { useUiStore } from '@/lib/store/ui';
 import {
   canSeeTab,
@@ -103,7 +104,8 @@ const navItemsFarbyTasmy: NavItem[] = [
 
 const navItemsPrzygotowanieProdukcji: NavItem[] = [
   { label: 'Plan zmian', href: '/przygotowanie-produkcji', icon: ClipboardList },
-  { label: 'Plan pracy', href: '/przygotowanie-produkcji?view=work-plan', icon: ClipboardCheck },
+  { label: 'Plan pracy — technologia', href: '/przygotowanie-produkcji?view=work-plan-technology', icon: ClipboardCheck },
+  { label: 'Plan pracy — przygotowanie produkcji', href: '/przygotowanie-produkcji?view=work-plan-preparation', icon: ClipboardCheck },
   { label: 'Rozpiska materiałowa', href: '/przygotowanie-produkcji?view=material', icon: Layers },
   { label: 'Historia planów', href: '/przygotowanie-produkcji?view=history', icon: History },
   { label: 'Raport prac', href: '/przygotowanie-produkcji?view=report', icon: FileText },
@@ -116,7 +118,6 @@ const navItemsPlanowanieZapotrzebowania: NavItem[] = [
   { label: 'Spis rzeczywisty', href: '/planowanie-zapotrzebowania?view=spis', icon: ClipboardCheck, tab: 'planowanie-zapotrzebowania' },
   { label: 'Dokument do wypisania', href: '/planowanie-zapotrzebowania?view=dokument', icon: FileCheck2, tab: 'planowanie-zapotrzebowania' },
   { label: 'Zwroty', href: '/planowanie-zapotrzebowania?view=zwroty', icon: RotateCcw, tab: 'planowanie-zapotrzebowania' },
-  { label: 'Historia', href: '/planowanie-zapotrzebowania?view=historia', icon: History, tab: 'planowanie-zapotrzebowania' },
   { label: 'Ustawienia', href: '/planowanie-zapotrzebowania?view=ustawienia', icon: Settings2, tab: 'planowanie-zapotrzebowania' }
 ];
 
@@ -167,8 +168,12 @@ export const Sidebar = () => {
     if (href === '/przygotowanie-produkcji?view=material') {
       return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'material';
     }
-    if (href === '/przygotowanie-produkcji?view=work-plan') {
-      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'work-plan';
+    if (href === '/przygotowanie-produkcji?view=work-plan-technology') {
+      const view = searchParams.get('view');
+      return pathname === '/przygotowanie-produkcji' && (view === 'work-plan-technology' || view === 'work-plan');
+    }
+    if (href === '/przygotowanie-produkcji?view=work-plan-preparation') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'work-plan-preparation';
     }
     if (href === '/przygotowanie-produkcji?view=history') {
       return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'history';
@@ -274,7 +279,7 @@ export const Sidebar = () => {
             return (
               <Link
                 key={item.href}
-                href={item.href}
+                href={withProductionPlanDate(item.href, searchParams.get('date'))}
                 onClick={closeOnMobile}
                 className={cn(
                   'flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[rgba(255,255,255,0.04)] hover:text-brandHover',
