@@ -113,14 +113,14 @@ const texturedMobilePrzemialyTabs = new Set<WarehouseTab>([
 
 const getTexturedMobileNavStyle = (active: boolean): React.CSSProperties => ({
   backgroundImage: active
-    ? "linear-gradient(100deg, rgba(255,122,0,0.18), rgba(7,8,12,0.52)), url('/profil-panel-bg.png')"
-    : "linear-gradient(100deg, rgba(7,8,12,0.78), rgba(7,8,12,0.58)), url('/profil-panel-bg.png')",
+    ? 'var(--task-choice-active-bg)'
+    : 'var(--task-choice-bg)',
   backgroundPosition: 'left center',
   backgroundSize: 'cover'
 });
 
 const mobileNavPanelClass =
-  'mb-4 rounded-[18px] border border-border bg-[var(--scrim)] p-2.5 shadow-[inset_0_1px_0_var(--inner-highlight)] backdrop-blur-[8px] md:hidden';
+  'mb-4 rounded-[18px] border border-border bg-[var(--content-scrim)] p-2.5 shadow-[inset_0_1px_0_var(--inner-highlight)] backdrop-blur-[8px] md:hidden';
 
 const mobileNavLinkClass =
   'flex min-h-[56px] items-center justify-center rounded-xl border border-border bg-[rgba(255,255,255,0.025)] px-3 py-3 text-center text-[13px] font-semibold leading-snug text-title transition hover:border-[rgba(255,122,26,0.65)] hover:bg-[rgba(255,255,255,0.045)] hover:text-title';
@@ -481,7 +481,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                 ? 'px-2 py-3 md:px-6 md:py-6'
                 : 'px-4 py-4 md:px-6 md:py-6',
             usePlanningGraphiteBackground &&
-              "isolate bg-[#1C1F24] before:pointer-events-none before:absolute before:inset-0 before:z-0 before:bg-[url('/material-planning-demand-bg.png')] before:bg-[length:100%_auto] before:bg-top before:bg-no-repeat before:opacity-[0.16] before:content-[''] [&>*]:relative [&>*]:z-[1]"
+              "planning-demand-background isolate before:pointer-events-none before:absolute before:inset-0 before:z-0 before:bg-[url('/material-planning-demand-bg.png')] before:bg-[length:100%_auto] before:bg-top before:bg-no-repeat before:opacity-[var(--planning-art-opacity)] before:content-[''] [&>*]:relative [&>*]:z-[1]"
           )}
         >
           {isDashboardPath ? (
@@ -490,7 +490,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                 <div
                   className={cn(
                     isPaintTapeMobileNav
-                      ? '-mx-2 mb-4 border-b border-border bg-[rgba(8,9,13,0.72)] md:hidden'
+                      ? '-mx-2 mb-4 border-b border-border bg-[var(--separator-bg)] md:hidden'
                       : isPreparationMobileNav
                         ? 'mb-4 md:hidden'
                         : mobileNavPanelClass
@@ -521,7 +521,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                               ? 'relative flex min-h-[48px] min-w-0 items-center justify-center px-2 py-2 text-center text-xs font-bold text-muted transition hover:text-title'
                               : mobileNavLinkClass,
                             textured &&
-                              'overflow-hidden bg-[#0b0c10] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_8px_20px_rgba(0,0,0,0.18)] hover:bg-[#111318] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_24px_rgba(0,0,0,0.22)]',
+                              'overflow-hidden bg-[var(--textured-nav-bg)] shadow-[inset_0_1px_0_var(--inner-highlight),0_8px_20px_rgba(0,0,0,0.18)] hover:bg-[var(--textured-nav-hover)] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_24px_rgba(0,0,0,0.22)]',
                             !isPaintTapeMobileNav && active &&
                               'border-[rgba(255,122,26,0.85)] bg-[linear-gradient(180deg,rgba(255,122,26,0.13),rgba(255,122,26,0.035))] shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]',
                             isPaintTapeMobileNav &&
@@ -556,7 +556,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
               <div
                 className={cn(
                   isPaintTapeMobileNav
-                    ? '-mx-2 mb-4 border-b border-border bg-[rgba(8,9,13,0.72)] md:hidden'
+                    ? '-mx-2 mb-4 border-b border-border bg-[var(--separator-bg)] md:hidden'
                     : isPreparationMobileNav
                       ? 'mb-4 md:hidden'
                       : mobileNavPanelClass
@@ -587,7 +587,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                             ? 'relative flex min-h-[48px] min-w-0 items-center justify-center px-2 py-2 text-center text-xs font-bold text-muted transition hover:text-title'
                             : mobileNavLinkClass,
                           textured &&
-                            'overflow-hidden bg-[#0b0c10] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_8px_20px_rgba(0,0,0,0.18)] hover:bg-[#111318] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_24px_rgba(0,0,0,0.22)]',
+                            'overflow-hidden bg-[var(--textured-nav-bg)] shadow-[inset_0_1px_0_var(--inner-highlight),0_8px_20px_rgba(0,0,0,0.18)] hover:bg-[var(--textured-nav-hover)] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_24px_rgba(0,0,0,0.22)]',
                           !isPaintTapeMobileNav && active &&
                             'border-[rgba(255,122,26,0.85)] bg-[linear-gradient(180deg,rgba(255,122,26,0.13),rgba(255,122,26,0.035))] shadow-[0_0_0_2px_rgba(255,122,26,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]',
                           isPaintTapeMobileNav &&

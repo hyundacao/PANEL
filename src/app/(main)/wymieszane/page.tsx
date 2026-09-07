@@ -588,7 +588,7 @@ export default function MixedMaterialsPage() {
           }}
         >
           <div
-            className="w-full max-w-md rounded-2xl border border-border bg-[rgba(10,11,15,0.98)] p-6 shadow-[inset_0_1px_0_var(--inner-highlight)]"
+            className="w-full max-w-md rounded-2xl border border-border bg-[var(--modal-bg)] p-6 shadow-[var(--modal-shadow)]"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="space-y-4">

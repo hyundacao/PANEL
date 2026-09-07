@@ -300,8 +300,8 @@ const temperatureFor = (type: string) => {
 
 const taskChoiceBackground = (active: boolean) => ({
   backgroundImage: active
-    ? "linear-gradient(100deg, rgba(255,122,0,0.28), rgba(7,8,12,0.58)), url('/profil-panel-bg.png')"
-    : "linear-gradient(100deg, rgba(7,8,12,0.7), rgba(7,8,12,0.5)), url('/profil-panel-bg.png')",
+    ? 'var(--task-choice-active-bg)'
+    : 'var(--task-choice-bg)',
   backgroundPosition: 'center',
   backgroundSize: 'cover'
 });
@@ -328,7 +328,7 @@ const WorkReportDashboard = ({
   const periodLabel = period === 'week' ? 'Ostatnie 7 dni' : period === 'month' ? 'Ostatnie 30 dni' : 'Cała historia';
 
   return <div className="work-report-dashboard space-y-4">
-    <section className="overflow-hidden rounded-xl border border-[rgba(255,122,0,0.3)] bg-[#0c0e13]" style={{ backgroundImage: "linear-gradient(100deg, rgba(255,122,0,0.16), rgba(7,8,12,0.72)), url('/profil-panel-bg.png')", backgroundPosition: 'center', backgroundSize: 'cover' }}>
+    <section className="overflow-hidden rounded-xl border border-[rgba(255,122,0,0.3)] bg-[var(--surface-1)]" style={{ backgroundImage: 'var(--report-hero-bg)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
       <div className="flex flex-col gap-4 px-5 py-5 lg:flex-row lg:items-center lg:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-[var(--brand)]">Przygotowanie produkcji</p><h2 className="mt-1 text-2xl font-semibold text-title">Raport prac</h2><p className="mt-1 text-sm text-dim">{periodLabel}</p></div><div className="grid grid-cols-3 gap-2">{([{ id: 'week', label: 'Tydzień' }, { id: 'month', label: 'Miesiąc' }, { id: 'all', label: 'Wszystko' }] as const).map((item) => <Button className={cn('min-h-10 px-3 py-2 text-xs', period === item.id && 'bg-[rgba(255,122,0,0.18)] text-title')} key={item.id} onClick={() => onPeriodChange(item.id)} type="button" variant={period === item.id ? 'secondary' : 'outline'}>{item.label}</Button>)}</div></div>
     </section>
     <div className="grid gap-3 md:grid-cols-3"><div className="rounded-xl border border-[rgba(255,122,0,0.3)] bg-[linear-gradient(135deg,rgba(255,122,0,0.15),rgba(255,255,255,0.02))] p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Prace w okresie</p><p className="mt-2 text-4xl font-bold text-[var(--brand)]">{total}</p></div><div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Dni z planem</p><p className="mt-2 text-4xl font-bold text-title">{dayCount}</p></div><div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Wykonane</p><p className="mt-2 text-4xl font-bold text-title">{done}</p></div></div>
@@ -1550,11 +1550,11 @@ export default function PrzygotowanieProdukcjiPage() {
                       <div className={cn('flex min-h-11 w-full items-center justify-center rounded-lg border border-[rgba(255,122,0,0.55)] bg-bg px-3 text-center text-base font-bold text-[var(--brand)]', task.highlighted && 'border-yellow-500 bg-yellow-200 text-zinc-950')}>{task.station}</div>
                       <div><textarea className={cn('min-h-14 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm font-semibold text-[var(--brand)] outline-none focus:border-[rgba(255,122,0,0.65)]', task.highlighted && 'border-yellow-500 bg-yellow-100 text-zinc-950 focus:border-yellow-600')} value={task.detail} onChange={(event) => updateTask(task.id, { detail: event.target.value })} /><p className={cn('mt-1 text-xs text-dim', task.highlighted && 'text-zinc-700')}>Ilość: <strong className={cn('text-title', task.highlighted && 'text-zinc-950')}>{task.quantity || '---'}</strong> &nbsp; Norma: <strong className={cn('text-title', task.highlighted && 'text-zinc-950')}>{task.norm || '---'}</strong></p></div>
                     </section>
-                    <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(rgba(10,11,15,0.87), rgba(10,11,15,0.87)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
+                    <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
                       <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[var(--brand)]">Praca</p>
                       <div className="grid grid-cols-3 gap-1.5">{editableWorkKinds(task).map((kind) => <label className={cn('flex min-h-10 items-center justify-start gap-2 rounded-lg border border-border px-3 text-left text-[11px] font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={kind.id} style={taskChoiceBackground(task.kinds.includes(kind.id))}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div>
                     </section>
-                    <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(rgba(10,11,15,0.87), rgba(10,11,15,0.87)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'right center', backgroundSize: 'cover' }}>
+                    <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'right center', backgroundSize: 'cover' }}>
                       <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[var(--brand)]">Osoby</p>
                       <div className="grid grid-cols-2 gap-1.5">{teamOptions.map((team) => <label className={cn('flex min-h-10 w-full items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.teams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={team.id} style={taskChoiceBackground(task.teams.includes(team.id))}><input checked={task.teams.includes(team.id)} onChange={() => toggleTeam(task, team.id)} type="checkbox" />{team.label}</label>)}</div>
                     </section>
@@ -1591,11 +1591,11 @@ export default function PrzygotowanieProdukcjiPage() {
                   </button>
                   {expanded && <div className="border-t border-[rgba(183,122,255,0.22)] p-3 sm:p-4">
                     <div className="grid gap-3 xl:grid-cols-2">
-                      <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(rgba(10,11,15,0.87), rgba(10,11,15,0.87)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
+                      <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
                         <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[#debaff]">Praca</p>
                         <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">{editableWorkKinds(task).map((kind) => <label className={cn('flex min-h-10 items-center justify-start gap-2 rounded-lg border border-border px-3 text-left text-[11px] font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={kind.id} style={taskChoiceBackground(task.kinds.includes(kind.id))}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div>
                       </section>
-                      <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(rgba(10,11,15,0.87), rgba(10,11,15,0.87)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'right center', backgroundSize: 'cover' }}>
+                      <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'right center', backgroundSize: 'cover' }}>
                         <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[#debaff]">Osoby</p>
                         <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">{teamOptions.map((team) => <label className={cn('flex min-h-10 w-full items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.teams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={team.id} style={taskChoiceBackground(task.teams.includes(team.id))}><input checked={task.teams.includes(team.id)} onChange={() => toggleTeam(task, team.id)} type="checkbox" />{team.label}</label>)}</div>
                       </section>

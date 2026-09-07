@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import { useEffect } from 'react';
-import { ArrowLeftRight, ClipboardList, History, LogOut, Settings } from 'lucide-react';
+import { ArrowLeftRight, ClipboardList, History, LogOut, Moon, Settings, Sun } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { useUiStore, type ErpWorkspaceTab } from '@/lib/store/ui';
 import { canSeeTab, getRoleLabel, isWarehouseAdmin } from '@/lib/auth/access';
@@ -48,7 +48,9 @@ export const ErpSidebar = () => {
     user,
     logout,
     erpWorkspaceTab,
-    setErpWorkspaceTab
+    setErpWorkspaceTab,
+    theme,
+    toggleTheme
   } = useUiStore();
   const roleLabel = getRoleLabel(user, 'PRZESUNIECIA_ERP');
   const displayName = user?.name ?? 'Gość';
@@ -110,8 +112,8 @@ export const ErpSidebar = () => {
                   closeOnMobile();
                 }}
                 className={cn(
-                  'flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-semibold transition hover:bg-[rgba(255,255,255,0.04)] hover:text-brandHover',
-                  active && 'bg-[rgba(255,255,255,0.06)]'
+                  'flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-semibold transition hover:bg-[var(--sidebar-item-hover)] hover:text-brandHover',
+                  active && 'bg-[var(--sidebar-item-active)]'
                 )}
               >
                 <span
@@ -120,13 +122,33 @@ export const ErpSidebar = () => {
                     active && 'bg-brand'
                   )}
                 />
-                <Icon className="h-4 w-4" style={{ color: 'var(--brand)' }} />
+                <Icon className="h-4 w-4" style={{ color: active ? 'var(--brand)' : 'var(--sidebar-item-color)' }} />
                 {!sidebarCollapsed && (
-                  <span style={{ color: 'var(--brand)' }}>{item.label}</span>
+                  <span style={{ color: active ? 'var(--brand)' : 'var(--sidebar-item-color)' }}>{item.label}</span>
                 )}
               </button>
             );
           })}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[var(--sidebar-item-hover)]"
+            aria-label={theme === 'dark' ? 'Włącz jasny motyw' : 'Włącz ciemny motyw'}
+            title={theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'}
+            aria-pressed={theme === 'light'}
+          >
+            <span className="h-8 w-[2px] rounded-full bg-transparent" />
+            {theme === 'dark' ? (
+              <Sun className="h-4 w-4" style={{ color: 'var(--sidebar-item-color)' }} />
+            ) : (
+              <Moon className="h-4 w-4" style={{ color: 'var(--sidebar-item-color)' }} />
+            )}
+            {!sidebarCollapsed && (
+              <span style={{ color: 'var(--sidebar-item-color)' }}>
+                {theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'}
+              </span>
+            )}
+          </button>
         </nav>
 
         <div className="rounded-xl border border-border bg-surface2 p-3 shadow-[inset_0_1px_0_var(--inner-highlight)]">
@@ -140,7 +162,7 @@ export const ErpSidebar = () => {
                   <button
                     type="button"
                     onClick={handleLogout}
-                    className="mt-2 flex h-8 w-[calc(100%+3.25rem)] -ml-[3.25rem] items-center rounded-lg pr-2 text-xs text-dim transition hover:bg-[rgba(255,255,255,0.06)] hover:text-title"
+                    className="mt-2 flex h-8 w-[calc(100%+3.25rem)] -ml-[3.25rem] items-center rounded-lg pr-2 text-xs text-dim transition hover:bg-[var(--sidebar-item-active)] hover:text-title"
                   >
                     <span className="flex items-center pl-[3.25rem]">
                       <LogOut className="mr-2 h-3.5 w-3.5" />

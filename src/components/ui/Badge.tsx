@@ -8,7 +8,7 @@ export const Badge = ({
   tone?: 'default' | 'success' | 'warning' | 'danger' | 'info';
 }) => {
   const tones = {
-    default: 'bg-[rgba(255,255,255,0.06)] text-muted border border-[rgba(255,255,255,0.14)]',
+    default: 'bg-[var(--neutral-chip-bg)] text-muted border border-[var(--neutral-chip-border)]',
     success:
       'bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success border border-[color:color-mix(in_srgb,var(--success)_35%,transparent)]',
     warning:

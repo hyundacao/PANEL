@@ -3919,7 +3919,7 @@ export default function SpisRzeczywisty() {
                 {pendingGrindDocuments.map((document, index) => (
                   <div
                     key={document.key}
-                    className="rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(0,0,0,0.48))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+                    className="rounded-2xl border border-[var(--table-frame-border)] bg-[image:var(--table-card-bg)] p-4 shadow-[var(--table-card-shadow)]"
                   >
                     <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_150px] md:items-center">
                       <div className="min-w-0">

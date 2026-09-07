@@ -20,7 +20,7 @@ export const PageHeader = ({
     )}
   >
     <div>
-      <h2 className="text-xl font-semibold" style={{ color: titleColor ?? 'var(--brand)' }}>
+      <h2 className="text-xl font-semibold" style={{ color: titleColor ?? 'var(--page-heading)' }}>
         {title}
       </h2>
       {subtitle && <p className="text-sm text-dim">{subtitle}</p>}

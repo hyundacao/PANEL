@@ -2429,7 +2429,7 @@ export default function PaintTapeSettlementsPage() {
       <Card className="border-0 bg-transparent p-0 shadow-none hover:border-transparent hover:bg-transparent">
         <form
           onSubmit={handleCreate}
-          className="w-full overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.12)] border-t-2 border-t-[var(--accent)] bg-[rgba(15,15,18,0.96)] shadow-[0_24px_70px_rgba(0,0,0,0.28)]"
+          className="w-full overflow-hidden rounded-2xl border border-border border-t-2 border-t-[var(--accent)] bg-[var(--deep-panel-bg)] shadow-[0_24px_70px_rgba(0,0,0,0.28)]"
         >
           <div className="border-b border-[rgba(255,255,255,0.09)] bg-[linear-gradient(135deg,rgba(255,122,0,0.10),rgba(255,255,255,0.015)_55%)] px-6 py-5">
             <h2 className="text-xl font-black text-title">Nowa produkcja</h2>

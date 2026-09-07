@@ -120,7 +120,7 @@ type TesseractLine = {
 };
 
 const textAreaClass =
-  'w-full rounded-xl border border-border bg-[rgba(0,0,0,0.40)] px-3 py-2 text-sm text-body placeholder:text-dim hover:border-borderStrong focus:border-[rgba(255,106,0,0.55)] focus:outline-none focus:ring-2 focus:ring-ring disabled:text-disabled disabled:opacity-55';
+  'w-full rounded-xl border border-border bg-[var(--field-bg)] px-3 py-2 text-sm shadow-[var(--field-shadow)] text-body placeholder:text-dim hover:border-borderStrong focus:border-[rgba(255,106,0,0.55)] focus:outline-none focus:ring-2 focus:ring-ring disabled:text-disabled disabled:opacity-55';
 
 const itemStatusConfig: Record<
   WarehouseTransferItemStatus,
@@ -4494,7 +4494,7 @@ export function WarehouseTransferDocumentsPanel() {
     ? `${filteredHistoryDocuments.length}/${historyDocuments.length}`
     : String(historyDocuments.length);
   const mobileDocumentSectionClass =
-    'space-y-3 rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(0,0,0,0.5))] p-3 shadow-[0_12px_28px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] md:hidden';
+    'space-y-3 rounded-2xl border border-[var(--table-frame-border)] bg-[image:var(--table-card-bg)] p-3 shadow-[var(--table-card-shadow)] md:hidden';
 
   const renderMobileDocumentCards = (docs: Array<(typeof documents)[number]>) => (
     <div className="space-y-2 md:hidden">
@@ -4799,7 +4799,7 @@ export function WarehouseTransferDocumentsPanel() {
                     className={
                       isWarehousemanTab || isDispatcherTab
                         ? 'w-full px-2 py-2'
-                        : 'w-full rounded-xl border border-[rgba(255,255,255,0.1)] bg-[rgba(0,0,0,0.18)] px-3 py-3 transition hover:border-[rgba(255,122,26,0.55)]'
+                        : 'w-full rounded-xl border border-border bg-[var(--inset-panel-bg)] px-3 py-3 transition hover:border-[rgba(255,122,26,0.55)]'
                     }
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -5018,7 +5018,7 @@ export function WarehouseTransferDocumentsPanel() {
                       className={
                         isWarehousemanTab || isDispatcherTab
                           ? 'mt-3 space-y-3'
-                          : 'mt-3 rounded-xl border border-[rgba(255,255,255,0.14)] bg-[rgba(0,0,0,0.22)] px-3 py-3'
+                          : 'mt-3 rounded-xl border border-border bg-[var(--inset-panel-bg)] px-3 py-3'
                       }
                     >
                       {!isWarehousemanTab && !isDispatcherTab && (
@@ -5589,7 +5589,7 @@ export function WarehouseTransferDocumentsPanel() {
             </div>
             <div>
               <label className="text-xs uppercase tracking-wide text-dim">Rodzaj dokumentu</label>
-              <div className="flex h-[42px] w-full overflow-hidden rounded-xl border border-border bg-[rgba(0,0,0,0.40)]">
+              <div className="flex h-[42px] w-full overflow-hidden rounded-xl border border-border bg-[var(--segmented-bg)]">
                 {WAREHOUSE_TRANSFER_FLOW_KIND_OPTIONS.map((flowKind) => {
                   const active = form.documentFlowKind === flowKind;
                   return (
@@ -6423,7 +6423,7 @@ export function WarehouseTransferDocumentsPanel() {
             />
             <div className="fixed inset-0 z-[993] flex items-center justify-center p-4">
               <div className="w-full max-w-lg" onClick={(event) => event.stopPropagation()}>
-                <Card className="space-y-4 border-[color:color-mix(in_srgb,var(--brand)_42%,var(--border))] bg-[linear-gradient(180deg,rgba(17,17,20,0.98),rgba(10,10,12,0.98))]">
+                <Card className="space-y-4 border-[color:color-mix(in_srgb,var(--brand)_42%,var(--border))] bg-[var(--modal-bg)] shadow-[var(--modal-shadow)]">
                   <p className="text-xs font-semibold uppercase tracking-wide text-brand">
                     Potwierdzenie wydania
                   </p>

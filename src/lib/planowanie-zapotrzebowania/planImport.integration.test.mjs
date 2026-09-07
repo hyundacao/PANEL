@@ -12,8 +12,8 @@ const ts = require('typescript');
 const source = readFileSync(pageFile,'utf8');
 const ast = ts.createSourceFile('page.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const directQuantityEditing = source.includes('const updatePlanQuantity =');
-const names = ['uid','numberValue','normalize','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','PACKAGING_CATEGORIES','splitProductFields','stationKey','applyStationMappings','materialKey','materialIdentityMatches','isPackagingMaterial','technologyMaterialsForMode','migrateLegacyEmergencyTechnologies','normalizedMaterialUnit','isKilogramUnit','isGramUnit','isThousandPiecesUnit','technologyResultUnit','technologyResultQuantity','roundTechnologyMaterialQuantity','canonicalProductIndex','linkedProductKey','linkedProductMatchesPlanItem','linkedSourceSelectionForItem','linkedMachineProductQuantity','linkedWarehouseProductQuantity','linkedSurplusQuantity','normalizeLinkedSources','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
-  'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','shiftNormForItem','plannedItemProductionQty','itemProductionQty','planQuantityNeedsReview','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','deriveReturnsForDate','syncOriginalInventory'];
+const names = ['uid','numberValue','normalize','productIdentityMatches','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','inferPickingWarehouseCode','pickingWarehouseCode','sortPickingDocumentRows','PACKAGING_CATEGORIES','splitProductFields','stationKey','applyStationMappings','materialKey','materialIdentityMatches','isPackagingMaterial','technologyMaterialsForMode','migrateLegacyEmergencyTechnologies','normalizedMaterialUnit','isKilogramUnit','isGramUnit','isThousandPiecesUnit','technologyResultUnit','technologyResultQuantity','roundTechnologyMaterialQuantity','canonicalProductIndex','linkedProductKey','linkedProductMatchesPlanItem','linkedSourceSelectionForItem','linkedMachineProductQuantity','linkedWarehouseProductQuantity','linkedSurplusQuantity','normalizeLinkedSources','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
+  'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','shiftNormForItem','plannedItemProductionQty','itemProductionQty','planQuantityNeedsReview','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','updatePickingDocumentWarehouse','deriveReturnsForDate','syncOriginalInventory'];
 if (directQuantityEditing) names.push('updatePlanNorm');
 const definitions = new Map();
 const areaCalculationNames = ['technologyForItem','materialsForItem','technologyLinksForItem','linkedProducerCandidates','linkedProducerFor','linkedAllocationByProducer','selectedLinkedAllocationByProducer','fullLinkedAllocationByProducer','materialDemandContributionsForItem','demandByArea','sharedAreaIds','materialSupply','requirementsForArea'];
@@ -61,6 +61,36 @@ const setQuantity = (h,item,value) => {
   if(directQuantityEditing) h.updatePlanQuantity(item.id,value,'edit-'+item.id);
   else { h.ctx.quantityInputs[item.id]=String(value); h.applyQuantityCorrection(item,'exact'); }
 };
+
+test('product technologies match by index, not by a shared name',()=>{
+  const h=setup();
+  const technology={
+    id:'tech-a',productIndex:'A100',productName:'CONTROL PANEL',variant:'base',alternativeNo:0,
+    description:'',notes:'',shiftNorm:500,materials:[],archived:false
+  };
+
+  assert.equal(h.technologyMatchesProduct(technology,'A100','OTHER NAME'),true);
+  assert.equal(h.technologyMatchesProduct(technology,'B200','CONTROL PANEL'),false);
+  assert.equal(h.productIdentityMatches('','','','CONTROL PANEL'),false);
+  assert.equal(h.productIdentityMatches('','CONTROL PANEL','','CONTROL PANEL'),true);
+  assert.equal(h.productIdentityMatches('1882','SYSTEM 300X300','01882','SYSTEM 300X300'),true);
+  assert.equal(h.productIdentityMatches('01882','SYSTEM 300X300','01883','SYSTEM 300X300'),false);
+  assert.equal(h.productIdentityMatches('M-10-1882','SYSTEM 300X300','01882','SYSTEM 300X300'),false);
+
+  const numericTechnology={
+    ...technology,id:'tech-1882',productIndex:'1882',productName:'SYSTEM 300X300',shiftNorm:410
+  };
+  const numericAssigned=h.applyDefaultTechnologyAssignments([
+    {id:'plan-01882',index:'01882',name:'SYSTEM 300X300',technologyId:'',continuationCandidateId:'',shiftNorm:0}
+  ],[numericTechnology]);
+  assert.equal(numericAssigned[0].technologyId,'tech-1882');
+  assert.equal(numericAssigned[0].shiftNorm,410);
+
+  const assigned=h.applyDefaultTechnologyAssignments([
+    {id:'plan-b',index:'B200',name:'CONTROL PANEL',technologyId:'',continuationCandidateId:'',shiftNorm:0}
+  ],[technology]);
+  assert.equal(assigned[0].technologyId,'');
+});
 
 test('technology mass factors are edited in grams without changing stored kilograms',()=>{
   const h=setup();
@@ -168,8 +198,8 @@ test('linked handle follows basket demand and uses packaging only for a future s
     ...h.ctx.state.plan[0],id:'basket',index:'A23587002',name:'IRIS CUTLERY BASKET SPLITABLE ASM',quantityStatus:'parsed',
     technologyId:'basket-tech',totalQty:100,remainingQty:100,shiftNorm:0,scopeMode:'all',included:true,areaId:'hala-2',
     linkedSources:{
-      a23586802:{mode:'production',producerPlanItemId:'handle',productionQuantity:0},
-      a23586602:{mode:'warehouse',producerPlanItemId:'',productionQuantity:0}
+      a23586802:{mode:'warehouse',producerPlanItemId:'handle',productionQuantity:0},
+      a23586602:{mode:'production',producerPlanItemId:'',productionQuantity:0}
     }
   };
   const handle={
@@ -185,8 +215,8 @@ test('linked handle follows basket demand and uses packaging only for a future s
       id:'basket-tech',productIndex:'A23587002',productName:basket.name,
       materials:[material('basket-resin','PP-GREY','PP COMPOUND GREY','Tworzywo',0.412,'kg')],
       linkedProducts:[
-        {id:'handle-link',productIndex:'A23586802',productName:handle.name,usage:2,unit:'szt.'},
-        {id:'lid-link',productIndex:'A23586602',productName:'IRIS CB SPLITABLE LID',usage:2,unit:'szt.'}
+        {id:'handle-link',productIndex:'A23586802',productName:handle.name,usage:2,unit:'szt.',sourcePolicy:'production'},
+        {id:'lid-link',productIndex:'A23586602',productName:'IRIS CB SPLITABLE LID',usage:2,unit:'szt.',sourcePolicy:'warehouse'}
       ]
     },
     {
@@ -200,6 +230,8 @@ test('linked handle follows basket demand and uses packaging only for a future s
   ];
   h.ctx.selectedLinkedAllocationByProducer=new Map([['handle',200]]);
   h.ctx.fullLinkedAllocationByProducer=new Map([['handle',200]]);
+  assert.equal(h.linkedSourceSelectionForItem(basket,h.ctx.state.technologies[0].linkedProducts[0]).mode,'production','handle source is fixed by technology');
+  assert.equal(h.linkedSourceSelectionForItem(basket,h.ctx.state.technologies[0].linkedProducts[1]).mode,'warehouse','lid source is fixed by technology');
   assert.equal(h.itemProductionQty(handle),200,'missing own quantity is filled by basket demand');
   assert.equal(h.planQuantityNeedsReview(handle),false,'linked demand resolves the missing plan quantity');
 
@@ -593,6 +625,19 @@ test('actual calculation never counts unknown quantity or restores a finished ze
   assert.equal(h.itemProductionQty({...h.ctx.state.plan[0],remainingQty:0}),0);
 });
 
+test('document warehouses are inferred from material codes and can be sorted with unassigned rows last',()=>{
+  const h=setup();
+  const rows=[
+    {key:'1',code:'M-10-ABC',name:'Beta',category:'Karton'},
+    {key:'2',code:'123',name:'Alpha',category:'Tworzywo',warehouseCode:'M-4'},
+    {key:'3',code:'456',name:'Gamma',category:'Pozostałe',warehouseCode:''}
+  ];
+  assert.equal(h.inferPickingWarehouseCode('m-10-abc'),'M-10');
+  assert.equal(h.pickingWarehouseCode(rows[1]),'M-4');
+  assert.equal(h.pickingWarehouseCode(rows[2]),'');
+  assert.deepEqual(Array.from(h.sortPickingDocumentRows(rows,'warehouse'),(row)=>row.key),['2','1','3']);
+});
+
 test('actual document actions reject unresolved included rows, but allow deliberate exclusion',()=>{
   const h=setup(); h.importSelectedSheet();
   h.createOrRefreshPickingDocument();
@@ -636,6 +681,31 @@ test('document checklist must be complete before handoff and issued document can
   assert.deepEqual(Array.from(h.ctx.state.documents[0].rows,(row)=>row.confirmed),[false,true]);
 });
 
+test('a completed draft document can be marked as issued directly',()=>{
+  const h=setup();
+  h.ctx.state.documents=[{
+    id:'doc-1',
+    documentNo:'DOC-1',
+    planDate:'2026-08-31',
+    areaId:'hala-2',
+    status:'draft',
+    rows:[{key:'MAT',name:'Material',confirmed:true,toIssue:10}]
+  }];
+  h.changePickingDocumentStatus('doc-1','issued');
+  assert.equal(h.ctx.state.documents[0].status,'issued');
+});
+
+test('warehouse assignment remains editable after a document is issued',()=>{
+  const h=setup();
+  h.ctx.state.documents=[{
+    id:'doc-1',
+    status:'issued',
+    rows:[{key:'MAT',code:'10905',name:'Karton',warehouseCode:'',confirmed:true,toIssue:10}]
+  }];
+  h.updatePickingDocumentWarehouse('doc-1','MAT',' m-4 ');
+  assert.equal(h.ctx.state.documents[0].rows[0].warehouseCode,'M-4');
+});
+
 test('reopening cannot change a read-only, cancelled or older document',()=>{
   const h=setup();
   const row={key:'MAT',name:'Material',confirmed:true,toIssue:10};
@@ -658,7 +728,7 @@ test('reopening cannot change a read-only, cancelled or older document',()=>{
   assert.equal(h.ctx.state.documents[0].rows[0].confirmed,true);
 });
 
-test('document table places the written checkmarks first and exposes progress plus edit rollback',()=>{
+test('document table exposes warehouse organization, Excel export and edit rollback',()=>{
   const documentSource=source.slice(source.indexOf('const renderDocumentV2 ='),source.indexOf('const renderReturnsV2 ='));
   const tableSource=documentSource.slice(documentSource.indexOf('<table'),documentSource.indexOf('</table>'));
   assert.ok(tableSource.indexOf('>Wypisane<')>=0);
@@ -667,11 +737,17 @@ test('document table places the written checkmarks first and exposes progress pl
   assert.ok(!tableSource.includes('>Potwierdzenie<'));
   assert.ok(!tableSource.includes('>Już wydano<'));
   assert.ok(!tableSource.includes('>Oczekuje<'));
-  assert.match(tableSource,/colSpan=\{7\}/);
+  assert.match(tableSource,/>Magazyn</);
+  assert.match(tableSource,/colSpan=\{8\}/);
   assert.ok(!documentSource.includes('Do wydania teraz'));
   assert.ok(!documentSource.includes('Dokumenty dla strefy'));
   assert.ok(!documentSource.includes('Aktualna wersja planu'));
   assert.match(documentSource,/Wszystko wypisane/);
+  assert.match(documentSource,/Filtr magazynu/);
+  assert.match(documentSource,/Eksportuj Excel/);
+  assert.match(documentSource,/Usuń dokument/);
+  assert.ok(!documentSource.includes('>Przekaż<'));
+  assert.ok(!documentSource.includes('>Anuluj<'));
   assert.match(documentSource,/Cofnij do edycji/);
   assert.match(documentSource,/changePickingDocumentStatus\(document\.id, 'draft'\)/);
 });

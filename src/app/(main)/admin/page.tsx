@@ -2824,8 +2824,8 @@ export default function AdminPage() {
       <div className="space-y-10">
         {isHead && activeWarehouse !== 'PRZEMIALY' && (
         <section className="space-y-4">
-          <div className="overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.11)] bg-[rgba(13,14,18,0.88)] shadow-[0_18px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.05)]">
-            <div className="flex flex-col gap-5 border-b border-[rgba(255,255,255,0.09)] bg-[linear-gradient(110deg,rgba(255,122,0,0.13),rgba(255,122,0,0.025)_42%,rgba(124,92,255,0.08))] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+          <div className="overflow-hidden rounded-2xl border border-border bg-[var(--deep-panel-bg)] shadow-[var(--card-shadow)]">
+            <div className="flex flex-col gap-5 border-b border-border bg-[linear-gradient(110deg,rgba(255,122,0,0.13),rgba(255,122,0,0.025)_42%,rgba(124,92,255,0.08))] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
               <div className="space-y-1.5">
                 <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--brand)]">
                   Administracja kont
@@ -2844,7 +2844,7 @@ export default function AdminPage() {
                 </p>
               </div>
             </div>
-            <div className="grid gap-1.5 bg-black/15 p-2 sm:grid-cols-3">
+            <div className="grid gap-1.5 bg-[var(--segmented-bg)] p-2 sm:grid-cols-3">
               <Button
                 type="button"
                 variant="ghost"

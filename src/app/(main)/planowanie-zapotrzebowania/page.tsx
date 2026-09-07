@@ -10,6 +10,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  CircleHelp,
   FileDown,
   FilePlus2,
   Factory,
@@ -100,6 +101,7 @@ type LinkedProduct = {
   productName: string;
   usage: number;
   unit: string;
+  sourcePolicy?: 'select' | 'warehouse' | 'production';
 };
 
 type LinkedSourceMode = 'unselected' | 'warehouse' | 'production' | 'mixed';
@@ -203,6 +205,7 @@ type PickingDocumentRow = {
   key: string;
   code: string;
   name: string;
+  warehouseCode?: string;
   category: MaterialCategory;
   unit: string;
   demand: number;
@@ -328,10 +331,56 @@ const CATEGORIES: MaterialCategory[] = [
 ];
 const CATEGORY_ORDER = new Map(CATEGORIES.map((item, index) => [item, index]));
 const PACKAGING_CATEGORIES = new Set<MaterialCategory>(['Karton', 'Przekładka', 'Opakowanie']);
+const TECHNOLOGY_PRODUCTION_MODE_HELP: Array<{
+  mode: TechnologyProductionMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    mode: 'planned',
+    label: 'Według planu',
+    description: 'Standardowa produkcja. Zapotrzebowanie jest liczone z ilości produktu wpisanej w planie.'
+  },
+  {
+    mode: 'continuous',
+    label: 'Produkcja ciągła',
+    description: 'Produkcja bez jednej zamkniętej ilości. System liczy potrzeby z wydajności na zmianę i wybranego horyzontu.'
+  },
+  {
+    mode: 'linked',
+    label: 'Pod powiązanie',
+    description: 'Półwyrób dla innej pozycji planu. Ilość wynika z przekazania do powiązanej produkcji albo pobrania z magazynu.'
+  }
+];
 const MATERIAL_WAREHOUSE_PRIORITY = ['M-1', 'M-4', 'M-10', 'M-11', 'M-51'] as const;
 const MATERIAL_WAREHOUSE_RANK = new Map<string, number>(
   MATERIAL_WAREHOUSE_PRIORITY.map((warehouseCode, index) => [warehouseCode, index])
 );
+const PICKING_WAREHOUSE_OPTIONS = [...MATERIAL_WAREHOUSE_PRIORITY, 'M-40', 'M-55'] as const;
+type PickingDocumentSort = 'warehouse' | 'material' | 'code';
+const inferPickingWarehouseCode = (code: unknown) =>
+  String(code ?? '').trim().toUpperCase().match(/^(M-\d+)(?:-|$)/)?.[1] ?? '';
+const pickingWarehouseCode = (row: Pick<PickingDocumentRow, 'code' | 'warehouseCode'>) =>
+  row.warehouseCode === undefined
+    ? inferPickingWarehouseCode(row.code)
+    : String(row.warehouseCode).replace(/\s+/g, '').trim().toUpperCase();
+const sortPickingDocumentRows = (rows: PickingDocumentRow[], sort: PickingDocumentSort) => [...rows].sort((left, right) => {
+  const compare = (leftValue: unknown, rightValue: unknown) =>
+    String(leftValue ?? '').localeCompare(String(rightValue ?? ''), 'pl', { numeric: true });
+  if (sort === 'material') return compare(left.name, right.name) || compare(left.code, right.code);
+  if (sort === 'code') return compare(left.code, right.code) || compare(left.name, right.name);
+  const leftWarehouse = pickingWarehouseCode(left);
+  const rightWarehouse = pickingWarehouseCode(right);
+  return compare(leftWarehouse || 'ZZZ', rightWarehouse || 'ZZZ')
+    || compare(left.category, right.category)
+    || compare(left.name, right.name);
+});
+const planCalculationDoneKey = (planDate: string, itemId: string) => `${planDate}|${itemId}`;
+const isPlanCalculationDone = (
+  pickingDone: Record<string, boolean> | undefined,
+  planDate: string,
+  itemId: string
+) => Boolean(pickingDone?.[planCalculationDoneKey(planDate, itemId)]);
 
 const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const numberValue = (value: unknown) => {
@@ -346,6 +395,31 @@ const normalize = (value: unknown) =>
     .replace(/[\u0300-\u036f]/g, '')
     .replaceAll('ł', 'l')
     .trim();
+const productIdentityMatches = (
+  leftIndex: unknown,
+  leftName: unknown,
+  rightIndex: unknown,
+  rightName: unknown
+) => {
+  const comparableIndex = (value: unknown) => {
+    const normalized = normalize(value);
+    return /^\d+$/.test(normalized)
+      ? normalized.replace(/^0+(?=\d)/, '')
+      : normalized;
+  };
+  const normalizedLeftIndex = comparableIndex(leftIndex);
+  const normalizedRightIndex = comparableIndex(rightIndex);
+  if (normalizedLeftIndex || normalizedRightIndex) {
+    return Boolean(
+      normalizedLeftIndex &&
+      normalizedRightIndex &&
+      normalizedLeftIndex === normalizedRightIndex
+    );
+  }
+  const normalizedLeftName = normalize(leftName);
+  const normalizedRightName = normalize(rightName);
+  return Boolean(normalizedLeftName && normalizedLeftName === normalizedRightName);
+};
 const splitProductFields = (name: unknown, index: unknown) => {
   let cleanName = String(name ?? '').replace(/\s+/g, ' ').trim();
   let cleanIndex = String(index ?? '').replace(/\s+/g, ' ').trim();
@@ -431,8 +505,7 @@ const migrateLegacyEmergencyTechnologies = (technologies: Technology[]) => {
     .sort()
     .join('||');
   const sameProduct = (left: Technology, right: Technology) => Boolean(
-    (normalize(left.productIndex) && normalize(left.productIndex) === normalize(right.productIndex)) ||
-    (normalize(left.productName) && normalize(left.productName) === normalize(right.productName))
+    productIdentityMatches(left.productIndex, left.productName, right.productIndex, right.productName)
   );
   const migrated = technologies.map((technology) => ({ ...technology, emergencyMaterials: [] }));
   const alternativeByBaseId: Record<string, string> = {};
@@ -505,8 +578,12 @@ const linkedProductMatchesPlanItem = (
   (canonicalProductIndex(link.productIndex) && canonicalProductIndex(link.productIndex) === canonicalProductIndex(item.index)) ||
   (normalize(link.productName) && normalize(link.productName) === normalize(item.name))
 );
-const linkedSourceSelectionForItem = (item: Pick<PlanItem, 'linkedSources'>, link: LinkedProduct): LinkedSourceSelection =>
-  item.linkedSources?.[linkedProductKey(link)] ?? { mode: 'unselected', producerPlanItemId: '', productionQuantity: 0 };
+const linkedSourceSelectionForItem = (item: Pick<PlanItem, 'linkedSources'>, link: LinkedProduct): LinkedSourceSelection => {
+  const selection = item.linkedSources?.[linkedProductKey(link)] ?? { mode: 'unselected', producerPlanItemId: '', productionQuantity: 0 };
+  return link.sourcePolicy === 'warehouse' || link.sourcePolicy === 'production'
+    ? { ...selection, mode: link.sourcePolicy, productionQuantity: 0 }
+    : selection;
+};
 const linkedMachineProductQuantity = (consumerQuantity: number, selection: LinkedSourceSelection) => {
   const safeQuantity = Math.max(0, Number.isFinite(consumerQuantity) ? consumerQuantity : 0);
   if (selection.mode === 'production') return safeQuantity;
@@ -581,9 +658,11 @@ const cloneMaterials = (items: TechnologyMaterial[]) => items.map((item) => ({ .
 
 const applyDefaultTechnologyAssignments = (plan: PlanItem[], technologies: Technology[]) => plan.map((item) => {
   if (item.technologyId || item.continuationCandidateId) return item;
-  const variants = technologies.filter((technology) => !technology.archived && (
-    normalize(technology.productIndex) === normalize(item.index) ||
-    normalize(technology.productName) === normalize(item.name)
+  const variants = technologies.filter((technology) => !technology.archived && productIdentityMatches(
+    technology.productIndex,
+    technology.productName,
+    item.index,
+    item.name
   ));
   const technology = variants.find((variant) => variant.variant === 'base') ?? (variants.length === 1 ? variants[0] : undefined);
   if (!technology) return item;
@@ -866,7 +945,8 @@ const sameLinkedProducts = (left: LinkedProduct[], right: LinkedProduct[]) =>
       link.productIndex === other.productIndex &&
       link.productName === other.productName &&
       link.usage === other.usage &&
-      link.unit === other.unit;
+      link.unit === other.unit &&
+      (link.sourcePolicy ?? 'select') === (other.sourcePolicy ?? 'select');
   });
 
 const sameTechnologyEditorValue = (left: Technology, right: Technology) =>
@@ -892,8 +972,17 @@ const CALCULATION_UNSAVED_CHANGES_MESSAGE =
   'Masz niezapisane zmiany w tej pozycji planu. Odrzucić je i przejść dalej?';
 
 const cleanImportedTechnologyDescription = (value: unknown) => {
-  const description = String(value ?? '').trim();
-  return /^Import\s*:/i.test(description) ? '' : description;
+  let description = String(value ?? '').trim();
+  if (/^Import\s*:/i.test(description)) return '';
+  description = description
+    .replace(/(?:tworzywo|materia[lł]|pakowanie|opakowanie)\s+(?:zast[eę]pcze|awaryjne)\s*:\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const novodur = description.match(/^(?:(Turcja|MDC)\s*(?:[-+·]\s*)?)?(?:ABS\s+)?NOVODUR(?:\s+P2HP-AT\s+Q202\s+WHITE\s+011236)?$/i);
+  if (novodur) return [novodur[1] ? novodur[1].toUpperCase() === 'MDC' ? 'MDC' : 'Turcja' : '', 'NOVODUR'].filter(Boolean).join(' + ');
+  if (/^RESLEN\s+PPH9\s+T15(?:\s+NT\s+1F0000\s+NATURAL)?$/i.test(description)) return 'RESLEN PPH9 T15';
+  if (/^karton\s+600X400X300\b.*\brozm\.?\s*6$/i.test(description)) return 'Karton rozm. 6';
+  return description;
 };
 
 const parseStoredState = (value: unknown): AppState | null => {
@@ -908,7 +997,7 @@ const parseStoredState = (value: unknown): AppState | null => {
       ...technology,
       productName: product.name,
       productIndex: product.index,
-      description: cleanImportedTechnologyDescription(technology.description),
+      description: technology.variant === 'base' ? '' : cleanImportedTechnologyDescription(technology.description),
       productionMode: technology.productionMode === 'continuous'
         ? 'continuous' as const
         : technology.productionMode === 'linked'
@@ -916,13 +1005,16 @@ const parseStoredState = (value: unknown): AppState | null => {
           : 'planned' as const,
       shiftNorm: Math.max(0, numberValue(technology.shiftNorm)),
       materials: Array.isArray(technology.materials) ? technology.materials : [],
-      linkedProducts: Array.isArray(technology.linkedProducts) ? technology.linkedProducts.map((link) => ({
+      linkedProducts: Array.isArray(technology.linkedProducts) ? technology.linkedProducts.map<LinkedProduct>((link) => ({
         ...link,
         id: String(link.id || uid('link')),
         productIndex: String(link.productIndex ?? '').trim(),
         productName: String(link.productName ?? '').trim(),
         usage: Math.max(0, numberValue(link.usage)),
-        unit: String(link.unit ?? '').trim() || 'szt.'
+        unit: String(link.unit ?? '').trim() || 'szt.',
+        sourcePolicy: link.sourcePolicy === 'warehouse' || link.sourcePolicy === 'production'
+          ? link.sourcePolicy
+          : 'select'
       })) : [],
       surplusMaterials: Array.isArray(technology.surplusMaterials) ? technology.surplusMaterials : [],
       emergencyMaterials: Array.isArray(technology.emergencyMaterials) ? technology.emergencyMaterials : []
@@ -1046,16 +1138,12 @@ const preparePlanningAutosaveState = (state: AppState): AppState => ({
 const technologyLabel = (technology: Technology) =>
   technology.variant === 'base' ? 'Bazowa' : `Awaryjna ${technology.alternativeNo}`;
 
-const technologySelectLabel = (technology: Technology) =>
-  [technologyLabel(technology), cleanImportedTechnologyDescription(technology.description)].filter(Boolean).join(' · ');
+const technologySelectLabel = (technology: Technology) => technology.variant === 'base'
+  ? 'Technologia bazowa'
+  : [technologyLabel(technology), cleanImportedTechnologyDescription(technology.description)].filter(Boolean).join(' · ');
 
 const technologyMatchesProduct = (technology: Technology, productIndex: string, productName: string) => {
-  const normalizedIndex = normalize(productIndex);
-  const normalizedName = normalize(productName);
-  return Boolean(
-    (normalizedIndex && normalize(technology.productIndex) === normalizedIndex) ||
-    (normalizedName && normalize(technology.productName) === normalizedName)
-  );
+  return productIdentityMatches(technology.productIndex, technology.productName, productIndex, productName);
 };
 
 const selectedTechnologyForEditor = (technologies: Technology[], editingTechnologyId: string) =>
@@ -1291,7 +1379,7 @@ const ProductCatalogField = ({
           }}
         />
         {open && suggestions.length > 0 ? (
-          <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-40 max-h-72 overflow-y-auto rounded-xl border border-borderStrong bg-[rgba(13,13,16,0.98)] p-1.5 normal-case tracking-normal shadow-2xl">
+          <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-40 max-h-72 overflow-y-auto rounded-xl border border-borderStrong bg-[image:var(--popover-bg)] p-1.5 normal-case tracking-normal shadow-2xl">
             {suggestions.map((item) => (
               <button
                 key={`${item.id}|${item.index}|${item.name}`}
@@ -1516,7 +1604,7 @@ const MaterialCatalogInput = forwardRef<HTMLInputElement, MaterialCatalogInputPr
         {catalogSearch.loading ? <p className="px-3 py-3 text-sm text-muted">Wyszukiwanie...</p> : suggestions.length ? suggestions.map((item) => <button
           key={item.id}
           type="button"
-          className="block w-full rounded-lg px-3 py-2.5 text-left transition hover:bg-[rgba(255,255,255,0.06)] focus:bg-[rgba(255,255,255,0.06)] focus:outline-none"
+          className="block w-full rounded-lg px-3 py-2.5 text-left transition hover:bg-[var(--row-hover)] focus:bg-[var(--row-hover)] focus:outline-none"
           onMouseDown={(event) => {
             event.preventDefault();
             selectItem(item);
@@ -1550,7 +1638,7 @@ const Input = forwardRef<HTMLInputElement, MaterialAwareInputProps>(({ onCatalog
 Input.displayName = 'MaterialAwareInput';
 
 const Stat = ({ label, value, tone = 'default' }: { label: string; value: string; tone?: 'default' | 'warning' | 'success' }) => (
-  <div className={cn('rounded-2xl border border-border bg-[rgba(255,255,255,0.035)] p-4', tone === 'warning' && 'border-[color:color-mix(in_srgb,var(--warning)_42%,transparent)]', tone === 'success' && 'border-[color:color-mix(in_srgb,var(--success)_42%,transparent)]')}>
+  <div className={cn('rounded-2xl border border-border bg-[var(--surface-soft)] p-4', tone === 'warning' && 'border-[color:color-mix(in_srgb,var(--warning)_42%,transparent)]', tone === 'success' && 'border-[color:color-mix(in_srgb,var(--success)_42%,transparent)]')}>
     <p className="text-xs font-semibold uppercase tracking-wide text-dim">{label}</p>
     <p className="mt-2 text-2xl font-black text-title">{value}</p>
   </div>
@@ -1605,6 +1693,8 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const [technologyPanel, setTechnologyPanel] = useState<'editor' | 'list'>('editor');
   const [expandedDocument, setExpandedDocument] = useState('');
   const [expandedMaterial, setExpandedMaterial] = useState('');
+  const [documentWarehouseFilter, setDocumentWarehouseFilter] = useState('all');
+  const [documentSort, setDocumentSort] = useState<PickingDocumentSort>('warehouse');
   const [editingTechnologyId, setEditingTechnologyId] = useState('');
   const [technologyDraft, setTechnologyDraft] = useState<Technology>(emptyTechnologyDraft);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1874,7 +1964,9 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     if (!state.areas.some((area) => area.id === areaId && !area.shared)) return;
     if (selectPlanningArea(areaId)) setShowAllPlanAreas(false);
   };
-  const technologiesFor = (item: Pick<PlanItem, 'index' | 'name'>) => state.technologies.filter((technology) => !technology.archived && (normalize(technology.productIndex) === normalize(item.index) || normalize(technology.productName) === normalize(item.name)));
+  const technologiesFor = (item: Pick<PlanItem, 'index' | 'name'>) => state.technologies.filter((technology) => (
+    !technology.archived && technologyMatchesProduct(technology, item.index, item.name)
+  ));
   const technologyForItem = (item: PlanItem) => state.technologies.find((technology) => technology.id === item.technologyId);
   const materialsForItem = (item: PlanItem) => item.workingMaterials ?? technologyForItem(item)?.materials ?? [];
 
@@ -2155,20 +2247,67 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   });
   const allVisiblePlanIncluded = visibleAreaPlan.length > 0 && visibleAreaPlan.every((item) => item.included);
   const someVisiblePlanIncluded = visibleAreaPlan.some((item) => item.included);
-  const setVisiblePlanIncluded = (included: boolean) => {
-    if (readOnly || !visibleAreaPlan.some((item) => item.included !== included)) return;
-    const visibleIds = new Set(visibleAreaPlan.map((item) => item.id));
+  const calculatedVisiblePlanCount = visibleAreaPlan.filter((item) =>
+    isPlanCalculationDone(state.pickingDone, state.selectedPlanDate, item.id)
+  ).length;
+  const updatePlanItemsIncluded = (itemIds: string[], included: boolean) => {
+    if (readOnly || !itemIds.length) return;
+    const ids = new Set(itemIds);
     const planDate = state.selectedPlanDate;
     updateState((current) => {
       if (current.selectedPlanDate !== planDate) return current;
       let changed = false;
+      const pickingDone = { ...(current.pickingDone ?? {}) };
+      if (included) {
+        ids.forEach((itemId) => {
+          const key = planCalculationDoneKey(planDate, itemId);
+          if (!pickingDone[key]) return;
+          delete pickingDone[key];
+          changed = true;
+        });
+      }
       const plan = current.plan.map((item) => {
-        if (!visibleIds.has(item.id) || item.included === included) return item;
+        if (!ids.has(item.id) || item.included === included) return item;
         changed = true;
         return { ...item, included };
       });
-      return changed ? { ...current, plan } : current;
+      return changed ? {
+        ...current,
+        plan,
+        pickingDone,
+        documents: current.documents.map((document) =>
+          document.planDate === planDate && document.status === 'draft'
+            ? { ...document, status: 'outdated' as const }
+            : document)
+      } : current;
     });
+  };
+  const togglePlanItemCalculated = (itemId: string) => {
+    if (readOnly) return;
+    const planDate = state.selectedPlanDate;
+    updateState((current) => {
+      if (current.selectedPlanDate !== planDate) return current;
+      const key = planCalculationDoneKey(planDate, itemId);
+      const calculated = !current.pickingDone?.[key];
+      const pickingDone = { ...(current.pickingDone ?? {}) };
+      if (calculated) pickingDone[key] = true;
+      else delete pickingDone[key];
+      return {
+        ...current,
+        pickingDone,
+        plan: current.plan.map((item) => item.id === itemId
+          ? { ...item, included: !calculated }
+          : item),
+        documents: current.documents.map((document) =>
+          document.planDate === planDate && document.status === 'draft'
+            ? { ...document, status: 'outdated' as const }
+            : document)
+      };
+    });
+  };
+  const setVisiblePlanIncluded = (included: boolean) => {
+    if (readOnly || !visibleAreaPlan.some((item) => item.included !== included)) return;
+    updatePlanItemsIncluded(visibleAreaPlan.map((item) => item.id), included);
   };
   const quantityResolvedPlanItemIds = new Set(state.plan
     .filter((item) => {
@@ -2259,8 +2398,8 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
           };
         }
         const candidate = suspended.find((entry) => planItemSignature(entry.planItem) === signature);
-        const variants = current.technologies.filter((technology) => !technology.archived && (
-          normalize(technology.productIndex) === normalize(incoming.index) || normalize(technology.productName) === normalize(incoming.name)
+        const variants = current.technologies.filter((technology) => (
+          !technology.archived && technologyMatchesProduct(technology, incoming.index, incoming.name)
         ));
         const defaultTechnology = variants.find((technology) => technology.variant === 'base') ?? (variants.length === 1 ? variants[0] : undefined);
         return {
@@ -2333,11 +2472,12 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     setState((current) => {
       const dailyPlans = { ...current.dailyPlans, [current.selectedPlanDate]: clonePlanItems(current.plan) };
       const latest = latestPlanVersion(current.planVersions, planDate);
+      const selectedPlan = clonePlanItems(dailyPlans[planDate] ?? latest?.items ?? []);
       return {
         ...current,
         selectedPlanDate: planDate,
         activePlanVersionId: latest?.id ?? '',
-        plan: clonePlanItems(dailyPlans[planDate] ?? latest?.items ?? []),
+        plan: applyDefaultTechnologyAssignments(selectedPlan, current.technologies),
         dailyPlans,
         planName: latest?.fileName ?? '',
         planSheet: latest?.sheetName ?? '',
@@ -2507,12 +2647,9 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   };
 
   const planShiftNormForProduct = (productIndex: string, productName: string) => {
-    const normalizedIndex = normalize(productIndex);
-    const normalizedName = normalize(productName);
     return state.plan.find((item) =>
       item.shiftNorm > 0 &&
-      ((normalizedIndex && normalize(item.index) === normalizedIndex) ||
-        (normalizedName && normalize(item.name) === normalizedName))
+      productIdentityMatches(item.index, item.name, productIndex, productName)
     )?.shiftNorm ?? 0;
   };
 
@@ -2565,7 +2702,9 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const saveTechnologyEditor = () => {
     const productIndex = technologyDraft.productIndex.trim();
     const productName = technologyDraft.productName.trim();
-    const description = cleanImportedTechnologyDescription(technologyDraft.description);
+    const description = technologyDraft.variant === 'base'
+      ? ''
+      : cleanImportedTechnologyDescription(technologyDraft.description);
     if (!productIndex || !productName) {
       flash('Wybierz indeks i nazwę produktu przed zapisaniem technologii.');
       return;
@@ -2761,18 +2900,18 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       if (!item.productionGroupId) return;
       productionGroups[item.productionGroupId] = [...(productionGroups[item.productionGroupId] ?? []), item];
     });
-    const planGridColumns = 'grid-cols-[80px_minmax(300px,1.65fr)_176px_190px_88px_minmax(300px,1.3fr)_56px]';
+    const planGridColumns = 'grid-cols-[80px_minmax(300px,1.55fr)_176px_190px_88px_minmax(280px,1.2fr)_126px_56px]';
     return <section className={cn('overflow-hidden border-y border-border', tone === 'emergency' && 'border-[rgba(239,68,68,0.42)]', tone === 'planned' && 'border-[rgba(183,122,255,0.45)]')}>
       {showSectionHeader ? <div className={cn('flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2.5', tone === 'planned' && 'border-[rgba(183,122,255,0.25)]')}>
         <div>
-          <p className={cn('font-bold text-title', tone === 'emergency' && 'text-red-300', tone === 'planned' && 'text-[#debaff]')}>{title}</p>
+          <p className={cn('font-bold text-title', tone === 'emergency' && 'text-danger', tone === 'planned' && 'text-[var(--future)]')}>{title}</p>
           {subtitle ? <p className="mt-0.5 text-xs text-muted">{subtitle}</p> : null}
         </div>
         <Badge tone={tone === 'emergency' ? 'danger' : tone === 'planned' ? 'info' : 'default'}>{items.length} detali</Badge>
       </div> : null}
       <div className="overflow-x-auto">
-        <div className="min-w-[1190px] pb-2 text-sm">
-          <div className={cn('sticky top-0 z-10 grid items-center border-b border-border bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim', planGridColumns)}>
+        <div className="min-w-[1320px] pb-2 text-sm">
+          <div className={cn('sticky top-0 z-10 grid items-center border-b border-border bg-[image:var(--table-sticky-header-bg)] text-left text-[11px] uppercase text-dim', planGridColumns)}>
             <div className="flex items-center gap-1 px-2 py-2">
               <button
                 type="button"
@@ -2796,7 +2935,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
               <span>Uwzgl.</span>
             </div><div className="p-3">Indeks / nazwa</div><div className="p-3">Stanowisko / strefa</div>
             <div className="p-3 text-right">Ilość do zrobienia</div>
-            <div className="p-3 text-right">Norma</div><div className="p-3">Technologia</div><div className="p-3"><span className="sr-only">Szczegóły</span></div>
+            <div className="p-3 text-right">Norma</div><div className="p-3">Technologia</div><div className="p-3 text-center">Przeliczone</div><div className="p-3"><span className="sr-only">Szczegóły</span></div>
           </div>
           <div>{items.map((item) => {
             const variants = technologiesFor(item);
@@ -2806,21 +2945,22 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
             const firstProductionOutput = !item.productionGroupId || productionItems[0]?.id === item.id;
             const productionIncluded = productionItems.every((entry) => entry.included);
             const readyTechnologies = productionItems.filter((entry) => entry.technologyId).length;
+            const calculated = isPlanCalculationDone(state.pickingDone, state.selectedPlanDate, item.id);
             return <Fragment key={item.id}>
-              {item.productionGroupId && firstProductionOutput ? <div className="flex min-h-14 items-center gap-3 border-b border-t border-borderStrong border-l-4 border-l-brand bg-[rgba(255,122,26,0.06)] px-3 py-2.5">
-                <button type="button" title={productionIncluded ? 'Wyłącz całą wspólną produkcję z obliczeń' : 'Uwzględnij całą wspólną produkcję w obliczeniach'} aria-pressed={productionIncluded} disabled={readOnly} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.productionGroupId === item.productionGroupId ? { ...row, included: !productionIncluded } : row) }))} className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border disabled:cursor-not-allowed', productionIncluded ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_18%,transparent)] text-success' : 'border-border text-dim')}>{productionIncluded ? <Check className="h-4 w-4" /> : null}</button>
-                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5"><Badge tone="info">Wspólna forma</Badge><span className="font-bold text-title">{productionItems.length} {productionItems.length < 5 ? 'detale' : 'detali'}</span><span className="h-4 w-px bg-[rgba(255,255,255,0.16)]" aria-hidden="true" /><span className="text-xs font-semibold text-muted">{item.station || 'Brak stanowiska'} · {item.areaId ? areaName(item.areaId) : 'Brak strefy'} · {fmt(item.shiftNorm)} szt. każdego detalu / zmianę</span></div>
+              {item.productionGroupId && firstProductionOutput ? <div className="flex min-h-14 items-center gap-3 border-b border-t border-borderStrong border-l-4 border-l-brand bg-[var(--brand-faint)] px-3 py-2.5">
+                <button type="button" title={productionIncluded ? 'Wyłącz całą wspólną produkcję z obliczeń' : 'Uwzględnij całą wspólną produkcję w obliczeniach'} aria-pressed={productionIncluded} disabled={readOnly} onClick={() => updatePlanItemsIncluded(productionItems.map((row) => row.id), !productionIncluded)} className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border disabled:cursor-not-allowed', productionIncluded ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_18%,transparent)] text-success' : 'border-border text-dim')}>{productionIncluded ? <Check className="h-4 w-4" /> : null}</button>
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5"><Badge tone="info">Wspólna forma</Badge><span className="font-bold text-title">{productionItems.length} {productionItems.length < 5 ? 'detale' : 'detali'}</span><span className="h-4 w-px bg-[var(--border-strong)]" aria-hidden="true" /><span className="text-xs font-semibold text-muted">{item.station || 'Brak stanowiska'} · {item.areaId ? areaName(item.areaId) : 'Brak strefy'} · {fmt(item.shiftNorm)} szt. każdego detalu / zmianę</span></div>
                 <Badge tone={readyTechnologies === productionItems.length ? 'success' : 'warning'}>Technologie {readyTechnologies}/{productionItems.length}</Badge>
               </div> : null}
               <div data-plan-item={item.id} data-expanded={expanded ? 'true' : 'false'} className={cn('relative overflow-hidden border-b border-border transition', expanded && 'border-y border-[rgba(255,122,26,0.58)] shadow-[0_16px_34px_-30px_rgba(255,106,0,0.9)]', tone === 'emergency' && !expanded && 'border-[rgba(239,68,68,0.35)]', tone === 'planned' && !expanded && 'border-[rgba(183,122,255,0.28)]')}>
                 {expanded ? <span className="absolute inset-y-0 left-0 z-10 w-1 bg-brand" aria-hidden="true" /> : null}
-                <div className={cn('grid min-h-[76px] items-center', planGridColumns, expanded ? 'bg-[rgba(255,255,255,0.055)]' : 'bg-[rgba(7,8,11,0.5)]', !item.included && 'text-dim')}>
-                <div className="p-3">{item.productionGroupId ? <span title={`Detal ${(item.productionOutputOrder ?? 0) + 1} z ${item.productionOutputCount}`} className={cn('flex h-9 w-9 items-center justify-center rounded-lg border text-xs font-black', expanded ? 'border-brand bg-brandSoft text-brand' : 'border-border text-muted')}>{(item.productionOutputOrder ?? 0) + 1}</span> : <button type="button" title={item.included ? 'Wyłącz z obliczeń' : 'Uwzględnij w obliczeniach'} aria-pressed={item.included} disabled={readOnly} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, included: !row.included } : row) }))} className={cn('flex h-11 w-11 items-center justify-center rounded-lg border disabled:cursor-not-allowed', item.included ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_18%,transparent)] text-success' : 'border-border text-dim')}>{item.included ? <Check className="h-4 w-4" /> : null}</button>}</div>
+                <div className={cn('grid min-h-[76px] items-center', planGridColumns, expanded ? 'bg-[var(--row-hover)]' : 'bg-[var(--row-flat)]', calculated && !expanded && 'bg-[rgba(34,197,94,0.06)]', !item.included && 'text-dim')}>
+                <div className="p-3">{item.productionGroupId ? <span title={`Detal ${(item.productionOutputOrder ?? 0) + 1} z ${item.productionOutputCount}`} className={cn('flex h-9 w-9 items-center justify-center rounded-lg border text-xs font-black', expanded ? 'border-brand bg-brandSoft text-brand' : 'border-border text-muted')}>{(item.productionOutputOrder ?? 0) + 1}</span> : <button type="button" title={item.included ? 'Wyłącz z obliczeń' : 'Uwzględnij w obliczeniach'} aria-pressed={item.included} disabled={readOnly} onClick={() => updatePlanItemsIncluded([item.id], !item.included)} className={cn('flex h-11 w-11 items-center justify-center rounded-lg border disabled:cursor-not-allowed', item.included ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_18%,transparent)] text-success' : 'border-border text-dim')}>{item.included ? <Check className="h-4 w-4" /> : null}</button>}</div>
                 <div className="p-3">
                   <div className="flex flex-wrap items-center gap-1.5"><p className="break-words font-normal text-title">{item.index}</p>{tone === 'emergency' ? <Badge tone="danger">Awaryjna</Badge> : null}{tone === 'planned' ? <Badge tone="info">Przyszła</Badge> : null}{corrected ? <Badge tone="warning">Zmieniona ręcznie</Badge> : null}</div>
                   {normalize(item.name) !== normalize(item.index) ? <p className="catalog-label mt-1 break-words font-bold">{item.name}</p> : null}
                   {item.notes ? <p className="mt-1 whitespace-pre-line break-words text-xs text-muted">{item.notes}</p> : null}
-                  {item.plannedDate ? <p className="mt-1 text-xs text-[#debaff]">Termin: {item.plannedDate}</p> : null}
+                  {item.plannedDate ? <p className="mt-1 text-xs text-[var(--future)]">Termin: {item.plannedDate}</p> : null}
                 </div>
                 <div className="p-3">
                   <p className="text-base font-black text-title">{item.station || 'Brak stanowiska'}</p>
@@ -2831,11 +2971,30 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                 <div className="p-3 text-right"><PlanQuantity item={item} productionMode={technologyForItem(item)?.productionMode} calculatedQuantity={itemProductionQty(item)} shiftNorm={shiftNormForItem(item)} /></div>
                 <div className="p-3 text-right text-base font-bold text-title">{fmt(shiftNormForItem(item))}</div>
                 <div className="p-3">{variants.length ? <SelectField className="min-h-11 rounded-lg shadow-none" value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}><option value="">Wybierz technologię</option>{variants.map((technology) => <option key={technology.id} value={technology.id}>{technologySelectLabel(technology)}</option>)}</SelectField> : <Button variant="outline" className="h-11 min-h-11 w-full max-w-[180px] rounded-lg shadow-none" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button>}{!item.technologyId ? <p className="mt-1.5 flex items-center gap-1.5 text-xs font-bold text-danger"><AlertTriangle className="h-3.5 w-3.5" />Brak technologii</p> : item.manualOverride ? <p className="mt-1.5 text-xs font-bold text-warning">Technologia robocza</p> : <p className="mt-1.5 text-xs font-semibold text-success">Gotowa</p>}</div>
+                <div className="flex justify-center p-3">
+                  <button
+                    type="button"
+                    aria-label={calculated ? `Przywróć do obliczeń: ${item.index}` : `Oznacz jako przeliczone: ${item.index}`}
+                    aria-pressed={calculated}
+                    title={calculated ? 'Przywróć indeks do dzisiejszych obliczeń' : 'Oznacz indeks jako przeliczony i wyłącz z dzisiejszych obliczeń'}
+                    disabled={readOnly}
+                    onClick={() => togglePlanItemCalculated(item.id)}
+                    className={cn(
+                      'inline-flex h-10 min-w-[106px] items-center justify-center gap-2 rounded-lg border px-2.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-55',
+                      calculated
+                        ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_16%,transparent)] text-success'
+                        : 'border-border text-muted hover:border-success hover:text-title'
+                    )}
+                  >
+                    <span className={cn('flex h-4 w-4 items-center justify-center rounded border', calculated ? 'border-success bg-success text-white' : 'border-border')} aria-hidden="true">{calculated ? <Check className="h-3 w-3" /> : null}</span>
+                    {calculated ? 'Przeliczone' : 'Oznacz'}
+                  </button>
+                </div>
                 <div className="p-3"><button type="button" title={expanded ? 'Zwiń pozycję' : 'Rozwiń pozycję'} aria-expanded={expanded} className={cn('flex h-11 w-11 items-center justify-center rounded-lg border text-muted hover:border-brand hover:text-title', expanded ? 'border-brand bg-brandSoft text-title' : 'border-border')} onClick={() => toggleCalculationEditor(item.id, 'plan')}>{expanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}</button></div>
                 </div>
               {expanded ? <>
-                <div data-plan-details={item.id} className="border-t border-borderStrong bg-[rgba(23,25,36,0.72)]">{renderCalculationDetails(item)}</div>
-                <div data-plan-separator={item.id} aria-hidden="true" className="h-2 border-t border-[rgba(255,122,26,0.22)] bg-[rgba(5,6,9,0.78)]" />
+                <div data-plan-details={item.id} className="border-t border-borderStrong bg-[var(--row-details-bg)]">{renderCalculationDetails(item)}</div>
+                <div data-plan-separator={item.id} aria-hidden="true" className="h-2 border-t border-[rgba(255,122,26,0.22)] bg-[var(--separator-bg)]" />
               </> : null}
               </div>
             </Fragment>;
@@ -2848,7 +3007,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const renderPlan = () => <div className="space-y-3">
     <input ref={fileInputRef} className="hidden" type="file" accept=".xlsx,.xls,.csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleWorkbook(file, 'plan', planUploadModeRef.current === 'update' ? state.planSheet : undefined); event.target.value = ''; }} />
 
-    <section className="overflow-hidden border-y border-border bg-[rgba(255,255,255,0.018)]">
+    <section className="overflow-hidden border-y border-border bg-[var(--surface-faint)]">
       <div className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-3 py-3 md:px-4">
         <h1 className="text-xl font-bold text-title">Plan produkcyjny</h1>
         <div className="flex items-center gap-3">
@@ -2896,7 +3055,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
             : <p className="flex h-[52px] max-h-[52px] min-h-[52px] items-center text-sm font-semibold text-muted">{showAllPlanAreas ? 'Wybierz strefę' : areaName(state.selectedAreaId)}</p>}
         </div>
       </div>
-      <div className={cn('grid gap-3 border-t border-border bg-[rgba(0,0,0,0.12)] p-3 md:grid-cols-2 xl:items-end', readOnly ? 'xl:grid-cols-[minmax(240px,1.15fr)_minmax(180px,0.65fr)_minmax(300px,1fr)]' : 'xl:grid-cols-[minmax(240px,1.15fr)_minmax(210px,0.75fr)_minmax(260px,1fr)_auto]')}>
+      <div className={cn('grid gap-3 border-t border-border bg-[image:var(--row-alt)] p-3 md:grid-cols-2 xl:items-end', readOnly ? 'xl:grid-cols-[minmax(240px,1.15fr)_minmax(180px,0.65fr)_minmax(300px,1fr)]' : 'xl:grid-cols-[minmax(240px,1.15fr)_minmax(210px,0.75fr)_minmax(260px,1fr)_auto]')}>
         <div className="min-w-0 border-l-2 border-brand pl-3">
           <p className="text-xs font-semibold text-dim">{pendingPlanWorkbook ? 'Plik do wczytania' : 'Wgrany plik'}</p>
           <p className="mt-1 min-w-0 break-words text-sm font-semibold text-title">{planImportWorkbook?.fileName || currentPlanVersion?.fileName || state.planName || 'Brak pliku'}</p>
@@ -2934,13 +3093,16 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     </section>
 
     {pending?.purpose === 'inventory' ? renderPendingImport() : null}
-    <PlanQuantityWarnings items={areaPlan} resolvedItemIds={quantityResolvedPlanItemIds} />
+    <PlanQuantityWarnings items={areaPlan.filter((item) =>
+      !isPlanCalculationDone(state.pickingDone, state.selectedPlanDate, item.id)
+    )} resolvedItemIds={quantityResolvedPlanItemIds} />
 
     {state.plan.length ? <div className="space-y-3">
-      <div className="flex flex-col gap-3 border-y border-border bg-[rgba(255,255,255,0.025)] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-col gap-3 border-y border-border bg-[var(--surface-faint)] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 items-center gap-2.5">
           <p className="text-base font-bold text-title">Produkty do realizacji</p>
           <Badge tone="info">{visibleAreaPlan.length} {visibleAreaPlan.length === 1 ? 'pozycja' : visibleAreaPlan.length > 1 && visibleAreaPlan.length < 5 ? 'pozycje' : 'pozycji'}</Badge>
+          {calculatedVisiblePlanCount ? <Badge tone="success">Przeliczone: {calculatedVisiblePlanCount}</Badge> : null}
         </div>
         <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto" data-plan-list-filters>
           <label className="relative block min-w-0 flex-1 lg:w-[340px]">
@@ -3077,7 +3239,8 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       productIndex: '',
       productName: '',
       usage: 1,
-      unit: 'szt.'
+      unit: 'szt.',
+      sourcePolicy: 'select'
     }]);
     const renderEditorMaterialsTable = (field: 'materials' | 'surplusMaterials', emptyText: string) => {
       const materials = editorTechnology[field] ?? [];
@@ -3087,12 +3250,12 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         : materials;
       if (!materials.length) return <p className="border-y border-border py-4 text-sm text-muted">{emptyText}</p>;
       if (!visibleMaterials.length) return <p className="border-y border-border py-4 text-sm text-muted">Brak materiałów pasujących do wyszukiwania.</p>;
-      const compactInputClass = 'min-h-9 rounded-none border-0 bg-transparent px-2 py-1 text-xs shadow-none focus:bg-[rgba(255,122,26,0.06)] focus:ring-1';
-      return <div className="overflow-x-auto rounded-lg border border-borderStrong bg-[rgba(0,0,0,0.16)]">
+      const compactInputClass = 'min-h-9 rounded-none border-0 bg-transparent px-2 py-1 text-xs shadow-none focus:bg-[var(--brand-faint)] focus:ring-1';
+      return <div className="overflow-x-auto rounded-lg border border-borderStrong bg-[image:var(--table-frame-bg)]">
         <table className="w-full min-w-[1144px] table-fixed text-xs">
           <colgroup><col className="w-[220px]" /><col className="w-[480px]" /><col className="w-[150px]" /><col className="w-[150px]" /><col className="w-[100px]" /><col className="w-[44px]" /></colgroup>
-          <thead className="bg-[rgba(255,255,255,0.045)] text-left text-[10px] uppercase text-dim"><tr><th className="border-r border-border px-2 py-1.5">Kod</th><th className="border-r border-border px-2 py-1.5">Nazwa materiału</th><th className="border-r border-border px-2 py-1.5">Rodzaj</th><th className="border-r border-border px-2 py-1.5">Przelicznik / szt.</th><th className="border-r border-border px-2 py-1.5">J.m. wyniku</th><th><span className="sr-only">Akcje</span></th></tr></thead>
-          <tbody>{visibleMaterials.map((material) => <tr key={material.id} className="border-t border-border transition hover:bg-[rgba(255,255,255,0.025)]">
+          <thead className="bg-[image:var(--table-header-bg)] text-left text-[10px] uppercase text-dim"><tr><th className="border-r border-border px-2 py-1.5">Kod</th><th className="border-r border-border px-2 py-1.5">Nazwa materiału</th><th className="border-r border-border px-2 py-1.5">Rodzaj</th><th className="border-r border-border px-2 py-1.5">Przelicznik / szt.</th><th className="border-r border-border px-2 py-1.5">J.m. wyniku</th><th><span className="sr-only">Akcje</span></th></tr></thead>
+          <tbody>{visibleMaterials.map((material) => <tr key={material.id} className="border-t border-border transition hover:bg-[var(--surface-faint)]">
             <td className="border-r border-border p-0"><Input className={cn(compactInputClass, 'font-semibold text-title')} list="material-code-suggestions" value={material.code} onCatalogSelect={(item) => selectEditorMaterial(field, material.id, item)} onChange={(event) => updateEditorMaterials(field, (rows) => rows.map((row) => row.id === material.id ? { ...row, code: event.target.value } : row))} /></td>
             <td className="border-r border-border p-0"><Input className={compactInputClass} list="material-name-suggestions" title={material.name} value={material.name} onCatalogSelect={(item) => selectEditorMaterial(field, material.id, item)} onChange={(event) => updateEditorMaterials(field, (rows) => rows.map((row) => row.id === material.id ? { ...row, name: event.target.value } : row))} /></td>
             <td className="border-r border-border p-0"><SelectField className="min-h-9 rounded-none border-0 bg-[none] px-2 py-1 text-xs shadow-none ring-0 focus:ring-1" value={material.category} onChange={(event) => updateEditorMaterials(field, (rows) => rows.map((row) => row.id === material.id ? { ...row, category: event.target.value as MaterialCategory } : row))}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td>
@@ -3152,7 +3315,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                 return <button
                   key={group.key}
                   onClick={() => openTechnologyEditor(primary.id)}
-                  className={cn('w-full rounded-lg border p-3 text-left transition', selectedGroup ? 'border-[rgba(255,122,26,0.75)] bg-brandSoft' : 'border-border bg-[rgba(255,255,255,0.025)] hover:border-borderStrong')}
+                  className={cn('w-full rounded-lg border p-3 text-left transition', selectedGroup ? 'border-[rgba(255,122,26,0.75)] bg-brandSoft' : 'border-border bg-[var(--surface-faint)] hover:border-borderStrong')}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <Badge tone={primary.variant === 'base' ? 'success' : 'info'}>{primary.variant === 'base' ? 'Technologia bazowa' : 'Warianty archiwalne'}</Badge>
@@ -3172,7 +3335,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         </TabsContent>
 
         <TabsContent value="editor" className="space-y-3">
-          <section className="rounded-lg border border-borderStrong bg-[rgba(255,255,255,0.025)] px-4 py-3">
+          <section className="rounded-lg border border-borderStrong bg-[var(--surface-faint)] px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-sm font-black text-title">Produkt i technologia</h2>
               <Badge tone={editorTechnology.archived ? 'default' : selected ? 'success' : 'info'}>{editorTechnology.archived ? 'Archiwalna' : selected ? 'Aktywna' : 'Nowa'}</Badge>
@@ -3182,20 +3345,20 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
               <ProductCatalogField label="Nazwa produktu" mode="name" value={editorTechnology.productName} items={technologyProductNameSearch.items} loading={technologyProductNameSearch.loading} onChange={(value) => editTechnologyEditorProductField('name', value)} onSelect={selectTechnologyEditorProduct} />
               <div className="space-y-1.5 text-xs font-semibold uppercase tracking-wide text-dim">
                 <div className="flex items-center justify-between gap-2"><span>Rodzaj technologii</span><span className="normal-case tracking-normal text-muted">{technologyLabel(editorTechnology)}</span></div>
-                <div role="group" aria-label="Rodzaj technologii" className="grid h-11 grid-cols-2 gap-1 rounded-lg border border-border bg-[rgba(0,0,0,0.28)] p-1">
+                <div role="group" aria-label="Rodzaj technologii" className="grid h-11 grid-cols-2 gap-1 rounded-lg border border-border bg-[var(--segmented-bg)] p-1">
                   <button
                     type="button"
                     aria-pressed={editorTechnology.variant === 'base'}
                     disabled={Boolean(editorBaseTechnology)}
                     onClick={() => selectTechnologyDraftVariant('base')}
-                    className={cn('rounded-md px-3 text-xs font-bold normal-case tracking-normal transition disabled:cursor-not-allowed disabled:opacity-40', editorTechnology.variant === 'base' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[rgba(255,255,255,0.05)]')}
+                    className={cn('rounded-md px-3 text-xs font-bold normal-case tracking-normal transition disabled:cursor-not-allowed disabled:opacity-40', editorTechnology.variant === 'base' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[var(--row-hover)]')}
                   >Bazowa</button>
                   <button
                     type="button"
                     aria-pressed={editorTechnology.variant === 'alternative'}
                     disabled={Boolean((editorTechnology.productIndex.trim() || editorTechnology.productName.trim()) && !editorBaseTechnology)}
                     onClick={() => selectTechnologyDraftVariant('alternative')}
-                    className={cn('rounded-md px-3 text-xs font-bold normal-case tracking-normal transition disabled:cursor-not-allowed disabled:opacity-40', editorTechnology.variant === 'alternative' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[rgba(255,255,255,0.05)]')}
+                    className={cn('rounded-md px-3 text-xs font-bold normal-case tracking-normal transition disabled:cursor-not-allowed disabled:opacity-40', editorTechnology.variant === 'alternative' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[var(--row-hover)]')}
                   >Awaryjna</button>
                 </div>
                 {editorBaseTechnology ? <p className="normal-case tracking-normal text-muted">Bazowa już istnieje. Tworzysz kolejny wariant awaryjny.</p> : editorTechnology.productIndex.trim() || editorTechnology.productName.trim() ? <p className="normal-case tracking-normal text-muted">Dla nowego produktu najpierw zapisz technologię bazową.</p> : null}
@@ -3229,18 +3392,18 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                   'h-[72px] overflow-hidden rounded-lg border px-3 py-2.5 text-left transition',
                   selected?.id === editorBaseTechnology.id
                     ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_9%,transparent)]'
-                    : 'border-border bg-[rgba(255,255,255,0.02)] hover:border-borderStrong'
+                    : 'border-border bg-[var(--surface-faint)] hover:border-borderStrong'
                 )}
               >
                 <div className="flex items-center justify-between gap-2">
                   <Badge tone="success">Bazowa</Badge>
                   <span className="text-xs text-dim">{editorBaseTechnology.materials.length} poz.</span>
                 </div>
-                <p className="mt-2 line-clamp-1 text-xs font-semibold text-title">{editorBaseTechnology.description || 'Technologia domyślna'}</p>
+                <p className="mt-2 line-clamp-1 text-xs font-semibold text-title">Technologia bazowa</p>
               </button> : <div className="flex h-[72px] items-center rounded-lg border border-dashed border-border px-3 text-xs text-muted">Brak zapisanej technologii bazowej.</div>}
 
-              {editorEmergencyVariants.length ? <details className="group overflow-hidden rounded-lg border border-border bg-[rgba(255,255,255,0.02)]">
-                <summary className="flex h-[70px] cursor-pointer list-none flex-col justify-center px-3 py-2 transition hover:bg-[rgba(255,255,255,0.025)] [&::-webkit-details-marker]:hidden">
+              {editorEmergencyVariants.length ? <details className="group overflow-hidden rounded-lg border border-border bg-[var(--surface-faint)]">
+                <summary className="flex h-[70px] cursor-pointer list-none flex-col justify-center px-3 py-2 transition hover:bg-[var(--surface-faint)] [&::-webkit-details-marker]:hidden">
                   <div className="flex items-center gap-2">
                     <Badge tone="warning">Awaryjne</Badge>
                     <span className="ml-auto text-xs text-dim">{editorEmergencyVariants.length} {editorEmergencyVariants.length === 1 ? 'wariant' : editorEmergencyVariants.length < 5 ? 'warianty' : 'wariantów'}</span>
@@ -3260,7 +3423,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                       openTechnologyEditor(technology.id);
                     }}
                     className={cn(
-                      'grid min-h-10 w-full grid-cols-[88px_minmax(0,1fr)_auto] items-center gap-2 border-b border-border px-3 py-2 text-left text-xs transition last:border-b-0 hover:bg-[rgba(255,255,255,0.035)]',
+                      'grid min-h-10 w-full grid-cols-[88px_minmax(0,1fr)_auto] items-center gap-2 border-b border-border px-3 py-2 text-left text-xs transition last:border-b-0 hover:bg-[var(--surface-soft)]',
                       selected?.id === technology.id && 'bg-brandSoft'
                     )}
                   >
@@ -3296,19 +3459,47 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
               </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-[220px_220px_minmax(0,1fr)]">
-              <Field label="Tryb produkcji">
-                <SelectField value={editorTechnology.productionMode ?? 'planned'} onChange={(event) => updateEditorTechnology({ productionMode: event.target.value as TechnologyProductionMode })}>
-                  <option value="planned">Według planu</option>
-                  <option value="continuous">Produkcja ciągła</option>
-                  <option value="linked">Pod powiązanie</option>
-                </SelectField>
-              </Field>
-              <Field label={editorTechnology.productionMode === 'continuous' ? 'Wydajność na zmianę (szt.)' : editorTechnology.productionMode === 'linked' ? 'Norma pomocnicza (opc.)' : 'Norma na zmianę (8h)'}><Input type="number" value={editorTechnology.shiftNorm} onChange={(event) => updateEditorTechnology({ shiftNorm: Math.max(0, numberValue(event.target.value)) })} /></Field>
-              <Field label={editorTechnology.variant === 'alternative' ? 'Opis wariantu (wymagany)' : 'Opis bazowej (opcjonalny)'}><Input placeholder={editorTechnology.variant === 'alternative' ? 'np. Przemiał + czarny barwnik + karton 600x410' : 'np. Oryginał bez barwnika'} value={editorTechnology.description} onChange={(event) => updateEditorTechnology({ description: event.target.value })} /></Field>
-              <label className="space-y-1.5 text-xs font-semibold uppercase tracking-wide text-dim md:col-span-3">
+            <div className="space-y-3">
+              <div className={cn('grid gap-3', editorTechnology.variant === 'alternative' ? 'md:grid-cols-[220px_220px_minmax(0,1fr)]' : 'md:grid-cols-[220px_220px]')}>
+                <Field label="Tryb produkcji">
+                  <SelectField value={editorTechnology.productionMode ?? 'planned'} onChange={(event) => updateEditorTechnology({ productionMode: event.target.value as TechnologyProductionMode })}>
+                    <option value="planned">Według planu</option>
+                    <option value="continuous">Produkcja ciągła</option>
+                    <option value="linked">Pod powiązanie</option>
+                  </SelectField>
+                </Field>
+                <Field label={editorTechnology.productionMode === 'continuous' ? 'Wydajność na zmianę (szt.)' : editorTechnology.productionMode === 'linked' ? 'Norma pomocnicza (opc.)' : 'Norma na zmianę (8h)'}><Input type="number" value={editorTechnology.shiftNorm} onChange={(event) => updateEditorTechnology({ shiftNorm: Math.max(0, numberValue(event.target.value)) })} /></Field>
+                {editorTechnology.variant === 'alternative' ? <Field label="Nazwa wariantu (wymagana)"><Input placeholder="np. NOVODUR, MDC lub karton rozm. 6" value={editorTechnology.description} onChange={(event) => updateEditorTechnology({ description: event.target.value })} /></Field> : null}
+              </div>
+              <div className="rounded-xl border border-borderStrong bg-[var(--inset-panel-bg)] p-3">
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-title">
+                  <CircleHelp className="h-4 w-4 shrink-0 text-brand" />
+                  <span>Co oznaczają tryby produkcji?</span>
+                </div>
+                <div className="mt-3 grid gap-2 lg:grid-cols-3">
+                  {TECHNOLOGY_PRODUCTION_MODE_HELP.map((item) => {
+                    const selectedMode = (editorTechnology.productionMode ?? 'planned') === item.mode;
+                    return <div
+                      key={item.mode}
+                      className={cn(
+                        'rounded-lg border px-3 py-2.5 text-xs leading-relaxed',
+                        selectedMode
+                          ? 'border-[rgba(255,122,26,0.68)] bg-brandSoft text-body'
+                          : 'border-border bg-[var(--surface-faint)] text-muted'
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className={cn('font-black', selectedMode ? 'text-brand' : 'text-title')}>{item.label}</p>
+                        {selectedMode ? <span className="flex items-center gap-1 whitespace-nowrap text-[10px] font-bold uppercase text-success"><Check className="h-3.5 w-3.5" />Wybrane</span> : null}
+                      </div>
+                      <p className="mt-1">{item.description}</p>
+                    </div>;
+                  })}
+                </div>
+              </div>
+              <label className="block space-y-1.5 text-xs font-semibold uppercase tracking-wide text-dim">
                 <span>Uwagi (opcjonalne)</span>
-                <textarea className="min-h-20 w-full rounded-xl border border-border bg-[rgba(0,0,0,0.4)] p-3 text-sm font-normal normal-case tracking-normal text-body focus:border-[rgba(255,106,0,0.55)] focus:outline-none" value={editorTechnology.notes} onChange={(event) => updateEditorTechnology({ notes: event.target.value })} />
+                <textarea className="min-h-20 w-full rounded-xl border border-border bg-[var(--field-bg)] p-3 text-sm font-normal normal-case tracking-normal text-body focus:border-[rgba(255,106,0,0.55)] focus:outline-none" value={editorTechnology.notes} onChange={(event) => updateEditorTechnology({ notes: event.target.value })} />
               </label>
             </div>
 
@@ -3341,9 +3532,10 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                 {!readOnly ? <Button className="min-h-9 rounded-lg px-3 py-1.5 text-xs" variant="outline" onClick={addEditorLink}><Link2 className="mr-2 h-4 w-4" />Dodaj powiązanie</Button> : null}
               </div>
               {(editorTechnology.linkedProducts ?? []).length ? <div className="space-y-2">
-                {(editorTechnology.linkedProducts ?? []).map((link) => <div key={link.id} className="grid gap-2 border-y border-border py-2 lg:grid-cols-[220px_minmax(320px,1fr)_150px_110px_44px] lg:items-end">
+                {(editorTechnology.linkedProducts ?? []).map((link) => <div key={link.id} className="grid gap-2 border-y border-border py-2 lg:grid-cols-[200px_minmax(280px,1fr)_190px_140px_100px_44px] lg:items-end">
                   <Field label="Indeks półwyrobu"><Input list="material-code-suggestions" value={link.productIndex} onCatalogSelect={(item) => selectEditorLink(link.id, item)} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, productIndex: event.target.value } : row))} /></Field>
                   <Field label="Nazwa półwyrobu"><Input list="material-name-suggestions" value={link.productName} onCatalogSelect={(item) => selectEditorLink(link.id, item)} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, productName: event.target.value } : row))} /></Field>
+                  <Field label="Źródło"><SelectField value={link.sourcePolicy ?? 'select'} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, sourcePolicy: event.target.value as LinkedProduct['sourcePolicy'] } : row))}><option value="select">Wybór w planie</option><option value="warehouse">Zawsze magazyn</option><option value="production">Zawsze maszyna</option></SelectField></Field>
                   <Field label="Zużycie / produkt"><Input className="text-right tabular-nums" type="number" min="0" step="0.001" value={link.usage} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, usage: Math.max(0, numberValue(event.target.value)) } : row))} /></Field>
                   <Field label="J.m."><Input value={link.unit} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, unit: event.target.value } : row))} /></Field>
                   {!readOnly ? <Button title="Usuń powiązanie" aria-label="Usuń powiązanie" variant="ghost" className="h-11 min-h-11 w-11 px-0 text-danger" onClick={() => updateEditorLinks((links) => links.filter((row) => row.id !== link.id))}><Trash2 className="h-4 w-4" /></Button> : null}
@@ -3394,7 +3586,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         ? row.productionGroupId === item.productionGroupId
         : row.id === item.id) ? { ...row, ...patch } : row)
     }));
-    const compactPlanMaterialInputClass = 'h-9 min-h-9 rounded-none border-0 bg-transparent px-2 py-1 text-xs shadow-none focus:bg-[rgba(255,122,26,0.06)] focus:ring-1';
+    const compactPlanMaterialInputClass = 'h-9 min-h-9 rounded-none border-0 bg-transparent px-2 py-1 text-xs shadow-none focus:bg-[var(--brand-faint)] focus:ring-1';
     const linkedProducts = technology?.linkedProducts ?? [];
     const selectedAllocatedOutput = selectedLinkedAllocationByProducer.get(item.id) ?? 0;
     const fullAllocatedOutput = fullLinkedAllocationByProducer.get(item.id) ?? 0;
@@ -3452,10 +3644,10 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         <div className="flex flex-wrap items-center gap-2">
           <Link2 className="h-4 w-4 text-brand" />
           <h3 className="text-sm font-black text-title">Źródło powiązanego półwyrobu</h3>
-          <Badge tone="info">wybór dla tej pozycji planu</Badge>
         </div>
         {linkedProducts.map((link) => {
           const selection = linkedSourceSelectionForItem(item, link);
+          const sourceFixedByTechnology = link.sourcePolicy === 'warehouse' || link.sourcePolicy === 'production';
           const candidates = linkedProducerCandidates(link, item.id);
           const producer = linkedProducerFor(item, link);
           const machineProducts = linkedMachineProductQuantity(selectedQty, selection);
@@ -3472,7 +3664,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
               : selection.producerPlanItemId || (candidates.length === 1 ? candidates[0].id : ''),
             productionQuantity: mode === 'mixed' ? Math.min(selectedQty, selection.productionQuantity) : selection.productionQuantity
           });
-          return <div key={link.id} className="space-y-3 border-y border-border bg-[rgba(255,255,255,0.018)] px-3 py-3">
+          return <div key={link.id} className="space-y-3 border-y border-border bg-[var(--surface-faint)] px-3 py-3">
             <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
               <span className="font-black text-title">{link.productIndex}</span>
               <span className="catalog-label min-w-0 break-words text-xs font-bold">{link.productName}</span>
@@ -3481,11 +3673,14 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
             <div className="grid gap-3 xl:grid-cols-[minmax(330px,0.8fr)_minmax(300px,1fr)_180px] xl:items-end">
               <div className="space-y-1.5">
                 <p className="text-xs font-semibold uppercase text-dim">Skąd pobieramy półwyrób</p>
-                <div role="group" aria-label={`Źródło półwyrobu ${link.productIndex}`} className="grid h-11 grid-cols-3 gap-1 rounded-lg border border-border bg-[rgba(0,0,0,0.28)] p-1">
-                  <button type="button" disabled={editorLocked} aria-pressed={selection.mode === 'warehouse'} onClick={() => setMode('warehouse')} className={cn('flex min-w-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-bold transition', selection.mode === 'warehouse' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[rgba(255,255,255,0.05)]')}><Warehouse className="h-3.5 w-3.5 shrink-0" />Magazyn</button>
-                  <button type="button" disabled={editorLocked} aria-pressed={selection.mode === 'production'} onClick={() => setMode('production')} className={cn('flex min-w-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-bold transition', selection.mode === 'production' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[rgba(255,255,255,0.05)]')}><Factory className="h-3.5 w-3.5 shrink-0" />Maszyna</button>
-                  <button type="button" disabled={editorLocked} aria-pressed={selection.mode === 'mixed'} onClick={() => setMode('mixed')} className={cn('flex min-w-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-bold transition', selection.mode === 'mixed' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[rgba(255,255,255,0.05)]')}><GitMerge className="h-3.5 w-3.5 shrink-0" />Mieszane</button>
-                </div>
+                {sourceFixedByTechnology ? <div className="flex h-11 items-center gap-2 rounded-lg border border-brand bg-brandSoft px-3 text-xs font-bold text-title">
+                  {selection.mode === 'warehouse' ? <Warehouse className="h-4 w-4 text-brand" /> : <Factory className="h-4 w-4 text-brand" />}
+                  {selection.mode === 'warehouse' ? 'Zawsze z magazynu' : 'Bezpośrednio z maszyny'}
+                </div> : <div role="group" aria-label={`Źródło półwyrobu ${link.productIndex}`} className="grid h-11 grid-cols-3 gap-1 rounded-lg border border-border bg-[var(--segmented-bg)] p-1">
+                  <button type="button" disabled={editorLocked} aria-pressed={selection.mode === 'warehouse'} onClick={() => setMode('warehouse')} className={cn('flex min-w-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-bold transition', selection.mode === 'warehouse' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[var(--row-hover)]')}><Warehouse className="h-3.5 w-3.5 shrink-0" />Magazyn</button>
+                  <button type="button" disabled={editorLocked} aria-pressed={selection.mode === 'production'} onClick={() => setMode('production')} className={cn('flex min-w-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-bold transition', selection.mode === 'production' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[var(--row-hover)]')}><Factory className="h-3.5 w-3.5 shrink-0" />Maszyna</button>
+                  <button type="button" disabled={editorLocked} aria-pressed={selection.mode === 'mixed'} onClick={() => setMode('mixed')} className={cn('flex min-w-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-bold transition', selection.mode === 'mixed' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[var(--row-hover)]')}><GitMerge className="h-3.5 w-3.5 shrink-0" />Mieszane</button>
+                </div>}
               </div>
               {selection.mode === 'production' || selection.mode === 'mixed' ? <Field label="Powiązana pozycja produkująca półwyrób">
                 <SelectField className="h-11 min-h-11 rounded-lg shadow-none" disabled={editorLocked || !candidates.length} value={producer?.id ?? ''} onChange={(event) => updateLinkedSourceSelection(item.id, link, { producerPlanItemId: event.target.value })}>
@@ -3511,10 +3706,10 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
           <Badge tone="warning">Technologia robocza zmieniona</Badge>
           <Button className="h-9 min-h-9 rounded-lg px-3 py-1.5 text-xs" variant="ghost" disabled={editorLocked} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, workingMaterials: cloneMaterials(technology.materials), manualOverride: false } : row) }))}><RefreshCw className="mr-2 h-3.5 w-3.5" />Przywróć wybraną</Button>
         </div> : null}
-        {materials.length ? <div className="overflow-x-auto rounded-lg border border-borderStrong bg-[rgba(0,0,0,0.16)]">
+        {materials.length ? <div className="overflow-x-auto rounded-lg border border-borderStrong bg-[image:var(--table-frame-bg)]">
           <table className="w-full min-w-[1394px] table-fixed text-xs">
             <colgroup><col className="w-[220px]" /><col className="w-[420px]" /><col className="w-[145px]" /><col className="w-[150px]" /><col className="w-[105px]" /><col className="w-[110px]" /><col className="w-[105px]" /><col className="w-[95px]" /><col className="w-[44px]" /></colgroup>
-            <thead className="sticky top-0 z-10 bg-[rgba(23,23,27,0.98)] text-left text-[10px] uppercase text-dim">
+            <thead className="sticky top-0 z-10 bg-[image:var(--table-sticky-header-bg)] text-left text-[10px] uppercase text-dim">
               <tr>
                 <th className="border-r border-border px-2 py-1.5">Kod</th>
                 <th className="border-r border-border px-2 py-1.5">Nazwa materiału</th>
@@ -3534,7 +3729,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
           const supply = materialSupply(key, material, item.areaId);
           const itemShare = supply.demand > 0 ? Math.min(1, demand / supply.demand) : 0;
           const toIssue = roundTechnologyMaterialQuantity(supply.toIssue * itemShare, material.unit);
-          return <tr key={material.id} className="border-t border-border transition hover:bg-[rgba(255,255,255,0.025)]">
+          return <tr key={material.id} className="border-t border-border transition hover:bg-[var(--surface-faint)]">
             <td className="border-r border-border p-0"><Input className={cn(compactPlanMaterialInputClass, 'font-semibold text-title')} disabled={editorLocked} list="material-code-suggestions" value={material.code} aria-label="Kod materiału" onCatalogSelect={(catalogItem) => updateWorkingMaterial(item.id, material.id, catalogMaterialPatch(material, catalogItem))} onChange={(event) => updateWorkingMaterial(item.id, material.id, { code: event.target.value })} /></td>
             <td className="border-r border-border p-0"><Input className={cn(compactPlanMaterialInputClass, 'font-semibold')} disabled={editorLocked} list="material-name-suggestions" title={material.name} value={material.name} aria-label="Nazwa materiału" onCatalogSelect={(catalogItem) => updateWorkingMaterial(item.id, material.id, catalogMaterialPatch(material, catalogItem))} onChange={(event) => updateWorkingMaterial(item.id, material.id, { name: event.target.value })} /></td>
             <td className="border-r border-border p-0"><SelectField className="h-9 min-h-9 rounded-none border-0 bg-[none] px-2 py-1 text-xs shadow-none ring-0 focus:ring-1" disabled={editorLocked} value={material.category} onChange={(event) => updateWorkingMaterial(item.id, material.id, { category: event.target.value as MaterialCategory })}>{CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</SelectField></td>
@@ -3555,10 +3750,10 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
             <span className="text-xs text-muted">Do powiązanych produktów: {fmt(selectedAllocatedOutput)} szt.</span>
             <Badge tone="warning">Nadwyżka: {fmt(selectedSurplusQuantity)} szt.</Badge>
           </div>
-          <div className="overflow-x-auto rounded-lg border border-borderStrong bg-[rgba(0,0,0,0.16)]">
+          <div className="overflow-x-auto rounded-lg border border-borderStrong bg-[image:var(--table-frame-bg)]">
             <table className="w-full min-w-[920px] table-fixed text-xs">
               <colgroup><col className="w-[210px]" /><col className="w-[390px]" /><col className="w-[130px]" /><col className="w-[120px]" /><col className="w-[120px]" /></colgroup>
-              <thead className="bg-[rgba(23,23,27,0.98)] text-left text-[10px] uppercase text-dim"><tr><th className="border-r border-border px-2 py-1.5">Kod</th><th className="border-r border-border px-2 py-1.5">Materiał nadwyżki</th><th className="border-r border-border px-2 py-1.5 text-right">Przelicznik / szt.</th><th className="border-r border-border px-2 py-1.5 text-right">Cały plan</th><th className="px-2 py-1.5 text-right">Wybrany zakres</th></tr></thead>
+              <thead className="bg-[image:var(--table-sticky-header-bg)] text-left text-[10px] uppercase text-dim"><tr><th className="border-r border-border px-2 py-1.5">Kod</th><th className="border-r border-border px-2 py-1.5">Materiał nadwyżki</th><th className="border-r border-border px-2 py-1.5 text-right">Przelicznik / szt.</th><th className="border-r border-border px-2 py-1.5 text-right">Cały plan</th><th className="px-2 py-1.5 text-right">Wybrany zakres</th></tr></thead>
               <tbody>{(technology.surplusMaterials ?? []).map((material) => {
                 const demand = roundTechnologyMaterialQuantity(selectedSurplusQuantity * material.usage, material.unit);
                 const fullDemand = roundTechnologyMaterialQuantity(fullSurplusQuantity * material.usage, material.unit);
@@ -3604,7 +3799,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         <Card className="overflow-hidden p-0">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1080px] text-sm">
-              <thead className="bg-[rgba(255,255,255,0.045)] text-left text-xs uppercase text-dim">
+              <thead className="bg-[image:var(--table-header-bg)] text-left text-xs uppercase text-dim">
                 <tr>
                   <th className="p-3">Pozycja</th>
                   <th className="p-3">Stanowisko / strefa</th>
@@ -3621,7 +3816,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                   const expanded = expandedCalculation === item.id;
                   return (
                     <Fragment key={item.id}>
-                      <tr className={cn('border-t border-border', expanded && 'bg-[rgba(255,255,255,0.035)]')}>
+                      <tr className={cn('border-t border-border', expanded && 'bg-[var(--surface-soft)]')}>
                         <td className="p-3">
                           {item.productionGroupId ? <p className="mb-1 text-[11px] font-black uppercase text-brand">Wspólna forma · detal {(item.productionOutputOrder ?? 0) + 1}/{item.productionOutputCount}</p> : null}
                           <p className="font-bold text-title">{item.index}</p><p className="catalog-label font-semibold">{item.name}</p>
@@ -3647,7 +3842,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                             type="button"
                             aria-label={expanded ? `Zwiń szczegóły ${item.index}` : `Rozwiń szczegóły ${item.index}`}
                             aria-expanded={expanded}
-                            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-[rgba(255,255,255,0.035)] text-muted transition hover:border-brand hover:text-title"
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-[var(--surface-soft)] text-muted transition hover:border-brand hover:text-title"
                             onClick={() => toggleCalculationEditor(item.id, 'calculation')}
                           >
                             {expanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
@@ -3706,6 +3901,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         key: row.key,
         code: row.code,
         name: row.name,
+        warehouseCode: inferPickingWarehouseCode(row.code),
         category: row.category,
         unit: row.unit,
         demand: row.demand,
@@ -3739,6 +3935,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         ? 'Cały pozostały plan'
         : `${fmt(current.horizonShifts)} zmiany`;
       if (editable) {
+        const previousRows = new Map(editable.rows.map((row) => [row.key, row]));
         return {
           ...current,
           documents: current.documents.map((document) => document.id === editable.id ? {
@@ -3749,7 +3946,10 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
             createdAt,
             createdBy: currentUserName,
             status: 'draft' as const,
-            rows
+            rows: rows.map((row) => ({
+              ...row,
+              warehouseCode: previousRows.get(row.key)?.warehouseCode ?? row.warehouseCode
+            }))
           } : document)
         };
       }
@@ -3786,10 +3986,10 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     if (readOnly) return;
     const document = state.documents.find((item) => item.id === documentId);
     if (!document) return;
-    if (nextStatus === 'handed' && state.plan.some((item) => item.included && planQuantityNeedsReview(item) && (item.areaId === document.areaId || !item.areaId))) {
-      return flash('Przed przekazaniem dokumentu wyjaśnij ilości albo wyłącz wskazane pozycje z obliczeń.');
+    if ((nextStatus === 'handed' || nextStatus === 'issued') && state.plan.some((item) => item.included && planQuantityNeedsReview(item) && (item.areaId === document.areaId || !item.areaId))) {
+      return flash('Przed wydaniem dokumentu wyjaśnij ilości albo wyłącz wskazane pozycje z obliczeń.');
     }
-    if (nextStatus === 'handed' && document.rows.some((row) => !row.confirmed)) {
+    if ((nextStatus === 'handed' || nextStatus === 'issued') && document.rows.some((row) => !row.confirmed)) {
       return flash('Najpierw zaznacz po lewej wszystkie pozycje jako wypisane do dokumentu.');
     }
     if (nextStatus === 'draft' && (document.status === 'handed' || document.status === 'issued')) {
@@ -3805,7 +4005,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     }
     const allowed =
       (nextStatus === 'handed' && document.status === 'draft') ||
-      (nextStatus === 'issued' && document.status === 'handed') ||
+      (nextStatus === 'issued' && (document.status === 'draft' || document.status === 'handed')) ||
       (nextStatus === 'draft' && (document.status === 'handed' || document.status === 'issued')) ||
       (nextStatus === 'cancelled' && ['draft', 'outdated', 'handed'].includes(document.status));
     if (!allowed) {
@@ -3836,36 +4036,70 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     }));
   };
 
-  const exportPickingDocument = (pickingDocument: PickingDocument) => {
-    const rows = [[
-      'Dokument', 'Status', 'Typ', 'Data planu', 'Wersja planu', 'Strefa', 'Zakres', 'Materiał', 'Kod',
+  const updatePickingDocumentWarehouse = (documentId: string, rowKey: string, warehouseCode: string) => {
+    if (readOnly) return;
+    updateState((current) => ({
+      ...current,
+      documents: current.documents.map((document) => (
+        document.id === documentId
+          ? {
+              ...document,
+              rows: document.rows.map((row) => row.key === rowKey
+                ? { ...row, warehouseCode: warehouseCode.replace(/\s+/g, '').trim().toUpperCase() }
+                : row)
+            }
+          : document
+      ))
+    }));
+  };
+
+  const removePickingDocument = (documentId: string) => {
+    if (readOnly) return;
+    const pickingDocument = state.documents.find((document) => document.id === documentId);
+    if (!pickingDocument) return;
+    if (pickingDocument.status === 'issued') {
+      flash('Wydanego dokumentu nie można usunąć. Najpierw cofnij go do edycji.');
+      return;
+    }
+    if (!window.confirm(`Usunąć dokument ${pickingDocument.documentNo}? Tej operacji nie można cofnąć.`)) return;
+    updateState((current) => ({
+      ...current,
+      documents: current.documents.filter((document) => document.id !== documentId)
+    }));
+    if (expandedDocument === documentId) setExpandedDocument('');
+    flash('Dokument został usunięty.');
+  };
+
+  const exportPickingDocument = (pickingDocument: PickingDocument, visibleRows = pickingDocument.rows) => {
+    const rows: Array<Array<string | number>> = [[
+      'Dokument', 'Status', 'Typ', 'Data planu', 'Wersja planu', 'Strefa', 'Magazyn', 'Zakres', 'Materiał', 'Kod',
       'Zapotrzebowanie', 'Stan strefy', 'Wydano wcześniej', 'Oczekuje', 'Wydać teraz', 'J.m.', 'Źródła'
     ]];
-    pickingDocument.rows.forEach((row) => rows.push([
+    visibleRows.forEach((row) => rows.push([
       pickingDocument.documentNo,
       documentStatusLabel[pickingDocument.status],
       pickingDocument.kind === 'base' ? 'Podstawowy' : 'Korekta',
       pickingDocument.planDate,
-      String(pickingDocument.planVersionNo),
+      pickingDocument.planVersionNo,
       areaName(pickingDocument.areaId),
+      pickingWarehouseCode(row) || 'Nieprzypisany',
       pickingDocument.scopeLabel,
       row.name,
       row.code,
-      String(technologyResultQuantity(row.demand, row.unit)),
-      String(technologyResultQuantity(row.areaStock, row.unit)),
-      String(technologyResultQuantity(row.issuedBefore, row.unit)),
-      String(technologyResultQuantity(row.pendingBefore, row.unit)),
-      String(technologyResultQuantity(row.toIssue, row.unit)),
+      technologyResultQuantity(row.demand, row.unit),
+      technologyResultQuantity(row.areaStock, row.unit),
+      technologyResultQuantity(row.issuedBefore, row.unit),
+      technologyResultQuantity(row.pendingBefore, row.unit),
+      technologyResultQuantity(row.toIssue, row.unit),
       technologyResultUnit(row.unit),
       row.sources.map((source) => `${source.index} - ${source.name}: ${fmt(technologyResultQuantity(source.demand, row.unit))}`).join(' | ')
     ]));
-    const csv = `\uFEFF${rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(';')).join('\r\n')}`;
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `${pickingDocument.documentNo}.csv`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    worksheet['!cols'] = [18, 12, 12, 13, 12, 16, 14, 22, 48, 22, 16, 14, 16, 12, 14, 10, 64].map((wch) => ({ wch }));
+    worksheet['!autofilter'] = { ref: `A1:Q${Math.max(1, rows.length)}` };
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Do wypisania');
+    XLSX.writeFile(workbook, `${pickingDocument.documentNo}.xlsx`, { compression: true });
   };
 
   const deriveReturnsForDate = (planDate: string): MaterialReturnRow[] => {
@@ -3921,7 +4155,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       .filter((document) => document.planDate === state.selectedPlanDate && document.areaId === state.selectedAreaId)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt, 'pl'));
     return <div className="space-y-5">
-      {renderHeader('Dokument do wypisania', 'Każda strefa otrzymuje osobny, zapisany dokument. Po przekazaniu lub wydaniu jego ilości pozostają niezmienne.')}
+      {renderHeader('Dokument do wypisania', 'Każda strefa otrzymuje osobny dokument. Magazyn przypisujesz przy każdej pozycji, a po oznaczeniu dokumentu jako wydany jego ilości pozostają niezmienne.')}
       <PlanQuantityWarnings items={state.plan.filter((item) => item.included && (item.areaId === state.selectedAreaId || !item.areaId))} resolvedItemIds={quantityResolvedPlanItemIds} calculations />
       <Card className="space-y-4">
         <div className="grid gap-3 lg:grid-cols-[minmax(220px,0.6fr)_minmax(260px,1fr)_auto] lg:items-end">
@@ -3936,6 +4170,27 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         const locked = document.status === 'handed' || document.status === 'issued';
         const confirmedRows = document.rows.filter((row) => row.confirmed).length;
         const allRowsConfirmed = document.rows.length > 0 && confirmedRows === document.rows.length;
+        const warehouseOptions = [...new Set([
+          ...PICKING_WAREHOUSE_OPTIONS,
+          ...document.rows.map(pickingWarehouseCode).filter(Boolean)
+        ])].sort((left, right) => left.localeCompare(right, 'pl', { numeric: true }));
+        const activeWarehouseFilter = documentWarehouseFilter === 'all'
+          || documentWarehouseFilter === 'unassigned'
+          || warehouseOptions.includes(documentWarehouseFilter)
+          ? documentWarehouseFilter
+          : 'all';
+        const visibleRows = sortPickingDocumentRows(document.rows.filter((row) => {
+          const warehouseCode = pickingWarehouseCode(row);
+          if (activeWarehouseFilter === 'all') return true;
+          if (activeWarehouseFilter === 'unassigned') return !warehouseCode;
+          return warehouseCode === activeWarehouseFilter;
+        }), documentSort);
+        const warehouseCounts = visibleRows.reduce((counts, row) => {
+          const warehouseCode = pickingWarehouseCode(row) || 'Nieprzypisane';
+          counts.set(warehouseCode, (counts.get(warehouseCode) ?? 0) + 1);
+          return counts;
+        }, new Map<string, number>());
+        const unassignedRows = document.rows.filter((row) => !pickingWarehouseCode(row)).length;
         return <Card key={document.id} className="overflow-hidden p-0">
           <div className="flex flex-col gap-3 border-b border-border px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
             <button type="button" className="flex min-w-0 items-center gap-3 text-left" onClick={() => setExpandedDocument(expanded ? '' : document.id)}>
@@ -3947,22 +4202,48 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
               <Badge tone={documentTone(document.status)}>{documentStatusLabel[document.status]}</Badge>
               <Badge tone={allRowsConfirmed ? 'success' : 'warning'}>{allRowsConfirmed ? `Wszystko wypisane · ${confirmedRows}/${document.rows.length}` : `Wypisano ${confirmedRows}/${document.rows.length}`}</Badge>
               {!readOnly && (document.status === 'draft' || document.status === 'outdated') ? <Button variant="outline" onClick={createOrRefreshPickingDocument}><RefreshCw className="mr-2 h-4 w-4" />Przelicz</Button> : null}
-              {!readOnly && document.status === 'draft' ? <Button variant="secondary" onClick={() => changePickingDocumentStatus(document.id, 'handed')}><PackageCheck className="mr-2 h-4 w-4" />Przekaż</Button> : null}
-              {!readOnly && document.status === 'handed' ? <Button variant="secondary" onClick={() => changePickingDocumentStatus(document.id, 'issued')}><Check className="mr-2 h-4 w-4" />Oznacz jako wydany</Button> : null}
+              {!readOnly && (document.status === 'draft' || document.status === 'handed') ? <Button variant="secondary" disabled={!allRowsConfirmed} title={!allRowsConfirmed ? 'Najpierw oznacz wszystkie pozycje jako wypisane' : undefined} onClick={() => changePickingDocumentStatus(document.id, 'issued')}><Check className="mr-2 h-4 w-4" />Oznacz jako wydany</Button> : null}
               {!readOnly && locked ? <Button variant="outline" onClick={() => changePickingDocumentStatus(document.id, 'draft')}><Undo2 className="mr-2 h-4 w-4" />Cofnij do edycji</Button> : null}
-              {!readOnly && ['draft', 'outdated', 'handed'].includes(document.status) ? <Button variant="ghost" className="text-danger" onClick={() => changePickingDocumentStatus(document.id, 'cancelled')}><X className="mr-2 h-4 w-4" />Anuluj</Button> : null}
-              <Button title="Pobierz dokument CSV" variant="ghost" className="min-h-11 px-3" onClick={() => exportPickingDocument(document)}><FileDown className="h-4 w-4" /></Button>
+              {!readOnly && document.status !== 'issued' ? <Button title="Usuń dokument" variant="ghost" className="min-h-11 px-3 text-danger" onClick={() => removePickingDocument(document.id)}><Trash2 className="mr-2 h-4 w-4" />Usuń dokument</Button> : null}
+              <Button title="Eksportuj widoczne pozycje do Excel" variant="outline" className="min-h-11 px-3" disabled={!visibleRows.length} onClick={() => exportPickingDocument(document, visibleRows)}><FileDown className="mr-2 h-4 w-4" />Eksportuj Excel</Button>
             </div>
           </div>
-          {expanded ? <div className="overflow-x-auto">
-            <table className="w-full min-w-[920px] text-sm">
-              <thead className="sticky top-0 z-10 bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim"><tr><th className="w-24 p-3 text-center">Wypisane</th><th className="w-14 p-3"><span className="sr-only">Źródła</span></th><th className="p-3">Materiał</th><th className="p-3 text-right">Zapotrzebowanie</th><th className="p-3 text-right">Stan strefy</th><th className="p-3 text-right">Wydać teraz</th><th className="p-3">J.m.</th></tr></thead>
-              <tbody>{document.rows.map((row) => {
-                const sourceKey = `${document.id}|${row.key}`;
-                const sourcesExpanded = expandedMaterial === sourceKey;
-                return <Fragment key={row.key}><tr className="border-t border-border"><td className="p-3"><button type="button" aria-label={row.confirmed ? `Odznacz jako wypisane: ${row.name}` : `Zaznacz jako wypisane: ${row.name}`} aria-pressed={row.confirmed} title={row.confirmed ? 'Pozycja wypisana — kliknij, aby cofnąć' : 'Zaznacz pozycję jako wypisaną'} disabled={readOnly || locked || document.status !== 'draft'} onClick={() => togglePickingConfirmation(document.id, row.key)} className={cn('mx-auto flex h-11 w-11 items-center justify-center rounded-lg border', row.confirmed ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success' : 'border-border text-muted', (readOnly || locked || document.status !== 'draft') && 'cursor-default opacity-80')}>{row.confirmed ? <Check className="h-4 w-4" /> : null}</button></td><td className="p-3"><button type="button" title={sourcesExpanded ? 'Ukryj źródła zapotrzebowania' : 'Pokaż indeksy źródłowe'} className="flex h-11 w-11 items-center justify-center rounded-lg border border-border text-muted" onClick={() => setExpandedMaterial(sourcesExpanded ? '' : sourceKey)}>{sourcesExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button></td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td><td className="p-3 text-right">{fmt(technologyResultQuantity(row.demand, row.unit))}</td><td className="p-3 text-right">{fmt(technologyResultQuantity(row.areaStock, row.unit))}</td><td className="p-3 text-right text-lg font-black text-title">{fmt(technologyResultQuantity(row.toIssue, row.unit))}</td><td className="p-3">{technologyResultUnit(row.unit)}</td></tr>{sourcesExpanded ? <tr className="border-t border-border bg-[rgba(255,255,255,0.025)]"><td colSpan={7} className="px-5 py-4"><p className="text-xs font-bold uppercase text-dim">Źródła zapotrzebowania</p><div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{row.sources.map((source) => <div key={`${source.planItemId}-${source.index}`} className="border-l-2 border-brand pl-3"><p className="font-bold text-title">{source.index}</p><p className="catalog-label break-words text-sm font-semibold">{source.name}</p><p className="mt-1 text-xs text-dim">{fmt(technologyResultQuantity(source.demand, row.unit))} {technologyResultUnit(row.unit)}</p></div>)}</div></td></tr> : null}</Fragment>;
-              })}</tbody>
-            </table>
+          {expanded ? <div>
+            <div className="flex flex-col gap-3 border-b border-border bg-[var(--surface-faint)] px-4 py-3 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-sm font-bold text-title">Pozycje do wypisania: {visibleRows.length}/{document.rows.length}</p>
+                <p className={cn('mt-1 text-xs', unassignedRows ? 'text-warning' : 'text-muted')}>{unassignedRows ? `Bez przypisanego magazynu: ${unassignedRows}` : 'Wszystkie pozycje mają przypisany magazyn'}</p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="min-w-[210px]"><p className="mb-1 text-xs font-semibold text-dim">Filtr magazynu</p><SelectField className="min-h-10 rounded-lg" aria-label="Filtr magazynu" value={activeWarehouseFilter} onChange={(event) => setDocumentWarehouseFilter(event.target.value)}><option value="all">Wszystkie magazyny</option><option value="unassigned">Nieprzypisane</option>{warehouseOptions.map((warehouseCode) => <option key={warehouseCode} value={warehouseCode}>{warehouseCode}</option>)}</SelectField></div>
+                <div className="min-w-[210px]"><p className="mb-1 text-xs font-semibold text-dim">Sortowanie</p><SelectField className="min-h-10 rounded-lg" aria-label="Sortowanie dokumentu" value={documentSort} onChange={(event) => setDocumentSort(event.target.value as PickingDocumentSort)}><option value="warehouse">Magazyn</option><option value="material">Nazwa materiału</option><option value="code">Kod materiału</option></SelectField></div>
+              </div>
+            </div>
+            <datalist id={`picking-warehouses-${document.id}`}>{warehouseOptions.map((warehouseCode) => <option key={warehouseCode} value={warehouseCode} />)}</datalist>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1120px] text-sm">
+                <thead className="sticky top-0 z-10 bg-[image:var(--table-sticky-header-bg)] text-left text-[11px] uppercase text-dim"><tr><th className="w-24 p-3 text-center">Wypisane</th><th className="w-14 p-3"><span className="sr-only">Źródła</span></th><th className="p-3">Materiał</th><th className="w-40 p-3">Magazyn</th><th className="p-3 text-right">Zapotrzebowanie</th><th className="p-3 text-right">Stan strefy</th><th className="p-3 text-right">Wydać teraz</th><th className="p-3">J.m.</th></tr></thead>
+                <tbody>{visibleRows.length ? visibleRows.map((row, rowIndex) => {
+                  const sourceKey = `${document.id}|${row.key}`;
+                  const sourcesExpanded = expandedMaterial === sourceKey;
+                  const warehouseCode = pickingWarehouseCode(row);
+                  const previousWarehouseCode = rowIndex > 0 ? pickingWarehouseCode(visibleRows[rowIndex - 1]) : null;
+                  const showWarehouseHeader = documentSort === 'warehouse' && warehouseCode !== previousWarehouseCode;
+                  const warehouseLabel = warehouseCode || 'Nieprzypisane';
+                  return <Fragment key={row.key}>
+                    {showWarehouseHeader ? <tr className="border-t border-borderStrong bg-[rgba(255,122,26,0.07)]"><td colSpan={8} className="px-4 py-2"><div className="flex items-center gap-2"><Warehouse className="h-4 w-4 text-brand" /><span className="font-black text-title">{warehouseLabel}</span><Badge>{warehouseCounts.get(warehouseLabel) ?? 0} poz.</Badge></div></td></tr> : null}
+                    <tr className="border-t border-border">
+                      <td className="p-3"><button type="button" aria-label={row.confirmed ? `Odznacz jako wypisane: ${row.name}` : `Zaznacz jako wypisane: ${row.name}`} aria-pressed={row.confirmed} title={row.confirmed ? 'Pozycja wypisana — kliknij, aby cofnąć' : 'Zaznacz pozycję jako wypisaną'} disabled={readOnly || locked || document.status !== 'draft'} onClick={() => togglePickingConfirmation(document.id, row.key)} className={cn('mx-auto flex h-11 w-11 items-center justify-center rounded-lg border', row.confirmed ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success' : 'border-border text-muted', (readOnly || locked || document.status !== 'draft') && 'cursor-default opacity-80')}>{row.confirmed ? <Check className="h-4 w-4" /> : null}</button></td>
+                      <td className="p-3"><button type="button" title={sourcesExpanded ? 'Ukryj źródła zapotrzebowania' : 'Pokaż indeksy źródłowe'} className="flex h-11 w-11 items-center justify-center rounded-lg border border-border text-muted" onClick={() => setExpandedMaterial(sourcesExpanded ? '' : sourceKey)}>{sourcesExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button></td>
+                      <td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td>
+                      <td className="p-3"><BaseInput className={cn('h-10 min-h-10 rounded-lg uppercase', !warehouseCode && 'border-warning')} aria-label={`Magazyn dla ${row.name}`} title={readOnly ? 'Brak uprawnień do edycji' : 'Wpisz lub wybierz magazyn'} list={`picking-warehouses-${document.id}`} placeholder="Np. M-1" value={warehouseCode} disabled={readOnly} onChange={(event) => updatePickingDocumentWarehouse(document.id, row.key, event.target.value)} /></td>
+                      <td className="p-3 text-right">{fmt(technologyResultQuantity(row.demand, row.unit))}</td><td className="p-3 text-right">{fmt(technologyResultQuantity(row.areaStock, row.unit))}</td><td className="p-3 text-right text-lg font-black text-title">{fmt(technologyResultQuantity(row.toIssue, row.unit))}</td><td className="p-3">{technologyResultUnit(row.unit)}</td>
+                    </tr>
+                    {sourcesExpanded ? <tr className="border-t border-border bg-[var(--surface-faint)]"><td colSpan={8} className="px-5 py-4"><p className="text-xs font-bold uppercase text-dim">Źródła zapotrzebowania</p><div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{row.sources.map((source) => <div key={`${source.planItemId}-${source.index}`} className="border-l-2 border-brand pl-3"><p className="font-bold text-title">{source.index}</p><p className="catalog-label break-words text-sm font-semibold">{source.name}</p><p className="mt-1 text-xs text-dim">{fmt(technologyResultQuantity(source.demand, row.unit))} {technologyResultUnit(row.unit)}</p></div>)}</div></td></tr> : null}
+                  </Fragment>;
+                }) : <tr><td colSpan={8} className="px-4 py-10 text-center text-muted">Brak pozycji dla wybranego magazynu.</td></tr>}</tbody>
+              </table>
+            </div>
           </div> : null}
         </Card>;
       }) : <EmptyState title="Brak zapisanych dokumentów" description="Wybierz strefę i utwórz dokument z aktualnego planu. Jeżeli materiały są już pokryte, dokument nie będzie potrzebny." />}
@@ -4014,7 +4295,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
           <Stat label="Data planu" value={formatPlanDate(state.selectedPlanDate)} />
         </div>
       </Card>
-      {returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="sticky top-0 z-10 bg-[rgba(18,18,22,0.98)] text-left text-[11px] uppercase text-dim"><tr><th className="p-3">Materiał</th><th className="p-3">Strefa</th><th className="p-3 text-right">Do zwrotu</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className={cn('border-t border-border', row.status === 'completed' && 'bg-[color:color-mix(in_srgb,var(--success)_7%,transparent)]')}><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3 text-right text-lg font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Button variant={row.status === 'completed' ? 'ghost' : 'secondary'} onClick={() => updateState((current) => ({ ...current, returnStatuses: { ...current.returnStatuses, [row.id]: row.status === 'completed' ? 'open' : 'completed' } }))}>{row.status === 'completed' ? <Undo2 className="mr-2 h-4 w-4" /> : <Check className="mr-2 h-4 w-4" />}{row.status === 'completed' ? 'Przywróć' : 'Wykonano'}</Button></td></tr>)}</tbody></table></div></Card> : returnsEmptyState}
+      {returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="sticky top-0 z-10 bg-[image:var(--table-sticky-header-bg)] text-left text-[11px] uppercase text-dim"><tr><th className="p-3">Materiał</th><th className="p-3">Strefa</th><th className="p-3 text-right">Do zwrotu</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className={cn('border-t border-border', row.status === 'completed' && 'bg-[color:color-mix(in_srgb,var(--success)_7%,transparent)]')}><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3 text-right text-lg font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Button variant={row.status === 'completed' ? 'ghost' : 'secondary'} onClick={() => updateState((current) => ({ ...current, returnStatuses: { ...current.returnStatuses, [row.id]: row.status === 'completed' ? 'open' : 'completed' } }))}>{row.status === 'completed' ? <Undo2 className="mr-2 h-4 w-4" /> : <Check className="mr-2 h-4 w-4" />}{row.status === 'completed' ? 'Przywróć' : 'Wykonano'}</Button></td></tr>)}</tbody></table></div></Card> : returnsEmptyState}
     </div>;
   };
 
@@ -4030,7 +4311,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         <SectionTitle title="Wersje planów" subtitle={`${versions.length} zapisanych wersji`} />
         {versions.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto">
           <table className="w-full min-w-[680px] text-sm">
-            <thead className="bg-[rgba(255,255,255,0.035)] text-left text-xs uppercase text-dim"><tr>
+            <thead className="bg-[var(--surface-soft)] text-left text-xs uppercase text-dim"><tr>
               <th className="p-3">Data / wersja</th><th className="p-3">Wgrano</th><th className="p-3">Plik / arkusz</th>
             </tr></thead>
             <tbody>{versions.map((version, index) => {
@@ -4049,11 +4330,11 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         </div></Card> : <EmptyState title="Brak wersji planów" description="Pierwszy import utworzy wersję 1 dla wybranej daty." />}
       </section>
 
-      <section className="space-y-3"><SectionTitle title="Ręczne korekty ilości" subtitle={`${corrections.length} operacji`} />{corrections.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[920px] text-sm"><thead className="bg-[rgba(255,255,255,0.035)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data planu</th><th className="p-3">Pozycja</th><th className="p-3 text-right">Poprzednio</th><th className="p-3 text-right">Nowa ilość</th><th className="p-3 text-right">Różnica</th><th className="p-3">Użytkownik / czas</th><th className="p-3">Status</th></tr></thead><tbody>{corrections.map((correction) => <tr key={correction.id} className="border-t border-border"><td className="p-3">{formatPlanDate(correction.planDate)}</td><td className="p-3"><p className="font-bold text-title">{correction.index}</p><p className="catalog-label text-xs font-semibold">{correction.name}</p></td><td className="p-3 text-right">{fmt(correction.previousValue)}</td><td className="p-3 text-right">{fmt(correction.newValue)}</td><td className={cn('p-3 text-right font-black', correction.difference > 0 ? 'text-success' : 'text-warning')}>{correction.difference > 0 ? '+' : ''}{fmt(correction.difference)}</td><td className="p-3"><p>{correction.createdBy}</p><p className="text-xs text-muted">{correction.createdAt}</p></td><td className="p-3"><Badge tone={correction.revertedAt ? 'default' : 'info'}>{correction.revertedAt ? 'Cofnięta' : correction.source}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak ręcznych korekt" description="Zmiana dokładna, + lub - przy pozycji planu pojawi się tutaj." />}</section>
+      <section className="space-y-3"><SectionTitle title="Ręczne korekty ilości" subtitle={`${corrections.length} operacji`} />{corrections.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[920px] text-sm"><thead className="bg-[var(--surface-soft)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data planu</th><th className="p-3">Pozycja</th><th className="p-3 text-right">Poprzednio</th><th className="p-3 text-right">Nowa ilość</th><th className="p-3 text-right">Różnica</th><th className="p-3">Użytkownik / czas</th><th className="p-3">Status</th></tr></thead><tbody>{corrections.map((correction) => <tr key={correction.id} className="border-t border-border"><td className="p-3">{formatPlanDate(correction.planDate)}</td><td className="p-3"><p className="font-bold text-title">{correction.index}</p><p className="catalog-label text-xs font-semibold">{correction.name}</p></td><td className="p-3 text-right">{fmt(correction.previousValue)}</td><td className="p-3 text-right">{fmt(correction.newValue)}</td><td className={cn('p-3 text-right font-black', correction.difference > 0 ? 'text-success' : 'text-warning')}>{correction.difference > 0 ? '+' : ''}{fmt(correction.difference)}</td><td className="p-3"><p>{correction.createdBy}</p><p className="text-xs text-muted">{correction.createdAt}</p></td><td className="p-3"><Badge tone={correction.revertedAt ? 'default' : 'info'}>{correction.revertedAt ? 'Cofnięta' : correction.source}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak ręcznych korekt" description="Zmiana dokładna, + lub - przy pozycji planu pojawi się tutaj." />}</section>
 
-      <section className="space-y-3"><SectionTitle title="Dokumenty i wydania" subtitle={`${documents.length} dokumentów`} />{documents.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-[rgba(255,255,255,0.035)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Dokument</th><th className="p-3">Data / strefa</th><th className="p-3">Wersja i zakres</th><th className="p-3">Utworzył</th><th className="p-3">Typ</th><th className="p-3">Status</th><th className="p-3 text-right">Pozycje</th></tr></thead><tbody>{documents.map((document) => <tr key={document.id} className="border-t border-border"><td className="p-3 font-black text-title">{document.documentNo}</td><td className="p-3"><p>{formatPlanDate(document.planDate)}</p><p className="text-xs text-muted">{areaName(document.areaId)}</p></td><td className="p-3"><p>Wersja {document.planVersionNo || '—'}</p><p className="text-xs text-muted">{document.scopeLabel}</p></td><td className="p-3"><p>{document.createdBy}</p><p className="text-xs text-muted">{document.createdAt}</p></td><td className="p-3"><Badge tone={document.kind === 'correction' ? 'warning' : 'info'}>{document.kind === 'correction' ? 'Korekta' : 'Podstawowy'}</Badge></td><td className="p-3"><Badge tone={documentTone(document.status)}>{documentStatusLabel[document.status]}</Badge></td><td className="p-3 text-right">{document.rows.length}</td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak dokumentów" description="Dokumenty podstawowe i korekty pojawią się po ich utworzeniu." />}</section>
+      <section className="space-y-3"><SectionTitle title="Dokumenty i wydania" subtitle={`${documents.length} dokumentów`} />{documents.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-[var(--surface-soft)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Dokument</th><th className="p-3">Data / strefa</th><th className="p-3">Wersja i zakres</th><th className="p-3">Utworzył</th><th className="p-3">Typ</th><th className="p-3">Status</th><th className="p-3 text-right">Pozycje</th></tr></thead><tbody>{documents.map((document) => <tr key={document.id} className="border-t border-border"><td className="p-3 font-black text-title">{document.documentNo}</td><td className="p-3"><p>{formatPlanDate(document.planDate)}</p><p className="text-xs text-muted">{areaName(document.areaId)}</p></td><td className="p-3"><p>Wersja {document.planVersionNo || '—'}</p><p className="text-xs text-muted">{document.scopeLabel}</p></td><td className="p-3"><p>{document.createdBy}</p><p className="text-xs text-muted">{document.createdAt}</p></td><td className="p-3"><Badge tone={document.kind === 'correction' ? 'warning' : 'info'}>{document.kind === 'correction' ? 'Korekta' : 'Podstawowy'}</Badge></td><td className="p-3"><Badge tone={documentTone(document.status)}>{documentStatusLabel[document.status]}</Badge></td><td className="p-3 text-right">{document.rows.length}</td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak dokumentów" description="Dokumenty podstawowe i korekty pojawią się po ich utworzeniu." />}</section>
 
-      <section className="space-y-3"><SectionTitle title="Zwroty" subtitle={`${returnRows.length} wykrytych pozycji dla aktualnego spisu`} />{returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="bg-[rgba(255,255,255,0.035)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data planu</th><th className="p-3">Materiał</th><th className="p-3">Strefa</th><th className="p-3">Przyczyna</th><th className="p-3 text-right">Do zwrotu</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className="border-t border-border"><td className="p-3">{formatPlanDate(row.planDate)}</td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label text-xs font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3">{row.reason}</td><td className="p-3 text-right font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Badge tone={row.status === 'completed' ? 'success' : 'warning'}>{row.status === 'completed' ? 'Wykonany' : 'Otwarty'}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak zwrotów" description="Materiały do zwrotu są wyznaczane z aktualnego Spisu rzeczywistego i technologii planu." />}</section>
+      <section className="space-y-3"><SectionTitle title="Zwroty" subtitle={`${returnRows.length} wykrytych pozycji dla aktualnego spisu`} />{returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="bg-[var(--surface-soft)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data planu</th><th className="p-3">Materiał</th><th className="p-3">Strefa</th><th className="p-3">Przyczyna</th><th className="p-3 text-right">Do zwrotu</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className="border-t border-border"><td className="p-3">{formatPlanDate(row.planDate)}</td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label text-xs font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3">{row.reason}</td><td className="p-3 text-right font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Badge tone={row.status === 'completed' ? 'success' : 'warning'}>{row.status === 'completed' ? 'Wykonany' : 'Otwarty'}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak zwrotów" description="Materiały do zwrotu są wyznaczane z aktualnego Spisu rzeczywistego i technologii planu." />}</section>
 
       {state.archive.length ? <section className="space-y-3"><SectionTitle title="Wstrzymane i zakończone produkcje" subtitle={`${state.archive.length} pozycji`} /><div className="divide-y divide-border border-y border-border">{state.archive.map((entry) => <div key={entry.id} className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between"><div><div className="flex flex-wrap gap-2"><Badge tone={entry.status === 'suspended' ? 'warning' : 'success'}>{entry.status === 'suspended' ? 'Wstrzymana' : 'Zakończona'}</Badge>{entry.planItem.manualOverride ? <Badge tone="info">Technologia robocza</Badge> : null}</div><p className="mt-2 font-bold"><span className="text-title">{entry.planItem.index}</span><span className="catalog-label"> · {entry.planItem.name}</span></p><p className="mt-1 text-sm text-muted">{entry.planItem.station || 'Brak stanowiska'} · {entry.technologyName} · {entry.at}</p><p className="mt-1 text-xs text-dim">{entry.reason}</p></div>{entry.status === 'suspended' && !readOnly ? <Button variant="ghost" onClick={() => updateState((current) => ({ ...current, archive: current.archive.map((row) => row.id === entry.id ? { ...row, status: 'completed', reason: 'Produkcja zakończona ręcznie', at: nowLabel() } : row) }))}><Archive className="mr-2 h-4 w-4" />Zakończ produkcję</Button> : null}</div>)}</div></section> : null}
     </div>;
@@ -4086,14 +4367,14 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     instrukcja: renderGuide
   };
 
-  return <div className="space-y-5">
+  return <div className="planning-demand-page space-y-5">
     {!readOnly ? <PlanningSaveNotice
       info={saveInfo}
       retry={calculationEditorOpen ? () => { void saveCalculationEditorChanges(); } : retrySave}
       downloadDraft={downloadDraft}
       loadLatest={async () => { if (await loadLatest()) closeCalculationEditor(); }}
     /> : null}
-    {message ? <div className="fixed right-4 top-20 z-50 max-w-sm rounded-2xl border border-[rgba(255,122,26,0.55)] bg-[rgba(12,12,15,0.96)] px-4 py-3 text-sm font-semibold text-title shadow-2xl">{message}</div> : null}
+    {message ? <div className="fixed right-4 top-20 z-50 max-w-sm rounded-2xl border border-[rgba(255,122,26,0.55)] bg-[var(--toast-bg)] px-4 py-3 text-sm font-semibold text-title shadow-2xl">{message}</div> : null}
     {renderer[view]()}
   </div>;
 }

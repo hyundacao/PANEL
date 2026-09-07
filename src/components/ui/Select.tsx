@@ -121,7 +121,7 @@ export const SelectField = ({
     >
       <SelectPrimitive.Trigger
         className={cn(
-          'flex min-h-[48px] w-full items-center justify-between gap-3 rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(0,0,0,0.5))] px-4 py-2.5 text-sm font-semibold text-title shadow-[0_10px_24px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.14)] transition hover:border-[rgba(255,122,26,0.7)] hover:bg-[linear-gradient(180deg,rgba(255,255,255,0.12),rgba(0,0,0,0.5))] focus:border-[rgba(255,122,26,0.9)] focus:outline-none focus:ring-2 focus:ring-[rgba(255,122,26,0.35)] disabled:cursor-not-allowed disabled:text-disabled disabled:opacity-60',
+          'flex min-h-[48px] w-full items-center justify-between gap-3 rounded-2xl border border-[var(--control-border)] bg-[image:var(--control-bg)] px-4 py-2.5 text-sm font-semibold text-title shadow-[var(--control-shadow)] transition hover:border-[var(--brand-border-hover)] hover:bg-[image:var(--control-bg-hover)] focus:border-[var(--brand-border-strong)] focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:text-disabled disabled:opacity-60',
           className
         )}
         style={{ WebkitTapHighlightColor: 'transparent', ...style }}
@@ -137,7 +137,7 @@ export const SelectField = ({
         position="popper"
         sideOffset={8}
         collisionPadding={16}
-        className="z-50 w-[--radix-select-trigger-width] max-h-[min(70vh,var(--radix-select-content-available-height))] overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(15,15,18,0.98),rgba(8,8,10,0.96))] shadow-[0_24px_60px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)] transition data-[state=open]:animate-fade data-[state=open]:ring-1 data-[state=open]:ring-[rgba(255,122,26,0.28)]"
+        className="z-50 w-[--radix-select-trigger-width] max-h-[min(70vh,var(--radix-select-content-available-height))] overflow-hidden rounded-2xl border border-[var(--popover-border)] bg-[image:var(--popover-bg)] shadow-[var(--popover-shadow)] transition data-[state=open]:animate-fade data-[state=open]:ring-1 data-[state=open]:ring-[var(--brand-ring)]"
       >
           <SelectPrimitive.ScrollUpButton className="flex items-center justify-center py-2 text-muted">
             <ChevronUp className="h-4 w-4" />
@@ -146,7 +146,7 @@ export const SelectField = ({
             {groups.map((group, groupIndex) => (
               <React.Fragment key={group.key}>
                 {groupIndex > 0 && (
-                  <div className="my-2 h-px bg-[rgba(255,255,255,0.08)]" />
+                  <div className="my-2 h-px bg-[var(--border-subtle)]" />
                 )}
                 {group.label && (
                   <div className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-dim">
@@ -158,7 +158,7 @@ export const SelectField = ({
                     key={`${group.key}-${idx}`}
                     value={item.value}
                     disabled={item.disabled}
-                    className="relative flex cursor-pointer select-none items-center justify-between gap-3 rounded-xl px-3 py-2 text-sm font-semibold text-title outline-none transition data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50 data-[highlighted]:bg-[rgba(255,122,26,0.18)] data-[highlighted]:text-title data-[state=checked]:bg-[rgba(255,122,26,0.25)]"
+                    className="relative flex cursor-pointer select-none items-center justify-between gap-3 rounded-xl px-3 py-2 text-sm font-semibold text-title outline-none transition data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--brand-soft-hover)] data-[highlighted]:text-title data-[state=checked]:bg-[var(--brand-soft-active)]"
                   >
                     <SelectPrimitive.ItemText>{item.label}</SelectPrimitive.ItemText>
                     <SelectPrimitive.ItemIndicator className="text-brand">

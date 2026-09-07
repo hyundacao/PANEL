@@ -19,7 +19,7 @@ export const DataTable = ({
   stickyHeader?: boolean;
   desktopMaxHeightClassName?: string;
 }) => (
-  <div className="md:overflow-hidden md:rounded-2xl md:border md:border-[rgba(255,255,255,0.12)] md:bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(0,0,0,0.55))] md:shadow-[0_18px_40px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]">
+  <div className="md:overflow-hidden md:rounded-2xl md:border md:border-[var(--table-frame-border)] md:bg-[image:var(--table-frame-bg)] md:shadow-[var(--table-frame-shadow)]">
     <div className="space-y-2 md:hidden">
       {rows.map((row, rowIndex) => {
         const details = renderRowDetails?.(rowIndex) ?? null;
@@ -30,7 +30,7 @@ export const DataTable = ({
           <div
             key={`row-card-${rowIndex}`}
             className={cn(
-              'rounded-xl border border-[rgba(255,255,255,0.12)] bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(0,0,0,0.48))] p-3 shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-[rgba(255,122,26,0.55)]',
+              'rounded-xl border border-[var(--table-frame-border)] bg-[image:var(--table-card-bg)] p-3 shadow-[var(--table-card-shadow)] transition hover:border-[var(--brand-border)]',
               onRowClick && 'cursor-pointer',
               rowClassName
             )}
@@ -52,11 +52,11 @@ export const DataTable = ({
               <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
                 {columns[0]}
               </p>
-              <div className="mt-1 break-words text-sm font-semibold leading-snug text-brand">
+              <div className="mt-1 break-words text-sm font-semibold leading-snug text-[var(--data-key-color)]">
                 {primaryCell}
               </div>
             </div>
-            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-[rgba(255,255,255,0.08)] pt-3">
+            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-[var(--border-subtle)] pt-3">
               {secondaryCells.map((cell, cellIndex) => (
                 <div
                   key={`cell-card-${rowIndex}-${cellIndex + 1}`}
@@ -83,7 +83,7 @@ export const DataTable = ({
       <table className="w-full text-sm">
       <thead
         className={cn(
-          'bg-[linear-gradient(90deg,rgba(255,122,26,0.18),rgba(255,255,255,0.03))] text-title',
+          'bg-[image:var(--table-header-bg)] text-title',
           stickyHeader && 'sticky top-0 z-10'
         )}
       >
@@ -94,7 +94,7 @@ export const DataTable = ({
               className={cn(
                 'px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-title',
                 stickyHeader &&
-                  'bg-[linear-gradient(90deg,rgba(32,18,8,0.98),rgba(18,18,18,0.98))] backdrop-blur'
+                  'bg-[image:var(--table-sticky-header-bg)] backdrop-blur'
               )}
             >
               {col}
@@ -110,11 +110,11 @@ export const DataTable = ({
             <React.Fragment key={`row-${rowIndex}`}>
               <tr
                 className={cn(
-                  'border-t border-[rgba(255,255,255,0.08)] text-body transition hover:bg-[rgba(255,255,255,0.06)]',
+                  'border-t border-[var(--border-subtle)] text-body transition hover:bg-[var(--row-hover)]',
                   onRowClick && 'cursor-pointer',
                   !rowClassName &&
                     rowIndex % 2 === 1 &&
-                    'bg-[linear-gradient(90deg,rgba(255,255,255,0.04),rgba(0,0,0,0.35))]',
+                    'bg-[image:var(--row-alt)]',
                   rowClassName
                 )}
                 onClick={onRowClick ? () => onRowClick(rowIndex) : undefined}
@@ -138,7 +138,7 @@ export const DataTable = ({
                 ))}
               </tr>
               {details && (
-                <tr className="border-t border-[rgba(255,255,255,0.08)] bg-[rgba(0,0,0,0.35)]">
+                <tr className="border-t border-[var(--border-subtle)] bg-[var(--row-details-bg)]">
                   <td colSpan={columns.length} className="px-4 py-4">
                     {details}
                   </td>

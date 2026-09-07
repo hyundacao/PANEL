@@ -979,7 +979,7 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
                   className="min-h-[50px] text-base"
                 />
                 {showCatalogSuggestions && catalogSearch.trim().length >= 2 && (
-                  <div className="absolute z-30 mt-2 max-h-[360px] w-full overflow-y-auto rounded-xl border border-border bg-[#0c0e13] p-1.5 shadow-[0_22px_50px_rgba(0,0,0,0.55)]">
+                  <div className="absolute z-30 mt-2 max-h-[360px] w-full overflow-y-auto rounded-xl border border-border bg-[var(--modal-bg)] p-1.5 shadow-[var(--modal-shadow)]">
                     {sourceCatalogQuery.isLoading ? (
                       <p className="px-3 py-4 text-sm text-dim">Wczytywanie kartoteki...</p>
                     ) : sourceCatalogQuery.isError ? (
@@ -1127,7 +1127,7 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
               {showInventorySuggestions && normalizeSearch(query).length >= 2 && (
                 <div
                   role="listbox"
-                  className="absolute z-40 mt-2 max-h-[min(52vh,420px)] w-full overflow-y-auto rounded-xl border border-border bg-[#0c0e13] p-1.5 shadow-[0_22px_50px_rgba(0,0,0,0.65)]"
+                  className="absolute z-40 mt-2 max-h-[min(52vh,420px)] w-full overflow-y-auto rounded-xl border border-border bg-[var(--modal-bg)] p-1.5 shadow-[var(--modal-shadow)]"
                 >
                   {inventorySuggestions.length === 0 ? (
                     <p className="px-3 py-4 text-sm text-dim">

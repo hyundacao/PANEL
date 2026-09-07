@@ -62,6 +62,26 @@ test('technology editor starts with an empty unpersisted draft instead of the fi
   assert.equal(h.technologyEditorState(technologies, 'existing-tech').selected, technologies[0]);
 });
 
+test('technology labels keep the base name fixed and emergency descriptions concise', () => {
+  const h = createHeaderFixture();
+  const base = {
+    id: 'base', productIndex: '8001', productName: 'DETAL', variant: 'base', alternativeNo: 0,
+    description: 'SABIC + TPE + pojemnik', notes: '', shiftNorm: 0, materials: [], archived: false
+  };
+  const emergency = { ...base, id: 'alt', variant: 'alternative', alternativeNo: 1, description: 'NOVODUR' };
+  assert.equal(h.technologySelectLabel(base), 'Technologia bazowa');
+  assert.equal(h.technologySelectLabel(emergency), 'Awaryjna 1 · NOVODUR');
+  assert.equal(h.technologySelectLabel({
+    ...emergency,
+    description: 'ABS NOVODUR P2HP-AT Q202 WHITE 011236'
+  }), 'Awaryjna 1 · NOVODUR');
+  assert.equal(h.technologySelectLabel({
+    ...emergency,
+    alternativeNo: 2,
+    description: 'Turcja - tworzywo zastępcze: ABS NOVODUR'
+  }), 'Awaryjna 2 · Turcja + NOVODUR');
+});
+
 test('technology editor draft detects nested material changes without mutating the saved source', () => {
   const h = createHeaderFixture();
   const technology = {
@@ -76,6 +96,21 @@ test('technology editor draft detects nested material changes without mutating t
   draft.materials[0].usage = 0.072;
   assert.equal(editor.isSame(draft, technology), false);
   assert.equal(technology.materials[0].usage, 0.064);
+});
+
+test('technology editor detects a changed fixed source for a linked product', () => {
+  const h = createHeaderFixture();
+  const technology = {
+    id: 'basket-tech', productIndex: 'A23587002', productName: 'IRIS CUTLERY BASKET SPLITABLE ASM',
+    variant: 'base', alternativeNo: 0, description: '', notes: '', shiftNorm: 940, materials: [],
+    linkedProducts: [{ id: 'handle', productIndex: 'A23586802', productName: 'IRIS CB SPLITABLE HANDLE', usage: 2, unit: 'szt.', sourcePolicy: 'production' }],
+    archived: false
+  };
+  const editor = h.technologyEditorState([technology], technology.id);
+  const draft = editor.clone(technology);
+  assert.equal(editor.isSame(draft, technology), true);
+  draft.linkedProducts[0].sourcePolicy = 'warehouse';
+  assert.equal(editor.isSame(draft, technology), false);
 });
 
 test('plan emphasizes the product name in bold orange and keeps the index and notes lighter', () => {
@@ -195,6 +230,17 @@ test('working recipe becomes the next numbered emergency technology without chan
   assert.equal(result.technology.materials[0].name, 'Karton zastępczy');
   assert.notEqual(result.technology.materials[0].id, materials[0].id);
   assert.equal(technologies.length, 2);
+});
+
+test('redundant emergency material prefix is removed when a variant is created', () => {
+  const h = createHeaderFixture();
+  const base = {
+    id: 'base', productIndex: '8001', productName: 'DETAL', variant: 'base', alternativeNo: 0,
+    description: '', notes: '', shiftNorm: 400, materials: [], emergencyMaterials: [], archived: false
+  };
+  const materials = [{ id: 'material', code: 'ABS-2', name: 'ABS NOVODUR', category: 'Tworzywo', usage: 0.2, unit: 'kg', logisticQty: 1 }];
+  const result = h.createAlternative([base], base.id, materials, 400, 'Tworzywo zastępcze: NOVODUR');
+  assert.equal(result.technology.description, 'NOVODUR');
 });
 
 test('header groups plan controls and source metadata without repeated statistics cards', () => {
@@ -547,6 +593,33 @@ test('each product remains individually included or excluded from calculations',
   control(h, 'Dzień produkcji').props.onChange({ target: { value: '2026-09-01' } });
   control(h, 'Dzień produkcji').props.onChange({ target: { value: '2026-08-31' } });
   assert.deepEqual(Array.from(h.ctx.state.plan, (item) => item.included), [false, true, false]);
+});
+
+test('a product can be marked as calculated for the selected day and restored', () => {
+  const h = createHeaderFixture();
+  const item = h.ctx.state.plan[0];
+  h.ctx.state.documents = [{ id: 'draft-1', planDate: '2026-08-31', status: 'draft', rows: [] }];
+  control(h, `Oznacz jako przeliczone: ${item.index}`).props.onClick();
+
+  assert.equal(h.ctx.state.plan[0].included, false);
+  assert.equal(h.ctx.state.pickingDone[`2026-08-31|${item.id}`], true);
+  assert.equal(h.ctx.state.documents[0].status, 'outdated');
+  assert.match(h.html(), /Przeliczone: 1/);
+  assert.ok(control(h, `Przywróć do obliczeń: ${item.index}`));
+
+  control(h, `Przywróć do obliczeń: ${item.index}`).props.onClick();
+  assert.equal(h.ctx.state.plan[0].included, true);
+  assert.equal(h.ctx.state.pickingDone[`2026-08-31|${item.id}`], undefined);
+});
+
+test('including all visible products also restores calculated products', () => {
+  const h = createHeaderFixture();
+  const item = h.ctx.state.plan[0];
+  control(h, `Oznacz jako przeliczone: ${item.index}`).props.onClick();
+  control(h, 'Zaznacz wszystkie widoczne pozycje').props.onClick();
+
+  assert.ok(h.ctx.state.plan.every((entry) => entry.included));
+  assert.equal(h.ctx.state.pickingDone[`2026-08-31|${item.id}`], undefined);
 });
 
 test('include-column checkbox selects or clears every currently visible product', () => {

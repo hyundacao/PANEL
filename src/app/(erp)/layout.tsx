@@ -186,7 +186,7 @@ export default function ErpLayout({ children }: { children: React.ReactNode }) {
                       className={cn(
                         'min-h-[52px] rounded-xl border border-border bg-surface px-3 py-2.5 text-center text-sm font-semibold leading-tight text-title shadow-[inset_0_1px_0_var(--inner-highlight)] transition hover:border-[rgba(255,122,26,0.7)] hover:text-title',
                         active &&
-                          'border-[rgba(255,122,26,0.9)] bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(0,0,0,0.5))] shadow-[0_0_0_2px_rgba(255,122,26,0.25)]'
+                          'border-[rgba(255,122,26,0.9)] bg-[image:var(--control-bg)] shadow-[0_0_0_2px_var(--brand-ring),var(--control-shadow)]'
                       )}
                     >
                       {item.label}

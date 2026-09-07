@@ -124,10 +124,10 @@ const ReasonChips = ({
   if (parts.length === 0) return <p className="text-sm text-dim">Brak wpisu</p>;
 
   const toneClass = {
-    amber: 'border-amber-400/25 bg-amber-400/10 text-amber-100',
-    cyan: 'border-cyan-400/25 bg-cyan-400/10 text-cyan-100',
-    green: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-100',
-    slate: 'border-slate-400/20 bg-slate-400/10 text-slate-100'
+    amber: 'border-amber-400/35 bg-amber-400/10 text-warning',
+    cyan: 'border-cyan-500/35 bg-cyan-500/10 text-[var(--location-blue)]',
+    green: 'border-emerald-500/35 bg-emerald-500/10 text-success',
+    slate: 'border-slate-400/35 bg-slate-400/10 text-muted'
   }[muted ? 'slate' : tone];
 
   return (
@@ -163,11 +163,11 @@ const Metric = ({
   tone?: 'orange' | 'cyan' | 'emerald' | 'violet' | 'slate';
 }) => {
   const toneClass = {
-    orange: 'from-orange-500/20 to-orange-500/5 text-orange-200 ring-orange-400/25',
-    cyan: 'from-cyan-500/20 to-cyan-500/5 text-cyan-200 ring-cyan-400/25',
-    emerald: 'from-emerald-500/20 to-emerald-500/5 text-emerald-200 ring-emerald-400/25',
-    violet: 'from-violet-500/20 to-violet-500/5 text-violet-200 ring-violet-400/25',
-    slate: 'from-slate-500/14 to-slate-500/5 text-slate-200 ring-white/10'
+    orange: 'from-orange-500/16 to-orange-500/5 text-[var(--catalog-accent)] ring-orange-500/35',
+    cyan: 'from-cyan-500/16 to-cyan-500/5 text-[var(--location-blue)] ring-cyan-500/35',
+    emerald: 'from-emerald-500/16 to-emerald-500/5 text-success ring-emerald-500/35',
+    violet: 'from-violet-500/16 to-violet-500/5 text-[var(--value-purple)] ring-violet-500/35',
+    slate: 'from-slate-500/12 to-slate-500/5 text-muted ring-[var(--border)]'
   }[tone];
 
   return (
@@ -182,10 +182,10 @@ const Metric = ({
 };
 
 const BrigadierShiftBox = ({ shift }: { shift: BrigadierShiftScrap }) => (
-  <div className="border-t border-white/10 py-2 first:border-t-0 first:pt-0 last:pb-0">
-    <div className="min-w-0 rounded-lg border border-emerald-400/10 bg-black/10 p-2.5">
+  <div className="border-t border-border py-2 first:border-t-0 first:pt-0 last:pb-0">
+    <div className="min-w-0 rounded-lg border border-border bg-surface p-2.5">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="rounded-md bg-emerald-400/10 px-2.5 py-1 text-[11px] font-black uppercase tracking-wide text-emerald-200">
+        <p className="rounded-md bg-emerald-400/10 px-2.5 py-1 text-[11px] font-black uppercase tracking-wide text-success">
         {shift.label}
       </p>
         <div className="inline-flex h-8 items-center gap-2 rounded-md border border-emerald-400/15 bg-emerald-400/8 px-2.5">
@@ -332,27 +332,27 @@ export default function RaportBrakowosciPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(14,165,233,0.14),rgba(34,197,94,0.08)_42%,rgba(255,122,26,0.12))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+    <div className="shortage-report-page space-y-6">
+      <div className="rounded-2xl border border-border bg-[image:var(--shortage-hero-bg)] p-5 shadow-[var(--card-shadow)]">
         <PageHeader
           title="Raport brakowosci"
           subtitle="Porownanie raportu MES z raportem brygadzisty. Jeden aktualny wynik, nadpisywany po kolejnym przeliczeniu."
         />
-        <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4 md:flex-row md:items-center md:justify-between">
+        <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-wrap items-center gap-3 text-sm text-dim">
-            <span className="inline-flex items-center gap-2 rounded-lg bg-black/20 px-3 py-2 ring-1 ring-white/10">
-              <CalendarClock className="h-4 w-4 text-cyan-200" />
+            <span className="inline-flex items-center gap-2 rounded-lg bg-surface2 px-3 py-2 ring-1 ring-[var(--border)]">
+              <CalendarClock className="h-4 w-4 text-[var(--location-blue)]" />
               Aktualny raport: <strong className="text-title">{latestUpdatedAt ? formatDateTime(latestUpdatedAt) : 'brak zapisu'}</strong>
             </span>
             {selectedSheet && (
-              <span className="inline-flex items-center gap-2 rounded-lg bg-black/20 px-3 py-2 ring-1 ring-white/10">
-                <ClipboardList className="h-4 w-4 text-emerald-200" />
+              <span className="inline-flex items-center gap-2 rounded-lg bg-surface2 px-3 py-2 ring-1 ring-[var(--border)]">
+                <ClipboardList className="h-4 w-4 text-success" />
                 Arkusz: <strong className="text-title">{selectedSheet}</strong>
               </span>
             )}
           </div>
           {rows.length > 0 && (
-            <Button asChild variant="outline" className="border-cyan-400/45 text-cyan-100 hover:bg-cyan-400/10">
+            <Button asChild variant="outline">
               <a href={csvHref} download="raport-brakowosci.csv">
                 <Download className="mr-2 h-4 w-4" />
                 Pobierz CSV
@@ -362,7 +362,7 @@ export default function RaportBrakowosciPage() {
         </div>
       </div>
 
-      <Card className="space-y-4 border-white/10 bg-[rgba(8,10,14,0.76)] p-3 sm:space-y-5 sm:p-5">
+      <Card className="space-y-4 border-border bg-surface p-3 sm:space-y-5 sm:p-5">
         <form className="grid gap-4 xl:grid-cols-[1fr_1fr_auto]" onSubmit={(event) => submit(event, 'sheets')}>
           <label className="min-w-0 space-y-2">
             <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-dim">
@@ -376,7 +376,7 @@ export default function RaportBrakowosciPage() {
                 setMesPdf(event.target.files?.[0] ?? null);
                 setSheets([]);
               }}
-              className="w-full rounded-xl border border-border bg-[rgba(0,0,0,0.36)] px-3 py-3 text-sm text-body file:mr-3 file:rounded-lg file:border-0 file:bg-[rgba(255,122,26,0.18)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-title"
+              className="w-full rounded-xl border border-border bg-[var(--field-bg)] px-3 py-3 text-sm shadow-[var(--field-shadow)] text-body file:mr-3 file:rounded-lg file:border-0 file:bg-[rgba(255,122,26,0.18)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-title"
             />
           </label>
           <label className="min-w-0 space-y-2">
@@ -391,7 +391,7 @@ export default function RaportBrakowosciPage() {
                 setBrigadierExcel(event.target.files?.[0] ?? null);
                 setSheets([]);
               }}
-              className="w-full rounded-xl border border-border bg-[rgba(0,0,0,0.36)] px-3 py-3 text-sm text-body file:mr-3 file:rounded-lg file:border-0 file:bg-[rgba(255,122,26,0.18)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-title"
+              className="w-full rounded-xl border border-border bg-[var(--field-bg)] px-3 py-3 text-sm shadow-[var(--field-shadow)] text-body file:mr-3 file:rounded-lg file:border-0 file:bg-[rgba(255,122,26,0.18)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-title"
             />
           </label>
           <Button type="submit" disabled={!canLoadSheets || loading} className="w-full self-end xl:w-auto">
@@ -401,13 +401,13 @@ export default function RaportBrakowosciPage() {
         </form>
 
         {sheets.length > 0 && (
-          <form className="flex flex-col gap-3 border-t border-white/10 pt-4 md:flex-row md:items-end" onSubmit={(event) => submit(event, 'analyze')}>
+          <form className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-end" onSubmit={(event) => submit(event, 'analyze')}>
             <label className="w-full space-y-2 md:max-w-sm">
               <span className="text-xs font-semibold uppercase tracking-wide text-dim">Arkusz z Excela</span>
               <select
                 value={selectedSheet}
                 onChange={(event) => setSelectedSheet(event.target.value)}
-                className="w-full rounded-xl border border-border bg-[rgba(0,0,0,0.40)] px-3 py-3 text-sm text-body focus:outline-none focus:ring-2 focus:ring-ring"
+                className="w-full rounded-xl border border-border bg-[var(--field-bg)] px-3 py-3 text-sm shadow-[var(--field-shadow)] text-body focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 {sheets.map((sheet) => (
                   <option key={sheet} value={sheet}>
@@ -443,11 +443,11 @@ export default function RaportBrakowosciPage() {
         {rows.map((row) => (
           <Card
             key={`${row.sheet}-${row.machine}-${row.detail}`}
-            className="grid min-w-0 gap-2.5 border-white/10 bg-[rgba(8,10,14,0.84)] p-2.5 sm:gap-3 sm:p-3 xl:grid-cols-2"
+            className="grid min-w-0 gap-2.5 border-border bg-surface p-2.5 shadow-[var(--card-shadow)] sm:gap-3 sm:p-3 xl:grid-cols-2"
           >
-            <div className="min-w-0 rounded-lg border border-orange-400/20 bg-orange-400/5 p-2.5 sm:p-3 xl:col-span-2">
+            <div className="min-w-0 rounded-lg border border-[var(--brand-border-soft)] bg-[var(--brand-faint)] p-2.5 sm:p-3 xl:col-span-2">
               <div className="grid gap-2.5 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
-                <span className="flex h-12 w-fit items-center rounded-lg bg-orange-500/18 px-3 text-lg font-black text-orange-200 sm:text-xl">
+                <span className="flex h-12 w-fit items-center rounded-lg bg-[var(--brand-soft)] px-3 text-lg font-black text-[var(--catalog-accent)] sm:text-xl">
                   {row.machine}
                 </span>
                 <div className="min-w-0">
@@ -457,7 +457,7 @@ export default function RaportBrakowosciPage() {
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                  <span className="inline-flex h-12 items-center gap-3 rounded-lg border border-red-400/45 bg-red-500/20 px-3.5 text-red-100 shadow-[0_10px_24px_-20px_rgba(248,113,113,0.9)]">
+                  <span className="inline-flex h-12 items-center gap-3 rounded-lg border border-red-500/45 bg-red-500/10 px-3.5 text-danger shadow-[0_10px_24px_-20px_rgba(248,113,113,0.9)]">
                     <span className="text-[10px] font-black uppercase tracking-wide opacity-85">Brakowosc</span>
                     <span className="text-xl font-black tabular-nums leading-none sm:text-[26px]">
                       {formatPct(row.mesScrapPct)}
@@ -470,7 +470,7 @@ export default function RaportBrakowosciPage() {
               </div>
             </div>
 
-            <div className="min-w-0 rounded-xl border-l-4 border-emerald-400 bg-emerald-400/5 p-3">
+            <div className="min-w-0 rounded-xl border-l-4 border-emerald-500 bg-surface2 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--success)_18%,transparent)] p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">Brygadzista</p>
               <div className="mt-2">
                 <Metric label="Braki" value={formatQty(row.brigadierScrapQty)} />
@@ -508,7 +508,7 @@ export default function RaportBrakowosciPage() {
               </div>
             </div>
 
-            <div className="min-w-0 rounded-xl border-l-4 border-cyan-400 bg-cyan-400/5 p-3">
+            <div className="min-w-0 rounded-xl border-l-4 border-cyan-500 bg-surface2 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--location-blue)_18%,transparent)] p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">MES</p>
               <div className="mt-2">
                 <Metric label="Braki" value={formatQty(row.mesScrapQty)} />

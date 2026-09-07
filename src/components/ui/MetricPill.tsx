@@ -11,7 +11,7 @@ export const MetricPill = ({
 }) => (
   <span
     className={cn(
-      'relative inline-flex items-center rounded-[10px] border bg-[linear-gradient(180deg,rgba(0,0,0,0.65),rgba(0,0,0,0.35))] px-3 py-1 text-sm font-semibold',
+      'relative inline-flex items-center rounded-[10px] border bg-[image:linear-gradient(180deg,var(--inset-panel-bg),var(--row-details-bg))] px-3 py-1 text-sm font-semibold',
       className
     )}
     style={{

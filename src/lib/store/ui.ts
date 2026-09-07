@@ -20,6 +20,19 @@ export type UiFilters = {
   search: string;
 };
 
+export type Theme = 'dark' | 'light';
+
+const normalizeTheme = (value: unknown): Theme => (value === 'light' ? 'light' : 'dark');
+
+const applyTheme = (theme: Theme) => {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  root.classList.toggle('dark', theme === 'dark');
+  root.classList.toggle('light', theme === 'light');
+  root.dataset.theme = theme;
+  root.style.colorScheme = theme;
+};
+
 export type ErpWorkspaceTab =
   | 'issuer'
   | 'warehouseman'
@@ -41,6 +54,9 @@ const normalizeErpWorkspaceTab = (value: unknown): ErpWorkspaceTab => {
 };
 
 type UiState = {
+  theme: Theme;
+  setTheme: (value: Theme) => void;
+  toggleTheme: () => void;
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
   setSidebarCollapsed: (value: boolean) => void;
@@ -73,6 +89,7 @@ type UiState = {
 
 type PersistedUiState = Pick<
   UiState,
+  | 'theme'
   | 'sidebarCollapsed'
   | 'user'
   | 'role'
@@ -148,6 +165,18 @@ const storage = createJSONStorage<PersistedUiState>(() => ({
 export const useUiStore = create<UiState>()(
   persist(
     (set) => ({
+      theme: 'dark',
+      setTheme: (value) => {
+        const theme = normalizeTheme(value);
+        applyTheme(theme);
+        set({ theme });
+      },
+      toggleTheme: () =>
+        set((state) => {
+          const theme: Theme = state.theme === 'dark' ? 'light' : 'dark';
+          applyTheme(theme);
+          return { theme };
+        }),
       sidebarCollapsed: false,
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (value) => set({ sidebarCollapsed: value }),
@@ -219,6 +248,7 @@ export const useUiStore = create<UiState>()(
       name: storageKey,
       storage,
       partialize: (state) => ({
+        theme: state.theme,
         sidebarCollapsed: state.sidebarCollapsed,
         user: state.user,
         role: state.role,
@@ -235,6 +265,7 @@ export const useUiStore = create<UiState>()(
       onRehydrateStorage: () => (state) => {
         state?.setHydrated(true);
         if (state) {
+          state.setTheme(normalizeTheme(state.theme));
           state.setRememberMe(getRememberFlag());
           state.setErpWorkspaceTab(normalizeErpWorkspaceTab(state.erpWorkspaceTab));
           state.setErpPushWarehousemanOptions(

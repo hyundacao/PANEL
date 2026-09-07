@@ -55,7 +55,7 @@ type ShiftGroup = {
 };
 
 const textAreaClass =
-  'w-full rounded-xl border border-border bg-[rgba(0,0,0,0.40)] px-3 py-2 text-sm text-body placeholder:text-dim hover:border-borderStrong focus:border-[rgba(255,106,0,0.55)] focus:outline-none focus:ring-2 focus:ring-ring disabled:text-disabled disabled:opacity-55';
+  'w-full rounded-xl border border-border bg-[var(--field-bg)] px-3 py-2 text-sm shadow-[var(--field-shadow)] text-body placeholder:text-dim hover:border-borderStrong focus:border-[rgba(255,106,0,0.55)] focus:outline-none focus:ring-2 focus:ring-ring disabled:text-disabled disabled:opacity-55';
 
 const parseIndexTokens = (text: string) => {
   const results: string[] = [];

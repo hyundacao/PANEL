@@ -31,10 +31,10 @@ const sourceFile = path.join(root, 'src/app/(main)/planowanie-zapotrzebowania/pa
 const source = readFileSync(sourceFile, 'utf8');
 const ast = ts.createSourceFile('page.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const names = [
-  'uid', 'numberValue', 'normalize', 'normalizeLinkedSources', 'clonePlanItems', 'cloneMaterials', 'cleanImportedTechnologyDescription', 'technologyMatchesProduct', 'technologyLabel', 'technologySelectLabel', 'normalizedMaterialUnit', 'isKilogramUnit', 'isGramUnit', 'isThousandPiecesUnit', 'technologyResultUnit', 'technologyResultQuantity', 'roundTechnologyMaterialQuantity', 'linkedSourceSelectionForItem', 'linkedMachineProductQuantity', 'linkedWarehouseProductQuantity', 'linkedSurplusQuantity', 'sameTechnologyMaterials', 'sameLinkedProducts', 'createAlternativeTechnologyFromWorkingCopy', 'selectPlanDate', 'currentPlanVersion',
+  'uid', 'numberValue', 'normalize', 'planCalculationDoneKey', 'isPlanCalculationDone', 'normalizeLinkedSources', 'clonePlanItems', 'cloneMaterials', 'cleanImportedTechnologyDescription', 'technologyMatchesProduct', 'technologyLabel', 'technologySelectLabel', 'normalizedMaterialUnit', 'isKilogramUnit', 'isGramUnit', 'isThousandPiecesUnit', 'technologyResultUnit', 'technologyResultQuantity', 'roundTechnologyMaterialQuantity', 'linkedSourceSelectionForItem', 'linkedMachineProductQuantity', 'linkedWarehouseProductQuantity', 'linkedSurplusQuantity', 'sameTechnologyMaterials', 'sameLinkedProducts', 'createAlternativeTechnologyFromWorkingCopy', 'selectPlanDate', 'currentPlanVersion',
   'tomorrow', 'savedPlanDates', 'customRangeVisible', 'globalRangeChoice', 'Field', 'PlanAmountField', 'Stat',
   'pendingPlanWorkbook', 'planImportWorkbook', 'planImportSheet',
-  'areaName', 'selectPlanningArea', 'selectPlanAreaFilter', 'shiftNormForItem', 'planQuantityNeedsReview', 'areaPlan', 'planSearchTokens', 'visibleAreaPlan', 'allVisiblePlanIncluded', 'someVisiblePlanIncluded', 'setVisiblePlanIncluded', 'quantityResolvedPlanItemIds', 'unresolvedActiveCount',
+  'areaName', 'selectPlanningArea', 'selectPlanAreaFilter', 'shiftNormForItem', 'planQuantityNeedsReview', 'areaPlan', 'planSearchTokens', 'visibleAreaPlan', 'allVisiblePlanIncluded', 'someVisiblePlanIncluded', 'calculatedVisiblePlanCount', 'updatePlanItemsIncluded', 'togglePlanItemCalculated', 'setVisiblePlanIncluded', 'quantityResolvedPlanItemIds', 'unresolvedActiveCount',
   'renderPlanTable', 'renderPlan', 'renderCalculationDetails', 'openAlternativeDraft', 'closeAlternativeDraft', 'saveWorkingAsAlternativeTechnology', 'SectionTitle', 'renderHeader', 'renderReturnsV2', 'ProductCatalogField',
   'emptyTechnologyDraft', 'selectedTechnologyForEditor', 'cloneTechnologyForEditor', 'sameTechnologyEditorValue'
 ];
@@ -47,7 +47,7 @@ const visit = (node) => {
 };
 visit(ast);
 for (const name of names) if (!definitions.has(name)) throw new Error('Missing fixture function: ' + name);
-const compiled = compile('{\n' + [...definitions.values()].join('\n') + '\nObject.assign(exports, { renderPlan, renderCalculationDetails, renderReturnsV2, ProductCatalogField, emptyTechnologyDraft, selectedTechnologyForEditor, cloneTechnologyForEditor, sameTechnologyEditorValue, createAlternativeTechnologyFromWorkingCopy });\n}', 'fixture.tsx');
+const compiled = compile('{\n' + [...definitions.values()].join('\n') + '\nObject.assign(exports, { renderPlan, renderCalculationDetails, renderReturnsV2, ProductCatalogField, emptyTechnologyDraft, selectedTechnologyForEditor, cloneTechnologyForEditor, sameTechnologyEditorValue, createAlternativeTechnologyFromWorkingCopy, technologyLabel, technologySelectLabel });\n}', 'fixture.tsx');
 
 export const createHeaderFixture = (overrides = {}) => {
   const plan = ['MAX CP+TH PRINTED F1_WQ35G2D0ES_A', 'MAX CP+TH PRINTED F1_WQ33G2D00', 'MAINT. DOOR CUBIC POPIEL'].map((name, index) => ({
@@ -64,7 +64,7 @@ export const createHeaderFixture = (overrides = {}) => {
       { id: 'bakoma', name: 'Bakoma' }, { id: 'lakiernia', name: 'Lakiernia' },
       { id: 'narzedziownia', name: 'Narzędziownia' }, { id: 'shared', name: 'Wspólne', shared: true }
     ],
-    plan, dailyPlans: { '2026-08-31': plan, '2026-08-30': [] }, quantityCorrections: [], documents: [], archive: [],
+    plan, dailyPlans: { '2026-08-31': plan, '2026-08-30': [] }, quantityCorrections: [], documents: [], archive: [], pickingDone: {},
     inventory: [], inventorySourceDate: '', inventorySyncedAt: '', returnStatuses: {}, technologies: [],
     planVersions: [{ id: 'v1', planDate: '2026-08-31', versionNo: 1, status: 'active',
       fileName: 'Plan produkcji 31.08.2026.xlsx', sheetName: '31.08', importedAt: '31.08.2026, 08:15', importedBy: 'Test',
@@ -150,7 +150,22 @@ export const createHeaderFixture = (overrides = {}) => {
     loadFixtureExports();
     return ctx.exports.createAlternativeTechnologyFromWorkingCopy(technologies, selectedTechnologyId, materials, shiftNorm, description);
   };
-  return { ctx, render, html: (view) => renderToStaticMarkup(render(view)), productCatalogField, technologyEditorState, createAlternative };
+  return {
+    ctx,
+    render,
+    html: (view) => renderToStaticMarkup(render(view)),
+    productCatalogField,
+    technologyEditorState,
+    createAlternative,
+    technologyLabel: (technology) => {
+      loadFixtureExports();
+      return ctx.exports.technologyLabel(technology);
+    },
+    technologySelectLabel: (technology) => {
+      loadFixtureExports();
+      return ctx.exports.technologySelectLabel(technology);
+    }
+  };
 };
 
 export const headerPreview = (overrides = {}) => '<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><style>body{margin:0;background:#0c0d10;color:#dce1e7;font-family:Arial,sans-serif;letter-spacing:0}main{max-width:1440px;margin:auto;padding:24px}@media(max-width:600px){main{padding:16px}}</style></head><body><main>'

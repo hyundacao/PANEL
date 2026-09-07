@@ -21,15 +21,15 @@ export const Toggle = ({
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        'relative h-7 w-12 rounded-full border border-[rgba(255,122,26,0.45)] bg-[rgba(10,10,12,0.65)] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.35)] transition',
+        'relative h-7 w-12 rounded-full border border-[var(--brand-border)] bg-[var(--toggle-off-bg)] shadow-[var(--toggle-shadow)] transition',
         checked &&
-          'border-[rgba(255,122,26,0.95)] bg-[linear-gradient(180deg,rgba(255,186,122,0.55),rgba(255,122,26,0.55))] shadow-[0_0_0_2px_rgba(255,122,26,0.25)]'
+          'border-[var(--brand-border-strong)] bg-[image:var(--toggle-on-bg)] shadow-[var(--toggle-on-shadow)]'
       )}
     >
       <span
         className={cn(
-          'block h-4.5 w-4.5 translate-x-1 rounded-full bg-[rgba(255,255,255,0.9)] shadow-[0_2px_6px_rgba(0,0,0,0.45)] transition',
-          checked && 'translate-x-6 bg-[#FF7A1A] shadow-[0_0_0_2px_rgba(255,255,255,0.6)]'
+          'block h-4.5 w-4.5 translate-x-1 rounded-full bg-[var(--toggle-thumb-bg)] shadow-[var(--toggle-thumb-shadow)] transition',
+          checked && 'translate-x-6 bg-[var(--toggle-thumb-on-bg)] shadow-[var(--toggle-thumb-on-shadow)]'
         )}
       />
     </button>

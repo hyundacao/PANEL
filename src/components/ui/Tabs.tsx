@@ -18,7 +18,7 @@ export const TabsList = ({ className, ...props }: TabsPrimitive.TabsListProps) =
 export const TabsTrigger = ({ className, ...props }: TabsPrimitive.TabsTriggerProps) => (
   <TabsPrimitive.Trigger
     className={cn(
-      'whitespace-nowrap rounded-lg border border-transparent px-3 py-1.5 text-sm font-semibold text-muted transition data-[state=active]:border-[rgba(255,106,0,0.65)] data-[state=active]:bg-brandSoft data-[state=active]:text-title data-[state=active]:ring-2 data-[state=active]:ring-[rgba(255,122,26,0.45)] data-[state=active]:shadow-[0_0_0_3px_rgba(255,122,26,0.18)]',
+      'whitespace-nowrap rounded-lg border border-transparent px-3 py-1.5 text-sm font-semibold text-muted transition data-[state=active]:border-[var(--brand-border-hover)] data-[state=active]:bg-brandSoft data-[state=active]:text-title data-[state=active]:ring-2 data-[state=active]:ring-[var(--brand-ring)] data-[state=active]:shadow-[0_0_0_3px_var(--brand-ring)]',
       className
     )}
     {...props}

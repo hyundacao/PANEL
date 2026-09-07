@@ -9,7 +9,7 @@ export const ContentScrim = ({
 }) => (
   <div
     className={cn(
-      'rounded-[18px] border border-border bg-[var(--scrim)] p-4 backdrop-blur-[8px] md:p-6',
+      'rounded-[18px] border border-border bg-[var(--content-scrim)] p-4 backdrop-blur-[8px] md:p-6',
       className
     )}
   >

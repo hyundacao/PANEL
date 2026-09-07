@@ -19,7 +19,9 @@ import {
   Settings2,
   Factory,
   FileCheck2,
-  RotateCcw
+  RotateCcw,
+  Moon,
+  Sun
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { withProductionPlanDate } from '@/lib/utils/productionPlanDate';
@@ -124,7 +126,7 @@ const navItemsPlanowanieZapotrzebowania: NavItem[] = [
 export const Sidebar = () => {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse, clearActiveWarehouse } = useUiStore();
+  const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse, clearActiveWarehouse, theme, toggleTheme } = useUiStore();
   const warehouse = activeWarehouse as WarehouseKey | null;
   const isAdminRoute = pathname.startsWith('/admin');
   const roleLabel = getRoleLabel(user, warehouse);
@@ -282,8 +284,8 @@ export const Sidebar = () => {
                 href={withProductionPlanDate(item.href, searchParams.get('date'))}
                 onClick={closeOnMobile}
                 className={cn(
-                  'flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[rgba(255,255,255,0.04)] hover:text-brandHover',
-                  active && 'bg-[rgba(255,255,255,0.06)]'
+                  'flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[var(--sidebar-item-hover)] hover:text-brandHover',
+                  active && 'bg-[var(--sidebar-item-active)]'
                 )}
               >
                 <span
@@ -292,9 +294,9 @@ export const Sidebar = () => {
                     active && 'bg-brand'
                   )}
                 />
-                <Icon className="h-4 w-4" style={{ color: 'var(--brand)' }} />
+                <Icon className="h-4 w-4" style={{ color: active ? 'var(--brand)' : 'var(--sidebar-item-color)' }} />
                 {!sidebarCollapsed && (
-                  <span style={{ color: 'var(--brand)' }}>{item.label}</span>
+                  <span style={{ color: active ? 'var(--brand)' : 'var(--sidebar-item-color)' }}>{item.label}</span>
                 )}
               </Link>
             );
@@ -306,29 +308,49 @@ export const Sidebar = () => {
                 clearActiveWarehouse();
                 closeOnMobile();
               }}
-              className="flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[rgba(255,255,255,0.04)] hover:text-brandHover"
+              className="flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[var(--sidebar-item-hover)] hover:text-brandHover"
             >
               <span className="h-8 w-[2px] rounded-full bg-transparent" />
-              <ArrowLeftRight className="h-4 w-4" style={{ color: 'var(--brand)' }} />
-              {!sidebarCollapsed && <span style={{ color: 'var(--brand)' }}>Zmień moduł</span>}
+              <ArrowLeftRight className="h-4 w-4" style={{ color: 'var(--sidebar-item-color)' }} />
+              {!sidebarCollapsed && <span style={{ color: 'var(--sidebar-item-color)' }}>Zmień moduł</span>}
             </Link>
           )}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[var(--sidebar-item-hover)]"
+            aria-label={theme === 'dark' ? 'Włącz jasny motyw' : 'Włącz ciemny motyw'}
+            title={theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'}
+            aria-pressed={theme === 'light'}
+          >
+            <span className="h-8 w-[2px] rounded-full bg-transparent" />
+            {theme === 'dark' ? (
+              <Sun className="h-4 w-4" style={{ color: 'var(--sidebar-item-color)' }} />
+            ) : (
+              <Moon className="h-4 w-4" style={{ color: 'var(--sidebar-item-color)' }} />
+            )}
+            {!sidebarCollapsed && (
+              <span style={{ color: 'var(--sidebar-item-color)' }}>
+                {theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'}
+              </span>
+            )}
+          </button>
         </nav>
 
         <div
           className={cn(
-            'overflow-hidden rounded-2xl border border-[rgba(255,122,0,0.22)] bg-[#0b0c10] shadow-[0_14px_32px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.08)]',
+            'overflow-hidden rounded-2xl border border-[var(--sidebar-profile-border)] bg-[var(--sidebar-profile-bg)] shadow-[var(--sidebar-profile-shadow)]',
             sidebarCollapsed ? 'p-2' : 'p-3'
           )}
           style={{
             backgroundImage:
-              "linear-gradient(100deg, rgba(7,8,12,0.78), rgba(7,8,12,0.58)), url('/profil-panel-bg.png')",
+              "var(--sidebar-profile-overlay), url('/profil-panel-bg.png')",
             backgroundPosition: 'left center',
             backgroundSize: 'cover'
           }}
         >
           <div className={cn('flex items-center', sidebarCollapsed ? 'justify-center' : 'gap-3')}>
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[rgba(255,122,0,0.32)] bg-[linear-gradient(145deg,rgba(255,122,0,0.22),rgba(124,92,255,0.16))] text-sm font-black uppercase text-[var(--brand)] shadow-[inset_0_1px_0_rgba(255,255,255,0.10)]">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--sidebar-avatar-border)] bg-[image:var(--sidebar-avatar-bg)] text-sm font-black uppercase text-[var(--brand)] shadow-[inset_0_1px_0_rgba(255,255,255,0.10)]">
               {displayName.slice(0, 1) || '?'}
             </div>
             {!sidebarCollapsed && (
@@ -342,7 +364,7 @@ export const Sidebar = () => {
             <button
               type="button"
               onClick={handleLogout}
-              className="mt-3 flex h-9 w-full items-center justify-center rounded-xl border border-[rgba(255,255,255,0.08)] bg-black/20 text-xs font-semibold text-dim transition hover:border-[rgba(255,122,0,0.28)] hover:bg-[rgba(255,122,0,0.08)] hover:text-title"
+              className="mt-3 flex h-9 w-full items-center justify-center rounded-xl border border-[var(--sidebar-action-border)] bg-[var(--sidebar-action-bg)] text-xs font-semibold text-dim transition hover:border-[rgba(255,122,0,0.28)] hover:bg-[rgba(255,122,0,0.08)] hover:text-title"
             >
               <LogOut className="mr-2 h-3.5 w-3.5" />
               Wyloguj

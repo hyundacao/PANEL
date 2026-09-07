@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { ArrowLeftRight, Bell, Cog, KeyRound, LogOut, Menu, X } from 'lucide-react';
+import { ArrowLeftRight, Bell, Cog, KeyRound, LogOut, Menu, Moon, Sun, X } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useUiStore } from '@/lib/store/ui';
 import { Button } from '@/components/ui/Button';
@@ -38,6 +38,8 @@ export const Topbar = ({
   const pathname = usePathname();
   const toast = useToastStore((state) => state.push);
   const {
+    theme,
+    toggleTheme,
     toggleSidebar,
     sidebarCollapsed,
     user,
@@ -364,13 +366,13 @@ export const Topbar = ({
         </Button>
         <div className="min-w-0">
           {breadcrumb && (
-            <p className="hidden truncate text-[11px] leading-tight sm:block" style={{ color: 'var(--brand)' }}>
+            <p className="hidden truncate text-[11px] leading-tight sm:block" style={{ color: 'var(--topbar-breadcrumb)' }}>
               {breadcrumb}
             </p>
           )}
           <h1
             className="truncate text-sm font-semibold leading-tight md:text-lg"
-            style={{ color: 'var(--brand)' }}
+            style={{ color: 'var(--topbar-title)' }}
           >
             {title}
           </h1>
@@ -458,7 +460,16 @@ export const Topbar = ({
             </Button>
           </>
         )}
-        <div className="hidden h-10 w-10 rounded-full bg-surface2 md:block" />
+        <Button
+          variant="ghost"
+          onClick={toggleTheme}
+          className="h-10 min-h-10 w-10 px-0 py-0 md:hidden"
+          aria-label={theme === 'dark' ? 'Włącz jasny motyw' : 'Włącz ciemny motyw'}
+          title={theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'}
+          aria-pressed={theme === 'light'}
+        >
+          {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+        </Button>
       </div>
       </header>
       {canManageErpDocumentPush && erpPreferencesDialogOpen && (
@@ -468,7 +479,7 @@ export const Topbar = ({
             onClick={() => setErpPreferencesDialogOpen(false)}
           />
           <div className="fixed inset-0 z-[993] flex items-center justify-center p-4">
-            <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[rgba(10,11,15,0.98)] p-6 shadow-[0_22px_50px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)]">
+            <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-borderStrong bg-[var(--modal-bg)] p-6 shadow-[var(--modal-shadow)]">
               <button
                 type="button"
                 className="absolute right-4 top-4 text-dim hover:text-title"
@@ -633,7 +644,7 @@ export const Topbar = ({
             }}
           />
           <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
-            <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[rgba(10,11,15,0.98)] p-6 shadow-[0_22px_50px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)]">
+            <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-borderStrong bg-[var(--modal-bg)] p-6 shadow-[var(--modal-shadow)]">
               {!mustChangePassword && (
                 <button
                   type="button"
