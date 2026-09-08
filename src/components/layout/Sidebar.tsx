@@ -339,7 +339,7 @@ export const Sidebar = () => {
 
         <div
           className={cn(
-            'overflow-hidden rounded-2xl border border-[var(--sidebar-profile-border)] bg-[var(--sidebar-profile-bg)] shadow-[var(--sidebar-profile-shadow)]',
+            'sidebar-profile-card overflow-hidden rounded-2xl border border-[var(--sidebar-profile-border)] bg-[var(--sidebar-profile-bg)] shadow-[var(--sidebar-profile-shadow)]',
             sidebarCollapsed ? 'p-2' : 'p-3'
           )}
           style={{

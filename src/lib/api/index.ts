@@ -636,6 +636,12 @@ export const saveOriginalInventorySiloEntry = async (payload: {
   hopperPresent: boolean;
 }): Promise<OriginalInventorySiloEntry> => appRequest('saveOriginalInventorySiloEntry', payload);
 
+export const saveOriginalInventoryFixedDeviceEntry = async (payload: {
+  deviceId: string;
+  dateKey: string;
+  qty: number;
+}): Promise<OriginalInventoryEntry> => appRequest('saveOriginalInventoryFixedDeviceEntry', payload);
+
 export const getOriginalInventoryGrindTasks = async (): Promise<OriginalInventoryGrindTask[]> =>
   appRequest('getOriginalInventoryGrindTasks');
 

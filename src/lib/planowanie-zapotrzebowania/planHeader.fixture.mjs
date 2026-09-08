@@ -31,11 +31,11 @@ const sourceFile = path.join(root, 'src/app/(main)/planowanie-zapotrzebowania/pa
 const source = readFileSync(sourceFile, 'utf8');
 const ast = ts.createSourceFile('page.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const names = [
-  'uid', 'numberValue', 'normalize', 'planCalculationDoneKey', 'isPlanCalculationDone', 'normalizeLinkedSources', 'clonePlanItems', 'cloneMaterials', 'cleanImportedTechnologyDescription', 'technologyMatchesProduct', 'technologyLabel', 'technologySelectLabel', 'normalizedMaterialUnit', 'isKilogramUnit', 'isGramUnit', 'isThousandPiecesUnit', 'technologyResultUnit', 'technologyResultQuantity', 'roundTechnologyMaterialQuantity', 'linkedSourceSelectionForItem', 'linkedMachineProductQuantity', 'linkedWarehouseProductQuantity', 'linkedSurplusQuantity', 'sameTechnologyMaterials', 'sameLinkedProducts', 'createAlternativeTechnologyFromWorkingCopy', 'selectPlanDate', 'currentPlanVersion',
+  'uid', 'numberValue', 'normalize', 'CATEGORIES', 'materialKey', 'normalizeReturnExclusions', 'planCalculationDoneKey', 'isPlanCalculationDone', 'normalizeLinkedSources', 'clonePlanItems', 'cloneMaterials', 'cleanImportedTechnologyDescription', 'technologyMatchesProduct', 'technologyLabel', 'technologySelectLabel', 'normalizedMaterialUnit', 'isKilogramUnit', 'isGramUnit', 'isThousandPiecesUnit', 'technologyResultUnit', 'technologyResultQuantity', 'roundTechnologyMaterialQuantity', 'linkedSourceSelectionForItem', 'linkedMachineProductQuantity', 'linkedWarehouseProductQuantity', 'linkedSurplusQuantity', 'sameTechnologyMaterials', 'sameLinkedProducts', 'createAlternativeTechnologyFromWorkingCopy', 'selectPlanDate', 'currentPlanVersion',
   'tomorrow', 'savedPlanDates', 'customRangeVisible', 'globalRangeChoice', 'Field', 'PlanAmountField', 'Stat',
   'pendingPlanWorkbook', 'planImportWorkbook', 'planImportSheet',
   'areaName', 'selectPlanningArea', 'selectPlanAreaFilter', 'shiftNormForItem', 'planQuantityNeedsReview', 'areaPlan', 'planSearchTokens', 'visibleAreaPlan', 'allVisiblePlanIncluded', 'someVisiblePlanIncluded', 'calculatedVisiblePlanCount', 'updatePlanItemsIncluded', 'togglePlanItemCalculated', 'setVisiblePlanIncluded', 'quantityResolvedPlanItemIds', 'unresolvedActiveCount',
-  'renderPlanTable', 'renderPlan', 'renderCalculationDetails', 'openAlternativeDraft', 'closeAlternativeDraft', 'saveWorkingAsAlternativeTechnology', 'SectionTitle', 'renderHeader', 'renderReturnsV2', 'ProductCatalogField',
+  'renderPlanTable', 'renderPlan', 'renderCalculationDetails', 'openAlternativeDraft', 'closeAlternativeDraft', 'saveWorkingAsAlternativeTechnology', 'SectionTitle', 'renderHeader', 'excludeReturnRow', 'restoreReturnExclusion', 'renderReturnsV2', 'ProductCatalogField',
   'emptyTechnologyDraft', 'selectedTechnologyForEditor', 'cloneTechnologyForEditor', 'sameTechnologyEditorValue'
 ];
 const definitions = new Map();
@@ -65,7 +65,7 @@ export const createHeaderFixture = (overrides = {}) => {
       { id: 'narzedziownia', name: 'Narzędziownia' }, { id: 'shared', name: 'Wspólne', shared: true }
     ],
     plan, dailyPlans: { '2026-08-31': plan, '2026-08-30': [] }, quantityCorrections: [], documents: [], archive: [], pickingDone: {},
-    inventory: [], inventorySourceDate: '', inventorySyncedAt: '', returnStatuses: {}, technologies: [],
+    inventory: [], inventorySourceDate: '', inventorySyncedAt: '', returnStatuses: {}, returnExclusions: [], technologies: [],
     planVersions: [{ id: 'v1', planDate: '2026-08-31', versionNo: 1, status: 'active',
       fileName: 'Plan produkcji 31.08.2026.xlsx', sheetName: '31.08', importedAt: '31.08.2026, 08:15', importedBy: 'Test',
       items: plan, differences: [{ id: 'legacy-new', kind: 'new', itemId: 'item-0', index: plan[0].index, name: plan[0].name }] }],
@@ -73,7 +73,7 @@ export const createHeaderFixture = (overrides = {}) => {
   };
   const ctx = vm.createContext({
     exports: {}, require, React, Fragment: React.Fragment, useState: React.useState, useRef: React.useRef,
-    ...require('lucide-react'),
+    ...require('lucide-react'), Map,
     ...load('@/components/ui/Button'), ...load('@/components/ui/Badge'),
     ...load('@/components/ui/Card'), ...load('@/lib/planowanie-zapotrzebowania/domain'),
     ...load('@/components/ui/EmptyState'), ...load('@/components/ui/Select'),
@@ -81,10 +81,10 @@ export const createHeaderFixture = (overrides = {}) => {
     ...load('@/components/planowanie-zapotrzebowania/PlanQuantity'),
     ...load('@/lib/planowanie-zapotrzebowania/planImport'), ...load('@/lib/utils/cn'),
     BaseInput: load('@/components/ui/Input').Input, Input: load('@/components/ui/Input').Input,
-    today: '2026-08-31', dateOffsetKey: () => '2026-09-01',
+    today: '2026-08-31', currentUserName: 'Test', nowLabel: () => '08.09.2026, 12:00', dateOffsetKey: () => '2026-09-01',
     formatPlanDate: (date) => date.split('-').reverse().join('.'),
     fmt: (value) => String(value).replace('.', ','),
-    readOnly: false, showDatePicker: false, customHorizon: false, showAllPlanAreas: false, returnAreaFilter: 'all', planSearch: '', view: 'plan', deriveReturnsForDate: () => [],
+    readOnly: false, showDatePicker: false, customHorizon: false, showAllPlanAreas: false, returnAreaFilter: 'all', returnListMode: 'returns', planSearch: '', view: 'plan', deriveReturnsForDate: () => [],
     saveInfo: { status: 'saved', pending: false, backupAvailable: true, error: '' },
     calculationEditorOpen: false, calculationEditorDirty: false, calculationEditorSaving: false,
     alternativeDraftItemId: '', alternativeDraftDescription: '',
@@ -106,6 +106,7 @@ export const createHeaderFixture = (overrides = {}) => {
   ctx.setExpandedPlan = (value) => { ctx.expandedPlan = value; };
   ctx.setShowAllPlanAreas = (value) => { ctx.showAllPlanAreas = value; };
   ctx.setReturnAreaFilter = (value) => { ctx.returnAreaFilter = value; };
+  ctx.setReturnListMode = (value) => { ctx.returnListMode = value; };
   ctx.setPlanSearch = (value) => { ctx.planSearch = value; };
   ctx.setExpandedCalculation = (value) => { ctx.expandedCalculation = value; };
   ctx.setAlternativeDraftItemId = (value) => { ctx.alternativeDraftItemId = value; };

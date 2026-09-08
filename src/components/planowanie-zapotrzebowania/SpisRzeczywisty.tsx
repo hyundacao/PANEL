@@ -22,6 +22,7 @@ import {
   removeOriginalInventoryErpSnapshot,
   removeOriginalInventory,
   reopenOriginalInventoryGrindTasks,
+  saveOriginalInventoryFixedDeviceEntry,
   saveOriginalInventorySiloEntry,
   updateOriginalInventory
 } from '@/lib/api';
@@ -48,12 +49,16 @@ import {
 } from '@/lib/utils/originalInventorySpisSearch';
 import {
   BarChart3,
+  Check,
+  ChevronDown,
+  ChevronUp,
   ClipboardList,
   Database,
   Factory,
   FileSpreadsheet,
   Maximize2,
   Minimize2,
+  PencilLine,
   Search
 } from 'lucide-react';
 import {
@@ -63,6 +68,15 @@ import {
 import {
   normalizeOriginalInventoryName
 } from '@/lib/utils/originalInventoryName';
+import {
+  FIXED_INVENTORY_DEVICE_SOURCE_TYPE,
+  fixedInventoryDeviceSourceId,
+  fixedInventoryDeviceTypeLabel,
+  isFixedInventoryDeviceReady,
+  normalizeFixedInventoryDevices,
+  planningAreaIdForWarehouse,
+  type FixedInventoryDevice
+} from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
 import {
   isOriginalInventoryErpSnapshotPdfFile,
   parseOriginalInventoryErpSnapshotPdfFile
@@ -493,6 +507,9 @@ export default function SpisRzeczywisty() {
   const [siloDrafts, setSiloDrafts] = useState<
     Record<string, { percent: string; hopperPresent: boolean }>
   >({});
+  const [fixedDevicesExpanded, setFixedDevicesExpanded] = useState(false);
+  const [editingFixedDeviceId, setEditingFixedDeviceId] = useState<string | null>(null);
+  const [fixedDeviceQtyDrafts, setFixedDeviceQtyDrafts] = useState<Record<string, string>>({});
   const [showNameSuggestions, setShowNameSuggestions] = useState(false);
   const entryFormRef = useRef<HTMLFormElement | null>(null);
   const entryFormViewportTopRef = useRef<number | null>(null);
@@ -584,6 +601,18 @@ export default function SpisRzeczywisty() {
   const { data: siloConfigs = [] } = useQuery({
     queryKey: ['original-inventory-silos-config'],
     queryFn: getOriginalInventorySilosConfig
+  });
+  const { data: fixedDevices = [] } = useQuery<FixedInventoryDevice[]>({
+    queryKey: ['material-planning-fixed-devices'],
+    queryFn: async () => {
+      const response = await fetch('/api/planowanie-zapotrzebowania', { cache: 'no-store' });
+      if (!response.ok) throw new Error('FIXED_DEVICES_LOAD_FAILED');
+      const payload = await response.json() as { state?: { fixedDevices?: unknown } | null };
+      return normalizeFixedInventoryDevices(payload.state?.fixedDevices);
+    },
+    staleTime: 0,
+    refetchOnMount: 'always',
+    retry: false
   });
   const { data: siloEntries = [] } = useQuery({
     queryKey: ['original-inventory-silo-entries', spisDate],
@@ -736,6 +765,11 @@ export default function SpisRzeczywisty() {
   const isSilosSelected = effectiveSelectedWarehouseId === SILOS_SELECT_VALUE;
 
   useEffect(() => {
+    setFixedDevicesExpanded(false);
+    setEditingFixedDeviceId(null);
+  }, [effectiveSelectedWarehouseId]);
+
+  useEffect(() => {
     setSelectedWarehouseId(getInitialWarehouseValue());
     setSelectedWarehouseName(getInitialWarehouseName());
     setWarehouseSelectionRestored(true);
@@ -862,6 +896,29 @@ export default function SpisRzeczywisty() {
         DATE_REQUIRED: 'Wybierz dzien spisu.'
       };
       toast({ title: messageMap[err.message] ?? 'Nie zapisano silosa.', tone: 'error' });
+    }
+  });
+  const saveFixedDeviceMutation = useMutation({
+    mutationFn: saveOriginalInventoryFixedDeviceEntry,
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] });
+      setEditingFixedDeviceId(null);
+      setFixedDeviceQtyDrafts((current) => {
+        const next = { ...current };
+        delete next[variables.deviceId];
+        return next;
+      });
+      toast({ title: 'Zapisano stan urządzenia', tone: 'success' });
+    },
+    onError: (err: Error) => {
+      const messageMap: Record<string, string> = {
+        QTY_REQUIRED: 'Wpisz poprawną ilość.',
+        QTY_EXCEEDS_CAPACITY: 'Ilość nie może przekraczać pojemności urządzenia.',
+        NOT_FOUND: 'Urządzenie nie jest już aktywne. Sprawdź ustawienia.',
+        DATE_REQUIRED: 'Wybierz dzień spisu.',
+        WAREHOUSE_REQUIRED: 'Nie znaleziono magazynu przypisanego do tej hali.'
+      };
+      toast({ title: messageMap[err.message] ?? 'Nie zapisano stanu urządzenia.', tone: 'error' });
     }
   });
   const addGrindTaskMutation = useMutation({
@@ -1180,6 +1237,21 @@ export default function SpisRzeczywisty() {
       hopperPresent: draft.hopperPresent
     });
   };
+  const handleSaveFixedDevice = (device: FixedInventoryDevice, qty: number | null) => {
+    if (readOnly) {
+      toast({ title: 'Brak uprawnień do zapisu spisu.', tone: 'error' });
+      return;
+    }
+    if (qty === null || !Number.isFinite(qty) || qty <= 0) {
+      toast({ title: 'Wpisz ilość większą od zera.', tone: 'error' });
+      return;
+    }
+    if (qty > device.fullQty) {
+      toast({ title: 'Ilość nie może przekraczać pojemności urządzenia.', tone: 'error' });
+      return;
+    }
+    saveFixedDeviceMutation.mutate({ deviceId: device.id, dateKey: spisDate, qty });
+  };
   const handleQuickAdd = () => {
     if (!selectedGroup) return;
     const qtyValue = parseQtyInput(quickQty);
@@ -1253,13 +1325,37 @@ export default function SpisRzeczywisty() {
     if (!spisDate) return entriesWithCurrentSiloMaterial;
     return entriesWithCurrentSiloMaterial.filter((entry) => getEntryDateKey(entry.at) === spisDate);
   }, [entriesWithCurrentSiloMaterial, spisDate]);
+  const selectedWarehouse = visibleWarehouses.find((warehouse) => warehouse.id === effectiveSelectedWarehouseId);
+  const selectedFixedDeviceAreaId = isSilosSelected
+    ? ''
+    : planningAreaIdForWarehouse(selectedWarehouse?.id, selectedWarehouse?.name);
+  const activeFixedDevicesForArea = useMemo(
+    () => fixedDevices.filter((device) =>
+      device.active && isFixedInventoryDeviceReady(device) && device.areaId === selectedFixedDeviceAreaId
+    ),
+    [fixedDevices, selectedFixedDeviceAreaId]
+  );
+  const fixedDeviceEntryById = useMemo(() => {
+    const result = new Map<string, (typeof entriesForDate)[number]>();
+    activeFixedDevicesForArea.forEach((device) => {
+      const sourceId = fixedInventoryDeviceSourceId(device.id, spisDate);
+      const entry = entriesForDate.find((item) =>
+        String(item.sourceType ?? '').toUpperCase() === FIXED_INVENTORY_DEVICE_SOURCE_TYPE
+        && item.sourceId === sourceId
+        && planningAreaIdForWarehouse(item.warehouseId, warehouseNameMap.get(item.warehouseId)) === device.areaId
+        && normalizeCatalogNameKey(item.name) === normalizeCatalogNameKey(device.materialName)
+      );
+      if (entry) result.set(device.id, entry);
+    });
+    return result;
+  }, [activeFixedDevicesForArea, entriesForDate, spisDate, warehouseNameMap]);
   const inventoryExportRows = useMemo(() => {
     const rows = new Map<
       string,
       {
         materialName: string;
         locationName: string;
-        locationType: 'Silos' | 'Hala / miejsce';
+        locationType: 'Silos' | 'Suszarka / bufor CS' | 'Hala / miejsce';
         qty: number;
         unit: string;
       }
@@ -1267,6 +1363,7 @@ export default function SpisRzeczywisty() {
 
     entriesForDate.forEach((entry) => {
       const isSilo = entry.sourceType === 'SILO';
+      const isFixedDevice = String(entry.sourceType ?? '').toUpperCase() === FIXED_INVENTORY_DEVICE_SOURCE_TYPE;
       const locationName =
         entry.location?.trim() ||
         warehouseNameMap.get(entry.warehouseId)?.trim() ||
@@ -1286,7 +1383,7 @@ export default function SpisRzeczywisty() {
       rows.set(key, {
         materialName: entry.name,
         locationName,
-        locationType: isSilo ? 'Silos' : 'Hala / miejsce',
+        locationType: isSilo ? 'Silos' : isFixedDevice ? 'Suszarka / bufor CS' : 'Hala / miejsce',
         qty: entry.qty,
         unit
       });
@@ -1509,6 +1606,7 @@ export default function SpisRzeczywisty() {
       { key: string; name: string; unit: string; entries: typeof entriesForDate }
     >();
     entriesForDate.forEach((entry) => {
+      if (String(entry.sourceType ?? '').toUpperCase() === FIXED_INVENTORY_DEVICE_SOURCE_TYPE && entry.qty <= 0.000001) return;
       const key = normalizeCatalogNameKey(entry.name);
       const current = map.get(key);
       if (current) {
@@ -2387,6 +2485,9 @@ export default function SpisRzeczywisty() {
           if (entry.sourceType === 'SILO') {
             return `${entry.qty} (Silos)`;
           }
+          if (String(entry.sourceType ?? '').toUpperCase() === FIXED_INVENTORY_DEVICE_SOURCE_TYPE) {
+            return `${entry.qty} (${entry.location || "urządzenie stałe"})`;
+          }
           const warehouseLabel = warehouseNameMap.get(entry.warehouseId);
           return warehouseLabel ? `${entry.qty} (${warehouseLabel})` : String(entry.qty);
         })
@@ -2898,6 +2999,73 @@ export default function SpisRzeczywisty() {
             </form>
           </Card>
 
+          {!isSilosSelected && selectedFixedDeviceAreaId ? (
+            <Card className="overflow-hidden p-0">
+              <button
+                type="button"
+                className="flex min-h-[64px] w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                onClick={() => setFixedDevicesExpanded((current) => !current)}
+                aria-expanded={fixedDevicesExpanded}
+              >
+                <span className="min-w-0">
+                  <span className="block text-xs font-black uppercase tracking-wide text-brand">Stałe urządzenia hali</span>
+                  <span className="mt-1 block text-sm text-muted">
+                    {fixedDeviceEntryById.size} z {activeFixedDevicesForArea.length} potwierdzonych dla dnia {spisDate}
+                  </span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <span className="rounded-full border border-border px-2.5 py-1 text-xs font-bold text-title">{selectedWarehouse?.name}</span>
+                  {fixedDevicesExpanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+                </span>
+              </button>
+              {fixedDevicesExpanded ? (
+                activeFixedDevicesForArea.length ? (
+                  <div className="grid gap-3 border-t border-border p-3 sm:p-4 lg:grid-cols-2 xl:grid-cols-3">
+                    {activeFixedDevicesForArea.map((device) => {
+                      const entry = fixedDeviceEntryById.get(device.id);
+                      const isEmpty = Boolean(entry) && entry!.qty <= 0.000001;
+                      const isFull = Boolean(entry) && Math.abs(entry!.qty - device.fullQty) <= 0.000001;
+                      const isManual = Boolean(entry) && !isEmpty && !isFull;
+                      const isEditing = editingFixedDeviceId === device.id;
+                      const statusLabel = !entry ? 'Niepotwierdzone' : isFull ? 'Pełny' : isEmpty ? 'Pusty' : `${entry.qty} ${entry.unit}`;
+                      return <div key={device.id} className={cn('space-y-3 rounded-2xl border p-4', entry ? 'border-[rgba(34,197,94,0.34)] bg-[rgba(34,197,94,0.055)]' : 'border-border bg-[var(--surface-faint)]')}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-black uppercase tracking-wide text-brand">{fixedInventoryDeviceTypeLabel(device.type)}</p>
+                            <h3 className="mt-1 break-words text-lg font-black text-title">{device.name}</h3>
+                            {device.location ? <p className="mt-1 text-xs text-muted">{device.location}</p> : null}
+                          </div>
+                          <span className={cn('shrink-0 rounded-full border px-2.5 py-1 text-xs font-black', entry ? 'border-[rgba(34,197,94,0.45)] text-success' : 'border-border text-muted')}>
+                            {entry ? <Check className="mr-1 inline h-3.5 w-3.5" /> : null}{statusLabel}
+                          </span>
+                        </div>
+                        <div className="rounded-xl border border-border bg-[rgba(255,255,255,0.025)] p-3">
+                          <p className="catalog-label break-words text-lg font-black leading-snug">{device.materialName}</p>
+                          <p className="mt-3 text-xl font-black leading-none text-title sm:text-2xl">
+                            Pełne urządzenie: <span className="tabular-nums">{device.fullQty} {device.unit}</span>
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button variant={isFull ? 'secondary' : 'outline'} className="min-h-[44px] px-2" disabled={readOnly || saveFixedDeviceMutation.isPending} onClick={() => handleSaveFixedDevice(device, device.fullQty)}>Pełny</Button>
+                          <Button variant={isManual || isEditing ? 'secondary' : 'outline'} className="min-h-[44px] px-2" title="Wpisz dokładną ilość" aria-label={`Wpisz dokładną ilość dla ${device.name}`} disabled={readOnly || saveFixedDeviceMutation.isPending} onClick={() => {
+                            setEditingFixedDeviceId(isEditing ? null : device.id);
+                            setFixedDeviceQtyDrafts((current) => ({ ...current, [device.id]: current[device.id] ?? String(entry?.qty ?? '') }));
+                          }}><PencilLine className="h-4 w-4" /><span className="sr-only">Ilość</span></Button>
+                        </div>
+                        {isEditing ? <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-t border-border pt-3">
+                          <Input value={fixedDeviceQtyDrafts[device.id] ?? ''} inputMode="decimal" placeholder={`Powyżej 0 do ${device.fullQty} kg`} autoFocus onChange={(event) => setFixedDeviceQtyDrafts((current) => ({ ...current, [device.id]: event.target.value }))} />
+                          <Button disabled={readOnly || saveFixedDeviceMutation.isPending} onClick={() => handleSaveFixedDevice(device, parseQtyInput(fixedDeviceQtyDrafts[device.id] ?? ''))}>Zapisz</Button>
+                        </div> : null}
+                      </div>;
+                    })}
+                  </div>
+                ) : (
+                  <p className="border-t border-border px-4 py-5 text-sm text-muted">Brak aktywnych urządzeń dla tej hali. Dodaj je w kaflu „Ustawienia” modułu Planowanie zapotrzebowania.</p>
+                )
+              ) : null}
+            </Card>
+          ) : null}
+
           {isSilosSelected ? (
             activeSiloConfigs.length === 0 ? (
               <EmptyState
@@ -3140,9 +3308,10 @@ export default function SpisRzeczywisty() {
                             qty: String(entry.qty),
                             warehouseId: entry.warehouseId
                           };
+                          const isFixedDeviceEntry = String(entry.sourceType ?? '').toUpperCase() === FIXED_INVENTORY_DEVICE_SOURCE_TYPE;
                           return [
                             new Date(entry.at).toLocaleString('pl-PL'),
-                            <Input
+                            isFixedDeviceEntry ? <span key={`${entry.id}-qty-fixed`} className="font-black text-title">{entry.qty}</span> : <Input
                               key={`${entry.id}-qty`}
                               value={draft.qty}
                               onChange={(event) =>
@@ -3152,7 +3321,7 @@ export default function SpisRzeczywisty() {
                               className="min-h-[40px] w-28"
                             />,
                             entry.unit,
-                            <SelectField
+                            isFixedDeviceEntry ? <span key={`${entry.id}-warehouse-fixed`} className="text-sm font-semibold text-title">{warehouseNameMap.get(entry.warehouseId) ?? entry.warehouseId}</span> : <SelectField
                               key={`${entry.id}-warehouse`}
                               value={draft.warehouseId}
                               onChange={(event) =>
@@ -3166,7 +3335,7 @@ export default function SpisRzeczywisty() {
                               ))}
                             </SelectField>,
                             entry.user,
-                            <div key={`${entry.id}-actions`} className="flex items-center gap-2">
+                            isFixedDeviceEntry ? <span key={`${entry.id}-actions-fixed`} className="rounded-full border border-border px-2.5 py-1 text-xs font-semibold text-muted">Edytuj w kaflu urządzenia</span> : <div key={`${entry.id}-actions`} className="flex items-center gap-2">
                               <Button
                                 variant="secondary"
                                 onClick={() => handleEditSave(entry.id)}

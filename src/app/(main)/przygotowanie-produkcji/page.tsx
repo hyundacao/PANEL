@@ -447,11 +447,16 @@ const ensureUniqueTaskIds = (items: Task[]) => {
 const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
   const remaining = [...existingTasks];
   const currentTasks = importedTasks.map((imported) => {
-    const matchIndex = remaining.findIndex((task) =>
+    const matchesImportedTask = (task: Task) =>
       !isToolroomReturnTask(task) && normalize(task.station) === normalize(imported.station)
-      && normalize(task.detail) === normalize(imported.detail)
+      && normalize(task.detail) === normalize(imported.detail);
+    let matchIndex = remaining.findIndex((task) =>
+      matchesImportedTask(task)
       && (imported.planGroup === 'planned' ? task.planGroup === 'planned' : task.planGroup !== 'planned')
     );
+    if (matchIndex < 0 && imported.planGroup !== 'planned') {
+      matchIndex = remaining.findIndex((task) => matchesImportedTask(task) && task.planGroup === 'planned');
+    }
     if (matchIndex < 0) return imported;
     const previous = remaining.splice(matchIndex, 1)[0];
     return {
@@ -465,7 +470,9 @@ const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
       notes: previous.notes,
       teamProgress: previous.teamProgress,
       done: previous.done,
-      material: imported.planGroup === 'planned' ? imported.material : previous.material,
+      material: imported.planGroup === 'planned' || previous.planGroup === 'planned'
+        ? imported.material
+        : previous.material,
       materialType: previous.materialType,
       source: previous.source,
       dryer: previous.dryer,
@@ -1550,11 +1557,11 @@ export default function PrzygotowanieProdukcjiPage() {
                       <div className={cn('flex min-h-11 w-full items-center justify-center rounded-lg border border-[rgba(255,122,0,0.55)] bg-bg px-3 text-center text-base font-bold text-[var(--brand)]', task.highlighted && 'border-yellow-500 bg-yellow-200 text-zinc-950')}>{task.station}</div>
                       <div><textarea className={cn('min-h-14 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm font-semibold text-[var(--brand)] outline-none focus:border-[rgba(255,122,0,0.65)]', task.highlighted && 'border-yellow-500 bg-yellow-100 text-zinc-950 focus:border-yellow-600')} value={task.detail} onChange={(event) => updateTask(task.id, { detail: event.target.value })} /><p className={cn('mt-1 text-xs text-dim', task.highlighted && 'text-zinc-700')}>Ilość: <strong className={cn('text-title', task.highlighted && 'text-zinc-950')}>{task.quantity || '---'}</strong> &nbsp; Norma: <strong className={cn('text-title', task.highlighted && 'text-zinc-950')}>{task.norm || '---'}</strong></p></div>
                     </section>
-                    <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
+                    <section className="technical-texture-panel rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
                       <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[var(--brand)]">Praca</p>
                       <div className="grid grid-cols-3 gap-1.5">{editableWorkKinds(task).map((kind) => <label className={cn('flex min-h-10 items-center justify-start gap-2 rounded-lg border border-border px-3 text-left text-[11px] font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={kind.id} style={taskChoiceBackground(task.kinds.includes(kind.id))}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div>
                     </section>
-                    <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'right center', backgroundSize: 'cover' }}>
+                    <section className="technical-texture-panel rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'right center', backgroundSize: 'cover' }}>
                       <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[var(--brand)]">Osoby</p>
                       <div className="grid grid-cols-2 gap-1.5">{teamOptions.map((team) => <label className={cn('flex min-h-10 w-full items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.teams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={team.id} style={taskChoiceBackground(task.teams.includes(team.id))}><input checked={task.teams.includes(team.id)} onChange={() => toggleTeam(task, team.id)} type="checkbox" />{team.label}</label>)}</div>
                     </section>
@@ -1591,11 +1598,11 @@ export default function PrzygotowanieProdukcjiPage() {
                   </button>
                   {expanded && <div className="border-t border-[rgba(183,122,255,0.22)] p-3 sm:p-4">
                     <div className="grid gap-3 xl:grid-cols-2">
-                      <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
+                      <section className="technical-texture-panel rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
                         <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[#debaff]">Praca</p>
                         <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">{editableWorkKinds(task).map((kind) => <label className={cn('flex min-h-10 items-center justify-start gap-2 rounded-lg border border-border px-3 text-left text-[11px] font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={kind.id} style={taskChoiceBackground(task.kinds.includes(kind.id))}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div>
                       </section>
-                      <section className="rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'right center', backgroundSize: 'cover' }}>
+                      <section className="technical-texture-panel rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'right center', backgroundSize: 'cover' }}>
                         <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[#debaff]">Osoby</p>
                         <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">{teamOptions.map((team) => <label className={cn('flex min-h-10 w-full items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold text-dim transition-colors hover:border-[rgba(255,122,0,0.5)]', task.teams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] text-title')} key={team.id} style={taskChoiceBackground(task.teams.includes(team.id))}><input checked={task.teams.includes(team.id)} onChange={() => toggleTeam(task, team.id)} type="checkbox" />{team.label}</label>)}</div>
                       </section>

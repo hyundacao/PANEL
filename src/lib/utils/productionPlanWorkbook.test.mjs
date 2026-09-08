@@ -160,6 +160,46 @@ test('reimport preserves assignments but drops unrelated unassigned plan rows', 
   assert.deepEqual(h.context.tasks[0].kinds, ['rozruch']);
 });
 
+test('reimport preserves work and comments when a planned form change enters the production plan', async () => {
+  const h = createHarness();
+  await h.preparePlanImport(fileFor());
+  const planned = h.parseTasks(readProductionPlanSheet(h.context.workbookSource, 'Tuesday'), 'Tuesday')[2];
+  planned.kinds = ['zmiana-formy', 'rozruch'];
+  planned.teams = ['mechanics', 'process', 'distribution', 'technician'];
+  planned.notes = {
+    mechanics: 'Przygotować formę przed zmianą.',
+    process: 'Sprawdzić parametry po uruchomieniu.',
+    processAssignee: 'Adam'
+  };
+  planned.teamProgress = { mechanics: { done: true, completedBy: 'Kamil' } };
+  const previousId = planned.id;
+  h.context.tasks = [planned];
+
+  const updatedWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(updatedWorkbook, XLSX.utils.aoa_to_sheet([
+    ['', 'NAZWA INDEKSU', 'ILOSC', 'STÓŁ LUB MASZYNA', 'NORMA'],
+    ['', 'PLANNED DETAIL', 150, 'WTR 3', 50]
+  ]), 'Updated');
+  h.context.workbookSource = readProductionPlanWorkbook(
+    XLSX.write(updatedWorkbook, { type: 'array', bookType: 'xlsx' }),
+    'updated.xlsx'
+  );
+  h.context.setSelectedSheetName('Updated');
+  await h.importSelectedSheet();
+
+  assert.equal(h.context.tasks.length, 1);
+  const current = h.context.tasks[0];
+  assert.equal(current.id, previousId);
+  assert.equal(current.planGroup, 'standard');
+  assert.deepEqual(current.kinds, ['zmiana-formy', 'rozruch']);
+  assert.deepEqual(current.teams, ['mechanics', 'process', 'distribution', 'technician']);
+  assert.equal(current.notes.mechanics, 'Przygotować formę przed zmianą.');
+  assert.equal(current.notes.process, 'Sprawdzić parametry po uruchomieniu.');
+  assert.equal(current.notes.processAssignee, 'Adam');
+  assert.equal(current.teamProgress.mechanics.done, true);
+  assert.equal(current.material, '');
+});
+
 test('reimport keeps a separate toolroom return with its own notes without duplicating production', async () => {
   const h=createHarness();
   await h.preparePlanImport(fileFor());

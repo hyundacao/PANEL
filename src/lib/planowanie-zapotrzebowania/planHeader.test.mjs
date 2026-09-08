@@ -69,7 +69,7 @@ test('technology labels keep the base name fixed and emergency descriptions conc
     description: 'SABIC + TPE + pojemnik', notes: '', shiftNorm: 0, materials: [], archived: false
   };
   const emergency = { ...base, id: 'alt', variant: 'alternative', alternativeNo: 1, description: 'NOVODUR' };
-  assert.equal(h.technologySelectLabel(base), 'Technologia bazowa');
+  assert.equal(h.technologySelectLabel(base), 'Bazowa');
   assert.equal(h.technologySelectLabel(emergency), 'Awaryjna 1 · NOVODUR');
   assert.equal(h.technologySelectLabel({
     ...emergency,
@@ -572,6 +572,50 @@ test('returns have an independent zone filter with an all-zones overview', () =>
   zoneFilter().props.onChange({ target: { value: 'all' } });
   assert.equal(zoneFilter().props.value, 'all');
   assert.match(h.html('zwroty'), /RETURN-H1/);
+});
+
+test('a return can stay permanently in one zone and be restored', () => {
+  const areaLabels = { 'hala-1': 'Hala 1', 'hala-2': 'Hala 2', bakoma: 'Bakoma', lakiernia: 'Lakiernia', narzedziownia: 'Narzędziownia' };
+  const returnRows = [
+    { id: 'return-h1', materialKey: 'keep|szt.', planDate: '2026-08-31', code: 'KEEP', name: 'Etykieta stała', category: 'Opakowanie', unit: 'szt.', areaId: 'hala-1', surplus: 7, status: 'open' },
+    { id: 'return-h2', materialKey: 'keep|szt.', planDate: '2026-08-31', code: 'KEEP', name: 'Etykieta stała', category: 'Opakowanie', unit: 'szt.', areaId: 'hala-2', surplus: 9, status: 'open' }
+  ];
+  let h;
+  h = createHeaderFixture({
+    deriveReturnsForDate: () => returnRows.filter((row) => !(h?.ctx.state.returnExclusions ?? []).some((item) => item.id === row.areaId + '|' + row.materialKey)),
+    areaName: (areaId) => areaLabels[areaId] ?? 'Brak przypisu',
+    state: { inventory: returnRows.map((row) => ({ ...row, qty: row.surplus })), returnExclusions: [] }
+  });
+  h.ctx.materialsForItem = () => [{ code: 'USED', name: 'Materiał planowany' }];
+
+  const keepButton = nodes(h.render('zwroty')).find((node) => node.props?.['aria-label'] === 'Pozostaw w strefie Hala 1: Etykieta stała');
+  assert.ok(keepButton);
+  keepButton.props.onClick();
+  assert.equal(h.ctx.state.returnExclusions.length, 1);
+  assert.equal(h.ctx.state.returnExclusions[0].id, 'hala-1|keep|szt.');
+  const remainingKeepButtons = nodes(h.render('zwroty')).filter((node) => String(node.props?.['aria-label'] ?? '').startsWith('Pozostaw w strefie'));
+  assert.equal(remainingKeepButtons.length, 1);
+  assert.equal(remainingKeepButtons[0].props['aria-label'], 'Pozostaw w strefie Hala 2: Etykieta stała');
+
+  assert.match(h.html('zwroty'), /aria-label="Pokaż listę: Pozostaje na hali"/);
+  const keptListButton = nodes(h.render('zwroty')).find((node) => node.props?.label === 'Pozostaje na hali' && typeof node.props?.onClick === 'function');
+  assert.ok(keptListButton);
+  assert.equal(keptListButton.props.active, false);
+  keptListButton.props.onClick();
+  assert.equal(h.ctx.returnListMode, 'kept');
+
+  const keptViewNodes = nodes(h.render('zwroty'));
+  assert.equal(keptViewNodes.filter((node) => String(node.props?.['aria-label'] ?? '').startsWith('Pozostaw w strefie')).length, 0);
+  const restoreButton = keptViewNodes.find((node) => node.props?.['aria-label'] === 'Przywróć do zwrotów w strefie Hala 1: Etykieta stała');
+  assert.ok(restoreButton);
+  restoreButton.props.onClick();
+  assert.equal(h.ctx.state.returnExclusions.length, 0);
+
+  const returnListButton = nodes(h.render('zwroty')).find((node) => node.props?.label === 'Do zwrotu' && typeof node.props?.onClick === 'function');
+  assert.ok(returnListButton);
+  returnListButton.props.onClick();
+  assert.equal(h.ctx.returnListMode, 'returns');
+  assert.equal(nodes(h.render('zwroty')).filter((node) => String(node.props?.['aria-label'] ?? '').startsWith('Pozostaw w strefie')).length, 2);
 });
 
 test('read-only users can show the whole plan and an empty plan remains empty', () => {

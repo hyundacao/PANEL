@@ -37,6 +37,7 @@ import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input as BaseInput } from '@/components/ui/Input';
 import { SelectField } from '@/components/ui/Select';
+import { WarningTriangle } from '@/components/ui/WarningTriangle';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import SpisRzeczywisty from '@/components/planowanie-zapotrzebowania/SpisRzeczywisty';
 import { PlanningSaveNotice, PlanningSaveStatus } from '@/components/planowanie-zapotrzebowania/PlanningSaveStatus';
@@ -50,6 +51,12 @@ import type {
   ProductCatalogItem,
   ProductCatalogSearchMode
 } from '@/lib/planowanie-zapotrzebowania/productCatalogSearch';
+import {
+  fixedInventoryDeviceTypeLabel,
+  isFixedInventoryDeviceReady,
+  normalizeFixedInventoryDevices,
+  type FixedInventoryDevice
+} from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
 
 import {
   calculateIssueBalance,
@@ -243,9 +250,22 @@ type MaterialReturnRow = {
   areaId: string;
   reason: string;
   inventoried: number;
+  protectedQty: number;
   surplus: number;
   destination: string;
   status: 'open' | 'completed';
+};
+
+type ReturnExclusion = {
+  id: string;
+  areaId: string;
+  materialKey: string;
+  code: string;
+  name: string;
+  category: MaterialCategory;
+  unit: string;
+  createdAt: string;
+  createdBy: string;
 };
 
 type InventoryItem = {
@@ -255,6 +275,7 @@ type InventoryItem = {
   name: string;
   category: MaterialCategory;
   qty: number;
+  protectedQty?: number;
   unit: string;
 };
 
@@ -283,6 +304,7 @@ type AppState = {
   selectedAreaId: string;
   areas: Area[];
   stationMappings: StationMapping[];
+  fixedDevices: FixedInventoryDevice[];
   selectedPlanDate: string;
   activePlanVersionId: string;
   technologies: Technology[];
@@ -292,6 +314,7 @@ type AppState = {
   quantityCorrections: QuantityCorrection[];
   documents: PickingDocument[];
   returnStatuses: Record<string, 'open' | 'completed'>;
+  returnExclusions: ReturnExclusion[];
   inventory: InventoryItem[];
   pickingDone: Record<string, boolean>;
   archive: ProductionArchive[];
@@ -467,6 +490,37 @@ const applyStationMappings = (plan: PlanItem[], mappings: StationMapping[]) => {
 };
 const materialKey = (item: Pick<TechnologyMaterial, 'code' | 'name' | 'unit'>) =>
   `${normalize(item.code || item.name)}|${normalize(item.unit)}`;
+const normalizeReturnExclusions = (value: unknown): ReturnExclusion[] => {
+  if (!Array.isArray(value)) return [];
+  const byId = new Map<string, ReturnExclusion>();
+  value.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') return;
+    const candidate = entry as Partial<ReturnExclusion>;
+    const areaId = String(candidate.areaId ?? '').trim();
+    const code = String(candidate.code ?? '').trim();
+    const name = String(candidate.name ?? '').trim();
+    const unit = String(candidate.unit ?? '').trim() || 'szt.';
+    const storedMaterialKey = String(candidate.materialKey ?? '').trim();
+    const normalizedKey = storedMaterialKey || materialKey({ code, name, unit });
+    if (!areaId || !normalizedKey || (!code && !name)) return;
+    const id = areaId + '|' + normalizedKey;
+    byId.set(id, {
+      id,
+      areaId,
+      materialKey: normalizedKey,
+      code,
+      name,
+      category: CATEGORIES.includes(candidate.category as MaterialCategory)
+        ? candidate.category as MaterialCategory
+        : 'Pozostałe',
+      unit,
+      createdAt: String(candidate.createdAt ?? ''),
+      createdBy: String(candidate.createdBy ?? '')
+    });
+  });
+  return [...byId.values()];
+};
+
 const materialMatches = (
   material: Pick<TechnologyMaterial, 'code' | 'name' | 'unit'>,
   stock: Pick<TechnologyMaterial, 'code' | 'name' | 'unit'>
@@ -831,6 +885,7 @@ const demoState = (): AppState => {
       { station: 'BAKOMA', areaId: 'bakoma' },
       { station: 'LAKIERNIA', areaId: 'lakiernia' }
     ],
+    fixedDevices: [],
     technologies: [
       {
         id: baseTechId,
@@ -883,6 +938,7 @@ const demoState = (): AppState => {
     quantityCorrections: [],
     documents: [],
     returnStatuses: {},
+    returnExclusions: [],
     inventory: [
       { id: uid('inv'), areaId: 'hala-1', code: 'PPGF35GR', name: 'Hostacom PPR 1042', category: 'Tworzywo', qty: 120, unit: 'kg' },
       { id: uid('inv'), areaId: 'silosy', code: 'PPGF35GR', name: 'Hostacom PPR 1042', category: 'Tworzywo', qty: 6000, unit: 'kg' },
@@ -896,7 +952,7 @@ const demoState = (): AppState => {
 
 const emptyState = (): AppState => ({
   ...demoState(),
-  planName: '', planSheet: '', planImportedAt: '', inventorySourceDate: '', inventorySyncedAt: '', technologies: [], plan: [], dailyPlans: {}, planVersions: [], quantityCorrections: [], documents: [], returnStatuses: {}, inventory: [], pickingDone: {}, archive: []
+  planName: '', planSheet: '', planImportedAt: '', inventorySourceDate: '', inventorySyncedAt: '', fixedDevices: [], technologies: [], plan: [], dailyPlans: {}, planVersions: [], quantityCorrections: [], documents: [], returnStatuses: {}, returnExclusions: [], inventory: [], pickingDone: {}, archive: []
 });
 
 const emptyTechnologyDraft = (): Technology => ({
@@ -1115,6 +1171,7 @@ const parseStoredState = (value: unknown): AppState | null => {
     calculationMode: record.calculationMode === 'all' ? 'all' : 'horizon',
     areas: mergeAreas(storedAreas),
     stationMappings,
+    fixedDevices: normalizeFixedInventoryDevices(record.fixedDevices),
     technologies,
     selectedPlanDate,
     activePlanVersionId: latestPlanVersion(planVersions, selectedPlanDate)?.id ?? '',
@@ -1124,6 +1181,7 @@ const parseStoredState = (value: unknown): AppState | null => {
     quantityCorrections: Array.isArray(record.quantityCorrections) ? record.quantityCorrections : [],
     documents: Array.isArray(record.documents) ? record.documents : [],
     returnStatuses: record.returnStatuses && typeof record.returnStatuses === 'object' ? record.returnStatuses : {},
+    returnExclusions: normalizeReturnExclusions(record.returnExclusions),
     inventory: Array.isArray(record.inventory) ? record.inventory : [],
     archive: Array.isArray(record.archive) ? record.archive.map((entry) => ({ ...entry, planItem: cleanPlanItem(entry.planItem) })) : [],
     pickingDone: record.pickingDone && typeof record.pickingDone === 'object' ? record.pickingDone : {}
@@ -1139,7 +1197,7 @@ const technologyLabel = (technology: Technology) =>
   technology.variant === 'base' ? 'Bazowa' : `Awaryjna ${technology.alternativeNo}`;
 
 const technologySelectLabel = (technology: Technology) => technology.variant === 'base'
-  ? 'Technologia bazowa'
+  ? 'Bazowa'
   : [technologyLabel(technology), cleanImportedTechnologyDescription(technology.description)].filter(Boolean).join(' · ');
 
 const technologyMatchesProduct = (technology: Technology, productIndex: string, productName: string) => {
@@ -1637,12 +1695,37 @@ const Input = forwardRef<HTMLInputElement, MaterialAwareInputProps>(({ onCatalog
 
 Input.displayName = 'MaterialAwareInput';
 
-const Stat = ({ label, value, tone = 'default' }: { label: string; value: string; tone?: 'default' | 'warning' | 'success' }) => (
-  <div className={cn('rounded-2xl border border-border bg-[var(--surface-soft)] p-4', tone === 'warning' && 'border-[color:color-mix(in_srgb,var(--warning)_42%,transparent)]', tone === 'success' && 'border-[color:color-mix(in_srgb,var(--success)_42%,transparent)]')}>
+const Stat = ({
+  label,
+  value,
+  tone = 'default',
+  active = false,
+  onClick
+}: {
+  label: string;
+  value: string;
+  tone?: 'default' | 'warning' | 'success';
+  active?: boolean;
+  onClick?: () => void;
+}) => {
+  const className = cn(
+    'h-full rounded-2xl border border-border bg-[var(--surface-soft)] p-4',
+    tone === 'warning' && 'border-[color:color-mix(in_srgb,var(--warning)_42%,transparent)]',
+    tone === 'success' && 'border-[color:color-mix(in_srgb,var(--success)_42%,transparent)]',
+    onClick && 'w-full cursor-pointer text-left transition hover:border-[var(--brand-border-hover)] hover:bg-[var(--brand-faint)] focus:outline-none focus:ring-2 focus:ring-ring',
+    onClick && active && 'border-[var(--brand-border-strong)] bg-[var(--brand-soft)] shadow-[inset_0_3px_0_var(--brand)]'
+  );
+  const content = <>
     <p className="text-xs font-semibold uppercase tracking-wide text-dim">{label}</p>
-    <p className="mt-2 text-2xl font-black text-title">{value}</p>
-  </div>
-);
+    <div className="mt-2 flex items-end justify-between gap-3">
+      <p className="text-2xl font-black text-title">{value}</p>
+      {onClick ? <span className={cn('text-[11px] font-bold uppercase tracking-wide', active ? 'text-brand' : 'text-muted')}>{active ? 'Wyświetlane' : 'Otwórz'}</span> : null}
+    </div>
+  </>;
+  return onClick
+    ? <button type="button" aria-label={'Pokaż listę: ' + label} aria-pressed={active} className={className} onClick={onClick}>{content}</button>
+    : <div className={className}>{content}</div>;
+};
 
 function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | null }) {
   const router = useRouter();
@@ -1678,6 +1761,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const [expandedPlan, setExpandedPlan] = useState('');
   const [showAllPlanAreas, setShowAllPlanAreas] = useState(false);
   const [returnAreaFilter, setReturnAreaFilter] = useState('all');
+  const [returnListMode, setReturnListMode] = useState<'returns' | 'kept'>('returns');
   const [planSearch, setPlanSearch] = useState('');
   const [expandedCalculation, setExpandedCalculation] = useState('');
   const [calculationEditorDirty, setCalculationEditorDirty] = useState(false);
@@ -1693,6 +1777,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const [technologyPanel, setTechnologyPanel] = useState<'editor' | 'list'>('editor');
   const [expandedDocument, setExpandedDocument] = useState('');
   const [expandedMaterial, setExpandedMaterial] = useState('');
+  const [expandedFixedDeviceId, setExpandedFixedDeviceId] = useState('');
   const [documentWarehouseFilter, setDocumentWarehouseFilter] = useState('all');
   const [documentSort, setDocumentSort] = useState<PickingDocumentSort>('warehouse');
   const [editingTechnologyId, setEditingTechnologyId] = useState('');
@@ -2562,7 +2647,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       const payload = await response.json() as {
         dateKey: string;
         syncedAt: string;
-        rows: Array<{ id: string; areaId: string; code: string; name: string; qty: number; unit: string }>;
+        rows: Array<{ id: string; areaId: string; code: string; name: string; qty: number; protectedQty?: number; unit: string }>;
       };
       if (requestId !== inventorySyncRequestRef.current) return;
       const inventory = payload.rows.map<InventoryItem>((row) => ({
@@ -2952,9 +3037,9 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5"><Badge tone="info">Wspólna forma</Badge><span className="font-bold text-title">{productionItems.length} {productionItems.length < 5 ? 'detale' : 'detali'}</span><span className="h-4 w-px bg-[var(--border-strong)]" aria-hidden="true" /><span className="text-xs font-semibold text-muted">{item.station || 'Brak stanowiska'} · {item.areaId ? areaName(item.areaId) : 'Brak strefy'} · {fmt(item.shiftNorm)} szt. każdego detalu / zmianę</span></div>
                 <Badge tone={readyTechnologies === productionItems.length ? 'success' : 'warning'}>Technologie {readyTechnologies}/{productionItems.length}</Badge>
               </div> : null}
-              <div data-plan-item={item.id} data-expanded={expanded ? 'true' : 'false'} className={cn('relative overflow-hidden border-b border-border transition', expanded && 'border-y border-[rgba(255,122,26,0.58)] shadow-[0_16px_34px_-30px_rgba(255,106,0,0.9)]', tone === 'emergency' && !expanded && 'border-[rgba(239,68,68,0.35)]', tone === 'planned' && !expanded && 'border-[rgba(183,122,255,0.28)]')}>
+              <div data-plan-item={item.id} data-expanded={expanded ? 'true' : 'false'} data-calculated={calculated ? 'true' : 'false'} className={cn('relative overflow-hidden border-b border-border transition', expanded && 'border-y border-[rgba(255,122,26,0.58)] shadow-[0_16px_34px_-30px_rgba(255,106,0,0.9)]', tone === 'emergency' && !expanded && 'border-[rgba(239,68,68,0.35)]', tone === 'planned' && !expanded && 'border-[rgba(183,122,255,0.28)]')}>
                 {expanded ? <span className="absolute inset-y-0 left-0 z-10 w-1 bg-brand" aria-hidden="true" /> : null}
-                <div className={cn('grid min-h-[76px] items-center', planGridColumns, expanded ? 'bg-[var(--row-hover)]' : 'bg-[var(--row-flat)]', calculated && !expanded && 'bg-[rgba(34,197,94,0.06)]', !item.included && 'text-dim')}>
+                <div className={cn('planning-plan-row grid min-h-[76px] items-center', planGridColumns, expanded ? 'bg-[var(--row-hover)]' : 'bg-[var(--row-flat)]', calculated && !expanded && 'bg-[rgba(34,197,94,0.06)]', !item.included && 'text-dim')}>
                 <div className="p-3">{item.productionGroupId ? <span title={`Detal ${(item.productionOutputOrder ?? 0) + 1} z ${item.productionOutputCount}`} className={cn('flex h-9 w-9 items-center justify-center rounded-lg border text-xs font-black', expanded ? 'border-brand bg-brandSoft text-brand' : 'border-border text-muted')}>{(item.productionOutputOrder ?? 0) + 1}</span> : <button type="button" title={item.included ? 'Wyłącz z obliczeń' : 'Uwzględnij w obliczeniach'} aria-pressed={item.included} disabled={readOnly} onClick={() => updatePlanItemsIncluded([item.id], !item.included)} className={cn('flex h-11 w-11 items-center justify-center rounded-lg border disabled:cursor-not-allowed', item.included ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_18%,transparent)] text-success' : 'border-border text-dim')}>{item.included ? <Check className="h-4 w-4" /> : null}</button>}</div>
                 <div className="p-3">
                   <div className="flex flex-wrap items-center gap-1.5"><p className="break-words font-normal text-title">{item.index}</p>{tone === 'emergency' ? <Badge tone="danger">Awaryjna</Badge> : null}{tone === 'planned' ? <Badge tone="info">Przyszła</Badge> : null}{corrected ? <Badge tone="warning">Zmieniona ręcznie</Badge> : null}</div>
@@ -2963,34 +3048,34 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                   {item.plannedDate ? <p className="mt-1 text-xs text-[var(--future)]">Termin: {item.plannedDate}</p> : null}
                 </div>
                 <div className="p-3">
-                  <p className="text-base font-black text-title">{item.station || 'Brak stanowiska'}</p>
+                  {item.station ? <p className="text-base font-black text-title">{item.station}</p> : <p className="flex items-center gap-2 text-sm font-bold text-warning"><WarningTriangle /><span>Brak stanowiska</span></p>}
                   <p className={cn('mt-1.5 flex items-center gap-1.5 text-sm font-semibold', item.areaId ? 'text-muted' : 'text-warning')}>
-                    <MapPin className="h-4 w-4 shrink-0" />{item.areaId ? areaName(item.areaId) : 'Brak przypisanej strefy'}
+                    {item.areaId ? <MapPin className="h-4 w-4 shrink-0" /> : <WarningTriangle />}{item.areaId ? areaName(item.areaId) : 'Brak przypisanej strefy'}
                   </p>
                 </div>
                 <div className="p-3 text-right"><PlanQuantity item={item} productionMode={technologyForItem(item)?.productionMode} calculatedQuantity={itemProductionQty(item)} shiftNorm={shiftNormForItem(item)} /></div>
                 <div className="p-3 text-right text-base font-bold text-title">{fmt(shiftNormForItem(item))}</div>
-                <div className="p-3">{variants.length ? <SelectField className="min-h-11 rounded-lg shadow-none" value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}><option value="">Wybierz technologię</option>{variants.map((technology) => <option key={technology.id} value={technology.id}>{technologySelectLabel(technology)}</option>)}</SelectField> : <Button variant="outline" className="h-11 min-h-11 w-full max-w-[180px] rounded-lg shadow-none" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button>}{!item.technologyId ? <p className="mt-1.5 flex items-center gap-1.5 text-xs font-bold text-danger"><AlertTriangle className="h-3.5 w-3.5" />Brak technologii</p> : item.manualOverride ? <p className="mt-1.5 text-xs font-bold text-warning">Technologia robocza</p> : <p className="mt-1.5 text-xs font-semibold text-success">Gotowa</p>}</div>
-                <div className="flex justify-center p-3">
+                <div className="self-start p-3">{variants.length ? <SelectField className="min-h-11 rounded-lg shadow-none" value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}><option value="">Wybierz technologię</option>{variants.map((technology) => <option key={technology.id} value={technology.id}>{technologySelectLabel(technology)}</option>)}</SelectField> : <Button variant="outline" className="h-11 min-h-11 w-full max-w-[180px] rounded-lg shadow-none" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button>}{!item.technologyId ? <p className="mt-1.5 flex items-center gap-2 text-xs font-bold text-warning"><WarningTriangle />Brak technologii</p> : item.manualOverride ? <p className="mt-1.5 text-xs font-bold text-warning">Technologia robocza</p> : <p className="mt-1.5 text-xs font-semibold text-success">Gotowa</p>}</div>
+                <div className="flex self-start justify-center p-3">
                   <button
                     type="button"
-                    aria-label={calculated ? `Przywróć do obliczeń: ${item.index}` : `Oznacz jako przeliczone: ${item.index}`}
+                    aria-label={calculated ? `Przywróć do obliczeń: ${item.index}` : `Odznacz z obliczeń: ${item.index}`}
                     aria-pressed={calculated}
-                    title={calculated ? 'Przywróć indeks do dzisiejszych obliczeń' : 'Oznacz indeks jako przeliczony i wyłącz z dzisiejszych obliczeń'}
+                    title={calculated ? 'Przywróć indeks do dzisiejszych obliczeń' : 'Odznacz indeks i wyłącz z dzisiejszych obliczeń'}
                     disabled={readOnly}
                     onClick={() => togglePlanItemCalculated(item.id)}
                     className={cn(
-                      'inline-flex h-10 min-w-[106px] items-center justify-center gap-2 rounded-lg border px-2.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-55',
+                      'inline-flex h-11 min-h-11 min-w-[106px] items-center justify-center gap-2 rounded-lg border px-2.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-55',
                       calculated
                         ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_16%,transparent)] text-success'
                         : 'border-border text-muted hover:border-success hover:text-title'
                     )}
                   >
                     <span className={cn('flex h-4 w-4 items-center justify-center rounded border', calculated ? 'border-success bg-success text-white' : 'border-border')} aria-hidden="true">{calculated ? <Check className="h-3 w-3" /> : null}</span>
-                    {calculated ? 'Przeliczone' : 'Oznacz'}
+                    {calculated ? 'Przeliczone' : 'Odznacz'}
                   </button>
                 </div>
-                <div className="p-3"><button type="button" title={expanded ? 'Zwiń pozycję' : 'Rozwiń pozycję'} aria-expanded={expanded} className={cn('flex h-11 w-11 items-center justify-center rounded-lg border text-muted hover:border-brand hover:text-title', expanded ? 'border-brand bg-brandSoft text-title' : 'border-border')} onClick={() => toggleCalculationEditor(item.id, 'plan')}>{expanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}</button></div>
+                <div className="self-start p-3"><button type="button" title={expanded ? 'Zwiń pozycję' : 'Rozwiń pozycję'} aria-expanded={expanded} className={cn('flex h-11 w-11 items-center justify-center rounded-lg border text-muted hover:border-brand hover:text-title', expanded ? 'border-brand bg-brandSoft text-title' : 'border-border')} onClick={() => toggleCalculationEditor(item.id, 'plan')}>{expanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}</button></div>
                 </div>
               {expanded ? <>
                 <div data-plan-details={item.id} className="border-t border-borderStrong bg-[var(--row-details-bg)]">{renderCalculationDetails(item)}</div>
@@ -3865,7 +3950,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         </div>
         {requirements.some((row) => row.globalSharedShortage > 0) ? (
           <Card className="border-[color:color-mix(in_srgb,var(--warning)_52%,transparent)]">
-            <div className="flex gap-3"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" /><div><p className="font-bold text-title">Wspólne silosy mogą nie wystarczyć dla wszystkich obszarów</p><p className="mt-1 text-sm text-muted">Bilans wspólnego źródła uwzględnia jednocześnie zapotrzebowanie wszystkich hal, a nie tylko aktualnie wybranej strefy.</p></div></div>
+            <div className="flex gap-3"><WarningTriangle className="mt-0.5 h-8 w-8" /><div><p className="font-bold text-title">Wspólne silosy mogą nie wystarczyć dla wszystkich obszarów</p><p className="mt-1 text-sm text-muted">Bilans wspólnego źródła uwzględnia jednocześnie zapotrzebowanie wszystkich hal, a nie tylko aktualnie wybranej strefy.</p></div></div>
           </Card>
         ) : null}
         <div className="flex justify-end"><Button onClick={createPickingDocumentFromPlan}><PackageCheck className="mr-2 h-4 w-4" />{editablePickingDocumentExists ? 'Przelicz i pokaż dokument' : 'Utwórz dokument do wypisania'}</Button></div>
@@ -4073,7 +4158,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const exportPickingDocument = (pickingDocument: PickingDocument, visibleRows = pickingDocument.rows) => {
     const rows: Array<Array<string | number>> = [[
       'Dokument', 'Status', 'Typ', 'Data planu', 'Wersja planu', 'Strefa', 'Magazyn', 'Zakres', 'Materiał', 'Kod',
-      'Zapotrzebowanie', 'Stan strefy', 'Wydano wcześniej', 'Oczekuje', 'Wydać teraz', 'J.m.', 'Źródła'
+      'Zapotrzebowanie', 'Stan rzeczywisty MAG 40', 'Wydano wcześniej', 'Oczekuje', 'Ilość do wypisania', 'J.m.', 'Źródła'
     ]];
     visibleRows.forEach((row) => rows.push([
       pickingDocument.documentNo,
@@ -4117,6 +4202,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       .flatMap((item) => materialsForItem(item))
       .filter((material) => Boolean(normalize(material.code) || normalize(material.name)));
     if (!plannedMaterials.length) return [];
+    const returnExclusionIds = new Set((state.returnExclusions ?? []).map((exclusion) => exclusion.id));
 
     const inventoriedByMaterial = new Map<string, InventoryItem>();
     state.inventory.forEach((inventoryItem) => {
@@ -4124,14 +4210,26 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       if (state.areas.find((area) => area.id === inventoryItem.areaId)?.shared) return;
       const key = `${inventoryItem.areaId}|${materialKey(inventoryItem)}`;
       const current = inventoriedByMaterial.get(key);
-      if (current) current.qty += inventoryItem.qty;
-      else inventoriedByMaterial.set(key, { ...inventoryItem });
+      const protectedQty = Math.min(inventoryItem.qty, Math.max(0, numberValue(inventoryItem.protectedQty)));
+      if (current) {
+        current.qty += inventoryItem.qty;
+        current.protectedQty = (current.protectedQty ?? 0) + protectedQty;
+      } else {
+        inventoriedByMaterial.set(key, { ...inventoryItem, protectedQty });
+      }
     });
 
     return [...inventoriedByMaterial.entries()]
-      .filter(([, inventoryItem]) => !plannedMaterials.some((material) => materialIdentityMatches(material, inventoryItem)))
+      .filter(([inventoryKey, inventoryItem]) => {
+        const protectedQty = Math.min(inventoryItem.qty, Math.max(0, numberValue(inventoryItem.protectedQty)));
+        const returnableQty = Math.max(0, inventoryItem.qty - protectedQty);
+        return returnableQty > 0.000001
+          && !returnExclusionIds.has(inventoryKey)
+          && !plannedMaterials.some((material) => materialIdentityMatches(material, inventoryItem));
+      })
       .map(([inventoryKey, inventoryItem]) => {
         const id = `${planDate}|${inventoryKey}`;
+        const protectedQty = Math.min(inventoryItem.qty, Math.max(0, numberValue(inventoryItem.protectedQty)));
         return {
           id,
           planDate,
@@ -4141,13 +4239,46 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
           category: inventoryItem.category ?? 'Pozostałe',
           unit: inventoryItem.unit,
           areaId: inventoryItem.areaId,
-          reason: 'Brak w technologiach aktualnego planu',
+          reason: protectedQty > 0.000001
+            ? 'Brak w technologiach planu; ilość w suszarce lub buforze CS pozostaje na hali'
+            : 'Brak w technologiach aktualnego planu',
           inventoried: inventoryItem.qty,
-          surplus: inventoryItem.qty,
+          protectedQty,
+          surplus: Math.max(0, inventoryItem.qty - protectedQty),
           destination: 'Zwrot do magazynu',
           status: state.returnStatuses[id] ?? 'open'
         } satisfies MaterialReturnRow;
       });
+  };
+
+  const excludeReturnRow = (row: MaterialReturnRow) => {
+    if (readOnly) return;
+    const exclusion: ReturnExclusion = {
+      id: row.areaId + '|' + row.materialKey,
+      areaId: row.areaId,
+      materialKey: row.materialKey,
+      code: row.code,
+      name: row.name,
+      category: row.category,
+      unit: row.unit,
+      createdAt: nowLabel(),
+      createdBy: currentUserName
+    };
+    updateState((current) => ({
+      ...current,
+      returnExclusions: normalizeReturnExclusions([...(current.returnExclusions ?? []), exclusion])
+    }));
+    flash(row.name + ' pozostaje w strefie ' + areaName(row.areaId) + ' i nie będzie proponowane do zwrotu.');
+  };
+
+  const restoreReturnExclusion = (exclusionId: string) => {
+    if (readOnly) return;
+    const exclusion = (state.returnExclusions ?? []).find((item) => item.id === exclusionId);
+    updateState((current) => ({
+      ...current,
+      returnExclusions: (current.returnExclusions ?? []).filter((item) => item.id !== exclusionId)
+    }));
+    if (exclusion) flash(exclusion.name + ' ponownie może pojawiać się w zwrotach dla strefy ' + areaName(exclusion.areaId) + '.');
   };
 
   const renderDocumentV2 = () => {
@@ -4158,10 +4289,10 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       {renderHeader('Dokument do wypisania', 'Każda strefa otrzymuje osobny dokument. Magazyn przypisujesz przy każdej pozycji, a po oznaczeniu dokumentu jako wydany jego ilości pozostają niezmienne.')}
       <PlanQuantityWarnings items={state.plan.filter((item) => item.included && (item.areaId === state.selectedAreaId || !item.areaId))} resolvedItemIds={quantityResolvedPlanItemIds} calculations />
       <Card className="space-y-4">
-        <div className="grid gap-3 lg:grid-cols-[minmax(220px,0.6fr)_minmax(260px,1fr)_auto] lg:items-end">
-          <Field label="Data planu"><Input type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
-          <Field label="Strefa"><SelectField value={state.selectedAreaId} onChange={(event) => selectPlanningArea(event.target.value)}>{state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField></Field>
-          {!readOnly ? <Button onClick={createOrRefreshPickingDocument}><FilePlus2 className="mr-2 h-4 w-4" />{documents.some((document) => document.status === 'draft' || document.status === 'outdated') ? 'Przelicz dokument roboczy' : 'Utwórz dokument'}</Button> : null}
+        <div className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_minmax(260px,1fr)_auto] lg:items-end">
+          <Field label="Data planu"><Input className="h-12 min-h-12 rounded-2xl border-[var(--control-border)] bg-[image:var(--control-bg)] px-4 py-2.5 text-sm font-semibold text-title shadow-[var(--control-shadow)] hover:border-[var(--brand-border-hover)] hover:bg-[image:var(--control-bg-hover)] focus:border-[var(--brand-border-strong)]" type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
+          <Field label="Strefa"><SelectField className="h-12 min-h-12" value={state.selectedAreaId} onChange={(event) => selectPlanningArea(event.target.value)}>{state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField></Field>
+          {!readOnly ? <Button className="h-12 min-h-12 px-5" onClick={createOrRefreshPickingDocument}><FilePlus2 className="mr-2 h-4 w-4" />{documents.some((document) => document.status === 'draft' || document.status === 'outdated') ? 'Przelicz dokument roboczy' : 'Utwórz dokument'}</Button> : null}
         </div>
       </Card>
 
@@ -4222,21 +4353,22 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
             <datalist id={`picking-warehouses-${document.id}`}>{warehouseOptions.map((warehouseCode) => <option key={warehouseCode} value={warehouseCode} />)}</datalist>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1120px] text-sm">
-                <thead className="sticky top-0 z-10 bg-[image:var(--table-sticky-header-bg)] text-left text-[11px] uppercase text-dim"><tr><th className="w-24 p-3 text-center">Wypisane</th><th className="w-14 p-3"><span className="sr-only">Źródła</span></th><th className="p-3">Materiał</th><th className="w-40 p-3">Magazyn</th><th className="p-3 text-right">Zapotrzebowanie</th><th className="p-3 text-right">Stan strefy</th><th className="p-3 text-right">Wydać teraz</th><th className="p-3">J.m.</th></tr></thead>
+                <thead className="sticky top-0 z-10 text-left text-sm font-black uppercase tracking-[0.055em] text-title shadow-[inset_0_3px_0_var(--brand),inset_0_-1px_0_var(--brand-border)]" style={{ background: 'linear-gradient(90deg, color-mix(in srgb, var(--brand) 22%, var(--surface-2)), color-mix(in srgb, var(--brand) 8%, var(--surface-2)) 60%, var(--surface-2))' }}><tr className="divide-x divide-[var(--brand-border-soft)]"><th className="w-24 p-3 text-center">Wypisane</th><th className="w-14 p-3"><span className="sr-only">Źródła</span></th><th className="p-3">Materiał</th><th className="w-40 p-3">Magazyn</th><th className="p-3 text-right">Zapotrzebowanie</th><th className="p-3 text-right">Stan rzeczywisty MAG 40</th><th className="p-3 text-right">Ilość do wypisania</th><th className="p-3">J.m.</th></tr></thead>
                 <tbody>{visibleRows.length ? visibleRows.map((row, rowIndex) => {
                   const sourceKey = `${document.id}|${row.key}`;
                   const sourcesExpanded = expandedMaterial === sourceKey;
                   const warehouseCode = pickingWarehouseCode(row);
                   const previousWarehouseCode = rowIndex > 0 ? pickingWarehouseCode(visibleRows[rowIndex - 1]) : null;
                   const showWarehouseHeader = documentSort === 'warehouse' && warehouseCode !== previousWarehouseCode;
+                  const activeDraftRow = document.status === 'draft' && !locked;
                   const warehouseLabel = warehouseCode || 'Nieprzypisane';
                   return <Fragment key={row.key}>
                     {showWarehouseHeader ? <tr className="border-t border-borderStrong bg-[rgba(255,122,26,0.07)]"><td colSpan={8} className="px-4 py-2"><div className="flex items-center gap-2"><Warehouse className="h-4 w-4 text-brand" /><span className="font-black text-title">{warehouseLabel}</span><Badge>{warehouseCounts.get(warehouseLabel) ?? 0} poz.</Badge></div></td></tr> : null}
                     <tr className="border-t border-border">
-                      <td className="p-3"><button type="button" aria-label={row.confirmed ? `Odznacz jako wypisane: ${row.name}` : `Zaznacz jako wypisane: ${row.name}`} aria-pressed={row.confirmed} title={row.confirmed ? 'Pozycja wypisana — kliknij, aby cofnąć' : 'Zaznacz pozycję jako wypisaną'} disabled={readOnly || locked || document.status !== 'draft'} onClick={() => togglePickingConfirmation(document.id, row.key)} className={cn('mx-auto flex h-11 w-11 items-center justify-center rounded-lg border', row.confirmed ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success' : 'border-border text-muted', (readOnly || locked || document.status !== 'draft') && 'cursor-default opacity-80')}>{row.confirmed ? <Check className="h-4 w-4" /> : null}</button></td>
+                      <td className="p-3"><button type="button" aria-label={row.confirmed ? `Odznacz jako wypisane: ${row.name}` : `Zaznacz jako wypisane: ${row.name}`} aria-pressed={row.confirmed} title={row.confirmed ? 'Pozycja wypisana — kliknij, aby cofnąć' : 'Zaznacz pozycję jako wypisaną'} disabled={readOnly || locked || document.status !== 'draft'} onClick={() => togglePickingConfirmation(document.id, row.key)} className={cn('mx-auto flex h-11 w-11 items-center justify-center rounded-lg border', row.confirmed ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success' : activeDraftRow ? 'border-warning bg-[color:color-mix(in_srgb,var(--warning)_12%,transparent)] text-warning' : 'border-border text-muted', (readOnly || locked || document.status !== 'draft') && 'cursor-default opacity-80')}>{row.confirmed ? <Check className="h-4 w-4" /> : activeDraftRow ? <WarningTriangle className="h-8 w-8" /> : null}</button></td>
                       <td className="p-3"><button type="button" title={sourcesExpanded ? 'Ukryj źródła zapotrzebowania' : 'Pokaż indeksy źródłowe'} className="flex h-11 w-11 items-center justify-center rounded-lg border border-border text-muted" onClick={() => setExpandedMaterial(sourcesExpanded ? '' : sourceKey)}>{sourcesExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button></td>
                       <td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td>
-                      <td className="p-3"><BaseInput className={cn('h-10 min-h-10 rounded-lg uppercase', !warehouseCode && 'border-warning')} aria-label={`Magazyn dla ${row.name}`} title={readOnly ? 'Brak uprawnień do edycji' : 'Wpisz lub wybierz magazyn'} list={`picking-warehouses-${document.id}`} placeholder="Np. M-1" value={warehouseCode} disabled={readOnly} onChange={(event) => updatePickingDocumentWarehouse(document.id, row.key, event.target.value)} /></td>
+                      <td className="p-3"><div className="relative"><BaseInput className={cn('h-10 min-h-10 rounded-lg uppercase', activeDraftRow && !warehouseCode && 'border-warning pr-12')} aria-label={`Magazyn dla ${row.name}`} aria-invalid={activeDraftRow && !warehouseCode ? true : undefined} title={readOnly ? 'Brak uprawnień do edycji' : 'Wpisz lub wybierz magazyn'} list={`picking-warehouses-${document.id}`} placeholder="Np. M-1" value={warehouseCode} disabled={readOnly} onChange={(event) => updatePickingDocumentWarehouse(document.id, row.key, event.target.value)} />{activeDraftRow && !warehouseCode ? <WarningTriangle label={`Brak przypisanego magazynu dla ${row.name}`} className="pointer-events-none absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2" /> : null}</div></td>
                       <td className="p-3 text-right">{fmt(technologyResultQuantity(row.demand, row.unit))}</td><td className="p-3 text-right">{fmt(technologyResultQuantity(row.areaStock, row.unit))}</td><td className="p-3 text-right text-lg font-black text-title">{fmt(technologyResultQuantity(row.toIssue, row.unit))}</td><td className="p-3">{technologyResultUnit(row.unit)}</td>
                     </tr>
                     {sourcesExpanded ? <tr className="border-t border-border bg-[var(--surface-faint)]"><td colSpan={8} className="px-5 py-4"><p className="text-xs font-bold uppercase text-dim">Źródła zapotrzebowania</p><div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{row.sources.map((source) => <div key={`${source.planItemId}-${source.index}`} className="border-l-2 border-brand pl-3"><p className="font-bold text-title">{source.index}</p><p className="catalog-label break-words text-sm font-semibold">{source.name}</p><p className="mt-1 text-xs text-dim">{fmt(technologyResultQuantity(source.demand, row.unit))} {technologyResultUnit(row.unit)}</p></div>)}</div></td></tr> : null}
@@ -4259,6 +4391,12 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     const returnRows = activeReturnAreaFilter === 'all'
       ? allReturnRows
       : allReturnRows.filter((row) => row.areaId === activeReturnAreaFilter);
+    const exclusionAreas = activeReturnAreaFilter === 'all'
+      ? returnAreas
+      : returnAreas.filter((area) => area.id === activeReturnAreaFilter);
+    const visibleReturnExclusions = (state.returnExclusions ?? [])
+      .filter((exclusion) => exclusionAreas.some((area) => area.id === exclusion.areaId))
+      .sort((left, right) => areaName(left.areaId).localeCompare(areaName(right.areaId), 'pl') || left.name.localeCompare(right.name, 'pl'));
     const openRows = returnRows.filter((row) => row.status === 'open');
     const activeTechnologyMaterialCount = state.plan
       .filter((item) => item.included)
@@ -4278,24 +4416,43 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
           ? <EmptyState title="Brak przypisanych technologii" description="Najpierw przypisz technologie do pozycji uwzględnionych w planie." />
           : activeReturnAreaFilter !== 'all' && allReturnRows.length && !returnRows.length
             ? <EmptyState title={`Brak zwrotów w strefie: ${areaName(activeReturnAreaFilter)}`} description="Wybierz inną strefę albo pokaż wszystkie strefy." />
-          : <EmptyState title="Brak materiałów do zwrotu" description="Każdy materiał ze Spisu rzeczywistego występuje w co najmniej jednej technologii aktualnego planu." />;
+          : <EmptyState title="Brak materiałów do zwrotu" description="Pozostałe materiały występują w technologiach albo są oznaczone jako pozostające w swojej strefie." />;
     return <div className="space-y-5">
       {renderHeader('Zwroty', 'Materiały ze Spisu rzeczywistego, których nie ma w żadnej technologii aktualnego planu.')}
       <PlanQuantityWarnings items={state.plan.filter((item) => item.included)} resolvedItemIds={quantityResolvedPlanItemIds} calculations />
       <Card className="space-y-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(200px,300px)_minmax(220px,320px)_1fr_auto] xl:items-end">
-          <Field label="Data planu"><Input type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
-          <Field label="Strefa"><SelectField aria-label="Strefa zwrotów" value={activeReturnAreaFilter} onChange={(event) => setReturnAreaFilter(event.target.value)}><option value="all">Wszystkie strefy</option>{returnAreas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField></Field>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,300px)_minmax(220px,300px)_1fr_auto] xl:items-end">
+          <Field label="Data planu"><Input className="h-12 min-h-12 rounded-2xl border-[var(--control-border)] bg-[image:var(--control-bg)] px-4 py-2.5 text-sm font-semibold text-title shadow-[var(--control-shadow)] hover:border-[var(--brand-border-hover)] hover:bg-[image:var(--control-bg-hover)] focus:border-[var(--brand-border-strong)]" type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
+          <Field label="Strefa"><SelectField className="h-12 min-h-12" aria-label="Strefa zwrotów" value={activeReturnAreaFilter} onChange={(event) => setReturnAreaFilter(event.target.value)}><option value="all">Wszystkie strefy</option>{returnAreas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField></Field>
           <p className="text-sm text-muted">Spis z dnia: <span className="font-bold text-title">{state.inventorySourceDate ? formatPlanDate(state.inventorySourceDate) : 'brak danych'}</span>{state.inventorySyncedAt ? ` · pobrano ${state.inventorySyncedAt}` : ''}</p>
           <Button variant="outline" onClick={() => void syncOriginalInventory()}><RefreshCw className="mr-2 h-4 w-4" />Odśwież spis</Button>
         </div>
-        <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-3">
-          <Stat label="Do zwrotu" value={String(openRows.length)} tone={openRows.length ? 'warning' : 'success'} />
+        <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Stat label="Do zwrotu" value={String(openRows.length)} tone={openRows.length ? 'warning' : 'success'} active={returnListMode === 'returns'} onClick={() => setReturnListMode('returns')} />
           <Stat label="Pozycje spisane" value={String(inventoriedAreaRows.length)} />
+          <Stat label="Pozostaje na hali" value={String(visibleReturnExclusions.length)} active={returnListMode === 'kept'} onClick={() => setReturnListMode('kept')} />
           <Stat label="Data planu" value={formatPlanDate(state.selectedPlanDate)} />
         </div>
       </Card>
-      {returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="sticky top-0 z-10 bg-[image:var(--table-sticky-header-bg)] text-left text-[11px] uppercase text-dim"><tr><th className="p-3">Materiał</th><th className="p-3">Strefa</th><th className="p-3 text-right">Do zwrotu</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className={cn('border-t border-border', row.status === 'completed' && 'bg-[color:color-mix(in_srgb,var(--success)_7%,transparent)]')}><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3 text-right text-lg font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Button variant={row.status === 'completed' ? 'ghost' : 'secondary'} onClick={() => updateState((current) => ({ ...current, returnStatuses: { ...current.returnStatuses, [row.id]: row.status === 'completed' ? 'open' : 'completed' } }))}>{row.status === 'completed' ? <Undo2 className="mr-2 h-4 w-4" /> : <Check className="mr-2 h-4 w-4" />}{row.status === 'completed' ? 'Przywróć' : 'Wykonano'}</Button></td></tr>)}</tbody></table></div></Card> : returnsEmptyState}
+      {returnListMode === 'returns' ? (
+        returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="sticky top-0 z-10 bg-[image:var(--table-sticky-header-bg)] text-left text-[11px] uppercase text-dim"><tr><th className="p-3">Materiał</th><th className="p-3">Strefa</th><th className="p-3 text-right">Do zwrotu</th><th className="p-3">Status</th><th className="p-3">Decyzja</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className={cn('border-t border-border', row.status === 'completed' && 'bg-[color:color-mix(in_srgb,var(--success)_7%,transparent)]')}><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3 text-right text-lg font-black text-warning"><span>{fmt(row.surplus)} {row.unit}</span>{row.protectedQty > 0.000001 ? <p className="mt-1 text-[11px] font-semibold text-muted">W urządzeniu zostaje: {fmt(row.protectedQty)} {row.unit}</p> : null}</td><td className="p-3"><Button disabled={readOnly} variant={row.status === 'completed' ? 'ghost' : 'secondary'} onClick={() => updateState((current) => ({ ...current, returnStatuses: { ...current.returnStatuses, [row.id]: row.status === 'completed' ? 'open' : 'completed' } }))}>{row.status === 'completed' ? <Undo2 className="mr-2 h-4 w-4" /> : <Check className="mr-2 h-4 w-4" />}{row.status === 'completed' ? 'Przywróć' : 'Wykonano'}</Button></td><td className="p-3"><Button aria-label={'Pozostaw w strefie ' + areaName(row.areaId) + ': ' + row.name} disabled={readOnly || row.status === 'completed'} title={row.status === 'completed' ? 'Najpierw przywróć pozycję ze statusu Wykonano' : 'Nie pokazuj tego materiału w zwrotach dla tej strefy'} variant="outline" onClick={() => excludeReturnRow(row)}><Archive className="mr-2 h-4 w-4" />Zostaje na hali</Button></td></tr>)}</tbody></table></div></Card> : returnsEmptyState
+      ) : (
+        <section className="space-y-3">
+          <SectionTitle title="Pozostaje na hali" subtitle="Stałe wyjątki zwrotów. Każda strefa ma własną listę, niezależną od dnia planu." />
+          <div className="grid gap-3 xl:grid-cols-2">
+            {exclusionAreas.map((area) => {
+              const exclusions = visibleReturnExclusions.filter((item) => item.areaId === area.id);
+              return <Card key={area.id} className="overflow-hidden p-0">
+                <div className="flex items-center justify-between gap-3 border-b border-border bg-[var(--brand-faint)] px-4 py-3">
+                  <div className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--brand-border-soft)] bg-[var(--brand-soft)] text-brand"><Warehouse className="h-5 w-5" /></span><div className="min-w-0"><p className="truncate font-black text-title">{area.name}</p><p className="text-xs text-muted">Tych pozycji nie proponujemy do zwrotu</p></div></div>
+                  <Badge tone={exclusions.length ? 'info' : 'default'}>{exclusions.length} poz.</Badge>
+                </div>
+                {exclusions.length ? <div className="divide-y divide-border">{exclusions.map((exclusion) => <div key={exclusion.id} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="font-bold text-title">{exclusion.code || '—'}</p><p className="catalog-label break-words text-sm font-semibold">{exclusion.name}</p><p className="mt-1 text-xs text-muted">{exclusion.unit}{exclusion.createdBy ? ' · dodał: ' + exclusion.createdBy : ''}{exclusion.createdAt ? ' · ' + exclusion.createdAt : ''}</p></div><Button aria-label={'Przywróć do zwrotów w strefie ' + area.name + ': ' + exclusion.name} className="shrink-0" disabled={readOnly} variant="outline" onClick={() => restoreReturnExclusion(exclusion.id)}><Undo2 className="mr-2 h-4 w-4" />Przywróć do zwrotów</Button></div>)}</div> : <p className="px-4 py-5 text-sm text-muted">Brak pozycji stale pozostających w tej strefie.</p>}
+              </Card>;
+            })}
+          </div>
+        </section>
+      )}
     </div>;
   };
 
@@ -4340,7 +4497,148 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     </div>;
   };
 
-  const renderSettings = () => <div className="space-y-5">{renderHeader('Ustawienia modułu', 'Przypisz stanowiska do obszarów. Import planu będzie uzupełniał halę automatycznie na podstawie tej listy.')}<Card className="space-y-4"><div className="flex items-center justify-between"><SectionTitle title="Stanowiska i obszary" subtitle="Domyślnie WTR 1–28 należą do Hali 1, a WTR 29–52 do Hali 2." /><Button variant="outline" onClick={() => updateState((current) => ({ ...current, stationMappings: [...current.stationMappings, { station: '', areaId: 'hala-1' }] }))}><Plus className="mr-2 h-4 w-4" />Dodaj</Button></div><div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{state.stationMappings.map((mapping, index) => <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2 rounded-xl border border-border p-2"><Input value={mapping.station} placeholder="np. WTR 12 lub ST 3" onChange={(event) => updateState((current) => ({ ...current, stationMappings: current.stationMappings.map((row, rowIndex) => rowIndex === index ? { ...row, station: event.target.value } : row) }))} /><SelectField value={mapping.areaId} onChange={(event) => updateState((current) => ({ ...current, stationMappings: current.stationMappings.map((row, rowIndex) => rowIndex === index ? { ...row, areaId: event.target.value } : row) }))}>{state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField><Button variant="ghost" className="min-h-[44px] px-3 text-danger" onClick={() => updateState((current) => ({ ...current, stationMappings: current.stationMappings.filter((_, rowIndex) => rowIndex !== index) }))}><Trash2 className="h-4 w-4" /></Button></div>)}</div></Card></div>;
+  const updateFixedDevice = (deviceId: string, patch: Partial<FixedInventoryDevice>) => {
+    updateState((current) => ({
+      ...current,
+      fixedDevices: current.fixedDevices.map((device) => device.id === deviceId ? { ...device, ...patch } : device)
+    }));
+  };
+
+  const addFixedDevice = () => {
+    const device: FixedInventoryDevice = {
+      id: uid('fixed-device'),
+      type: 'cs',
+      name: '',
+      areaId: 'hala-1',
+      location: '',
+      materialCode: '',
+      materialName: '',
+      fullQty: 0,
+      unit: 'kg',
+      active: false
+    };
+    updateState((current) => ({ ...current, fixedDevices: [...current.fixedDevices, device] }));
+    setExpandedFixedDeviceId(device.id);
+  };
+
+  const toggleFixedDevice = (device: FixedInventoryDevice) => {
+    if (!device.active && !isFixedInventoryDeviceReady(device)) {
+      flash('Uzupełnij nazwę urządzenia, halę, materiał i pojemność przed włączeniem.');
+      return;
+    }
+    updateFixedDevice(device.id, { active: !device.active });
+  };
+
+  const removeFixedDevice = (device: FixedInventoryDevice) => {
+    if (!window.confirm(`Usunąć urządzenie „${device.name || fixedInventoryDeviceTypeLabel(device.type)}”? Poprzednie dzienne spisy pozostaną w historii.`)) return;
+    updateState((current) => ({
+      ...current,
+      fixedDevices: current.fixedDevices.filter((item) => item.id !== device.id)
+    }));
+    setExpandedFixedDeviceId((current) => current === device.id ? '' : current);
+  };
+
+  const fixedDeviceAreaOptions = state.areas.filter(
+    (area) => area.id === 'hala-1' || area.id === 'hala-2'
+  );
+  const fixedDeviceAreaIds = new Set(fixedDeviceAreaOptions.map((area) => area.id));
+  const fixedDevicesWithoutArea = state.fixedDevices.filter(
+    (device) => !fixedDeviceAreaIds.has(device.areaId)
+  );
+  const fixedDeviceGroups: Array<{ id: string; name: string; devices: FixedInventoryDevice[] }> = [
+    ...fixedDeviceAreaOptions.map((area) => ({
+      id: area.id,
+      name: area.name,
+      devices: state.fixedDevices
+        .filter((device) => device.areaId === area.id)
+        .sort((left, right) => left.name.localeCompare(right.name, 'pl', { numeric: true, sensitivity: 'base' }))
+    })),
+    ...(fixedDevicesWithoutArea.length ? [{
+      id: 'bez-hali',
+      name: 'Bez przypisanej hali',
+      devices: [...fixedDevicesWithoutArea].sort((left, right) => left.name.localeCompare(right.name, 'pl', { numeric: true, sensitivity: 'base' }))
+    }] : [])
+  ];
+
+  const renderFixedDeviceSettingsRow = (device: FixedInventoryDevice) => {
+    const expanded = expandedFixedDeviceId === device.id;
+    const ready = isFixedInventoryDeviceReady(device);
+    return <div key={device.id} className={cn('border-t border-border', device.active ? 'bg-[var(--brand-faint)]' : 'bg-[var(--surface-faint)]')}>
+      <button
+        type="button"
+        className="flex w-full flex-col gap-3 px-4 py-3 text-left transition hover:bg-[var(--interactive-soft-hover)] sm:flex-row sm:items-center sm:justify-between"
+        aria-expanded={expanded}
+        onClick={() => setExpandedFixedDeviceId(expanded ? '' : device.id)}
+      >
+        <span className="min-w-0">
+          <span className="block break-words text-base font-black text-title">{device.name.trim() || 'Nowe urządzenie'}</span>
+          <span className="mt-1 block text-xs font-semibold uppercase tracking-wide text-muted">
+            {fixedInventoryDeviceTypeLabel(device.type)}
+            {device.location.trim() ? <> · {device.location}</> : null}
+          </span>
+          <span className={cn('mt-1 block break-words text-sm font-bold', device.materialName.trim() ? 'catalog-label' : 'text-muted')}>
+            {device.materialName.trim() || 'Brak przypisanego tworzywa'}
+          </span>
+        </span>
+        <span className="flex w-full shrink-0 items-center justify-between gap-3 sm:w-auto sm:justify-end">
+          <span className="text-left sm:text-right">
+            <span className="block text-lg font-black tabular-nums text-title">{device.fullQty > 0 ? fmt(device.fullQty) : '—'}{device.fullQty > 0 ? <> {device.unit}</> : null}</span>
+            <span className="block text-[10px] font-bold uppercase tracking-wide text-dim">Pojemność</span>
+          </span>
+          <Badge tone={device.active ? 'success' : 'default'}>{device.active ? 'Aktywne' : 'Wyłączone'}</Badge>
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border text-muted">
+            {expanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+          </span>
+        </span>
+      </button>
+      {expanded ? <div className="border-t border-border bg-[var(--surface-1)] p-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted">{ready ? 'Konfiguracja kompletna — urządzenie może być widoczne podczas spisu.' : 'Uzupełnij nazwę urządzenia, halę, materiał i pojemność.'}</p>
+          <div className="flex gap-2">
+            <Button variant={device.active ? 'secondary' : 'outline'} disabled={readOnly} onClick={() => toggleFixedDevice(device)}>{device.active ? <Check className="mr-2 h-4 w-4" /> : null}{device.active ? 'Aktywne' : 'Włącz'}</Button>
+            <Button variant="ghost" className="min-h-[44px] px-3 text-danger" title="Usuń urządzenie" aria-label={'Usuń urządzenie ' + (device.name || device.id)} disabled={readOnly} onClick={() => removeFixedDevice(device)}><Trash2 className="h-4 w-4" /></Button>
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <Field label="Rodzaj"><SelectField value={device.type} disabled={readOnly} onChange={(event) => updateFixedDevice(device.id, { type: event.target.value === 'dryer' ? 'dryer' : 'cs' })}><option value="cs">Bufor CS</option><option value="dryer">Suszarka</option></SelectField></Field>
+          <Field label="Nazwa urządzenia"><Input value={device.name} disabled={readOnly} placeholder="np. CS 31 albo Suszarka WTR 12" onChange={(event) => updateFixedDevice(device.id, { name: event.target.value })} /></Field>
+          <Field label="Hala"><SelectField value={device.areaId} disabled={readOnly} onChange={(event) => updateFixedDevice(device.id, { areaId: event.target.value })}>{fixedDeviceAreaOptions.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField></Field>
+          <Field label="Lokalizacja / maszyna"><Input value={device.location} disabled={readOnly} placeholder="np. WTR 31" onChange={(event) => updateFixedDevice(device.id, { location: event.target.value })} /></Field>
+          <Field label="Indeks materiału"><MaterialCatalogInput mode="code" value={device.materialCode} disabled={readOnly} placeholder="Wyszukaj indeks" onChange={(event) => updateFixedDevice(device.id, { materialCode: event.target.value })} onCatalogSelect={(item) => updateFixedDevice(device.id, { materialCode: item.index, materialName: item.name })} /></Field>
+          <Field label="Materiał"><MaterialCatalogInput mode="name" value={device.materialName} disabled={readOnly} placeholder="Wyszukaj nazwę materiału" onChange={(event) => updateFixedDevice(device.id, { materialName: event.target.value })} onCatalogSelect={(item) => updateFixedDevice(device.id, { materialCode: item.index, materialName: item.name })} /></Field>
+          <Field label="Pojemność pełnego urządzenia [kg]"><Input value={device.fullQty || ''} disabled={readOnly} inputMode="decimal" placeholder="np. 400" onChange={(event) => updateFixedDevice(device.id, { fullQty: Math.max(0, numberValue(event.target.value)) })} /></Field>
+        </div>
+      </div> : null}
+    </div>;
+  };
+
+  const renderSettings = () => <div className="space-y-5">
+    {renderHeader('Ustawienia modułu', 'Tutaj konfigurujesz przypisania stanowisk oraz stałe urządzenia hali. W samym spisie pracownik potwierdza już tylko ich ilość.')}
+    <Card className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <SectionTitle title="Suszarki i bufory CS" subtitle="Urządzenie jest podlokalizacją Hali 1 albo Hali 2. Jego stan dolicza się do spisu, ale nigdy nie trafia do zwrotów." />
+        <Button variant="outline" disabled={readOnly} onClick={addFixedDevice}><Plus className="mr-2 h-4 w-4" />Dodaj urządzenie</Button>
+      </div>
+      {state.fixedDevices.length ? (
+        <div className="space-y-4">
+          {fixedDeviceGroups.map((group) => <section key={group.id} className="rounded-2xl border border-border bg-[var(--surface-faint)]">
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <div>
+                <h3 className="text-base font-black text-title">{group.name}</h3>
+                <p className="mt-1 text-xs text-muted">{group.devices.length} urządzeń · aktywne: {group.devices.filter((device) => device.active).length}</p>
+              </div>
+              <Badge tone="info">{group.devices.length}</Badge>
+            </div>
+            {group.devices.length ? <div>{group.devices.map(renderFixedDeviceSettingsRow)}</div> : <p className="border-t border-border px-4 py-4 text-sm text-muted">Brak urządzeń przypisanych do tej hali.</p>}
+          </section>)}
+        </div>
+      ) : <EmptyState title="Brak skonfigurowanych urządzeń" description="Dodaj pierwszy bufor CS lub suszarkę i przypisz mu halę, materiał oraz pojemność." />}
+    </Card>
+    <Card className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3"><SectionTitle title="Stanowiska i obszary" subtitle="Domyślnie WTR 1–28 należą do Hali 1, a WTR 29–52 do Hali 2." /><Button variant="outline" disabled={readOnly} onClick={() => updateState((current) => ({ ...current, stationMappings: [...current.stationMappings, { station: '', areaId: 'hala-1' }] }))}><Plus className="mr-2 h-4 w-4" />Dodaj</Button></div>
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{state.stationMappings.map((mapping, index) => <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2 rounded-xl border border-border p-2"><Input value={mapping.station} disabled={readOnly} placeholder="np. WTR 12 lub ST 3" onChange={(event) => updateState((current) => ({ ...current, stationMappings: current.stationMappings.map((row, rowIndex) => rowIndex === index ? { ...row, station: event.target.value } : row) }))} /><SelectField value={mapping.areaId} disabled={readOnly} onChange={(event) => updateState((current) => ({ ...current, stationMappings: current.stationMappings.map((row, rowIndex) => rowIndex === index ? { ...row, areaId: event.target.value } : row) }))}>{state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField><Button variant="ghost" disabled={readOnly} className="min-h-[44px] px-3 text-danger" onClick={() => updateState((current) => ({ ...current, stationMappings: current.stationMappings.filter((_, rowIndex) => rowIndex !== index) }))}><Trash2 className="h-4 w-4" /></Button></div>)}</div>
+    </Card>
+  </div>;
 
   const renderGuide = () => <div className="space-y-5">{renderHeader('Instrukcja modułu', 'Krótki opis pełnego obiegu i najważniejszych zasad działania.')}{[
     ['1. Plan produkcyjny', 'Wgraj Excel i wybierz jedną zakładkę. Stanowiska zostaną przypisane do obszarów zgodnie z ustawieniami. Pozycje bez przypisu pozostaną widoczne na obu halach z ostrzeżeniem.'],

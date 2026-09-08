@@ -15,6 +15,13 @@ import {
 } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { normalizeOriginalInventoryCatalogIdentityKey } from '@/lib/utils/originalInventoryCatalog';
+import {
+  FIXED_INVENTORY_DEVICE_SOURCE_TYPE,
+  fixedInventoryDeviceSourceId,
+  isFixedInventoryDeviceReady,
+  normalizeFixedInventoryDevices,
+  planningAreaIdForWarehouse
+} from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
 import { PAINT_TAPE_INVENTORY_SEED } from '@/lib/data/paintTapeInventorySeed';
 import {
   sendWarehouseTransferDocumentCreatedPush,
@@ -1118,6 +1125,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       return;
     case 'addOriginalInventory':
     case 'saveOriginalInventorySiloEntry':
+    case 'saveOriginalInventoryFixedDeviceEntry':
     case 'addOriginalInventoryGrindTask':
     case 'completeOriginalInventoryGrindTask':
     case 'completeOriginalInventoryGrindTasks':
@@ -1294,6 +1302,7 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'setDryerMaterial',
   'addOriginalInventory',
   'saveOriginalInventorySiloEntry',
+  'saveOriginalInventoryFixedDeviceEntry',
   'addOriginalInventoryCatalog',
   'addOriginalInventoryCatalogBulk',
   'upsertOriginalInventorySiloConfig',
@@ -1431,6 +1440,7 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   setDryerMaterial: 'Suszarki: przypisanie tworzywa',
   addOriginalInventory: 'Spis oryginalow: dodanie wpisu',
   saveOriginalInventorySiloEntry: 'Spis oryginalow: zapis silosa',
+  saveOriginalInventoryFixedDeviceEntry: 'Spis oryginalow: zapis suszarki lub bufora CS',
   updateOriginalInventory: 'Spis oryginalow: aktualizacja wpisu',
   removeOriginalInventory: 'Spis oryginalow: usuniecie wpisu',
   createPaintTapeSettlement: 'Rozliczanie farb i rozcienczalnikow: nowe zlecenie',
@@ -1627,6 +1637,7 @@ const getAuditQty = (action: string, payload: any, data: unknown) => {
     action === 'addMixedMaterial' ||
     action === 'removeMixedMaterial' ||
     action === 'addOriginalInventory' ||
+    action === 'saveOriginalInventoryFixedDeviceEntry' ||
     action === 'updateOriginalInventory'
   ) {
     return { prevQty: null, nextQty: toAuditNumber(payload?.qty) };
@@ -7745,6 +7756,91 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (error) throw error;
       if (!data) throw new Error('NOT_FOUND');
       return mapOriginalInventorySiloEntry(data);
+    }
+    case 'saveOriginalInventoryFixedDeviceEntry': {
+      const deviceId = String(payload?.deviceId ?? '').trim();
+      const dateKey = String(payload?.dateKey ?? '').trim();
+      const rawQty = payload?.qty;
+      const requestedQty = Number(rawQty);
+      if (!deviceId) throw new Error('NOT_FOUND');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) throw new Error('DATE_REQUIRED');
+      if (rawQty === undefined || rawQty === null || rawQty === '' || !Number.isFinite(requestedQty) || requestedQty < 0) {
+        throw new Error('QTY_REQUIRED');
+      }
+
+      const { data: planningRow, error: planningError } = await supabaseAdmin
+        .from('material_planning_state')
+        .select('state')
+        .eq('id', 'main')
+        .maybeSingle();
+      if (planningError) throw planningError;
+      const planningState = planningRow?.state && typeof planningRow.state === 'object'
+        ? planningRow.state as { fixedDevices?: unknown }
+        : null;
+      const device = normalizeFixedInventoryDevices(planningState?.fixedDevices)
+        .find((item) => item.id === deviceId && item.active);
+      if (!device || !isFixedInventoryDeviceReady(device)) throw new Error('NOT_FOUND');
+
+      const qty = Math.round(requestedQty * 1000) / 1000;
+      if (qty > device.fullQty + 0.000001) throw new Error('QTY_EXCEEDS_CAPACITY');
+
+      const { data: warehouseRows, error: warehouseError } = await supabaseAdmin
+        .from('warehouses')
+        .select('id, name')
+        .eq('is_active', true);
+      if (warehouseError) throw warehouseError;
+      const warehouse = (warehouseRows ?? []).find((row) =>
+        planningAreaIdForWarehouse(row.id, row.name) === device.areaId
+      );
+      if (!warehouse?.id) throw new Error('WAREHOUSE_REQUIRED');
+
+      const sourceId = fixedInventoryDeviceSourceId(device.id, dateKey);
+      const { data: existingEntry, error: existingError } = await supabaseAdmin
+        .from('original_inventory_entries')
+        .select('id')
+        .eq('source_type', FIXED_INVENTORY_DEVICE_SOURCE_TYPE)
+        .eq('source_id', sourceId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+
+      const [year, month, day] = dateKey.split('-').map(Number);
+      const now = new Date();
+      const at = new Date(
+        year,
+        month - 1,
+        day,
+        now.getHours(),
+        now.getMinutes(),
+        now.getSeconds(),
+        now.getMilliseconds()
+      ).toISOString();
+      const stateLabel = qty <= 0.000001
+        ? 'Pusty'
+        : Math.abs(qty - device.fullQty) <= 0.000001
+          ? 'Pełny'
+          : 'Ilość ręczna';
+      const location = [device.name, device.location].filter(Boolean).join(' · ');
+      const row = {
+        id: existingEntry?.id ?? randomUUID(),
+        at,
+        warehouse_id: String(warehouse.id),
+        name: device.materialName,
+        qty,
+        unit: device.unit || 'kg',
+        location,
+        note: `${stateLabel}; pojemność: ${device.fullQty} ${device.unit || 'kg'}`,
+        source_type: FIXED_INVENTORY_DEVICE_SOURCE_TYPE,
+        source_id: sourceId,
+        user_name: getActorName(currentUser)
+      };
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_entries')
+        .upsert(row, { onConflict: 'id' })
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('NOT_FOUND');
+      return mapOriginalInventoryEntry(data);
     }
     case 'addOriginalInventoryCatalog': {
       const name = String(payload?.name ?? '').trim();

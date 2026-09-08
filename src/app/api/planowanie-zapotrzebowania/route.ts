@@ -7,6 +7,7 @@ import {
   type ProductCatalogItem,
   type ProductCatalogSearchMode
 } from '@/lib/planowanie-zapotrzebowania/productCatalogSearch';
+import { FIXED_INVENTORY_DEVICE_SOURCE_TYPE } from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
 
 export const dynamic = 'force-dynamic';
 
@@ -120,7 +121,7 @@ const loadOriginalInventory = async (dateKey: string) => {
     const current = catalogCodes.get(key);
     if (!current || (!current.warehouseCode && warehouseCode)) catalogCodes.set(key, { code, warehouseCode });
   });
-  const grouped = new Map<string, { id: string; areaId: string; code: string; name: string; qty: number; unit: string }>();
+  const grouped = new Map<string, { id: string; areaId: string; code: string; name: string; qty: number; protectedQty: number; unit: string }>();
   (entries ?? []).forEach((row) => {
     const at = new Date(String(row.at));
     if (!Number.isFinite(at.getTime()) || warsawDateKey(at) !== requestedDate) return;
@@ -131,10 +132,13 @@ const loadOriginalInventory = async (dateKey: string) => {
     const unit = String(row.unit ?? '').trim() || 'kg';
     const key = `${areaId}|${normalizeName(code || name)}|${normalizeName(unit)}`;
     const current = grouped.get(key);
+    const qty = Number(row.qty ?? 0);
+    const protectedQty = String(row.source_type ?? '').toUpperCase() === FIXED_INVENTORY_DEVICE_SOURCE_TYPE ? qty : 0;
     if (current) {
-      current.qty += Number(row.qty ?? 0);
+      current.qty += qty;
+      current.protectedQty += protectedQty;
     } else {
-      grouped.set(key, { id: `original-${String(row.id)}`, areaId, code, name, qty: Number(row.qty ?? 0), unit });
+      grouped.set(key, { id: `original-${String(row.id)}`, areaId, code, name, qty, protectedQty, unit });
     }
   });
   return {

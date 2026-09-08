@@ -1,4 +1,5 @@
-import { AlertTriangle, ChevronDown } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
+import { WarningTriangle } from '@/components/ui/WarningTriangle';
 import { quantityIssueLabel, quantityNeedsReview, type PlanSourceFields } from '@/lib/planowanie-zapotrzebowania/planImport';
 
 type QuantityItem = PlanSourceFields & { totalQty: number };
@@ -14,7 +15,7 @@ export function PlanQuantity({ item, productionMode = 'planned', calculatedQuant
     <p className="text-base font-black text-title">Ciągła</p>
     {shiftNorm > 0
       ? <p className="text-xs font-semibold text-muted">{fmt(calculatedQuantity)} szt. w zakresie</p>
-      : <p className="flex items-start justify-end gap-1 text-xs font-bold text-warning"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>Brak wydajności na zmianę</span></p>}
+      : <p className="flex items-center justify-end gap-2 text-xs font-bold text-warning"><WarningTriangle /><span>Brak wydajności na zmianę</span></p>}
   </div>;
   if (productionMode === 'linked') return <div className="space-y-1" data-testid="plan-quantity" data-production-mode="linked">
     <p className="text-base font-black text-title">Pod powiązanie</p>
@@ -24,7 +25,7 @@ export function PlanQuantity({ item, productionMode = 'planned', calculatedQuant
   const source = item.sourceQuantity?.trim();
   return <div className="space-y-1" data-testid="plan-quantity">
     <p className="whitespace-pre-line break-words text-base font-black text-title">{source || (review || item.sourceQuantity !== undefined ? '—' : fmt(item.totalQty))}</p>
-    {review ? <p className="flex items-start justify-end gap-1 text-xs font-bold text-warning"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>{quantityIssueLabel(item)} — do wyjaśnienia</span></p>
+    {review ? <p className="flex items-center justify-end gap-2 text-xs font-bold text-warning"><WarningTriangle /><span>{quantityIssueLabel(item)} — do wyjaśnienia</span></p>
       : item.quantityStatus === 'manual' ? <p className="text-xs font-bold text-warning">Do obliczeń (ręcznie): {fmt(item.totalQty)} szt.</p>
         : item.quantityParts?.length ? <p className="text-xs text-muted">Do obliczeń łącznie: {fmt(item.totalQty)} szt.</p> : null}
   </div>;
@@ -40,7 +41,7 @@ export function PlanQuantityWarnings({ items, calculations = false, resolvedItem
     : 'Wszystkie są wyłączone z obliczeń';
   return <details role="status" className="group border-y border-[rgba(245,158,11,0.42)] bg-[rgba(245,158,11,0.055)] text-sm">
     <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
-      <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+      <WarningTriangle />
       <div className="min-w-0 flex-1 sm:flex sm:items-baseline sm:gap-2">
         <p className="font-bold text-title">Brak ilości: {unresolved.length}</p>
         <p className="text-xs text-warning">{status}</p>
