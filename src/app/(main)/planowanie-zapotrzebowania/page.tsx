@@ -5,7 +5,6 @@ import { createPortal } from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import {
-  AlertTriangle,
   Archive,
   Check,
   ChevronDown,
@@ -43,7 +42,16 @@ import SpisRzeczywisty from '@/components/planowanie-zapotrzebowania/SpisRzeczyw
 import { PlanningSaveNotice, PlanningSaveStatus } from '@/components/planowanie-zapotrzebowania/PlanningSaveStatus';
 import { usePlanningAutosave } from '@/lib/planowanie-zapotrzebowania/usePlanningAutosave';
 import { PlanQuantity, PlanQuantityWarnings } from '@/components/planowanie-zapotrzebowania/PlanQuantity';
-import { knownRemainingQuantity, planningSections, quantityNeedsReview, readPlanningRows, splitPlanningRowOutputs, type PlanQuantityStatus, type PlanSourceFields } from '@/lib/planowanie-zapotrzebowania/planImport';
+import {
+  highlightedPlanSourceRows,
+  knownRemainingQuantity,
+  planningSections,
+  quantityNeedsReview,
+  readPlanningRows,
+  splitPlanningRowOutputs,
+  type PlanQuantityStatus,
+  type PlanSourceFields
+} from '@/lib/planowanie-zapotrzebowania/planImport';
 import { isReadOnly } from '@/lib/auth/access';
 import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
@@ -711,7 +719,7 @@ const pickingRowWasWritten = (
 const cloneMaterials = (items: TechnologyMaterial[]) => items.map((item) => ({ ...item, id: uid('mat') }));
 
 const applyDefaultTechnologyAssignments = (plan: PlanItem[], technologies: Technology[]) => plan.map((item) => {
-  if (item.technologyId || item.continuationCandidateId) return item;
+  if (item.technologyId) return item;
   const variants = technologies.filter((technology) => !technology.archived && productIdentityMatches(
     technology.productIndex,
     technology.productName,
@@ -1266,8 +1274,13 @@ const createAlternativeTechnologyFromWorkingCopy = (
 const planItemSignature = (item: Pick<PlanItem, 'index' | 'station' | 'planGroup' | 'plannedDate'>) =>
   `${item.planGroup ?? 'standard'}|${normalize(item.plannedDate)}|${normalize(item.index)}|${normalize(item.station)}`;
 
-const parsePlanRows = (rows: unknown[][], mappings: StationMapping[], rowOffset = 0): PlanItem[] =>
-  readPlanningRows(rows, rowOffset).flatMap((row, position) => {
+const parsePlanRows = (
+  rows: unknown[][],
+  mappings: StationMapping[],
+  rowOffset = 0,
+  highlightedSourceRows: ReadonlySet<number> = new Set<number>()
+): PlanItem[] =>
+  readPlanningRows(rows, rowOffset, highlightedSourceRows).flatMap((row, position) => {
     const outputs = splitPlanningRowOutputs(row);
     const productionGroupId = outputs.length > 1 ? uid('production') : '';
     const mapping = mappings.find((item) => stationKey(item.station) === stationKey(row.station));
@@ -2421,7 +2434,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const handleWorkbook = async (file: File, purpose: PendingWorkbook['purpose'], preferredSheet?: string) => {
     if (purpose === 'plan' && readOnly) return;
     try {
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellStyles: true });
       const selected = purpose === 'plan'
         ? preferredSheet && workbook.SheetNames.includes(preferredSheet) ? preferredSheet : ''
         : workbook.SheetNames.at(-1) ?? '';
@@ -2446,7 +2459,8 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       flash(`Wczytano i pogrupowano ${imported.length} pozycji spisu.`);
       return;
     }
-    const imported = parsePlanRows(rows, state.stationMappings, XLSX.utils.decode_range(sheet['!ref'] || 'A1').s.r);
+    const rowOffset = XLSX.utils.decode_range(sheet['!ref'] || 'A1').s.r;
+    const imported = parsePlanRows(rows, state.stationMappings, rowOffset, highlightedPlanSourceRows(sheet));
     if (!imported.length) return flash('Nie znaleziono rozpoznawalnych pozycji planu.');
     const importedProductionCount = new Set(imported.map((item) => item.productionGroupId || item.id)).size;
     let importedVersionNo = 1;
@@ -2490,8 +2504,8 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         return {
           ...incoming,
           continuationCandidateId: candidate?.id ?? '',
-          technologyId: candidate ? '' : defaultTechnology?.id ?? '',
-          workingMaterials: candidate || !defaultTechnology ? null : cloneMaterials(defaultTechnology.materials),
+          technologyId: defaultTechnology?.id ?? '',
+          workingMaterials: defaultTechnology ? cloneMaterials(defaultTechnology.materials) : null,
           scopeMode: 'global' as const,
           scopeShifts: 3.5,
           scopeQuantity: 0
@@ -3037,7 +3051,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5"><Badge tone="info">Wspólna forma</Badge><span className="font-bold text-title">{productionItems.length} {productionItems.length < 5 ? 'detale' : 'detali'}</span><span className="h-4 w-px bg-[var(--border-strong)]" aria-hidden="true" /><span className="text-xs font-semibold text-muted">{item.station || 'Brak stanowiska'} · {item.areaId ? areaName(item.areaId) : 'Brak strefy'} · {fmt(item.shiftNorm)} szt. każdego detalu / zmianę</span></div>
                 <Badge tone={readyTechnologies === productionItems.length ? 'success' : 'warning'}>Technologie {readyTechnologies}/{productionItems.length}</Badge>
               </div> : null}
-              <div data-plan-item={item.id} data-expanded={expanded ? 'true' : 'false'} data-calculated={calculated ? 'true' : 'false'} className={cn('relative overflow-hidden border-b border-border transition', expanded && 'border-y border-[rgba(255,122,26,0.58)] shadow-[0_16px_34px_-30px_rgba(255,106,0,0.9)]', tone === 'emergency' && !expanded && 'border-[rgba(239,68,68,0.35)]', tone === 'planned' && !expanded && 'border-[rgba(183,122,255,0.28)]')}>
+              <div data-plan-item={item.id} data-source-highlighted={item.sourceHighlighted ? 'true' : 'false'} data-expanded={expanded ? 'true' : 'false'} data-calculated={calculated ? 'true' : 'false'} className={cn('relative overflow-hidden border-b border-border transition', expanded && 'border-y border-[rgba(255,122,26,0.58)] shadow-[0_16px_34px_-30px_rgba(255,106,0,0.9)]', tone === 'emergency' && !expanded && 'border-[rgba(239,68,68,0.35)]', tone === 'planned' && !expanded && 'border-[rgba(183,122,255,0.28)]')}>
                 {expanded ? <span className="absolute inset-y-0 left-0 z-10 w-1 bg-brand" aria-hidden="true" /> : null}
                 <div className={cn('planning-plan-row grid min-h-[76px] items-center', planGridColumns, expanded ? 'bg-[var(--row-hover)]' : 'bg-[var(--row-flat)]', calculated && !expanded && 'bg-[rgba(34,197,94,0.06)]', !item.included && 'text-dim')}>
                 <div className="p-3">{item.productionGroupId ? <span title={`Detal ${(item.productionOutputOrder ?? 0) + 1} z ${item.productionOutputCount}`} className={cn('flex h-9 w-9 items-center justify-center rounded-lg border text-xs font-black', expanded ? 'border-brand bg-brandSoft text-brand' : 'border-border text-muted')}>{(item.productionOutputOrder ?? 0) + 1}</span> : <button type="button" title={item.included ? 'Wyłącz z obliczeń' : 'Uwzględnij w obliczeniach'} aria-pressed={item.included} disabled={readOnly} onClick={() => updatePlanItemsIncluded([item.id], !item.included)} className={cn('flex h-11 w-11 items-center justify-center rounded-lg border disabled:cursor-not-allowed', item.included ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_18%,transparent)] text-success' : 'border-border text-dim')}>{item.included ? <Check className="h-4 w-4" /> : null}</button>}</div>

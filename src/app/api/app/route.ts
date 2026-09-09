@@ -2494,6 +2494,8 @@ const getOriginalInventoryFallbackWarehouseId = async () => {
     .from('warehouses')
     .select('id')
     .eq('is_active', true)
+    .eq('include_in_spis', true)
+    .not('id', 'like', `${ERP_WAREHOUSE_ID_PREFIX}%`)
     .order('order_no', { ascending: true })
     .limit(1)
     .maybeSingle();
@@ -7694,7 +7696,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         const originalInventoryPayload = {
           id: existingEntry?.id ?? randomUUID(),
           at,
-          warehouse_id: null as string | null,
+          warehouse_id: config.warehouseId ?? null,
           name: config.materialName,
           qty: calculatedQty,
           unit: 'kg',

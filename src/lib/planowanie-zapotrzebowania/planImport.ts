@@ -1,3 +1,5 @@
+import * as XLSX from 'xlsx';
+
 export type PlanQuantityStatus = 'parsed' | 'missing' | 'unrecognized' | 'manual';
 export type PlanQuantityPart = { label: string; quantity: number };
 export type PlanSourceFields = {
@@ -14,6 +16,41 @@ export type PlanSourceFields = {
   productionOutputOrder?: number;
   productionOutputCount?: number;
   productionSourceQuantity?: string;
+  sourceHighlighted?: boolean;
+};
+
+type PlanCellStyle = {
+  fill?: { fgColor?: { rgb?: string } };
+  fgColor?: { rgb?: string };
+};
+
+const hasYellowPlanFill = (cell: XLSX.CellObject | undefined) => {
+  const style = cell?.s as PlanCellStyle | undefined;
+  return [style?.fill?.fgColor?.rgb, style?.fgColor?.rgb]
+    .some((color) => color?.toUpperCase().endsWith('FFFF00'));
+};
+
+export const highlightedPlanSourceRows = (sheet: XLSX.WorkSheet) => {
+  const highlighted = new Set<number>();
+  if (!sheet?.['!ref']) return highlighted;
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  const merges = sheet['!merges'] ?? [];
+  const cellAt = (row: number, column: number) => {
+    const direct = sheet[XLSX.utils.encode_cell({ r: row, c: column })] as XLSX.CellObject | undefined;
+    const merge = merges.find((item) => row >= item.s.r && row <= item.e.r && column >= item.s.c && column <= item.e.c);
+    return merge
+      ? sheet[XLSX.utils.encode_cell(merge.s)] as XLSX.CellObject | undefined
+      : direct;
+  };
+  const lastCheckedColumn = Math.min(range.e.c, 7);
+  for (let row = range.s.r; row <= range.e.r; row += 1) {
+    for (let column = range.s.c; column <= lastCheckedColumn; column += 1) {
+      if (!hasYellowPlanFill(cellAt(row, column))) continue;
+      highlighted.add(row + 1);
+      break;
+    }
+  }
+  return highlighted;
 };
 
 const text = (value: unknown) => String(value ?? '');
@@ -200,7 +237,11 @@ export const splitPlanningRowOutputs = (row: ImportedPlanningRow): ImportedPlann
 
 // Section headings are retained as sections, not artificial production tasks.
 // Every detail row is retained, including blank/invalid quantities and missing stations.
-export const readPlanningRows = (rows: unknown[][], rowOffset = 0): ImportedPlanningRow[] => {
+export const readPlanningRows = (
+  rows: unknown[][],
+  rowOffset = 0,
+  highlightedSourceRows: ReadonlySet<number> = new Set<number>()
+): ImportedPlanningRow[] => {
   const normalizedRows = rows.map((row) => row.map(normalized));
   const scheduleHeader = normalizedRows.findIndex((row) => row.some((cell) => cell.includes('ilosc'))
     && row.some((cell) => cell.includes('norma')));
@@ -251,11 +292,13 @@ export const readPlanningRows = (rows: unknown[][], rowOffset = 0): ImportedPlan
     }
     const plannedDate = planGroup === 'planned' ? text(row[0]).trim() || lastPlannedDate : '';
     if (plannedDate) lastPlannedDate = plannedDate;
+    const sourceRow = rowOffset + headerIndex + position + 2;
     result.push({
       name: detail, index: indexColumn >= 0 ? text(row[indexColumn]) : detail, station, norm,
       notes: text(row[notesIndex]), planGroup, plannedDate,
       ...parsePlanQuantity(row[qtyColumn]),
-      sourceRow: rowOffset + headerIndex + position + 2,
+      sourceRow,
+      sourceHighlighted: highlightedSourceRows.has(sourceRow),
       sourceSection: section, sourceLabel: scheduleHeader >= 0 ? text(row[0]) : '',
       sourceDetail: detail, sourceStation: text(row[stationIndex]), sourceNorm: text(row[normIndex]), sourceNotes: text(row[notesIndex])
     });

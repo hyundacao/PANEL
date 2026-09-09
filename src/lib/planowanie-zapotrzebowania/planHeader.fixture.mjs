@@ -31,7 +31,7 @@ const sourceFile = path.join(root, 'src/app/(main)/planowanie-zapotrzebowania/pa
 const source = readFileSync(sourceFile, 'utf8');
 const ast = ts.createSourceFile('page.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const names = [
-  'uid', 'numberValue', 'normalize', 'CATEGORIES', 'materialKey', 'normalizeReturnExclusions', 'planCalculationDoneKey', 'isPlanCalculationDone', 'normalizeLinkedSources', 'clonePlanItems', 'cloneMaterials', 'cleanImportedTechnologyDescription', 'technologyMatchesProduct', 'technologyLabel', 'technologySelectLabel', 'normalizedMaterialUnit', 'isKilogramUnit', 'isGramUnit', 'isThousandPiecesUnit', 'technologyResultUnit', 'technologyResultQuantity', 'roundTechnologyMaterialQuantity', 'linkedSourceSelectionForItem', 'linkedMachineProductQuantity', 'linkedWarehouseProductQuantity', 'linkedSurplusQuantity', 'sameTechnologyMaterials', 'sameLinkedProducts', 'createAlternativeTechnologyFromWorkingCopy', 'selectPlanDate', 'currentPlanVersion',
+  'uid', 'numberValue', 'normalize', 'CATEGORIES', 'materialKey', 'normalizeReturnExclusions', 'planCalculationDoneKey', 'isPlanCalculationDone', 'normalizeLinkedSources', 'clonePlanItems', 'cloneMaterials', 'cleanImportedTechnologyDescription', 'productIdentityMatches', 'technologyMatchesProduct', 'technologyLabel', 'technologySelectLabel', 'normalizedMaterialUnit', 'isKilogramUnit', 'isGramUnit', 'isThousandPiecesUnit', 'technologyResultUnit', 'technologyResultQuantity', 'roundTechnologyMaterialQuantity', 'linkedSourceSelectionForItem', 'linkedMachineProductQuantity', 'linkedWarehouseProductQuantity', 'linkedSurplusQuantity', 'sameTechnologyMaterials', 'sameLinkedProducts', 'createAlternativeTechnologyFromWorkingCopy', 'selectPlanDate', 'currentPlanVersion',
   'tomorrow', 'savedPlanDates', 'customRangeVisible', 'globalRangeChoice', 'Field', 'PlanAmountField', 'Stat',
   'pendingPlanWorkbook', 'planImportWorkbook', 'planImportSheet',
   'areaName', 'selectPlanningArea', 'selectPlanAreaFilter', 'shiftNormForItem', 'planQuantityNeedsReview', 'areaPlan', 'planSearchTokens', 'visibleAreaPlan', 'allVisiblePlanIncluded', 'someVisiblePlanIncluded', 'calculatedVisiblePlanCount', 'updatePlanItemsIncluded', 'togglePlanItemCalculated', 'setVisiblePlanIncluded', 'quantityResolvedPlanItemIds', 'unresolvedActiveCount',
@@ -75,6 +75,7 @@ export const createHeaderFixture = (overrides = {}) => {
     exports: {}, require, React, Fragment: React.Fragment, useState: React.useState, useRef: React.useRef,
     ...require('lucide-react'), Map,
     ...load('@/components/ui/Button'), ...load('@/components/ui/Badge'),
+    ...load('@/components/ui/WarningTriangle'),
     ...load('@/components/ui/Card'), ...load('@/lib/planowanie-zapotrzebowania/domain'),
     ...load('@/components/ui/EmptyState'), ...load('@/components/ui/Select'),
     ...load('@/components/planowanie-zapotrzebowania/PlanningSaveStatus'),

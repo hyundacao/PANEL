@@ -93,6 +93,26 @@ test('product technologies match by index, not by a shared name',()=>{
   assert.equal(assigned[0].technologyId,'');
 });
 
+test('a continuation candidate still receives its base technology automatically',()=>{
+  const h=setup();
+  const material={id:'material-source',code:'MAT-1',name:'Material 1',category:'Tworzywo',usage:0.25,unit:'kg',logisticQty:1};
+  const technology={
+    id:'tech-base',productIndex:'8563',productName:'MAINT. DOOR CUBIC POPIEL',variant:'base',alternativeNo:0,
+    description:'',notes:'',shiftNorm:550,materials:[material],archived:false
+  };
+
+  const [assigned]=h.applyDefaultTechnologyAssignments([{
+    id:'plan-8563',index:'8563',name:'MAINT. DOOR CUBIC POPIEL',technologyId:'',
+    continuationCandidateId:'previous-run',shiftNorm:0
+  }],[technology]);
+
+  assert.equal(assigned.technologyId,'tech-base');
+  assert.equal(assigned.continuationCandidateId,'previous-run');
+  assert.equal(assigned.shiftNorm,550);
+  assert.notEqual(assigned.workingMaterials,technology.materials);
+  assert.equal(assigned.workingMaterials[0].code,'MAT-1');
+});
+
 test('technology mass factors are edited in grams without changing stored kilograms',()=>{
   const h=setup();
   const material={id:'mat',code:'MAT',name:'Material',category:'Tworzywo',usage:0.075,unit:'kg',logisticQty:1000};
@@ -128,6 +148,17 @@ test('discrete technology materials round up while mass remains exact',()=>{
   assert.equal(h.roundTechnologyMaterialQuantity(7.000000000000001,'opak'),7);
   assert.equal(h.roundTechnologyMaterialQuantity(0.0492,'1000szt.'),0.05);
   assert.equal(h.technologyResultQuantity(h.roundTechnologyMaterialQuantity(0.0492,'1000szt.'),'1000szt.'),50);
+});
+
+test('plan import preserves a yellow Excel marker on the calculation row',()=>{
+  const h=setup();
+  const sheet=h.ctx.pending.workbook.Sheets.Plan;
+  sheet['!ref']='A1:H4';
+  sheet.B2={s:{fill:{fgColor:{rgb:'FFFFFF00'}}}};
+  h.importSelectedSheet();
+  assert.equal(h.ctx.state.plan[0].sourceHighlighted,true);
+  assert.equal(h.ctx.state.plan[1].sourceHighlighted,true);
+  assert.equal(h.ctx.state.plan[2].sourceHighlighted,false);
 });
 
 test('requirements round every discrete product source before aggregation',()=>{

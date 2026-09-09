@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { knownRemainingQuantity, parsePlanQuantity, planningSections, quantityNeedsReview, readPlanningRows, splitPlanningRowOutputs } from './planImport.ts';
+import { highlightedPlanSourceRows, knownRemainingQuantity, parsePlanQuantity, planningSections, quantityNeedsReview, readPlanningRows, splitPlanningRowOutputs } from './planImport.ts';
 
 const header = ['Data / Lp.', '', 'ILOŚĆ:', 'ST.', 'NORMA', 'CZĘŚĆ DNIÓWKI', 'UWAGI:'];
 const detail = 'QUICK LIFT ADJUSTER SIDE LEFT, QUICK LIFT ADJUSTER SIDE RIGHT (A28963702, A28963701 )';
@@ -40,6 +40,25 @@ test('keeps all detail rows including missing, zero, invalid amounts and missing
   assert.equal(imported[0].sourceDetail,detail);
   assert.deepEqual(planningSections(imported).flatMap(section=>section.items),imported);
   assert.deepEqual(planningSections(imported).map(section=>section.title), ['Plan bieżący','AWARYJNIE','NARZĘDZIOWNIA','LAKIERNIA','PLANOWANE ZMIANY FORM']);
+});
+
+test('retains yellow source rows, including cells covered by a merge', () => {
+  const sheet = {
+    '!ref': 'A1:H4',
+    '!merges': [{ s: { r: 2, c: 1 }, e: { r: 3, c: 1 } }],
+    B2: { s: { fill: { fgColor: { rgb: 'FFFFFF00' } } } },
+    B3: { s: { fgColor: { rgb: 'FFFF00' } } }
+  };
+  const highlightedRows = highlightedPlanSourceRows(sheet);
+  assert.deepEqual([...highlightedRows], [2, 3, 4]);
+
+  const imported = readPlanningRows([
+    header,
+    ['1', 'Pierwszy detal (A100)', 100, 'WTR 1', 50],
+    ['2', 'Drugi detal (A200)', 200, 'WTR 2', 60],
+    ['3', 'Trzeci detal (A300)', 300, 'WTR 3', 70]
+  ], 0, highlightedRows);
+  assert.deepEqual(imported.map((row) => row.sourceHighlighted), [true, true, true]);
 });
 
 test('splits one mould run into independently calculated products in source order', () => {

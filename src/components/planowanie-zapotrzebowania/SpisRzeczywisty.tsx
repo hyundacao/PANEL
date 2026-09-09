@@ -68,6 +68,7 @@ import {
 import {
   normalizeOriginalInventoryName
 } from '@/lib/utils/originalInventoryName';
+import { aggregateOriginalInventoryByArea } from '@/lib/utils/originalInventoryLocationHierarchy';
 import {
   FIXED_INVENTORY_DEVICE_SOURCE_TYPE,
   fixedInventoryDeviceSourceId,
@@ -1317,6 +1318,18 @@ export default function SpisRzeczywisty() {
     () => new Map(warehouses.map((warehouse) => [warehouse.id, warehouse.name])),
     [warehouses]
   );
+  const warehouseNameByPlanningAreaId = useMemo(() => {
+    const result = new Map<string, string>();
+    warehouses.forEach((warehouse) => {
+      const areaId = planningAreaIdForWarehouse(warehouse.id, warehouse.name);
+      if (areaId) result.set(areaId, warehouse.name);
+    });
+    return result;
+  }, [warehouses]);
+  const fixedDeviceAreaIdById = useMemo(
+    () => new Map(fixedDevices.map((device) => [device.id, device.areaId])),
+    [fixedDevices]
+  );
   const warehouseOrderMap = useMemo(
     () => new Map(warehouses.map((warehouse) => [warehouse.id, warehouse.orderNo])),
     [warehouses]
@@ -1350,51 +1363,21 @@ export default function SpisRzeczywisty() {
     return result;
   }, [activeFixedDevicesForArea, entriesForDate, spisDate, warehouseNameMap]);
   const inventoryExportRows = useMemo(() => {
-    const rows = new Map<
-      string,
-      {
-        materialName: string;
-        locationName: string;
-        locationType: 'Silos' | 'Suszarka / bufor CS' | 'Hala / miejsce';
-        qty: number;
-        unit: string;
-      }
-    >();
-
-    entriesForDate.forEach((entry) => {
-      const isSilo = entry.sourceType === 'SILO';
-      const isFixedDevice = String(entry.sourceType ?? '').toUpperCase() === FIXED_INVENTORY_DEVICE_SOURCE_TYPE;
-      const locationName =
-        entry.location?.trim() ||
-        warehouseNameMap.get(entry.warehouseId)?.trim() ||
-        entry.warehouseId?.trim() ||
-        'Nieznana lokalizacja';
-      const unit = entry.unit.trim() || 'kg';
-      const key = [
-        normalizeCatalogNameKey(entry.name),
-        normalizeCatalogNameKey(locationName),
-        unit.toLowerCase()
-      ].join('|');
-      const current = rows.get(key);
-      if (current) {
-        current.qty += entry.qty;
-        return;
-      }
-      rows.set(key, {
-        materialName: entry.name,
-        locationName,
-        locationType: isSilo ? 'Silos' : isFixedDevice ? 'Suszarka / bufor CS' : 'Hala / miejsce',
-        qty: entry.qty,
-        unit
-      });
+    return aggregateOriginalInventoryByArea(entriesForDate, {
+      warehouseNameById: warehouseNameMap,
+      warehouseNameByPlanningAreaId,
+      fixedDeviceAreaIdById
+    }).sort((left, right) => {
+      const areaCompare = exportCatalogCollator.compare(left.areaName, right.areaName);
+      if (areaCompare !== 0) return areaCompare;
+      return exportCatalogCollator.compare(left.materialName, right.materialName);
     });
-
-    return [...rows.values()].sort((left, right) => {
-      const materialCompare = exportCatalogCollator.compare(left.materialName, right.materialName);
-      if (materialCompare !== 0) return materialCompare;
-      return exportCatalogCollator.compare(left.locationName, right.locationName);
-    });
-  }, [entriesForDate, warehouseNameMap]);
+  }, [
+    entriesForDate,
+    fixedDeviceAreaIdById,
+    warehouseNameByPlanningAreaId,
+    warehouseNameMap
+  ]);
 
   const existingByName = useMemo(() => {
     const map = new Map<string, { name: string; unit: string; total: number }>();
@@ -2399,18 +2382,17 @@ export default function SpisRzeczywisty() {
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'APKA DLA KAMILA';
       workbook.created = new Date();
-      const worksheet = workbook.addWorksheet('Spis wg lokalizacji', {
+      const worksheet = workbook.addWorksheet('Spis sumaryczny', {
         views: [{ state: 'frozen', ySplit: 1 }]
       });
       worksheet.columns = [
         { header: 'Data spisu', key: 'date', width: 14 },
         { header: 'Tworzywo', key: 'material', width: 48 },
-        { header: 'Lokalizacja', key: 'location', width: 30 },
-        { header: 'Typ lokalizacji', key: 'locationType', width: 18 },
+        { header: 'Obszar', key: 'area', width: 14 },
         { header: 'Ilość', key: 'qty', width: 14 },
         { header: 'Jednostka', key: 'unit', width: 12 }
       ];
-      worksheet.autoFilter = 'A1:F1';
+      worksheet.autoFilter = 'A1:E1';
       const headerRow = worksheet.getRow(1);
       headerRow.height = 24;
       headerRow.eachCell((cell) => {
@@ -2422,8 +2404,7 @@ export default function SpisRzeczywisty() {
         const excelRow = worksheet.addRow({
           date: spisDate,
           material: row.materialName,
-          location: row.locationName,
-          locationType: row.locationType,
+          area: row.areaName,
           qty: Math.round(row.qty * 1000) / 1000,
           unit: row.unit
         });
@@ -2437,7 +2418,7 @@ export default function SpisRzeczywisty() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `spis-rzeczywisty-lokalizacje-${spisDate}.xlsx`;
+      link.download = `spis-rzeczywisty-podsumowanie-${spisDate}.xlsx`;
       link.click();
       URL.revokeObjectURL(url);
     } catch {

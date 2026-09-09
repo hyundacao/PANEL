@@ -1423,6 +1423,31 @@ html.light [data-plan-item][data-calculated='true'][data-expanded='false'] > .pl
     0 3px 12px rgba(16, 24, 40, 0.035);
 }
 
+[data-plan-item][data-source-highlighted='true'][data-expanded='false'] > .planning-plan-row {
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--warning-signal-fill) 11%, transparent) 0%,
+    color-mix(in srgb, var(--warning-signal-fill) 4%, transparent) 38%,
+    transparent 72%
+  ) !important;
+  box-shadow:
+    inset 3px 0 0 color-mix(in srgb, var(--warning-signal-fill) 68%, transparent),
+    inset 0 0 22px color-mix(in srgb, var(--warning-signal-fill) 7%, transparent);
+}
+
+html.light [data-plan-item][data-source-highlighted='true'][data-expanded='false'] > .planning-plan-row {
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--warning-signal-fill) 9%, transparent) 0%,
+    color-mix(in srgb, var(--warning-signal-fill) 3%, transparent) 42%,
+    transparent 72%
+  ) !important;
+  box-shadow:
+    inset 3px 0 0 color-mix(in srgb, var(--warning) 55%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--warning) 8%, var(--border)),
+    0 3px 12px rgba(16, 24, 40, 0.035);
+}
+
 html.light .shortage-report-page > .space-y-4 > div,
 html.light .shortage-report-page > .space-y-4 > article {
   box-shadow: var(--card-shadow);

@@ -179,6 +179,17 @@ test('expanded plan index has a visible bounded block and an end separator', () 
   assert.doesNotMatch(h.html(), /Indeks produkcyjny/);
 });
 
+test('a yellow marker from Excel adds a subtle highlight to the calculation row', () => {
+  const h = createHeaderFixture();
+  const item = h.ctx.state.plan[0];
+  h.ctx.state.plan = [{ ...item, sourceHighlighted: true }];
+  const row = nodes(h.render()).find((node) => node.props?.['data-plan-item'] === item.id);
+  assert.equal(row.props['data-source-highlighted'], 'true');
+  const css = readFileSync(new URL('../../app/globals.css', import.meta.url), 'utf8');
+  assert.match(css, /data-source-highlighted='true'/);
+  assert.match(css, /warning-signal-fill/);
+});
+
 test('expanded plan edits expose one explicit save action', () => {
   const h = createHeaderFixture({ calculationEditorDirty: true });
   h.ctx.expandedPlan = h.ctx.state.plan[0].id;
