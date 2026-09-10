@@ -211,28 +211,71 @@ export const splitPlanningRowOutputs = (row: ImportedPlanningRow): ImportedPlann
   const quantities = groupedQuantities.length ? groupedQuantities : reparsedQuantity.quantityStatus === 'parsed'
     ? reparsedQuantity.quantityParts
     : row.quantityParts ?? [];
-  if (row.quantityStatus === 'manual') return [row];
-  if (row.quantityStatus !== 'parsed' && reparsedQuantity.quantityStatus !== 'parsed') return [row];
-  if (names.length !== indices.length || quantities.length !== indices.length) {
+  if (names.length !== indices.length) {
     return [{ ...row, totalQty: 0, quantityStatus: 'unrecognized' }];
   }
 
-  return indices.map((index, position) => {
-    const quantity = quantities[position];
-    const formattedQuantity = quantity.quantity.toLocaleString('pl-PL', { maximumFractionDigits: 3 });
-    return {
-      ...row,
-      name: names[position],
-      index,
-      totalQty: quantity.quantity,
-      quantityStatus: 'parsed',
-      sourceQuantity: quantity.label ? `${quantity.label} - ${formattedQuantity}` : formattedQuantity,
-      quantityParts: [],
-      productionOutputOrder: position,
-      productionOutputCount: indices.length,
-      productionSourceQuantity: row.sourceQuantity
-    };
-  });
+  const outputs = (
+    outputQuantities: number[],
+    quantityStatus: PlanQuantityStatus,
+    sourceQuantities: string[],
+    productionSourceQuantity: string
+  ) => indices.map((index, position) => ({
+    ...row,
+    name: names[position],
+    index,
+    totalQty: outputQuantities[position],
+    quantityStatus,
+    sourceQuantity: sourceQuantities[position],
+    quantityParts: [],
+    productionOutputOrder: position,
+    productionOutputCount: indices.length,
+    productionSourceQuantity
+  }));
+
+  // A manual correction on a legacy combined row describes one mould cycle count,
+  // so every simultaneously produced output receives that same corrected amount.
+  if (row.quantityStatus === 'manual') {
+    const manualQuantity = Number(row.totalQty);
+    if (!Number.isFinite(manualQuantity) || manualQuantity < 0) {
+      return [{ ...row, totalQty: 0, quantityStatus: 'unrecognized' }];
+    }
+    return outputs(
+      Array(indices.length).fill(manualQuantity),
+      'manual',
+      Array(indices.length).fill(text(row.sourceQuantity)),
+      text(row.productionSourceQuantity ?? row.sourceQuantity)
+    );
+  }
+
+  // Product identity is still unambiguous when the quantity cell is blank or
+  // unreadable. Split the products and keep each amount blocked for review.
+  if (row.quantityStatus !== 'parsed' && reparsedQuantity.quantityStatus !== 'parsed') {
+    const unresolvedStatus: PlanQuantityStatus = row.quantityStatus === 'unrecognized'
+      || reparsedQuantity.quantityStatus === 'unrecognized'
+      ? 'unrecognized'
+      : 'missing';
+    return outputs(
+      Array(indices.length).fill(0),
+      unresolvedStatus,
+      Array(indices.length).fill(text(row.sourceQuantity)),
+      text(row.sourceQuantity)
+    );
+  }
+
+  if (quantities.length !== indices.length) {
+    return [{ ...row, totalQty: 0, quantityStatus: 'unrecognized' }];
+  }
+
+  return outputs(
+    quantities.map((quantity) => quantity.quantity),
+    'parsed',
+    quantities.map((quantity) => {
+      const formattedQuantity = quantity.quantity.toLocaleString('pl-PL', { maximumFractionDigits: 3 });
+      return quantity.label ? quantity.label + ' - ' + formattedQuantity : formattedQuantity;
+    }),
+    text(row.sourceQuantity)
+  );
 };
 
 // Section headings are retained as sections, not artificial production tasks.

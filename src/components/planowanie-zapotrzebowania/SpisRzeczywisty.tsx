@@ -68,7 +68,7 @@ import {
 import {
   normalizeOriginalInventoryName
 } from '@/lib/utils/originalInventoryName';
-import { aggregateOriginalInventoryByArea } from '@/lib/utils/originalInventoryLocationHierarchy';
+import { buildOriginalInventoryExportRows } from '@/lib/utils/originalInventoryLocationHierarchy';
 import {
   FIXED_INVENTORY_DEVICE_SOURCE_TYPE,
   fixedInventoryDeviceSourceId,
@@ -1363,18 +1363,35 @@ export default function SpisRzeczywisty() {
     return result;
   }, [activeFixedDevicesForArea, entriesForDate, spisDate, warehouseNameMap]);
   const inventoryExportRows = useMemo(() => {
-    return aggregateOriginalInventoryByArea(entriesForDate, {
-      warehouseNameById: warehouseNameMap,
-      warehouseNameByPlanningAreaId,
-      fixedDeviceAreaIdById
-    }).sort((left, right) => {
+    return buildOriginalInventoryExportRows(
+      entriesForDate,
+      siloConfigs,
+      siloEntries,
+      {
+        warehouseNameById: warehouseNameMap,
+        warehouseNameByPlanningAreaId,
+        fixedDeviceAreaIdById
+      }
+    ).sort((left, right) => {
       const areaCompare = exportCatalogCollator.compare(left.areaName, right.areaName);
       if (areaCompare !== 0) return areaCompare;
+      const siloOrderCompare = (left.siloOrderNo ?? Number.MAX_SAFE_INTEGER)
+        - (right.siloOrderNo ?? Number.MAX_SAFE_INTEGER);
+      if (siloOrderCompare !== 0) return siloOrderCompare;
+      const siloCompare = exportCatalogCollator.compare(left.siloName ?? '', right.siloName ?? '');
+      if (siloCompare !== 0) return siloCompare;
+      const chamberCompare = exportCatalogCollator.compare(
+        left.siloChamber ?? '',
+        right.siloChamber ?? ''
+      );
+      if (chamberCompare !== 0) return chamberCompare;
       return exportCatalogCollator.compare(left.materialName, right.materialName);
     });
   }, [
     entriesForDate,
     fixedDeviceAreaIdById,
+    siloConfigs,
+    siloEntries,
     warehouseNameByPlanningAreaId,
     warehouseNameMap
   ]);
@@ -2389,25 +2406,36 @@ export default function SpisRzeczywisty() {
         { header: 'Data spisu', key: 'date', width: 14 },
         { header: 'Tworzywo', key: 'material', width: 48 },
         { header: 'Obszar', key: 'area', width: 14 },
+        { header: 'Komora', key: 'siloChamber', width: 16 },
+        { header: 'Napełnienie silosa [%]', key: 'siloPercent', width: 22 },
+        { header: 'Przelicznik 1% [kg]', key: 'siloPercentKg', width: 20 },
+        { header: 'Lejek [kg]', key: 'siloHopperKg', width: 14 },
         { header: 'Ilość', key: 'qty', width: 14 },
         { header: 'Jednostka', key: 'unit', width: 12 }
       ];
-      worksheet.autoFilter = 'A1:E1';
+      worksheet.autoFilter = 'A1:I1';
       const headerRow = worksheet.getRow(1);
-      headerRow.height = 24;
+      headerRow.height = 34;
       headerRow.eachCell((cell) => {
         cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB45309' } };
-        cell.alignment = { vertical: 'middle' };
+        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
       });
       inventoryExportRows.forEach((row) => {
         const excelRow = worksheet.addRow({
           date: spisDate,
           material: row.materialName,
           area: row.areaName,
+          siloChamber: row.siloChamber ?? null,
+          siloPercent: row.siloPercent === undefined ? null : row.siloPercent / 100,
+          siloPercentKg: row.siloPercentKg ?? null,
+          siloHopperKg: row.siloHopperKg ?? null,
           qty: Math.round(row.qty * 1000) / 1000,
           unit: row.unit
         });
+        excelRow.getCell('siloPercent').numFmt = '0.##%';
+        excelRow.getCell('siloPercentKg').numFmt = '0.###';
+        excelRow.getCell('siloHopperKg').numFmt = '0.###';
         excelRow.getCell('qty').numFmt = '0.###';
       });
 

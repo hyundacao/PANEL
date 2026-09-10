@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   aggregateOriginalInventoryByArea,
+  buildOriginalInventoryExportRows,
   getOriginalInventoryParentLocationName
 } from './originalInventoryLocationHierarchy.ts';
 
@@ -105,4 +106,70 @@ test('inventory export sums every source of the same material within one area', 
     qty: 790,
     unit: 'kg'
   }]);
+});
+
+test('inventory export keeps every saved silo chamber as a separate detailed row', () => {
+  const rows = buildOriginalInventoryExportRows([
+    {
+      name: 'HOSTACOM HBC 327L GREY',
+      qty: 15680,
+      unit: 'kg',
+      warehouseId: 'fallback',
+      sourceType: 'SILO',
+      sourceId: 'silo:silo-e:2026-09-10'
+    },
+    {
+      name: 'HOSTACOM HBC 327L GREY',
+      qty: 50,
+      unit: 'kg',
+      warehouseId: 'hall-2'
+    }
+  ], [
+    {
+      id: 'silo-e',
+      name: 'Silos główny',
+      chamber: 'Komora E',
+      materialName: 'HOSTACOM HBC 327L GREY',
+      percentKg: 330,
+      hopperKg: 500,
+      orderNo: 5
+    },
+    {
+      id: 'silo-f',
+      name: 'Silos główny',
+      chamber: 'Komora F',
+      materialName: 'PP GF35',
+      percentKg: 220,
+      hopperKg: 350,
+      orderNo: 6
+    }
+  ], [
+    {
+      configId: 'silo-e',
+      percent: 46,
+      hopperPresent: true,
+      calculatedQty: 15680
+    }
+  ], hierarchy);
+
+  assert.deepEqual(rows, [
+    {
+      materialName: 'HOSTACOM HBC 327L GREY',
+      areaName: 'H2',
+      qty: 50,
+      unit: 'kg'
+    },
+    {
+      materialName: 'HOSTACOM HBC 327L GREY',
+      areaName: 'Silosy',
+      qty: 15680,
+      unit: 'kg',
+      siloName: 'Silos główny',
+      siloChamber: 'Komora E',
+      siloPercent: 46,
+      siloPercentKg: 330,
+      siloHopperKg: 500,
+      siloOrderNo: 5
+    }
+  ]);
 });

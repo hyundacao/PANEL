@@ -115,6 +115,37 @@ test('keeps plus signs inside product names when commas separate mould outputs',
   assert.deepEqual(recovered.map((output) => output.index), ['A18208403', 'A18208404']);
 });
 
+test('splits DORIS outputs even when source quantity is missing and preserves review state', () => {
+  const [row] = readPlanningRows([header, [
+    '1',
+    'PLV QUICK LIFT SLIDER LEFT + WHEEL DORIS 229, PLV QUICK LIFT SLIDER RIGHT + WHEEL DORIS 229 (A18208403, A18208404)',
+    '',
+    'WTR 18',
+    1300
+  ]]);
+  const outputs = splitPlanningRowOutputs(row);
+
+  assert.deepEqual(outputs.map((output) => output.index), ['A18208403', 'A18208404']);
+  assert.deepEqual(outputs.map((output) => output.totalQty), [0, 0]);
+  assert.ok(outputs.every((output) => output.quantityStatus === 'missing'));
+  assert.deepEqual(outputs.map((output) => output.productionOutputOrder), [0, 1]);
+});
+
+test('applies a manual combined mould correction to every DORIS output', () => {
+  const [row] = readPlanningRows([header, [
+    '1',
+    'PLV QUICK LIFT SLIDER LEFT + WHEEL DORIS 229, PLV QUICK LIFT SLIDER RIGHT + WHEEL DORIS 229 (A18208403, A18208404)',
+    '',
+    'WTR 18',
+    1300
+  ]]);
+  const outputs = splitPlanningRowOutputs({ ...row, totalQty: 2222, quantityStatus: 'manual' });
+
+  assert.deepEqual(outputs.map((output) => output.index), ['A18208403', 'A18208404']);
+  assert.deepEqual(outputs.map((output) => output.totalQty), [2222, 2222]);
+  assert.ok(outputs.every((output) => output.quantityStatus === 'manual'));
+});
+
 test('adds exact quantity components separately for each labelled mould output', () => {
   const source = 'L - 234 + 1 560                    P - 420 + 2 400';
   const parsed = parsePlanQuantity(source);

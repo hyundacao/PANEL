@@ -17,6 +17,32 @@ export type OriginalInventoryAreaSummaryRow = {
   unit: string;
 };
 
+export type OriginalInventorySiloExportConfig = {
+  id: string;
+  name: string;
+  chamber: string;
+  materialName: string;
+  percentKg: number;
+  hopperKg: number;
+  orderNo?: number;
+};
+
+export type OriginalInventorySiloExportEntry = {
+  configId: string;
+  percent: number;
+  hopperPresent: boolean;
+  calculatedQty: number;
+};
+
+export type OriginalInventoryExportRow = OriginalInventoryAreaSummaryRow & {
+  siloName?: string;
+  siloChamber?: string;
+  siloPercent?: number;
+  siloPercentKg?: number;
+  siloHopperKg?: number;
+  siloOrderNo?: number;
+};
+
 export type OriginalInventoryLocationHierarchy = {
   warehouseNameById: ReadonlyMap<string, string>;
   warehouseNameByPlanningAreaId: ReadonlyMap<string, string>;
@@ -91,4 +117,54 @@ export const aggregateOriginalInventoryByArea = (
   });
 
   return [...rows.values()];
+};
+
+export const buildOriginalInventoryExportRows = (
+  entries: readonly OriginalInventoryAreaSummaryEntry[],
+  siloConfigs: readonly OriginalInventorySiloExportConfig[],
+  siloEntries: readonly OriginalInventorySiloExportEntry[],
+  hierarchy: OriginalInventoryLocationHierarchy
+): OriginalInventoryExportRow[] => {
+  const siloConfigById = new Map(siloConfigs.map((config) => [config.id, config]));
+  const detailedSiloConfigIds = new Set(
+    siloEntries
+      .map((entry) => entry.configId)
+      .filter((configId) => siloConfigById.has(configId))
+  );
+  const summaryRows = aggregateOriginalInventoryByArea(
+    entries.filter((entry) => {
+      if (String(entry.sourceType ?? '').trim().toUpperCase() !== 'SILO') return true;
+      const configId = sourceEntityId(entry.sourceId, 'silo');
+      return !configId || !detailedSiloConfigIds.has(configId);
+    }),
+    hierarchy
+  );
+  const siloRows = siloEntries.flatMap<OriginalInventoryExportRow>((entry) => {
+    const config = siloConfigById.get(entry.configId);
+    if (!config) return [];
+
+    const percent = Number.isFinite(entry.percent) ? entry.percent : 0;
+    const percentKg = Number.isFinite(config.percentKg) ? config.percentKg : 0;
+    const hopperKg = entry.hopperPresent && Number.isFinite(config.hopperKg)
+      ? config.hopperKg
+      : 0;
+    const calculatedQty = Number.isFinite(entry.calculatedQty)
+      ? entry.calculatedQty
+      : (percent * percentKg) + hopperKg;
+
+    return [{
+      materialName: config.materialName.trim(),
+      areaName: 'Silosy',
+      qty: calculatedQty,
+      unit: 'kg',
+      siloName: config.name.trim(),
+      siloChamber: config.chamber.trim(),
+      siloPercent: percent,
+      siloPercentKg: percentKg,
+      siloHopperKg: hopperKg,
+      siloOrderNo: config.orderNo
+    }];
+  });
+
+  return [...summaryRows, ...siloRows];
 };
