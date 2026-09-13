@@ -348,10 +348,13 @@ test('continuous production replaces a missing final quantity with output for th
 });
 
 test('today, tomorrow, saved dates and custom calendar select the matching daily plan', () => {
-  const h = createHeaderFixture();
+  const h = createHeaderFixture({
+    state: { dailyPlans: { '2026-08-30': [], '2026-08-23': [] } }
+  });
   const original = h.ctx.state.plan;
   const select = control(h, 'Dzień produkcji');
   assert.ok(nodes(select).some((node) => node.props?.value === '2026-08-30'));
+  assert.ok(!nodes(select).some((node) => node.props?.value === '2026-08-23'));
   select.props.onChange({ target: { value: '2026-09-01' } });
   assert.equal(h.ctx.state.selectedPlanDate, '2026-09-01');
   assert.equal(h.ctx.state.plan.length, 0);
@@ -359,7 +362,10 @@ test('today, tomorrow, saved dates and custom calendar select the matching daily
   control(h, 'Dzień produkcji').props.onChange({ target: { value: '2026-08-31' } });
   assert.equal(h.ctx.state.plan.length, original.length);
   control(h, 'Dzień produkcji').props.onChange({ target: { value: 'custom' } });
-  assert.ok(control(h, 'Wybrana data produkcji'));
+  const datePicker = control(h, 'Wybrana data produkcji');
+  assert.equal(datePicker.props.min, '2026-08-24');
+  datePicker.props.onChange({ target: { value: '2026-08-23' } });
+  assert.equal(h.ctx.state.selectedPlanDate, '2026-08-31');
 });
 
 test('range presets, entire production and a custom 9.5 shifts preserve individual overrides', () => {
@@ -541,7 +547,7 @@ test('all-zone view shows the entire plan once without changing production or do
   for (const index of [0, 2, 3, 4, 5]) assert.ok(!filtered.includes(`ALL_ZONE_ROW_${index}`));
 });
 
-test('returns have an independent zone filter with an all-zones overview', () => {
+test('transfers and returns have an independent zone filter with an all-zones overview', () => {
   const areaLabels = { 'hala-1': 'Hala 1', 'hala-2': 'Hala 2', bakoma: 'Bakoma', lakiernia: 'Lakiernia', narzedziownia: 'Narzędziownia' };
   const returnRows = [
     { id: 'return-h1', planDate: '2026-08-31', code: 'RETURN-H1', name: 'Zwrot z hali 1', category: 'Tworzywo', unit: 'kg', areaId: 'hala-1', surplus: 12, status: 'open' },
@@ -577,7 +583,7 @@ test('returns have an independent zone filter with an all-zones overview', () =>
 
   zoneFilter().props.onChange({ target: { value: 'narzedziownia' } });
   html = h.html('zwroty');
-  assert.match(html, /Brak zwrotów w strefie: Narzędziownia/);
+  assert.match(html, /Brak przesunięć i zwrotów w strefie: Narzędziownia/);
   assert.doesNotMatch(html, /RETURN-H1|RETURN-H2|RETURN-BAKOMA/);
 
   zoneFilter().props.onChange({ target: { value: 'all' } });

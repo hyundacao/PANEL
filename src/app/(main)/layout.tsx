@@ -11,12 +11,15 @@ import { withProductionPlanDate } from '@/lib/utils/productionPlanDate';
 import {
   canAccessWarehouse,
   canSeeTab,
+  canViewProductionPreparationMaterials,
   getAdminWarehouses,
+  getProductionPreparationTeams,
   getWarehouseLabel,
   isHeadAdmin,
   isWarehouseAdmin
 } from '@/lib/auth/access';
 import type { WarehouseKey, WarehouseTab } from '@/lib/api/types';
+import type { ProductionTeam } from '@/lib/utils/productionTeamComments';
 import Link from 'next/link';
 import { getCurrentSessionUser } from '@/lib/api';
 
@@ -89,6 +92,8 @@ type MobileNavItem = {
   href: string;
   tab?: WarehouseTab;
   requiresAdmin?: boolean;
+  requiresMaterialAccess?: boolean;
+  preparationTeams?: ProductionTeam[];
 };
 
 const navItemsPrzemialy: MobileNavItem[] = [
@@ -150,13 +155,14 @@ const navItemsFarbyTasmy: MobileNavItem[] = [
 ];
 
 const navItemsPrzygotowanieProdukcji: MobileNavItem[] = [
-  { label: 'Plan zmian', href: '/przygotowanie-produkcji' },
-  { label: 'Plan pracy — technologia', mobileLabel: 'Praca: technologia', href: '/przygotowanie-produkcji?view=work-plan-technology' },
-  { label: 'Plan pracy — przygotowanie produkcji', mobileLabel: 'Praca: przygotowanie', href: '/przygotowanie-produkcji?view=work-plan-preparation' },
-  { label: 'Rozpiska materiałowa', href: '/przygotowanie-produkcji?view=material' },
-  { label: 'Historia planów', href: '/przygotowanie-produkcji?view=history' },
-  { label: 'Raport prac', href: '/przygotowanie-produkcji?view=report' },
-  { label: 'Zarządzanie', href: '/przygotowanie-produkcji?view=management' }
+  { label: 'Plan zmian', href: '/przygotowanie-produkcji', requiresAdmin: true },
+  { label: 'Moje zadania', href: '/przygotowanie-produkcji?view=personal' },
+  { label: 'Plan pracy — technologia', mobileLabel: 'Praca: technologia', href: '/przygotowanie-produkcji?view=work-plan-technology', preparationTeams: ['mechanics', 'process', 'graphics'] },
+  { label: 'Plan pracy — przygotowanie produkcji', mobileLabel: 'Praca: przygotowanie', href: '/przygotowanie-produkcji?view=work-plan-preparation', preparationTeams: ['distribution', 'technician', 'additional'] },
+  { label: 'Rozpiska materiałowa', href: '/przygotowanie-produkcji?view=material', requiresMaterialAccess: true },
+  { label: 'Historia planów', href: '/przygotowanie-produkcji?view=history', requiresAdmin: true },
+  { label: 'Raport prac', href: '/przygotowanie-produkcji?view=report', requiresAdmin: true },
+  { label: 'Zarządzanie', href: '/przygotowanie-produkcji?view=management', requiresAdmin: true }
 ];
 
 const navItemsPlanowanieZapotrzebowania: MobileNavItem[] = [
@@ -179,16 +185,27 @@ const getModuleNavItems = (warehouse: WarehouseKey | null) => {
   return navItemsPrzemialy;
 };
 
+const canShowModuleNavItem = (
+  user: Parameters<typeof canSeeTab>[0],
+  warehouse: WarehouseKey,
+  item: MobileNavItem
+) => {
+  if (item.requiresAdmin && !isWarehouseAdmin(user, warehouse)) return false;
+  if (item.requiresMaterialAccess && !canViewProductionPreparationMaterials(user)) return false;
+  if (warehouse === 'PRZYGOTOWANIE_PRODUKCJI' && item.preparationTeams) {
+    const grantedTeams = getProductionPreparationTeams(user);
+    if (!item.preparationTeams.some((team) => grantedTeams.includes(team))) return false;
+  }
+  if (!item.tab) return true;
+  return canSeeTab(user, warehouse, item.tab);
+};
+
 const getFirstAccessibleModuleHref = (
   user: Parameters<typeof canSeeTab>[0],
   warehouse: WarehouseKey
-) => {
-  const item = getModuleNavItems(warehouse).find((navItem) => {
-    if (!navItem.tab) return true;
-    return canSeeTab(user, warehouse, navItem.tab);
-  });
-  return item?.href ?? null;
-};
+) => getModuleNavItems(warehouse)
+  .find((item) => canShowModuleNavItem(user, warehouse, item))
+  ?.href ?? null;
 
 function MainLayoutContent({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -405,6 +422,9 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     if (href === '/przygotowanie-produkcji?view=work-plan-preparation') {
       return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'work-plan-preparation';
     }
+    if (href === '/przygotowanie-produkcji?view=personal') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'personal';
+    }
     if (href === '/przygotowanie-produkcji?view=material') {
       return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'material';
     }
@@ -436,13 +456,11 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     }
     return pathname.startsWith(href);
   };
-  const mobileItems =
-    getModuleNavItems(activeWarehouse).filter((item) => {
-      if (!activeWarehouse) return false;
-      if (item.requiresAdmin && !isWarehouseAdmin(user, activeWarehouse)) return false;
-      if (!item.tab) return true;
-      return canSeeTab(user, activeWarehouse, item.tab);
-    });
+  const mobileItems = activeWarehouse
+    ? getModuleNavItems(activeWarehouse).filter((item) =>
+        canShowModuleNavItem(user, activeWarehouse, item)
+      )
+    : [];
   const isPaintTapeMobileNav = activeWarehouse === 'FARBY_TASMY';
   const isPreparationMobileNav = activeWarehouse === 'PRZYGOTOWANIE_PRODUKCJI' || activeWarehouse === 'PLANOWANIE_ZAPOTRZEBOWANIA';
   const isDashboardPath = pathname.startsWith('/dashboard');

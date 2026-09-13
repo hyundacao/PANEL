@@ -11,7 +11,128 @@ import * as toolroom from './productionToolroomTasks.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
+
+const recurringFile = fileURLToPath(new URL('./productionRecurringTasks.ts', import.meta.url));
+const recurringModule = new Module(recurringFile);
+recurringModule.require = (id) => {
+  if (id === './productionTeamComments') return comments;
+  return require(id);
+};
+recurringModule._compile(ts.transpileModule(readFileSync(recurringFile, 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, recurringFile);
+const recurring = recurringModule.exports;
+
 const { defaultTeamComments, normalizeTeamComments, normalizeTeamComment, validateTeamComment, teamCommentForTask, TEAM_COMMENT_KEY_PREFIX } = comments;
+
+const accessFile = fileURLToPath(new URL('../auth/access.ts', import.meta.url));
+const accessModule = new Module(accessFile);
+accessModule.require = (id) => {
+  if (id === '@/lib/utils/productionTeamComments') return comments;
+  if (id === '@/lib/utils/productionWorkProgress') return workProgress;
+  return require(id);
+};
+accessModule._compile(ts.transpileModule(readFileSync(accessFile, 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, accessFile);
+const authAccess = accessModule.exports;
+
+const usersFile = fileURLToPath(new URL('../supabase/users.ts', import.meta.url));
+const usersModule = new Module(usersFile);
+usersModule.require = (id) => {
+  if (id === '@/lib/auth/access') return authAccess;
+  return require(id);
+};
+usersModule._compile(ts.transpileModule(readFileSync(usersFile, 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, usersFile);
+const dbUsers = usersModule.exports;
+
+test('preparation module admin is independent from the global account role', () => {
+  const preparationAccess = {
+    role: 'PODGLAD',
+    readOnly: true,
+    tabs: ['przygotowanie-produkcji'],
+    admin: true,
+    preparationTeams: [],
+    preparationMaterialAccess: 'none'
+  };
+  const user = {
+    role: 'USER',
+    access: { admin: false, warehouses: { PRZYGOTOWANIE_PRODUKCJI: preparationAccess } }
+  };
+  assert.equal(authAccess.isWarehouseAdmin(user, 'PRZYGOTOWANIE_PRODUKCJI'), true);
+  assert.equal(authAccess.canManageProductionPreparation(user), true);
+  assert.deepEqual(authAccess.getAdminWarehouses(user), ['PRZYGOTOWANIE_PRODUKCJI']);
+  assert.equal(authAccess.hasAnyAdminAccess(user), true);
+  assert.deepEqual(authAccess.getProductionPreparationTeams(user), [...comments.PRODUCTION_TEAMS]);
+  assert.equal(authAccess.getProductionPreparationMaterialAccess(user), 'edit');
+  assert.equal(authAccess.canViewProductionPreparationMaterials(user), true);
+  assert.equal(authAccess.canEditProductionPreparationMaterials(user), true);
+
+  preparationAccess.admin = false;
+  preparationAccess.preparationMaterialAccess = 'read';
+  assert.equal(authAccess.isWarehouseAdmin(user, 'PRZYGOTOWANIE_PRODUKCJI'), false);
+  assert.equal(authAccess.canManageProductionPreparation(user), false);
+  assert.equal(authAccess.getProductionPreparationMaterialAccess(user), 'read');
+  assert.equal(authAccess.canViewProductionPreparationMaterials(user), true);
+  assert.equal(authAccess.canEditProductionPreparationMaterials(user), false);
+});
+
+test('material access defaults securely and permission groups merge to the highest level', () => {
+  const invalid = dbUsers.normalizeAccessForDb({
+    admin: false,
+    warehouses: {
+      PRZYGOTOWANIE_PRODUKCJI: {
+        role: 'PODGLAD',
+        readOnly: true,
+        tabs: ['przygotowanie-produkcji'],
+        admin: false,
+        preparationTeams: [],
+        preparationMaterialAccess: 'owner'
+      }
+    }
+  });
+  assert.equal(
+    invalid.warehouses.PRZYGOTOWANIE_PRODUKCJI.preparationMaterialAccess,
+    'none'
+  );
+
+  const preparationAccess = (preparationMaterialAccess) => ({
+    admin: false,
+    warehouses: {
+      PRZYGOTOWANIE_PRODUKCJI: {
+        role: 'PODGLAD',
+        readOnly: true,
+        tabs: ['przygotowanie-produkcji'],
+        admin: false,
+        preparationTeams: [],
+        preparationMaterialAccess
+      }
+    }
+  });
+  const mapped = dbUsers.mapDbUser({
+    id: 'user-1',
+    name: 'Materiałowiec',
+    username: 'materialowiec',
+    role: 'USER',
+    access: preparationAccess('read'),
+    is_active: true,
+    created_at: '2026-09-11T00:00:00.000Z',
+    last_login: null
+  }, [{
+    id: 'group-1',
+    name: 'Edycja materiałów',
+    description: null,
+    access: preparationAccess('edit'),
+    isActive: true,
+    createdAt: '2026-09-11T00:00:00.000Z'
+  }]);
+  assert.equal(
+    mapped.access.warehouses.PRZYGOTOWANIE_PRODUKCJI.preparationMaterialAccess,
+    'edit'
+  );
+});
 
 test('defaults preserve the four existing 5S groups, leaving other groups disabled', () => {
   const defaults = defaultTeamComments();
@@ -117,6 +238,7 @@ test('work progress unlocks startup teams only after assigned preparation teams 
   assert.equal(workProgress.canProductionTeamStart(task, 'mechanics'), true);
   assert.equal(workProgress.canProductionTeamStart(task, 'distribution'), true);
   assert.equal(workProgress.canProductionTeamStart(task, 'technician'), true);
+  assert.equal(workProgress.canProductionTeamStart(task, 'additional'), true);
   assert.equal(workProgress.canProductionTeamStart(task, 'process'), false);
   assert.equal(workProgress.canProductionTeamStart(task, 'graphics'), false);
   assert.deepEqual(workProgress.productionWaitingTeams(task, 'process'), ['mechanics', 'distribution', 'technician']);
@@ -131,6 +253,9 @@ test('work progress unlocks startup teams only after assigned preparation teams 
   task.teamProgress = workProgress.setProductionTeamCompletion(task.teamProgress, 'graphics', true);
   assert.equal(workProgress.isProductionTaskDone(task), true);
   assert.equal(workProgress.isProductionTeamDone(task, 'additional'), false);
+  task.teamProgress = workProgress.setProductionTeamCompletion(task.teamProgress, 'additional', true);
+  assert.equal(workProgress.isProductionTeamDone(task, 'additional'), true);
+  assert.equal(workProgress.isProductionTaskDone(task), true);
   task.teamProgress = workProgress.productionTeamProgressForTask({
     ...task,
     teamProgress: workProgress.setProductionTeamCompletion(task.teamProgress, 'technician', false),
@@ -138,6 +263,20 @@ test('work progress unlocks startup teams only after assigned preparation teams 
   });
   assert.equal(workProgress.isProductionTeamDone(task, 'process'), false);
   assert.equal(workProgress.isProductionTeamDone(task, 'graphics'), false);
+  assert.equal(workProgress.isProductionTeamDone(task, 'additional'), true);
+
+  const additionalOnly = { teams: ['additional'], kinds: ['inne'], teamProgress: {}, done: false };
+  assert.equal(workProgress.canProductionTeamStart(additionalOnly, 'additional'), true);
+  assert.equal(workProgress.isProductionTaskDone(additionalOnly), false);
+  additionalOnly.teamProgress = workProgress.setProductionTeamCompletion(additionalOnly.teamProgress, 'additional', true);
+  assert.equal(workProgress.isProductionTaskDone(additionalOnly), true);
+
+  const legacyMixed = { teams: ['mechanics', 'additional'], kinds: ['inne'], teamProgress: {}, done: true };
+  assert.equal(workProgress.isProductionTeamDone(legacyMixed, 'mechanics'), true);
+  assert.equal(workProgress.isProductionTeamDone(legacyMixed, 'additional'), false);
+  assert.equal(workProgress.isProductionTaskDone(legacyMixed), true);
+  const legacyAdditionalOnly = { teams: ['additional'], kinds: ['inne'], teamProgress: {}, done: true };
+  assert.equal(workProgress.isProductionTeamDone(legacyAdditionalOnly, 'additional'), true);
 
   const technicianOnly = { teams: ['technician', 'process'], kinds: ['inne'], teamProgress: {}, done: false };
   assert.deepEqual(workProgress.productionWaitingTeams(technicianOnly, 'process'), ['technician']);
@@ -174,7 +313,15 @@ test('toolroom return is a separate mechanic gate for process startup', () => {
 // Exercise the real route against an isolated in-memory database, never Supabase.
 function testApi() {
   const db = {przygotowanie_produkcji_sessions:[],przygotowanie_produkcji_tasks:[],przygotowanie_produkcji_history:[]};
-  const state = {user:{name:'Test'},readOnly:false,allowed:true,failWrite:false};
+  const state = {
+    user:{name:'Test'},
+    isAdmin:true,
+    preparationTeams:[...comments.PRODUCTION_TEAMS],
+    materialAccess:'none',
+    allowed:true,
+    failWrite:false,
+    writeCount:0
+  };
   let sequence=0;
   const clone=value=>structuredClone(value);
   class Query {
@@ -194,6 +341,7 @@ function testApi() {
     async run(single) {
       const table=db[this.table];
       assert.ok(table, `Unexpected table ${this.table}`);
+      if(this.mode!=='select')state.writeCount+=1;
       if(state.failWrite&&this.mode!=='select')return {data:null,error:new Error('Testowy błąd zapisu')};
       let result=table.filter(row=>this.filters.every(filter=>filter(row)));
       if(this.mode==='update')result.forEach(row=>Object.assign(row,clone(this.values)));
@@ -216,10 +364,18 @@ function testApi() {
   const stubs={
     'node:crypto':require('node:crypto'),
     'next/server':{NextResponse:{json:(data,options)=>new Response(JSON.stringify(data),{status:options?.status??200,headers:{'Content-Type':'application/json'}})}},
-    '@/lib/auth/access':{canSeeTab:()=>state.allowed,isReadOnly:()=>state.readOnly},
+    '@/lib/auth/access':{
+      canSeeTab:()=>state.allowed,
+      getProductionPreparationTeams:()=>state.isAdmin?[...comments.PRODUCTION_TEAMS]:[...state.preparationTeams],
+      getProductionPreparationMaterialAccess:()=>state.isAdmin?'edit':state.materialAccess,
+      canManageProductionPreparation:()=>Boolean(state.user&&state.isAdmin),
+      canEditProductionPreparationMaterials:()=>Boolean(state.user)&&(state.isAdmin||state.materialAccess==='edit'),
+      canCompleteProductionPreparationTeam:(_user,team)=>Boolean(state.user)&&workProgress.isProductionCompletableTeam(team)&&(state.isAdmin||state.preparationTeams.includes(team))
+    },
     '@/lib/auth/session':{getAuthenticatedUser:async()=>({user:state.user,code:'UNAUTHORIZED'})},
     '@/lib/supabase/admin':{supabaseAdmin:{from:table=>new Query(table)}},
     '@/lib/utils/productionPlanDate':planDates,
+    '@/lib/utils/productionRecurringTasks':recurring,
     '@/lib/utils/productionTeamComments':comments,
     '@/lib/utils/productionWorkProgress':workProgress,
     '@/lib/utils/productionToolroomTasks':toolroom
@@ -277,7 +433,7 @@ test('unchanged plan responses still refresh shared comments', async () => {
   const date=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Warsaw'}).format(new Date());
   api.db.przygotowanie_produkcji_sessions.push({id:'daily',session_date:date,updated_at:'version-1'});
   await api.save('process',{enabled:true,text:'Nowa wspólna instrukcja'});
-  const data=await (await api.get('?sync=1&since=version-1')).json();
+  const data=await (await api.get('?sync=1&since=version-1%7Cedit')).json();
   assert.equal(data.unchanged,true);
   assert.equal(data.teamComments.process.text,'Nowa wspólna instrukcja');
 });
@@ -286,14 +442,125 @@ test('invalid requests and access restrictions never write settings', async () =
   const api=testApi();
   assert.equal((await api.save('unknown',{enabled:true,text:'tekst'})).status,400);
   assert.equal((await api.save('mechanics',{enabled:true,text:' '})).status,400);
-  api.state.readOnly=true;
+  api.state.isAdmin=false;api.state.preparationTeams=['mechanics'];
   assert.equal((await api.save('mechanics',{enabled:true,text:'tekst'})).status,403);
-  api.state.readOnly=false;api.state.allowed=false;
+  api.state.isAdmin=true;api.state.allowed=false;
   assert.equal((await api.save('mechanics',{enabled:true,text:'tekst'})).status,403);
   api.state.allowed=true;api.state.user=null;
   assert.equal((await api.save('mechanics',{enabled:true,text:'tekst'})).status,401);
   assert.equal(api.db.przygotowanie_produkcji_sessions.length,0);
   assert.equal(api.db.przygotowanie_produkcji_tasks.length,0);
+});
+
+test('API exposes scoped preparation access and protects history from workers without writes', async () => {
+  const api=testApi();
+  api.state.isAdmin=false;
+  api.state.preparationTeams=['mechanics','additional'];
+  const data=await(await api.get()).json();
+  assert.deepEqual(data.access,{isAdmin:false,teams:['mechanics','additional'],materialAccess:'none'});
+
+  const writesBefore=api.state.writeCount;
+  const denied=await api.get('?history=1');
+  assert.equal(denied.status,403);
+  assert.equal((await denied.json()).code,'FORBIDDEN');
+  assert.equal(api.state.writeCount,writesBefore);
+
+  api.state.isAdmin=true;
+  const adminResponse=await api.get('?history=1');
+  assert.equal(adminResponse.status,200);
+  const adminData=await adminResponse.json();
+  assert.deepEqual(adminData.access,{isAdmin:true,teams:[...comments.PRODUCTION_TEAMS],materialAccess:'edit'});
+});
+
+test('material access separates none, read and edit without broadening worker writes', async () => {
+  const api=testApi();
+  const active={
+    ...toolroomSource(),
+    id:'material-active',
+    kinds:['inne'],
+    teams:[],
+    notes:{},
+    material:'PP GBX',
+    materialType:'PP',
+    source:'Silos 1',
+    dryer:'S-1',
+    temperature:'80'
+  };
+  const inactive={...active,id:'material-inactive',isCurrentPlan:false};
+  const planned={...active,id:'material-planned',planGroup:'planned'};
+  const header={...active,id:'material-header',station:'ST 1',detail:'PANELE SE'};
+  assert.equal((await api.post({action:'savePlan',tasks:[active,inactive,planned,header]})).status,200);
+
+  api.state.isAdmin=false;
+  api.state.preparationTeams=[];
+  api.state.materialAccess='none';
+  let data=await(await api.get()).json();
+  assert.equal(data.access.materialAccess,'none');
+  assert.deepEqual(
+    ['material','materialType','source','dryer','temperature'].map(key=>data.tasks.find(task=>task.id===active.id)[key]),
+    ['','','','','']
+  );
+
+  const maskedSyncVersion=data.syncVersion;
+  api.state.materialAccess='read';
+  data=await(await api.get('?sync=1&since='+encodeURIComponent(maskedSyncVersion))).json();
+  assert.notEqual(data.unchanged,true);
+  assert.equal(data.tasks.find(task=>task.id===active.id).material,'PP GBX');
+  const writesBeforeReadAttempt=api.state.writeCount;
+  const readDenied=await api.post({
+    action:'mutateTask',
+    taskId:active.id,
+    mutation:{fields:{material:'ABS'}}
+  });
+  assert.equal(readDenied.status,403);
+  assert.equal((await readDenied.json()).code,'MATERIAL_EDIT_FORBIDDEN');
+  assert.equal(api.state.writeCount,writesBeforeReadAttempt);
+
+  api.state.materialAccess='edit';
+  const edited=await api.post({
+    action:'mutateTask',
+    taskId:active.id,
+    mutation:{fields:{
+      material:'ABS NOVODUR',
+      materialType:'ABS',
+      source:'Silos 2',
+      dryer:'S-2',
+      temperature:'80'
+    }}
+  });
+  assert.equal(edited.status,200);
+  const editedTask=(await edited.json()).task;
+  assert.deepEqual(
+    ['material','materialType','source','dryer','temperature'].map(key=>editedTask[key]),
+    ['ABS NOVODUR','ABS','Silos 2','S-2','80']
+  );
+
+  const writesBeforeSmuggling=api.state.writeCount;
+  const invalidBodies=[
+    {status:400,body:{action:'mutateTask',taskId:active.id,mutation:{fields:{}}}},
+    {status:400,body:{action:'mutateTask',taskId:active.id,mutation:{fields:{material:123}}}},
+    {status:400,body:{action:'mutateTask',taskId:active.id,mutation:{fields:{material:'X'.repeat(241)}}}},
+    {status:400,body:{action:'mutateTask',taskId:active.id,mutation:{fields:{material:'ABS',detail:'Podmiana'}}}},
+    {status:403,body:{action:'mutateTask',taskId:active.id,mutation:{fields:{material:'ABS'},addTeams:['mechanics']}}},
+    {status:403,body:{action:'mutateTask',taskId:active.id,mutation:{fields:{material:'ABS'},setTeamDone:{team:'mechanics',done:true}}}},
+    {status:403,body:{action:'mutateTask',taskId:active.id,mutation:{fields:{material:'ABS'}},tasks:[]}},
+    {status:403,body:{action:'savePlan',tasks:[]}},
+    {status:403,body:{action:'updateTask',task:{...active,material:'ABS'}}}
+  ];
+  for(const entry of invalidBodies) {
+    assert.equal((await api.post(entry.body)).status,entry.status,JSON.stringify(entry.body));
+  }
+  assert.equal(api.state.writeCount,writesBeforeSmuggling);
+
+  for(const taskId of [inactive.id,planned.id,header.id]) {
+    const response=await api.post({
+      action:'mutateTask',
+      taskId,
+      mutation:{fields:{material:'Niedozwolone'}}
+    });
+    assert.equal(response.status,409,taskId);
+    assert.equal((await response.json()).code,'MATERIAL_TASK_FORBIDDEN');
+  }
 });
 
 test('database failures are reported without pretending the comment was saved', async () => {
@@ -355,7 +622,7 @@ test('all actual copy paths use the same saved quantity switch', async () => {
   const pageFile=fileURLToPath(new URL('../../app/(main)/przygotowanie-produkcji/page.tsx',import.meta.url));
   const page=readFileSync(pageFile,'utf8');
   const start=page.indexOf('  const copyQueueTask =');
-  const end=page.indexOf('\n  return (\n    <div className="production-preparation',start);
+  const end=page.indexOf('\n  if (!preparationAccess)',start);
   assert.ok(start>=0&&end>start);
   const source=`export function createCopies(deps) { const { navigator, window, taskMetrics, taskComment, kindsForTeam, workKinds, isManualTask, setCopiedQueueTask } = deps; ${page.slice(start,end)} return {copyQueueTask,copyTeamQueue,copyProcessEngineerQueue}; }`;
   const mod=new Module(pageFile);
@@ -458,13 +725,191 @@ test('API saves completion per department and unlocks process only after prepara
   assert.equal(saved.teamProgress.process,undefined);
 });
 
+test('recurring task definitions validate days, groups and matching dates', () => {
+  const valid=[{id:'kontrola-srodowa',title:'Sprawdzić stan suszarek',weekdays:[3],teams:['distribution','technician'],active:true}];
+  assert.equal(recurring.validateRecurringTasks(valid),null);
+  assert.equal(recurring.isoWeekdayForDate('2026-09-16'),3);
+  assert.equal(recurring.recurringTasksForDate(valid,'2026-09-16').length,1);
+  assert.equal(recurring.recurringTasksForDate(valid,'2026-09-17').length,0);
+  assert.match(recurring.validateRecurringTasks([{...valid[0],weekdays:[]}]),/dzień tygodnia/);
+  assert.match(recurring.validateRecurringTasks([{...valid[0],teams:[]}]),/grupę/);
+});
+
+test('recurring settings materialize exactly one normal task for the current day', async () => {
+  const api=testApi();
+  const planDate=planDates.getWarsawProductionPlanDate();
+  const weekday=recurring.isoWeekdayForDate(planDate);
+  assert.ok(weekday);
+  const definition={
+    id:'cotygodniowa-kontrola',
+    title:'Sprawdzić poziom oleju w wtryskarkach',
+    weekdays:[weekday],
+    teams:['distribution','technician'],
+    active:true
+  };
+
+  const savedResponse=await api.post({action:'saveRecurringTasks',planDate,recurringTasks:[definition]});
+  assert.equal(savedResponse.status,200);
+  assert.deepEqual((await savedResponse.json()).recurringTasks,[definition]);
+
+  const first=await (await api.get(`?date=${planDate}`)).json();
+  const taskId=recurring.recurringTaskInstanceId(definition.id,planDate);
+  const generated=first.tasks.filter(task=>task.id===taskId);
+  assert.equal(generated.length,1);
+  assert.equal(generated[0].station,recurring.RECURRING_TASK_STATION);
+  assert.equal(generated[0].detail,definition.title);
+  assert.deepEqual(generated[0].teams,definition.teams);
+  assert.deepEqual(generated[0].kinds,['inne']);
+  assert.equal(generated[0].isCurrentPlan,false);
+  assert.deepEqual(first.recurringTasks,[definition]);
+
+  await api.get(`?date=${planDate}`);
+  assert.equal(api.db.przygotowanie_produkcji_tasks.filter(row=>row.task_key===taskId).length,1);
+});
+
+test('editing a completed recurring task reopens it and marks the added content', async () => {
+  const api=testApi();
+  const planDate=planDates.getWarsawProductionPlanDate();
+  const definition={
+    id:'cotygodniowe-czyszczenie',
+    title:'Czyszczenie',
+    weekdays:[recurring.isoWeekdayForDate(planDate)],
+    teams:['distribution'],
+    active:true
+  };
+  await api.post({action:'saveRecurringTasks',planDate,recurringTasks:[definition]});
+  const taskId=recurring.recurringTaskInstanceId(definition.id,planDate);
+  assert.equal((await api.post({action:'mutateTask',taskId,mutation:{setTeamDone:{team:'distribution',done:true}}})).status,200);
+
+  const title='Czyszczenie i podstawić pojemnik pod maszynę';
+  assert.equal((await api.post({
+    action:'saveRecurringTasks',
+    planDate,
+    recurringTasks:[{...definition,title}]
+  })).status,200);
+  const changed=(await(await api.get(`?date=${planDate}`)).json()).tasks.find(task=>task.id===taskId);
+  assert.equal(changed.detail,title);
+  assert.equal(changed.done,false);
+  assert.equal(changed.teamProgress.distribution,undefined);
+  assert.deepEqual(workProgress.productionReopenedDetailDiff(changed.notes,'distribution',changed.detail),{
+    unchanged:'Czyszczenie',
+    changed:' i podstawić pojemnik pod maszynę',
+    wasChanged:true
+  });
+
+  const completed=await api.post({action:'mutateTask',taskId,mutation:{setTeamDone:{team:'distribution',done:true}}});
+  assert.equal(completed.status,200);
+  assert.equal(workProgress.productionReopenedDetailDiff((await completed.json()).task.notes,'distribution',title),null);
+});
+
+test('editing a completed team note reopens the task and marks only the added text', async () => {
+  const api=testApi();
+  const task={
+    ...toolroomSource(),
+    id:'reopened-note',
+    kinds:['inne'],
+    teams:['distribution'],
+    notes:{distribution:'Czyszczenie'},
+    teamProgress:{},
+    done:false
+  };
+  assert.equal((await api.post({action:'savePlan',tasks:[task]})).status,200);
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'distribution',done:true}}})).status,200);
+
+  const changedResponse=await api.post({
+    action:'mutateTask',
+    taskId:task.id,
+    mutation:{setNotes:{distribution:'Czyszczenie i podstawić pojemnik pod maszynę'}}
+  });
+  assert.equal(changedResponse.status,200);
+  const changed=(await changedResponse.json()).task;
+  assert.equal(changed.done,false);
+  assert.equal(changed.teamProgress.distribution,undefined);
+  assert.deepEqual(workProgress.productionReopenedNoteDiff(changed.notes,'distribution'),{
+    unchanged:'Czyszczenie',
+    changed:' i podstawić pojemnik pod maszynę',
+    wasChanged:true
+  });
+
+  const completedResponse=await api.post({
+    action:'mutateTask',
+    taskId:task.id,
+    mutation:{setTeamDone:{team:'distribution',done:true}}
+  });
+  assert.equal(completedResponse.status,200);
+  const completed=(await completedResponse.json()).task;
+  assert.ok(completed.teamProgress.distribution);
+  assert.equal(workProgress.productionReopenedNoteDiff(completed.notes,'distribution'),null);
+});
+
 test('API rejects invalid or unassigned department confirmations', async () => {
   const api=testApi();
   const task={...toolroomSource(),id:'progress-invalid',kinds:['inne'],teams:['technician'],notes:{},teamProgress:{},done:false};
   await api.post({action:'savePlan',tasks:[task]});
   assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'technician',done:'yes'}}})).status,400);
   assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'process',done:true}}})).status,409);
-  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'additional',done:true}}})).status,400);
+  const unassignedAdditional=await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'additional',done:true}}});
+  assert.equal(unassignedAdditional.status,409);
+  assert.equal((await unassignedAdditional.json()).code,'TEAM_NOT_ASSIGNED');
+});
+
+test('worker can only toggle completion for an allowed assigned section', async () => {
+  const api=testApi();
+  const task={
+    ...toolroomSource(),
+    id:'worker-scope',
+    kinds:['inne'],
+    teams:['mechanics','process','additional'],
+    notes:{mechanics:'Praca mechanika',process:'Praca procesu',additional:'Informacja'},
+    teamProgress:{},
+    done:false
+  };
+  assert.equal((await api.post({action:'savePlan',tasks:[task]})).status,200);
+
+  api.state.isAdmin=false;
+  api.state.preparationTeams=['mechanics','additional'];
+  const writesBeforeDenied=api.state.writeCount;
+  const forbiddenBodies=[
+    {action:'savePlan',tasks:[]},
+    {action:'updateTask',task:{...task,detail:'Niedozwolona zmiana'}},
+    {action:'saveProcessEngineers',processEngineerRoster:[]},
+    {action:'saveRecurringTasks',recurringTasks:[],planDate:planDates.getWarsawProductionPlanDate()},
+    {action:'saveTeamComment',team:'mechanics',comment:{enabled:true,text:'Niedozwolony komentarz',showQuantity:false}},
+    {action:'deleteHistoryDay',planDate:'2026-09-01'},
+    {action:'mutateTask',taskId:task.id,mutation:{fields:{detail:'Niedozwolona zmiana'}}},
+    {action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'mechanics',done:true},fields:{detail:'Niedozwolona zmiana'}}},
+    {action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'mechanics',done:true}},tasks:[]}
+  ];
+  for(const body of forbiddenBodies) {
+    const response=await api.post(body);
+    assert.equal(response.status,403,JSON.stringify(body));
+  }
+  const otherTeam=await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'process',done:true}}});
+  assert.equal(otherTeam.status,403);
+  assert.equal((await otherTeam.json()).code,'TEAM_COMPLETION_FORBIDDEN');
+  const nestedExtra=await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'mechanics',done:true,unexpected:true}}});
+  assert.equal(nestedExtra.status,400);
+  assert.equal(api.state.writeCount,writesBeforeDenied);
+  assert.equal(api.db.przygotowanie_produkcji_tasks.find(row=>row.task_key===task.id).detail,task.detail);
+
+  const additional=await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'additional',done:true}}});
+  assert.equal(additional.status,200);
+  assert.equal((await additional.json()).task.teamProgress.additional.completedBy,'Test');
+  const revertedAdditional=await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'additional',done:false}}});
+  assert.equal(revertedAdditional.status,200);
+  assert.equal((await revertedAdditional.json()).task.teamProgress.additional,undefined);
+
+  const allowed=await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'mechanics',done:true}}});
+  assert.equal(allowed.status,200);
+  const allowedTask=(await allowed.json()).task;
+  assert.equal(allowedTask.teamProgress.mechanics.completedBy,'Test');
+  assert.equal(allowedTask.teamProgress.process,undefined);
+
+  api.state.isAdmin=true;
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'process',done:true}}})).status,200);
+  const saved=(await(await api.get()).json()).tasks.find(item=>item.id===task.id);
+  assert.equal(saved.done,true);
+  assert.equal(saved.teamProgress.additional,undefined);
 });
 
 test('API stores two linked work tasks and snapshots both, with just one production row', async()=>{

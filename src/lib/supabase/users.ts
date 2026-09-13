@@ -1,6 +1,7 @@
 import type {
   AppUser,
   PermissionGroup,
+  PreparationMaterialAccess,
   Role,
   UserAccess,
   UserPermissionGroup,
@@ -9,7 +10,13 @@ import type {
   WarehouseRole,
   WarehouseTab
 } from '@/lib/api/types';
-import { PAINT_TAPE_PERMISSION_KEYS, WAREHOUSE_TABS_BY_KEY } from '@/lib/auth/access';
+import {
+  normalizeProductionPreparationMaterialAccess,
+  PAINT_TAPE_PERMISSION_KEYS,
+  PRODUCTION_PREPARATION_TEAM_KEYS,
+  WAREHOUSE_TABS_BY_KEY
+} from '@/lib/auth/access';
+import type { ProductionTeam } from '@/lib/utils/productionTeamComments';
 
 export type DbUserRow = {
   id: string;
@@ -71,6 +78,21 @@ const toUniqueTabs = (tabs: unknown, warehouse: WarehouseKey): WarehouseTab[] =>
   return Array.from(unique);
 };
 
+const toUniquePreparationTeams = (value: unknown): ProductionTeam[] | undefined => {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set<ProductionTeam>(PRODUCTION_PREPARATION_TEAM_KEYS);
+  return Array.from(new Set(value.filter(
+    (team): team is ProductionTeam => typeof team === 'string' && allowed.has(team as ProductionTeam)
+  )));
+};
+
+const preparationMaterialAccessWeight: Record<PreparationMaterialAccess, number> = {
+  none: 0,
+  read: 1,
+  edit: 2
+};
+
 const normalizeWarehouseAccess = (value: unknown, warehouse: WarehouseKey): WarehouseAccess | null => {
   if (!value || typeof value !== 'object') return null;
   const entry = value as Record<string, unknown>;
@@ -84,7 +106,15 @@ const normalizeWarehouseAccess = (value: unknown, warehouse: WarehouseKey): Ware
     tabs: warehouse === 'PRZYGOTOWANIE_PRODUKCJI' && hasOnlyLegacyTabs
       ? [...WAREHOUSE_TABS_BY_KEY.PRZYGOTOWANIE_PRODUKCJI]
       : tabs,
-    admin: Boolean(entry.admin)
+    admin: Boolean(entry.admin),
+    ...(warehouse === 'PRZYGOTOWANIE_PRODUKCJI'
+      ? {
+          preparationTeams: toUniquePreparationTeams(entry.preparationTeams),
+          preparationMaterialAccess: normalizeProductionPreparationMaterialAccess(
+            entry.preparationMaterialAccess
+          )
+        }
+      : {})
   };
 };
 
@@ -96,11 +126,29 @@ const mergeWarehouseAccess = (
     warehouseRoleWeight[right.role] > warehouseRoleWeight[left.role]
       ? right.role
       : left.role;
+  const hasPreparationTeams = left.preparationTeams !== undefined || right.preparationTeams !== undefined;
+  const preparationTeams = hasPreparationTeams ? Array.from(new Set([...(left.preparationTeams ?? []), ...(right.preparationTeams ?? [])])) : undefined;
+  const hasPreparationMaterialAccess =
+    left.preparationMaterialAccess !== undefined ||
+    right.preparationMaterialAccess !== undefined;
+  const leftMaterialAccess = normalizeProductionPreparationMaterialAccess(
+    left.preparationMaterialAccess
+  );
+  const rightMaterialAccess = normalizeProductionPreparationMaterialAccess(
+    right.preparationMaterialAccess
+  );
+  const preparationMaterialAccess =
+    preparationMaterialAccessWeight[rightMaterialAccess] >
+    preparationMaterialAccessWeight[leftMaterialAccess]
+      ? rightMaterialAccess
+      : leftMaterialAccess;
   return {
     role,
     readOnly: left.readOnly && right.readOnly,
     tabs: Array.from(new Set([...left.tabs, ...right.tabs])),
-    admin: Boolean(left.admin || right.admin)
+    admin: Boolean(left.admin || right.admin),
+    ...(hasPreparationTeams ? { preparationTeams } : {}),
+    ...(hasPreparationMaterialAccess ? { preparationMaterialAccess } : {})
   };
 };
 
@@ -109,7 +157,14 @@ const cloneAccess = (access: UserAccess): UserAccess => ({
   warehouses: Object.fromEntries(
     Object.entries(access.warehouses)
       .filter(([key]) => isWarehouseKey(key))
-      .map(([key, value]) => [key, value ? { ...value, tabs: [...value.tabs] } : value])
+      .map(([key, value]) => [
+        key,
+        value ? {
+          ...value,
+          tabs: [...value.tabs],
+          ...(value.preparationTeams !== undefined ? { preparationTeams: [...value.preparationTeams] } : {})
+        } : value
+      ])
   ) as UserAccess['warehouses'],
   paintTapePermissions: access.paintTapePermissions
     ? { ...access.paintTapePermissions }

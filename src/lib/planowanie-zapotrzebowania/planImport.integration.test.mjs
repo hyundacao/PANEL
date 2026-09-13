@@ -13,7 +13,7 @@ const ts = require('typescript');
 const source = readFileSync(pageFile,'utf8');
 const ast = ts.createSourceFile('page.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const directQuantityEditing = source.includes('const updatePlanQuantity =');
-const names = ['uid','numberValue','normalize','CATEGORIES','normalizeReturnExclusions','productIdentityMatches','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','inferPickingWarehouseCode','pickingWarehouseCode','sortPickingDocumentRows','PACKAGING_CATEGORIES','splitProductFields','stationKey','applyStationMappings','materialKey','materialIdentityMatches','isPackagingMaterial','technologyMaterialsForMode','migrateLegacyEmergencyTechnologies','normalizedMaterialUnit','isKilogramUnit','isGramUnit','isThousandPiecesUnit','technologyResultUnit','technologyResultQuantity','roundTechnologyMaterialQuantity','canonicalProductIndex','linkedProductKey','linkedProductMatchesPlanItem','linkedSourceSelectionForItem','linkedMachineProductQuantity','linkedWarehouseProductQuantity','linkedSurplusQuantity','normalizeLinkedSources','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
+const names = ['uid','numberValue','normalize','CATEGORIES','normalizeReturnExclusions','productIdentityMatches','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','inferPickingWarehouseCode','pickingWarehouseCode','sortPickingDocumentRows','PACKAGING_CATEGORIES','splitProductFields','stationKey','applyStationMappings','materialKey','materialMatches','materialIdentityMatches','isPackagingMaterial','technologyMaterialsForMode','migrateLegacyEmergencyTechnologies','normalizedMaterialUnit','isKilogramUnit','isGramUnit','isThousandPiecesUnit','technologyResultUnit','technologyResultQuantity','roundTechnologyMaterialQuantity','canonicalProductIndex','linkedProductKey','linkedProductMatchesPlanItem','linkedSourceSelectionForItem','linkedMachineProductQuantity','linkedWarehouseProductQuantity','linkedSurplusQuantity','normalizeLinkedSources','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
   'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','shiftNormForItem','plannedItemProductionQty','itemProductionQty','planQuantityNeedsReview','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','updatePickingDocumentWarehouse','deriveReturnsForDate','syncOriginalInventory'];
 if (directQuantityEditing) names.push('updatePlanNorm');
 const definitions = new Map();
@@ -40,6 +40,7 @@ function setup() {
     calculationEditorOpen:false,closeCalculationEditorIfAllowed:()=>true,inventorySyncRequestRef:{current:0},
     XLSX:{read:(data)=>data,utils:{sheet_to_json:(sheet)=>sheet.rows,decode_range:()=>({s:{r:0}})}},
     flash:(message)=>messages.push(message),nowLabel:()=>new Date().toISOString(),localDateKey:()=>'2026-08-31',formatPlanDate:(date)=>date,
+    areaName:(areaId)=>ctx?.state?.areas?.find((area)=>area.id===areaId)?.name ?? 'Brak przypisu',
     mergeAreas:(areas)=>areas,emptyState:()=>({plan:[],technologies:[]}),cloneMaterials:(items)=>JSON.parse(JSON.stringify(items)),technologyForItem:()=>undefined,
     materialsForItem:()=>[{code:'MAT',unit:'kg',usage:1}],materialKey:()=> 'MAT',requirementsForArea:()=>[],
     selectedLinkedAllocationByProducer:new Map(),fullLinkedAllocationByProducer:new Map(),linkedSourceIssuesForArea:()=>[]
@@ -801,6 +802,47 @@ test('an inventoried material absent from every current technology is returned i
   assert.equal(returned.surplus,75);
   assert.equal(returned.inventoried,75);
   assert.equal(returned.reason,'Brak w technologiach aktualnego planu');
+});
+
+test('unused hall stock covers another hall shortage before the remainder returns to warehouse',()=>{
+  const h=setup();
+  const planItem={
+    index:'PRODUCT',name:'Product',station:'WTR',included:true,totalQty:100,remainingQty:100,
+    shiftNorm:100,scopeMode:'all',quantityStatus:'parsed',workingMaterials:null,linkedSources:{}
+  };
+  h.ctx.state.areas=[{id:'hala-1',name:'Hala 1'},{id:'hala-2',name:'Hala 2'}];
+  h.ctx.state.plan=[
+    {...planItem,id:'source-job',areaId:'hala-1',technologyId:'other-tech'},
+    {...planItem,id:'target-job',areaId:'hala-2',technologyId:'material-tech'}
+  ];
+  h.ctx.state.technologies=[
+    {id:'other-tech',productionMode:'planned',materials:[{id:'other',code:'OTHER',name:'Inny materiał',category:'Tworzywo',unit:'kg',usage:0.1}]},
+    {id:'material-tech',productionMode:'planned',materials:[{id:'material',code:'MAT',name:'Potrzebny materiał',category:'Tworzywo',unit:'kg',usage:1}]}
+  ];
+  h.ctx.state.inventory=[
+    {id:'source-stock',areaId:'hala-1',code:'MAT',name:'Potrzebny materiał',category:'Tworzywo',qty:90,unit:'kg'},
+    {id:'target-stock',areaId:'hala-2',code:'MAT',name:'Potrzebny materiał',category:'Tworzywo',qty:30,unit:'kg'}
+  ];
+  h.ctx.materialsForItem=(item)=>h.ctx.state.technologies.find((technology)=>technology.id===item.technologyId)?.materials ?? [];
+  h.ctx.needsMaterialBalances=true;
+  h.ctx.documentLedger=new Map();
+  h.ctx.CATEGORY_ORDER=new Map();
+  const code=ts.transpileModule('(()=>{'+[...areaCalculationDefinitions.values()].join('\n')+';return requirementsForArea;})()',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  h.ctx.requirementsForArea=vm.runInContext(code,h.ctx);
+
+  const rows=h.deriveReturnsForDate('2026-08-31');
+  assert.equal(rows.length,2);
+  assert.deepEqual(Array.from(rows,({action,surplus})=>({action,surplus})),[
+    {action:'transfer',surplus:70},
+    {action:'warehouse_return',surplus:20}
+  ]);
+  assert.equal(rows[0].areaId,'hala-1');
+  assert.equal(rows[0].destinationAreaId,'hala-2');
+  assert.equal(rows[0].destination,'Przesunięcie do: Hala 2');
+  assert.equal(rows[1].destination,'Zwrot do magazynu');
+
+  h.ctx.state.plan[0].technologyId='material-tech';
+  assert.equal(h.deriveReturnsForDate('2026-08-31').length,0,'active use in the source hall keeps its whole stock there');
 });
 
 test('a permanent return exclusion is scoped to one area and survives state reload',()=>{

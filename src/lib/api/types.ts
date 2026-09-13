@@ -1,3 +1,5 @@
+import type { ProductionTeam } from '@/lib/utils/productionTeamComments';
+
 export type Role = 'VIEWER' | 'USER' | 'ADMIN' | 'HEAD_ADMIN';
 
 export type WarehouseKey =
@@ -55,11 +57,15 @@ export type WarehouseTab =
   | PlanowanieZapotrzebowaniaTab
   | ErpTransfersTab;
 
+export type PreparationMaterialAccess = 'none' | 'read' | 'edit';
+
 export type WarehouseAccess = {
   role: WarehouseRole;
   readOnly: boolean;
   tabs: WarehouseTab[];
   admin?: boolean;
+  preparationTeams?: ProductionTeam[];
+  preparationMaterialAccess?: PreparationMaterialAccess;
 };
 
 export type PaintTapePermissionKey =

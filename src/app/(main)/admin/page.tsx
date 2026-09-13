@@ -68,6 +68,7 @@ import { cn } from '@/lib/utils/cn';
 import { formatKg, parseQtyInput } from '@/lib/utils/format';
 import type {
   AppUser,
+  PreparationMaterialAccess,
   Role,
   UserAccess,
   WarehouseKey,
@@ -79,6 +80,8 @@ import type {
 import {
   DEFAULT_PAINT_TAPE_PERMISSIONS,
   PAINT_TAPE_PERMISSION_KEYS,
+  PRODUCTION_PREPARATION_TEAM_KEYS,
+  PRODUCTION_PREPARATION_TEAM_LABELS,
   getRolePreset,
   isHeadAdmin,
   isWarehouseAdmin
@@ -186,7 +189,7 @@ const bilansPrzezbrojenTabOptions: Array<{ key: WarehouseTab; label: string }> =
   { key: 'bilans-przezbrojen', label: 'Bilans przezbrojen' }
 ];
 const przygotowanieProdukcjiTabOptions: Array<{ key: WarehouseTab; label: string }> = [
-  { key: 'przygotowanie-produkcji', label: 'Plan zmian, rozpiska, historia i raport' }
+  { key: 'przygotowanie-produkcji', label: 'Dostęp do panelu przygotowania produkcji' }
 ];
 const planowanieZapotrzebowaniaTabOptions: Array<{ key: WarehouseTab; label: string }> = [
   { key: 'planowanie-zapotrzebowania', label: 'Plan, technologie, obliczenia, dokumenty i zwroty' }
@@ -319,7 +322,15 @@ const cloneAccess = (access: UserAccess): UserAccess => ({
   warehouses: Object.fromEntries(
     Object.entries(access.warehouses).map(([key, value]) => [
       key,
-      value ? { ...value, tabs: [...value.tabs] } : value
+      value
+        ? {
+            ...value,
+            tabs: [...value.tabs],
+            ...(value.preparationTeams !== undefined
+              ? { preparationTeams: [...value.preparationTeams] }
+              : {})
+          }
+        : value
     ])
   ) as UserAccess['warehouses'],
   paintTapePermissions: access.paintTapePermissions
@@ -351,7 +362,11 @@ const accessKey = (access: UserAccess) => {
       if (!entry) return `${key}:none`;
       const tabsKey = [...entry.tabs].sort().join(',');
       const adminKey = entry.admin ? 1 : 0;
-      return `${key}:${entry.role}:${entry.readOnly ? 1 : 0}:${adminKey}:${tabsKey}`;
+      const preparationTeamsKey = entry.preparationTeams === undefined
+        ? '-'
+        : [...entry.preparationTeams].sort().join(',');
+      const preparationMaterialAccessKey = entry.preparationMaterialAccess ?? 'none';
+      return `${key}:${entry.role}:${entry.readOnly ? 1 : 0}:${adminKey}:${tabsKey}:preparationTeams:${preparationTeamsKey}:preparationMaterialAccess:${preparationMaterialAccessKey}`;
     })
     .join('|');
   const paintTapeKey = PAINT_TAPE_PERMISSION_KEYS.map(
@@ -864,8 +879,17 @@ export default function AdminPage() {
       .map(([key, value]) => {
         if (!value) return null;
         const label = warehouseLabels[key as WarehouseKey] ?? key;
-        const roleLabel = role === 'ADMIN' && value.admin ? 'Administrator modulu' : 'Uzytkownik';
-        return `${label}: ${roleLabel}`;
+        const roleLabel = value.admin && (role === 'ADMIN' || key === 'PRZYGOTOWANIE_PRODUKCJI')
+          ? 'Administrator modułu'
+          : 'Użytkownik';
+        const materialAccessLabel = key === 'PRZYGOTOWANIE_PRODUKCJI' && !value.admin
+          ? value.preparationMaterialAccess === 'edit'
+            ? ' · rozpiska: edycja'
+            : value.preparationMaterialAccess === 'read'
+              ? ' · rozpiska: podgląd'
+              : ''
+          : '';
+        return `${label}: ${roleLabel}${materialAccessLabel}`;
       })
       .filter(Boolean);
     if (entries.length === 0) {
@@ -891,7 +915,8 @@ export default function AdminPage() {
     const defaultRole: WarehouseRole =
       warehouseKey === 'CZESCI' ? 'MECHANIK' : 'ROZDZIELCA';
     const isHeadAdminUser = userRole === 'HEAD_ADMIN';
-    const canAssignAdmin = userRole === 'ADMIN';
+    const isProductionPreparation = warehouseKey === 'PRZYGOTOWANIE_PRODUKCJI';
+    const canAssignAdmin = userRole === 'ADMIN' || (isProductionPreparation && !isHeadAdminUser);
     const canSeeHistory =
       userRole === 'HEAD_ADMIN' ||
       (userRole === 'ADMIN' && Boolean(warehouseAccess?.admin));
@@ -909,13 +934,21 @@ export default function AdminPage() {
                 : warehouseKey === 'PLANOWANIE_ZAPOTRZEBOWANIA'
                   ? planowanieZapotrzebowaniaTabOptions
                   : czesciTabOptions;
-    const visibleTabs =
-      warehouseKey === 'CZESCI' && !canSeeHistory
+    const visibleTabs = isProductionPreparation
+      ? []
+      : warehouseKey === 'CZESCI' && !canSeeHistory
         ? tabOptions.filter((tab) => tab.key !== 'historia')
         : tabOptions;
     const blockEditing = isHeadAdminUser;
-    const readOnlyValue = enabled && warehouseAccess ? warehouseAccess.readOnly : false;
     const adminValue = enabled && warehouseAccess ? Boolean(warehouseAccess.admin) : false;
+    const readOnlyValue = enabled && warehouseAccess
+      ? isProductionPreparation && adminValue ? false : warehouseAccess.readOnly
+      : false;
+    const preparationMaterialAccessValue: PreparationMaterialAccess = enabled && warehouseAccess
+      ? isHeadAdminUser || adminValue
+        ? 'edit'
+        : warehouseAccess.preparationMaterialAccess ?? 'none'
+      : 'none';
 
     return (
       <Card key={warehouseKey} className={`space-y-3 ${blockEditing ? 'opacity-70' : ''}`}>
@@ -948,41 +981,108 @@ export default function AdminPage() {
           }`}
         >
           {canAssignAdmin && (
+            <div className="space-y-1 rounded-lg border border-border bg-bg/40 p-3">
+              <AdminToggle
+                checked={adminValue}
+                onCheckedChange={(value) =>
+                  onChange((current) => {
+                    const next = cloneAccess(current);
+                    const currentAccess = next.warehouses[warehouseKey];
+                    if (!currentAccess) return next;
+                    currentAccess.admin = value;
+                    if (isProductionPreparation) {
+                      currentAccess.readOnly = !value;
+                      if (value) {
+                        currentAccess.tabs = Array.from(new Set([
+                          ...currentAccess.tabs,
+                          ...przygotowanieProdukcjiTabOptions.map((tab) => tab.key)
+                        ]));
+                      }
+                    }
+                    return next;
+                  })
+                }
+                label={isProductionPreparation ? 'Administrator modułu — pełna edycja' : 'Administrator modułu'}
+                disabled={blockEditing || !enabled}
+              />
+              {isProductionPreparation && (
+                <p className="pl-14 text-xs text-dim">
+                  Pełne prawa: wgrywanie i edycja planu, rozdzielanie prac, historia, raport oraz zarządzanie modułem.
+                </p>
+              )}
+            </div>
+          )}
+          {!isProductionPreparation && (
             <AdminToggle
-              checked={adminValue}
+              checked={readOnlyValue}
               onCheckedChange={(value) =>
                 onChange((current) => {
                   const next = cloneAccess(current);
                   const currentAccess = next.warehouses[warehouseKey];
                   if (!currentAccess) return next;
-                  currentAccess.admin = value;
+                  currentAccess.readOnly = value;
                   return next;
                 })
               }
-              label="Administrator modulu"
+              label="Tylko do odczytu"
               disabled={blockEditing || !enabled}
             />
           )}
-          <AdminToggle
-            checked={readOnlyValue}
-            onCheckedChange={(value) =>
-              onChange((current) => {
-                const next = cloneAccess(current);
-                const currentAccess = next.warehouses[warehouseKey];
-                if (!currentAccess) return next;
-                currentAccess.readOnly = value;
-                return next;
-              })
-            }
-            label="Tylko do odczytu"
-            disabled={blockEditing || !enabled}
-          />
+          {isProductionPreparation && (
+            <div className="space-y-2 rounded-lg border border-border bg-bg/40 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Rozpiska materiałowa</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <AdminToggle
+                  checked={preparationMaterialAccessValue !== 'none'}
+                  onCheckedChange={(value) =>
+                    onChange((current) => {
+                      const next = cloneAccess(current);
+                      const currentAccess = next.warehouses.PRZYGOTOWANIE_PRODUKCJI;
+                      if (!currentAccess) return next;
+                      currentAccess.preparationMaterialAccess = value ? 'read' : 'none';
+                      if (value) {
+                        currentAccess.tabs = Array.from(new Set([
+                          ...currentAccess.tabs,
+                          'przygotowanie-produkcji'
+                        ]));
+                      }
+                      return next;
+                    })
+                  }
+                  label="Dostęp do rozpiski"
+                  disabled={blockEditing || !enabled || adminValue}
+                />
+                <AdminToggle
+                  checked={preparationMaterialAccessValue === 'edit'}
+                  onCheckedChange={(value) =>
+                    onChange((current) => {
+                      const next = cloneAccess(current);
+                      const currentAccess = next.warehouses.PRZYGOTOWANIE_PRODUKCJI;
+                      if (!currentAccess) return next;
+                      currentAccess.preparationMaterialAccess = value ? 'edit' : 'read';
+                      if (value) {
+                        currentAccess.tabs = Array.from(new Set([
+                          ...currentAccess.tabs,
+                          'przygotowanie-produkcji'
+                        ]));
+                      }
+                      return next;
+                    })
+                  }
+                  label="Może edytować"
+                  disabled={blockEditing || !enabled || adminValue || preparationMaterialAccessValue === 'none'}
+                />
+              </div>
+            </div>
+          )}
 
           <div className="grid gap-2 sm:grid-cols-2">
             {visibleTabs.map((tab) => (
               <AdminToggle
                 key={`${warehouseKey}-${tab.key}`}
-                checked={enabled && warehouseAccess ? warehouseAccess.tabs.includes(tab.key) : false}
+                checked={enabled && warehouseAccess
+                  ? (isProductionPreparation && adminValue) || warehouseAccess.tabs.includes(tab.key)
+                  : false}
                 onCheckedChange={(value) =>
                   onChange((current) => {
                     const next = cloneAccess(current);
@@ -999,10 +1099,53 @@ export default function AdminPage() {
                   })
                 }
                 label={tab.label}
-                disabled={blockEditing || !enabled}
+                disabled={blockEditing || !enabled || (isProductionPreparation && adminValue)}
               />
             ))}
           </div>
+          {warehouseKey === 'PRZYGOTOWANIE_PRODUKCJI' && (
+            <div className="space-y-2 rounded-lg border border-border bg-bg/40 p-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-dim">Sekcje wykonawcze</p>
+                <p className="mt-1 text-xs text-dim">
+                  Użytkownik widzi wybrane sekcje i może potwierdzać wykonanie ich zadań.
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {PRODUCTION_PREPARATION_TEAM_KEYS.map((team) => (
+                  <AdminToggle
+                    key={`${warehouseKey}-team-${team}`}
+                    checked={isHeadAdminUser || adminValue || Boolean(warehouseAccess?.preparationTeams?.includes(team))}
+                    onCheckedChange={(value) =>
+                      onChange((current) => {
+                        const next = cloneAccess(current);
+                        const currentAccess = next.warehouses.PRZYGOTOWANIE_PRODUKCJI;
+                        if (!currentAccess) return next;
+                        const teams = new Set(currentAccess.preparationTeams ?? []);
+                        if (value) {
+                          teams.add(team);
+                          currentAccess.tabs = Array.from(new Set([
+                            ...currentAccess.tabs,
+                            'przygotowanie-produkcji'
+                          ]));
+                        } else {
+                          teams.delete(team);
+                        }
+                        currentAccess.preparationTeams = Array.from(teams);
+                        currentAccess.readOnly = true;
+                        return next;
+                      })
+                    }
+                    label={PRODUCTION_PREPARATION_TEAM_LABELS[team]}
+                    disabled={blockEditing || !enabled || adminValue}
+                  />
+                ))}
+              </div>
+              {adminValue && (
+                <p className="text-xs text-dim">Administrator modułu ma automatycznie dostęp do wszystkich sekcji.</p>
+              )}
+            </div>
+          )}
           {!enabled && (
             <p className="text-xs text-dim">
               Wlacz dostep, aby aktywowac uprawnienia i zakladki tego modulu.
@@ -3224,8 +3367,8 @@ export default function AdminPage() {
                         const nextAccess = cloneAccess(prev.access);
                         nextAccess.admin = nextRole === 'HEAD_ADMIN';
                         if (nextRole !== 'ADMIN') {
-                          Object.values(nextAccess.warehouses).forEach((entry) => {
-                            if (entry) entry.admin = false;
+                          Object.entries(nextAccess.warehouses).forEach(([warehouseKey, entry]) => {
+                            if (entry && warehouseKey !== 'PRZYGOTOWANIE_PRODUKCJI') entry.admin = false;
                           });
                         }
                         if (nextRole === 'HEAD_ADMIN') {
@@ -3415,8 +3558,8 @@ export default function AdminPage() {
                             const nextAccess = cloneAccess(existing.access);
                             nextAccess.admin = nextRole === 'HEAD_ADMIN';
                             if (nextRole !== 'ADMIN') {
-                              Object.values(nextAccess.warehouses).forEach((entry) => {
-                                if (entry) entry.admin = false;
+                              Object.entries(nextAccess.warehouses).forEach(([warehouseKey, entry]) => {
+                                if (entry && warehouseKey !== 'PRZYGOTOWANIE_PRODUKCJI') entry.admin = false;
                               });
                             }
                             if (nextRole === 'HEAD_ADMIN') {

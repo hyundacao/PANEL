@@ -14,6 +14,7 @@ type Props = {
   ready: boolean;
   loadError: string | null;
   onSave: (team: ProductionTeam, comment: TeamComment) => Promise<TeamComment>;
+  embedded?: boolean;
 };
 
 function TeamCommentEditor({ team, value, ready, onSave }: {
@@ -119,16 +120,20 @@ function TeamCommentEditor({ team, value, ready, onSave }: {
   </fieldset>;
 }
 
-export function TeamCommentsSettings({ teams, settings, ready, loadError, onSave }: Props) {
-  return <Card className="overflow-hidden p-0">
-    <div className="flex items-center gap-3 border-b border-border px-5 py-4">
-      <MessageSquare aria-hidden="true" className="h-5 w-5 shrink-0 text-[var(--brand)]" />
-      <h2 className="font-semibold text-title" title="Dla każdej grupy osobno ustaw widoczność ilości z normą oraz automatyczny komentarz. Dotyczy kart planu pracy i kopiowanych zadań. Ustawienia są wspólne dla użytkowników; ręczne uwagi i dane planu pozostają bez zmian.">Komentarze i ilości</h2>
-    </div>
+export function TeamCommentsSettings({ teams, settings, ready, loadError, onSave, embedded = false }: Props) {
+  const content = <>
     {loadError && <p className="px-5 pt-4 text-sm text-red-300" role="alert">{loadError}</p>}
     {!ready && !loadError && <p className="px-5 pt-4 text-sm text-dim" role="status">Wczytywanie ustawień grup…</p>}
     <div className="grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
       {teams.map((team) => <TeamCommentEditor key={team.id} team={team} value={settings[team.id]} ready={ready} onSave={onSave} />)}
     </div>
+  </>;
+  if (embedded) return <div>{content}</div>;
+  return <Card className="overflow-hidden p-0">
+    <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+      <MessageSquare aria-hidden="true" className="h-5 w-5 shrink-0 text-[var(--brand)]" />
+      <h2 className="font-semibold text-title" title="Dla każdej grupy osobno ustaw widoczność ilości z normą oraz automatyczny komentarz. Dotyczy kart planu pracy i kopiowanych zadań. Ustawienia są wspólne dla użytkowników; ręczne uwagi i dane planu pozostają bez zmian.">Komentarze i ilości</h2>
+    </div>
+    {content}
   </Card>;
 }

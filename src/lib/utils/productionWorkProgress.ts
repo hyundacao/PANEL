@@ -1,6 +1,9 @@
 import type { ProductionTeam } from './productionTeamComments';
 
 export const PRODUCTION_TEAM_PROGRESS_NOTE_KEY = '__teamProgress';
+export const PRODUCTION_REOPENED_NOTE_PREFIX = '__reopenedNoteBase:';
+export const PRODUCTION_REOPENED_DETAIL_PREFIX = '__reopenedDetailBase:';
+const PRODUCTION_REOPENED_NOTE_VALUE_PREFIX = 'v1:';
 
 export const PRODUCTION_PREPARATION_TEAMS = [
   'mechanics',
@@ -16,6 +19,13 @@ export const PRODUCTION_STARTUP_TEAMS = [
 export const PRODUCTION_ACTION_TEAMS = [
   ...PRODUCTION_PREPARATION_TEAMS,
   ...PRODUCTION_STARTUP_TEAMS
+] as const satisfies readonly ProductionTeam[];
+
+// Sections listed here have their own completion toggle. "Additional" is kept
+// outside the workflow teams so it never blocks preparation or startup.
+export const PRODUCTION_COMPLETABLE_TEAMS = [
+  ...PRODUCTION_ACTION_TEAMS,
+  'additional'
 ] as const satisfies readonly ProductionTeam[];
 
 export type ProductionTeamCompletion = {
@@ -36,6 +46,55 @@ type ProgressTask = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
+export const productionReopenedNoteKey = (team: ProductionTeam) =>
+  `${PRODUCTION_REOPENED_NOTE_PREFIX}${team}`;
+
+export const productionReopenedDetailKey = (team: ProductionTeam) =>
+  `${PRODUCTION_REOPENED_DETAIL_PREFIX}${team}`;
+
+export const encodeProductionReopenedNoteBase = (value: string) =>
+  `${PRODUCTION_REOPENED_NOTE_VALUE_PREFIX}${value}`;
+
+export const productionReopenedNoteBase = (notes: unknown, team: ProductionTeam): string | null => {
+  if (!isRecord(notes)) return null;
+  const value = notes[productionReopenedNoteKey(team)];
+  return typeof value === 'string' && value.startsWith(PRODUCTION_REOPENED_NOTE_VALUE_PREFIX)
+    ? value.slice(PRODUCTION_REOPENED_NOTE_VALUE_PREFIX.length)
+    : null;
+};
+
+const productionReopenedTextDiff = (base: string | null, current: string) => {
+  if (base === null) return null;
+  let commonLength = 0;
+  while (commonLength < base.length && commonLength < current.length && base[commonLength] === current[commonLength]) {
+    commonLength += 1;
+  }
+  return {
+    unchanged: current.slice(0, commonLength),
+    changed: current.slice(commonLength),
+    wasChanged: current !== base
+  };
+};
+
+export const productionReopenedNoteDiff = (notes: unknown, team: ProductionTeam) => {
+  if (!isRecord(notes)) return null;
+  return productionReopenedTextDiff(
+    productionReopenedNoteBase(notes, team),
+    typeof notes[team] === 'string' ? notes[team] : ''
+  );
+};
+
+export const productionReopenedDetailBase = (notes: unknown, team: ProductionTeam): string | null => {
+  if (!isRecord(notes)) return null;
+  const value = notes[productionReopenedDetailKey(team)];
+  return typeof value === 'string' && value.startsWith(PRODUCTION_REOPENED_NOTE_VALUE_PREFIX)
+    ? value.slice(PRODUCTION_REOPENED_NOTE_VALUE_PREFIX.length)
+    : null;
+};
+
+export const productionReopenedDetailDiff = (notes: unknown, team: ProductionTeam, detail: string) =>
+  productionReopenedTextDiff(productionReopenedDetailBase(notes, team), detail);
+
 export const isProductionPreparationTeam = (team: unknown): team is typeof PRODUCTION_PREPARATION_TEAMS[number] =>
   typeof team === 'string' && PRODUCTION_PREPARATION_TEAMS.includes(team as typeof PRODUCTION_PREPARATION_TEAMS[number]);
 
@@ -45,10 +104,14 @@ export const isProductionStartupTeam = (team: unknown): team is typeof PRODUCTIO
 export const isProductionActionTeam = (team: unknown): team is typeof PRODUCTION_ACTION_TEAMS[number] =>
   typeof team === 'string' && PRODUCTION_ACTION_TEAMS.includes(team as typeof PRODUCTION_ACTION_TEAMS[number]);
 
+export const isProductionCompletableTeam = (team: unknown): team is typeof PRODUCTION_COMPLETABLE_TEAMS[number] =>
+  typeof team === 'string'
+  && PRODUCTION_COMPLETABLE_TEAMS.includes(team as typeof PRODUCTION_COMPLETABLE_TEAMS[number]);
+
 export const normalizeProductionTeamProgress = (value: unknown): ProductionTeamProgress => {
   if (!isRecord(value)) return {};
   const result: ProductionTeamProgress = {};
-  for (const team of PRODUCTION_ACTION_TEAMS) {
+  for (const team of PRODUCTION_COMPLETABLE_TEAMS) {
     const raw = value[team];
     if (raw === true) {
       result[team] = { completedAt: '', completedBy: '' };
@@ -66,20 +129,25 @@ export const normalizeProductionTeamProgress = (value: unknown): ProductionTeamP
 export const productionActionTeamsForTask = (task: ProgressTask): ProductionTeam[] =>
   PRODUCTION_ACTION_TEAMS.filter((team) => task.teams?.includes(team));
 
+export const productionCompletableTeamsForTask = (task: ProgressTask): ProductionTeam[] =>
+  PRODUCTION_COMPLETABLE_TEAMS.filter((team) => task.teams?.includes(team));
+
 export const productionWaitsForToolroomReturn = (task: ProgressTask, team: ProductionTeam): boolean =>
   isProductionStartupTeam(team)
   && task.kinds?.includes('forma-narzedziownia') === true
   && task.toolroomReturnDone === false;
 
 export const productionTeamProgressForTask = (task: ProgressTask): ProductionTeamProgress => {
-  const assigned = new Set(productionActionTeamsForTask(task));
+  const assigned = new Set(productionCompletableTeamsForTask(task));
   const normalized = normalizeProductionTeamProgress(task.teamProgress);
   let filtered = Object.fromEntries(
     Object.entries(normalized).filter(([team]) => assigned.has(team as ProductionTeam))
   ) as ProductionTeamProgress;
   if (Object.keys(filtered).length === 0 && task.done === true) {
+    const legacyActionTeams = productionActionTeamsForTask(task);
+    const inferredDoneTeams = legacyActionTeams.length > 0 ? legacyActionTeams : [...assigned];
     filtered = Object.fromEntries(
-      [...assigned].map((team) => [team, { completedAt: '', completedBy: '' }])
+      inferredDoneTeams.map((team) => [team, { completedAt: '', completedBy: '' }])
     ) as ProductionTeamProgress;
   }
   for (const startupTeam of PRODUCTION_STARTUP_TEAMS) {
@@ -114,15 +182,21 @@ export const productionWaitingTeams = (task: ProgressTask, team: ProductionTeam)
 };
 
 export const canProductionTeamStart = (task: ProgressTask, team: ProductionTeam): boolean => {
-  if (!isProductionActionTeam(team) || !task.teams?.includes(team)) return false;
+  if (!isProductionCompletableTeam(team) || !task.teams?.includes(team)) return false;
   if (task.kinds?.includes('anulowane')) return false;
   return !isProductionStartupTeam(team)
     || (productionWaitingTeams(task, team).length === 0 && !productionWaitsForToolroomReturn(task, team));
 };
 
 export const isProductionTaskDone = (task: ProgressTask): boolean => {
-  const assignedTeams = productionActionTeamsForTask(task);
-  return assignedTeams.length > 0 && assignedTeams.every((team) => isProductionTeamDone(task, team));
+  const requiredTeams = productionActionTeamsForTask(task);
+  if (requiredTeams.length > 0) {
+    return requiredTeams.every((team) => isProductionTeamDone(task, team));
+  }
+
+  const optionalTeams = productionCompletableTeamsForTask(task);
+  return optionalTeams.length > 0
+    && optionalTeams.every((team) => isProductionTeamDone(task, team));
 };
 
 export const setProductionTeamCompletion = (
@@ -132,7 +206,7 @@ export const setProductionTeamCompletion = (
   completion: ProductionTeamCompletion = { completedAt: '', completedBy: '' }
 ): ProductionTeamProgress => {
   const next = normalizeProductionTeamProgress(value);
-  if (done && isProductionActionTeam(team)) next[team] = completion;
+  if (done && isProductionCompletableTeam(team)) next[team] = completion;
   else delete next[team];
   return next;
 };

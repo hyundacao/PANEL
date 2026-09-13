@@ -1,5 +1,6 @@
 ﻿import type {
   AppUser,
+  PreparationMaterialAccess,
   WarehouseAccess,
   WarehouseKey,
   WarehouseRole,
@@ -7,6 +8,19 @@
   PaintTapePermissionKey,
   PaintTapePermissions
 } from '@/lib/api/types';
+import { PRODUCTION_TEAMS, type ProductionTeam } from '@/lib/utils/productionTeamComments';
+import { isProductionCompletableTeam } from '@/lib/utils/productionWorkProgress';
+
+export const PRODUCTION_PREPARATION_TEAM_KEYS = PRODUCTION_TEAMS;
+
+export const PRODUCTION_PREPARATION_TEAM_LABELS: Record<ProductionTeam, string> = {
+  mechanics: 'Mechanik',
+  process: 'Inżynier procesu',
+  distribution: 'Rozdzielca',
+  graphics: 'Grafik',
+  technician: 'Technik uruchomienia',
+  additional: 'Informacja dodatkowa'
+};
 
 export const PRZEMIALY_TABS: WarehouseTab[] = [
   'dashboard',
@@ -71,6 +85,8 @@ export const isWarehouseAdmin = (
 ) =>
   Boolean(
     isHeadAdmin(user) ||
+      (warehouse === 'PRZYGOTOWANIE_PRODUKCJI' &&
+        user?.access?.warehouses?.PRZYGOTOWANIE_PRODUKCJI?.admin) ||
       (user?.role === 'ADMIN' &&
         (user?.access?.warehouses?.[warehouse]?.admin ||
           (warehouse === 'FARBY_TASMY' && user?.access?.warehouses?.PRZEMIALY?.admin)))
@@ -111,17 +127,19 @@ export const getAdminWarehouses = (
 ): WarehouseKey[] => {
   if (!user) return [];
   if (isHeadAdmin(user)) return allWarehouseKeys;
-  if (user.role !== 'ADMIN') return [];
   return Object.entries(user.access?.warehouses ?? {})
-    .filter(([, value]) => Boolean(value?.admin))
+    .filter(([key, value]) => Boolean(
+      value?.admin && (user.role === 'ADMIN' || key === 'PRZYGOTOWANIE_PRODUKCJI')
+    ))
     .map(([key]) => key as WarehouseKey);
 };
 
 export const hasAnyAdminAccess = (user: AppUser | null | undefined) => {
   if (!user) return false;
   if (isHeadAdmin(user)) return true;
-  if (user.role !== 'ADMIN') return false;
-  return Object.values(user.access?.warehouses ?? {}).some((entry) => Boolean(entry?.admin));
+  return Object.entries(user.access?.warehouses ?? {}).some(([key, entry]) => Boolean(
+    entry?.admin && (user.role === 'ADMIN' || key === 'PRZYGOTOWANIE_PRODUKCJI')
+  ));
 };
 
 export const getRoleLabel = (user: AppUser | null | undefined, warehouse: WarehouseKey | null) => {
@@ -186,6 +204,53 @@ export const isReadOnly = (
   }
   return user.access?.warehouses?.[warehouse]?.readOnly ?? true;
 };
+
+export const canManageProductionPreparation = (
+  user: AppUser | null | undefined
+) => isWarehouseAdmin(user, 'PRZYGOTOWANIE_PRODUKCJI');
+
+export const normalizeProductionPreparationMaterialAccess = (
+  value: unknown
+): PreparationMaterialAccess =>
+  value === 'read' || value === 'edit' ? value : 'none';
+
+export const getProductionPreparationMaterialAccess = (
+  user: AppUser | null | undefined
+): PreparationMaterialAccess => {
+  if (!user || !canSeeTab(user, 'PRZYGOTOWANIE_PRODUKCJI', 'przygotowanie-produkcji')) {
+    return 'none';
+  }
+  if (canManageProductionPreparation(user)) return 'edit';
+  return normalizeProductionPreparationMaterialAccess(
+    user.access?.warehouses?.PRZYGOTOWANIE_PRODUKCJI?.preparationMaterialAccess
+  );
+};
+
+export const canViewProductionPreparationMaterials = (
+  user: AppUser | null | undefined
+) => getProductionPreparationMaterialAccess(user) !== 'none';
+
+export const canEditProductionPreparationMaterials = (
+  user: AppUser | null | undefined
+) => getProductionPreparationMaterialAccess(user) === 'edit';
+
+export const getProductionPreparationTeams = (
+  user: AppUser | null | undefined
+): ProductionTeam[] => {
+  if (!user || !canSeeTab(user, 'PRZYGOTOWANIE_PRODUKCJI', 'przygotowanie-produkcji')) {
+    return [];
+  }
+  if (canManageProductionPreparation(user)) return [...PRODUCTION_PREPARATION_TEAM_KEYS];
+  const configuredTeams = user.access?.warehouses?.PRZYGOTOWANIE_PRODUKCJI?.preparationTeams;
+  if (!Array.isArray(configuredTeams)) return [];
+  const allowedTeams = new Set<ProductionTeam>(PRODUCTION_PREPARATION_TEAM_KEYS);
+  return [...new Set(configuredTeams)].filter((team): team is ProductionTeam => allowedTeams.has(team));
+};
+
+export const canCompleteProductionPreparationTeam = (
+  user: AppUser | null | undefined,
+  team: ProductionTeam
+) => isProductionCompletableTeam(team) && getProductionPreparationTeams(user).includes(team);
 
 export const getPaintTapePermissions = (
   user: AppUser | null | undefined
@@ -263,10 +328,14 @@ export const getRolePreset = (
     return { role, readOnly: false, tabs: BILANS_PRZEZBROJEN_TABS, admin: false };
   }
   if (warehouse === 'PRZYGOTOWANIE_PRODUKCJI') {
-    if (role === 'PODGLAD') {
-      return { role, readOnly: true, tabs: PRZYGOTOWANIE_PRODUKCJI_TABS, admin: false };
-    }
-    return { role, readOnly: false, tabs: PRZYGOTOWANIE_PRODUKCJI_TABS, admin: false };
+    return {
+      role,
+      readOnly: true,
+      tabs: PRZYGOTOWANIE_PRODUKCJI_TABS,
+      admin: false,
+      preparationTeams: [],
+      preparationMaterialAccess: 'none'
+    };
   }
   if (warehouse === 'PLANOWANIE_ZAPOTRZEBOWANIA') {
     if (role === 'PODGLAD') {

@@ -52,7 +52,7 @@ export const validateTeamComment = (value: unknown): string | null => {
 };
 
 export const teamCommentForTask = (settings: TeamComments, team: ProductionTeam, station: string): string => {
-  if (station === 'ZADANIE DODATKOWE') return '';
+  if (station === 'ZADANIE DODATKOWE' || station === 'ZADANIE CYKLICZNE') return '';
   return settings[team].enabled ? settings[team].text : '';
 };
 
@@ -61,6 +61,6 @@ export const productionMetricsForTask = (
   team: ProductionTeam,
   task: { station: string; quantity: string; norm: string }
 ): string => {
-  if (task.station === 'ZADANIE DODATKOWE' || !settings[team].showQuantity) return '';
+  if (task.station === 'ZADANIE DODATKOWE' || task.station === 'ZADANIE CYKLICZNE' || !settings[team].showQuantity) return '';
   return `Ilość: ${task.quantity || '---'} | Norma: ${task.norm || '---'}`;
 };

@@ -5,9 +5,14 @@ import { createPortal } from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   Archive,
   Check,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   CircleHelp,
   FileDown,
@@ -41,6 +46,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import SpisRzeczywisty from '@/components/planowanie-zapotrzebowania/SpisRzeczywisty';
 import { PlanningSaveNotice, PlanningSaveStatus } from '@/components/planowanie-zapotrzebowania/PlanningSaveStatus';
 import { usePlanningAutosave } from '@/lib/planowanie-zapotrzebowania/usePlanningAutosave';
+import {
+  MATERIAL_PLANNING_HISTORY_DAYS,
+  isMaterialPlanningDateRetained,
+  materialPlanningHistoryCutoffDateKey,
+  pruneMaterialPlanningHistory
+} from '@/lib/planowanie-zapotrzebowania/historyRetention';
 import { PlanQuantity, PlanQuantityWarnings } from '@/components/planowanie-zapotrzebowania/PlanQuantity';
 import {
   highlightedPlanSourceRows,
@@ -63,6 +74,7 @@ import {
   fixedInventoryDeviceTypeLabel,
   isFixedInventoryDeviceReady,
   normalizeFixedInventoryDevices,
+  sortFixedInventoryDevices,
   type FixedInventoryDevice
 } from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
 
@@ -89,6 +101,8 @@ type View =
   | 'ustawienia'
   | 'obliczenia'
   | 'instrukcja';
+
+type SettingsSection = 'devices' | 'areas';
 
 type MaterialCategory =
   | 'Tworzywo'
@@ -260,6 +274,8 @@ type MaterialReturnRow = {
   inventoried: number;
   protectedQty: number;
   surplus: number;
+  action: 'transfer' | 'warehouse_return';
+  destinationAreaId?: string;
   destination: string;
   status: 'open' | 'completed';
 };
@@ -299,6 +315,33 @@ type ProductionArchive = {
 
 type Area = { id: string; name: string; shared?: boolean };
 type StationMapping = { station: string; areaId: string };
+type StationMappingDraft = StationMapping & {
+  draftId: string;
+  savedIndex: number | null;
+  dirty: boolean;
+};
+
+type StationMappingGroupId = 'wtr' | 'st' | 'other';
+
+const stationMappingGroup = (station: string): StationMappingGroupId => {
+  const value = station.trim().toUpperCase();
+  if (/^WTR(?:\s|[-/]|\d|$)/.test(value)) return 'wtr';
+  if (/^ST(?:\s|[-/]|\d|$)/.test(value)) return 'st';
+  return 'other';
+};
+
+const stationMappingCollator = new Intl.Collator('pl', { numeric: true, sensitivity: 'base' });
+
+const compareStationMappings = (left: StationMappingDraft, right: StationMappingDraft) => {
+  const leftName = left.station.trim();
+  const rightName = right.station.trim();
+  const leftHasNumber = /\d/.test(leftName);
+  const rightHasNumber = /\d/.test(rightName);
+  if (leftHasNumber !== rightHasNumber) return leftHasNumber ? -1 : 1;
+  const nameOrder = stationMappingCollator.compare(leftName, rightName);
+  if (nameOrder) return nameOrder;
+  return (left.savedIndex ?? Number.MAX_SAFE_INTEGER) - (right.savedIndex ?? Number.MAX_SAFE_INTEGER);
+};
 
 type AppState = {
   version: number;
@@ -365,22 +408,30 @@ const PACKAGING_CATEGORIES = new Set<MaterialCategory>(['Karton', 'Przekładka',
 const TECHNOLOGY_PRODUCTION_MODE_HELP: Array<{
   mode: TechnologyProductionMode;
   label: string;
-  description: string;
+  when: string;
+  calculation: string;
+  example: string;
 }> = [
   {
     mode: 'planned',
     label: 'Według planu',
-    description: 'Standardowa produkcja. Zapotrzebowanie jest liczone z ilości produktu wpisanej w planie.'
+    when: 'Wybierz ten tryb, gdy w planie z Excela jest wpisana konkretna liczba sztuk produktu do wykonania.',
+    calculation: 'Aplikacja sprawdza, ile sztuk zostało jeszcze w zleceniu, i liczy tylko zakres wybrany na teraz. Nigdy nie policzy więcej sztuk, niż zostało w planie.',
+    example: 'WTR 18 ma w planie 10 000 szt. produktu NEL QUICK LIFT. Norma wynosi 1 400 szt. na zmianę, a liczysz 3,5 zmiany. Aplikacja przyjmie teraz 4 900 szt. (1 400 × 3,5), a następnie policzy materiały potrzebne na te 4 900 szt.'
   },
   {
     mode: 'continuous',
     label: 'Produkcja ciągła',
-    description: 'Produkcja bez jednej zamkniętej ilości. System liczy potrzeby z wydajności na zmianę i wybranego horyzontu.'
+    when: 'Wybierz ten tryb, gdy pozycja znajduje się w planie z Excela, ale nie ma przy niej podanej konkretnej ilości sztuk do wykonania.',
+    calculation: 'Ponieważ w planie nie ma podanej ilości, aplikacja wylicza ją sama. Bierze wydajność technologii na jedną zmianę i mnoży ją przez liczbę zmian wybraną do obliczeń.',
+    example: 'WTR 26 produkuje kratę w trybie ciągłym. Wydajność wynosi 470 szt. na zmianę, a liczysz 3,5 zmiany. Aplikacja przyjmie 1 645 szt. (470 × 3,5) i dla tej ilości obliczy tworzywo, opakowania oraz pozostałe materiały.'
   },
   {
     mode: 'linked',
     label: 'Pod powiązanie',
-    description: 'Półwyrób dla innej pozycji planu. Ilość wynika z przekazania do powiązanej produkcji albo pobrania z magazynu.'
+    when: 'Wybierz ten tryb, gdy jedna wtryskarka produkuje półwyrób potrzebny innej pozycji z planu, na przykład koło montowane później w gotowym wózku.',
+    calculation: 'Aplikacja odczytuje potrzebną ilość z powiązanego produktu. Opcja „Maszyna” dodaje tę ilość do produkcji półwyrobu. Opcja „Magazyn” pokazuje ją do pobrania. Opcja „Mieszane” dzieli zapotrzebowanie między maszynę i magazyn.',
+    example: 'WTR 20 ma zrobić 1 000 wózków, a każdy wózek potrzebuje 2 kół. Koła produkuje WTR 18. Gdy wybierzesz „Maszyna”, aplikacja wyliczy dla WTR 18 produkcję 2 000 kół. Gdy wybierzesz „Magazyn”, pokaże 2 000 kół do pobrania zamiast dodawać je do produkcji WTR 18.'
   }
 ];
 const MATERIAL_WAREHOUSE_PRIORITY = ['M-1', 'M-4', 'M-10', 'M-11', 'M-51'] as const;
@@ -1717,7 +1768,7 @@ const Stat = ({
 }: {
   label: string;
   value: string;
-  tone?: 'default' | 'warning' | 'success';
+  tone?: 'default' | 'warning' | 'success' | 'info';
   active?: boolean;
   onClick?: () => void;
 }) => {
@@ -1725,6 +1776,7 @@ const Stat = ({
     'h-full rounded-2xl border border-border bg-[var(--surface-soft)] p-4',
     tone === 'warning' && 'border-[color:color-mix(in_srgb,var(--warning)_42%,transparent)]',
     tone === 'success' && 'border-[color:color-mix(in_srgb,var(--success)_42%,transparent)]',
+    tone === 'info' && 'border-[color:color-mix(in_srgb,var(--brand)_42%,transparent)]',
     onClick && 'w-full cursor-pointer text-left transition hover:border-[var(--brand-border-hover)] hover:bg-[var(--brand-faint)] focus:outline-none focus:ring-2 focus:ring-ring',
     onClick && active && 'border-[var(--brand-border-strong)] bg-[var(--brand-soft)] shadow-[inset_0_3px_0_var(--brand)]'
   );
@@ -1740,13 +1792,16 @@ const Stat = ({
     : <div className={className}>{content}</div>;
 };
 
-function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | null }) {
+function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: { requestedView: string | null; requestedSettingsSection: string | null }) {
   const router = useRouter();
   const user = useUiStore((store) => store.user);
   const readOnly = isReadOnly(user, 'PLANOWANIE_ZAPOTRZEBOWANIA');
   const view: View = requestedView && ['plan', 'technologie', 'spis', 'dokument', 'zwroty', 'ustawienia'].includes(requestedView)
     ? requestedView as View
     : 'plan';
+  const settingsSection: SettingsSection | null = requestedSettingsSection === 'devices' || requestedSettingsSection === 'areas'
+    ? requestedSettingsSection
+    : null;
   const {
     state,
     setState,
@@ -1791,6 +1846,17 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const [expandedDocument, setExpandedDocument] = useState('');
   const [expandedMaterial, setExpandedMaterial] = useState('');
   const [expandedFixedDeviceId, setExpandedFixedDeviceId] = useState('');
+  const [stationMappingDrafts, setStationMappingDrafts] = useState<StationMappingDraft[]>(() =>
+    state.stationMappings.map((mapping, index) => ({
+      ...mapping,
+      draftId: 'station-mapping-' + index,
+      savedIndex: index,
+      dirty: false
+    }))
+  );
+  const [stationMappingSavingId, setStationMappingSavingId] = useState('');
+  const stationMappingDraftCounterRef = useRef(state.stationMappings.length);
+  const stationMappingInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
   const [documentWarehouseFilter, setDocumentWarehouseFilter] = useState('all');
   const [documentSort, setDocumentSort] = useState<PickingDocumentSort>('warehouse');
   const [editingTechnologyId, setEditingTechnologyId] = useState('');
@@ -1798,6 +1864,26 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inventorySyncRequestRef = useRef(0);
   const currentUserName = user?.username ?? user?.name ?? 'nieznany';
+  useEffect(() => {
+    if (!hydrated) return;
+    setStationMappingDrafts((current) => {
+      if (current.some((mapping) => mapping.dirty)) return current;
+      const unchanged = current.length === state.stationMappings.length
+        && current.every((mapping, index) => {
+          const saved = state.stationMappings[index];
+          return mapping.savedIndex === index
+            && mapping.station === saved?.station
+            && mapping.areaId === saved?.areaId;
+        });
+      if (unchanged) return current;
+      return state.stationMappings.map((mapping, index) => ({
+        ...mapping,
+        draftId: 'station-mapping-' + index + '-' + stationMappingDraftCounterRef.current++,
+        savedIndex: index,
+        dirty: false
+      }));
+    });
+  }, [hydrated, state.stationMappings]);
   const selectedTechnologyEditorSource = useMemo(
     () => selectedTechnologyForEditor(state.technologies, editingTechnologyId),
     [editingTechnologyId, state.technologies]
@@ -1899,6 +1985,16 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     return () => { clearTimeout(timer); window.removeEventListener('focus', refresh); };
   }, []);
 
+  useEffect(() => {
+    if (!hydrated) return;
+    const removeExpiredHistory = (current: AppState) => {
+      const next = pruneMaterialPlanningHistory(current, today);
+      return next === current ? current : { ...next, updatedAt: nowLabel() };
+    };
+    if (readOnly) setState(removeExpiredHistory);
+    else changeState(removeExpiredHistory);
+  }, [changeState, hydrated, readOnly, setState, today]);
+
   const flash = (text: string) => {
     setMessage(text);
     window.setTimeout(() => setMessage(''), 3200);
@@ -1923,6 +2019,102 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       };
     });
     if (changed && calculationEditorOpen) setCalculationEditorDirty(true);
+  };
+
+  const focusStationMappingDraft = (draftId: string) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const input = stationMappingInputRefs.current.get(draftId);
+        if (!input) return;
+        input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        input.focus({ preventScroll: true });
+        const end = input.value.length;
+        input.setSelectionRange(end, end);
+      });
+    });
+  };
+
+  const updateStationMappingDraft = (draftId: string, patch: Partial<StationMapping>) => {
+    if (readOnly || stationMappingSavingId) return;
+    setStationMappingDrafts((current) => current.map((mapping) =>
+      mapping.draftId === draftId ? { ...mapping, ...patch, dirty: true } : mapping
+    ));
+  };
+
+  const addStationMappingDraft = (group: 'wtr' | 'st') => {
+    if (readOnly || stationMappingSavingId) return;
+    const draftId = 'station-mapping-new-' + group + '-' + stationMappingDraftCounterRef.current++;
+    setStationMappingDrafts((current) => [...current, {
+      draftId,
+      savedIndex: null,
+      dirty: true,
+      station: group === 'wtr' ? 'WTR ' : 'ST ',
+      areaId: 'hala-1'
+    }]);
+    focusStationMappingDraft(draftId);
+  };
+
+  const saveStationMappingDraft = async (draftId: string) => {
+    if (readOnly || stationMappingSavingId) return;
+    const draft = stationMappingDrafts.find((mapping) => mapping.draftId === draftId);
+    if (!draft) return;
+    const station = draft.station.trim();
+    if (!station) {
+      flash('Wpisz nazwę stanowiska przed zapisem.');
+      focusStationMappingDraft(draftId);
+      return;
+    }
+
+    const savedMapping: StationMapping = { station, areaId: draft.areaId };
+    const savedIndex = draft.savedIndex;
+    const targetIndex = savedIndex ?? state.stationMappings.length;
+    setStationMappingSavingId(draftId);
+    beginManualSave();
+    updateState((current) => ({
+      ...current,
+      stationMappings: savedIndex === null
+        ? [...current.stationMappings, savedMapping]
+        : current.stationMappings.map((mapping, index) => index === savedIndex ? savedMapping : mapping)
+    }));
+
+    try {
+      const result = await commitManualSave();
+      if (!result || result.status !== 'saved' || result.pending) {
+        discardManualSave();
+        flash('Nie udało się zapisać przypisania. Wpis pozostał jako niezapisany.');
+        return;
+      }
+      setStationMappingDrafts((current) => current.map((mapping) =>
+        mapping.draftId === draftId
+          ? { ...mapping, ...savedMapping, savedIndex: targetIndex, dirty: false }
+          : mapping
+      ));
+      flash('Zapisano przypisanie ' + station + '.');
+    } catch {
+      discardManualSave();
+      flash('Nie udało się zapisać przypisania. Wpis pozostał jako niezapisany.');
+    } finally {
+      setStationMappingSavingId('');
+    }
+  };
+
+  const removeStationMappingDraft = (draftId: string) => {
+    if (readOnly || stationMappingSavingId) return;
+    const draft = stationMappingDrafts.find((mapping) => mapping.draftId === draftId);
+    if (!draft) return;
+    setStationMappingDrafts((current) => current
+      .filter((mapping) => mapping.draftId !== draftId)
+      .map((mapping) => ({
+        ...mapping,
+        savedIndex: draft.savedIndex !== null && mapping.savedIndex !== null && mapping.savedIndex > draft.savedIndex
+          ? mapping.savedIndex - 1
+          : mapping.savedIndex
+      })));
+    if (draft.savedIndex === null) return;
+    updateState((current) => ({
+      ...current,
+      stationMappings: current.stationMappings.filter((_, index) => index !== draft.savedIndex)
+    }));
   };
 
   const confirmDiscardCalculationEditor = useCallback(
@@ -2567,6 +2759,10 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
 
   const selectPlanDate = (planDate: string) => {
     if (!planDate) return;
+    if (!isMaterialPlanningDateRetained(planDate, today)) {
+      flash(`Plany są dostępne maksymalnie ${MATERIAL_PLANNING_HISTORY_DAYS} dni wstecz.`);
+      return;
+    }
     if (!closeCalculationEditorIfAllowed()) return;
     setState((current) => {
       const dailyPlans = { ...current.dailyPlans, [current.selectedPlanDate]: clonePlanItems(current.plan) };
@@ -2955,9 +3151,13 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         <p className="mt-2 max-w-3xl text-sm text-muted">{subtitle}</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {!readOnly && view !== 'technologie' ? calculationEditorOpen
-          ? <Badge tone={calculationEditorDirty ? 'warning' : 'info'}>{calculationEditorDirty ? 'Niezapisane zmiany' : 'Zapis ręczny'}</Badge>
-          : <PlanningSaveStatus info={saveInfo} /> : null}
+        {!readOnly && view !== 'technologie'
+          ? view === 'ustawienia' && settingsSection === 'areas' && stationMappingDrafts.some((mapping) => mapping.dirty)
+            ? <Badge tone={stationMappingSavingId ? 'info' : 'warning'}>{stationMappingSavingId ? 'Zapisywanie...' : 'Niezapisane zmiany'}</Badge>
+            : calculationEditorOpen
+              ? <Badge tone={calculationEditorDirty ? 'warning' : 'info'}>{calculationEditorDirty ? 'Niezapisane zmiany' : 'Zapis ręczny'}</Badge>
+              : <PlanningSaveStatus info={saveInfo} />
+          : null}
         {readOnly ? <Badge tone="info">Tylko podgląd</Badge> : null}
       </div>
     </div>
@@ -2980,9 +3180,14 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
 
   const currentPlanVersion = latestPlanVersion(state.planVersions, state.selectedPlanDate);
   const tomorrow = dateOffsetKey(1);
+  const historyCutoffDate = materialPlanningHistoryCutoffDateKey(today);
   const savedPlanDates = [...new Set([
     ...Object.keys(state.dailyPlans), ...state.planVersions.map((version) => version.planDate), state.selectedPlanDate
-  ])].filter((date) => date && date !== today && date !== tomorrow).sort((left, right) => right.localeCompare(left));
+  ])].filter((date) => (
+    date !== today
+    && date !== tomorrow
+    && isMaterialPlanningDateRetained(date, today)
+  )).sort((left, right) => right.localeCompare(left));
   const customRangeVisible = state.calculationMode !== 'all' && (customHorizon || ![3.5, 9].includes(state.horizonShifts));
   const globalRangeChoice = state.calculationMode === 'all' ? 'all' : customRangeVisible ? 'custom' : String(state.horizonShifts);
   const pendingPlanWorkbook = pending?.purpose === 'plan' ? pending : null;
@@ -3128,7 +3333,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
               {savedPlanDates.map((date) => <option key={date} value={date}>{formatPlanDate(date)}</option>)}
               <option value="custom">Inny dzień...</option>
             </SelectField>
-          {showDatePicker ? <Input aria-label="Wybrana data produkcji" className="mt-2 h-[52px] max-h-[52px] min-h-[52px] rounded-xl" type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /> : null}
+          {showDatePicker ? <Input aria-label="Wybrana data produkcji" className="mt-2 h-[52px] max-h-[52px] min-h-[52px] rounded-xl" type="date" min={historyCutoffDate} value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /> : null}
         </div>
         <div className="min-w-0">
           <p className="mb-1.5 h-4 text-xs font-semibold leading-4 text-dim">Zapotrzebowanie na</p>
@@ -3220,7 +3425,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       {visibleAreaPlan.length ? planningSections(visibleAreaPlan).map((section, index) => <Fragment key={`${index}-${section.title}`}>{renderPlanTable(section.items, section.title,
         section.group === 'planned' ? 'Pozycje przyszłe są wyłączone do ręcznego zaznaczenia.' : section.group === 'emergency' ? 'Pozycje wymagające reakcji.' : '', section.group)}</Fragment>)
         : <p className="py-8 text-center text-sm text-muted">{areaPlan.length ? 'Brak produktów pasujących do wyszukiwania.' : showAllPlanAreas ? 'Brak pozycji w planie.' : `Brak pozycji w strefie: ${areaName(state.selectedAreaId)}.`}</p>}
-    </div> : <EmptyState title={`Brak planu na ${formatPlanDate(state.selectedPlanDate)}`} description="Wgraj pierwszy plan dla wybranej daty. Poprzednie dni i wersje pozostaną w historii." />}
+    </div> : <EmptyState title={`Brak planu na ${formatPlanDate(state.selectedPlanDate)}`} description={`Wgraj pierwszy plan dla wybranej daty. Poprzednie dni i wersje są dostępne przez ${MATERIAL_PLANNING_HISTORY_DAYS} dni.`} />}
   </div>;
 
   const renderTechnologies = () => {
@@ -3570,31 +3775,19 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
                 <Field label={editorTechnology.productionMode === 'continuous' ? 'Wydajność na zmianę (szt.)' : editorTechnology.productionMode === 'linked' ? 'Norma pomocnicza (opc.)' : 'Norma na zmianę (8h)'}><Input type="number" value={editorTechnology.shiftNorm} onChange={(event) => updateEditorTechnology({ shiftNorm: Math.max(0, numberValue(event.target.value)) })} /></Field>
                 {editorTechnology.variant === 'alternative' ? <Field label="Nazwa wariantu (wymagana)"><Input placeholder="np. NOVODUR, MDC lub karton rozm. 6" value={editorTechnology.description} onChange={(event) => updateEditorTechnology({ description: event.target.value })} /></Field> : null}
               </div>
-              <div className="rounded-xl border border-borderStrong bg-[var(--inset-panel-bg)] p-3">
-                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-title">
-                  <CircleHelp className="h-4 w-4 shrink-0 text-brand" />
-                  <span>Co oznaczają tryby produkcji?</span>
-                </div>
-                <div className="mt-3 grid gap-2 lg:grid-cols-3">
-                  {TECHNOLOGY_PRODUCTION_MODE_HELP.map((item) => {
-                    const selectedMode = (editorTechnology.productionMode ?? 'planned') === item.mode;
-                    return <div
-                      key={item.mode}
-                      className={cn(
-                        'rounded-lg border px-3 py-2.5 text-xs leading-relaxed',
-                        selectedMode
-                          ? 'border-[rgba(255,122,26,0.68)] bg-brandSoft text-body'
-                          : 'border-border bg-[var(--surface-faint)] text-muted'
-                      )}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <p className={cn('font-black', selectedMode ? 'text-brand' : 'text-title')}>{item.label}</p>
-                        {selectedMode ? <span className="flex items-center gap-1 whitespace-nowrap text-[10px] font-bold uppercase text-success"><Check className="h-3.5 w-3.5" />Wybrane</span> : null}
-                      </div>
-                      <p className="mt-1">{item.description}</p>
-                    </div>;
-                  })}
-                </div>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                <CircleHelp className="h-4 w-4 shrink-0 text-brand" />
+                <span>Nie masz pewności, który tryb wybrać?</span>
+                <button
+                  type="button"
+                  className="rounded-sm font-bold text-brand underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                  onClick={() => {
+                    const help = document.getElementById('technology-production-mode-help') as HTMLDetailsElement | null;
+                    if (!help) return;
+                    help.open = true;
+                    help.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }}
+                >Zobacz objaśnienia i przykłady</button>
               </div>
               <label className="block space-y-1.5 text-xs font-semibold uppercase tracking-wide text-dim">
                 <span>Uwagi (opcjonalne)</span>
@@ -3652,6 +3845,48 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
               </div>
               {renderEditorMaterialsTable('surplusMaterials', 'Brak osobnego pakowania nadwyżki.')}
             </section>
+
+            <details id="technology-production-mode-help" className="group scroll-mt-6 border-t border-borderStrong pt-5">
+              <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 rounded-lg px-2 py-2 transition hover:bg-[var(--surface-faint)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand [&::-webkit-details-marker]:hidden">
+                <CircleHelp className="h-5 w-5 shrink-0 text-brand" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-black !text-[#60a5fa]">Który tryb produkcji wybrać?</p>
+                  <p className="mt-0.5 text-xs font-semibold !text-[#93c5fd]">Rozwiń proste wyjaśnienia i przykłady z hali.</p>
+                </div>
+                <ChevronDown className="h-5 w-5 shrink-0 text-muted transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="mt-3 border-y border-border">
+                {TECHNOLOGY_PRODUCTION_MODE_HELP.map((item) => {
+                  const selectedMode = (editorTechnology.productionMode ?? 'planned') === item.mode;
+                  return <div
+                    key={item.mode}
+                    className={cn(
+                      'grid gap-4 border-t border-border px-3 py-4 first:border-t-0 lg:grid-cols-[190px_minmax(0,1fr)]',
+                      selectedMode && 'border-l-2 border-l-brand bg-brandSoft'
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2 lg:block">
+                      <p className={cn('text-base font-black', selectedMode ? 'text-brand' : 'text-title')}>{item.label}</p>
+                      {selectedMode ? <span className="mt-2 inline-flex items-center gap-1 whitespace-nowrap text-[10px] font-bold uppercase text-success"><Check className="h-3.5 w-3.5" />Wybrane</span> : null}
+                    </div>
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-wide text-dim">Kiedy wybrać?</p>
+                        <p className="mt-1 text-sm leading-6 text-body">{item.when}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-wide text-dim">Co zrobi aplikacja?</p>
+                        <p className="mt-1 text-sm leading-6 text-body">{item.calculation}</p>
+                      </div>
+                      <div className="border-l-2 border-brand bg-[rgba(255,122,26,0.055)] px-3 py-2.5">
+                        <p className="text-[10px] font-black uppercase tracking-wide text-brand">Przykład z hali</p>
+                        <p className="mt-1 text-sm leading-6 text-title">{item.example}</p>
+                      </div>
+                    </div>
+                  </div>;
+                })}
+              </div>
+            </details>
           </Card>
         </TabsContent>
       </Tabs>
@@ -4211,10 +4446,38 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
         ?? [];
     if (!datePlan.length) return [];
 
-    const plannedMaterials = datePlan
+    const productionAreas = state.areas.filter((area) => !area.shared);
+    const activeMaterialsByArea = new Map<string, Array<Pick<TechnologyMaterial, 'code' | 'name' | 'unit'>>>();
+    const unassignedActiveMaterials: Array<Pick<TechnologyMaterial, 'code' | 'name' | 'unit'>> = [];
+    const addActiveMaterial = (
+      areaId: string,
+      material: Pick<TechnologyMaterial, 'code' | 'name' | 'unit'>
+    ) => {
+      if (!normalize(material.code) && !normalize(material.name)) return;
+      if (!areaId) {
+        unassignedActiveMaterials.push(material);
+        return;
+      }
+      activeMaterialsByArea.set(areaId, [...(activeMaterialsByArea.get(areaId) ?? []), material]);
+    };
+
+    datePlan
       .filter((item) => item.included)
-      .flatMap((item) => materialsForItem(item))
-      .filter((material) => Boolean(normalize(material.code) || normalize(material.name)));
+      .forEach((item) => materialsForItem(item).forEach((material) => addActiveMaterial(item.areaId, material)));
+
+    const requirementsByArea = new Map<string, Requirement[]>();
+    if (planDate === state.selectedPlanDate) {
+      productionAreas.forEach((area) => {
+        const areaRequirements = requirementsForArea(area.id);
+        requirementsByArea.set(area.id, areaRequirements);
+        areaRequirements.forEach((material) => addActiveMaterial(area.id, material));
+      });
+    }
+
+    const plannedMaterials = [
+      ...unassignedActiveMaterials,
+      ...[...activeMaterialsByArea.values()].flat()
+    ];
     if (!plannedMaterials.length) return [];
     const returnExclusionIds = new Set((state.returnExclusions ?? []).map((exclusion) => exclusion.id));
 
@@ -4233,18 +4496,53 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       }
     });
 
-    return [...inventoriedByMaterial.entries()]
-      .filter(([inventoryKey, inventoryItem]) => {
-        const protectedQty = Math.min(inventoryItem.qty, Math.max(0, numberValue(inventoryItem.protectedQty)));
-        const returnableQty = Math.max(0, inventoryItem.qty - protectedQty);
-        return returnableQty > 0.000001
-          && !returnExclusionIds.has(inventoryKey)
-          && !plannedMaterials.some((material) => materialIdentityMatches(material, inventoryItem));
-      })
-      .map(([inventoryKey, inventoryItem]) => {
-        const id = `${planDate}|${inventoryKey}`;
-        const protectedQty = Math.min(inventoryItem.qty, Math.max(0, numberValue(inventoryItem.protectedQty)));
-        return {
+    const unitDescriptor = (unit: unknown) => {
+      const normalizedUnit = normalizedMaterialUnit(unit).replace(/\s+/g, '');
+      if (isKilogramUnit(unit)) return { family: 'mass', factor: 1000 };
+      if (isGramUnit(unit)) return { family: 'mass', factor: 1 };
+      if (isThousandPiecesUnit(unit)) return { family: 'pieces', factor: 1000 };
+      if (['szt', 'sztuk', 'sztuka', 'sztuki'].includes(normalizedUnit)) return { family: 'pieces', factor: 1 };
+      if (['opak', 'opakowanie', 'opakowania', 'opakowan'].includes(normalizedUnit)) return { family: 'packages', factor: 1 };
+      return { family: normalizedUnit || 'pieces', factor: 1 };
+    };
+    const convertQuantity = (value: number, fromUnit: unknown, toUnit: unknown) => {
+      const from = unitDescriptor(fromUnit);
+      const to = unitDescriptor(toUnit);
+      return from.family === to.family ? value * from.factor / to.factor : null;
+    };
+    const targetNeeds = productionAreas.flatMap((area) => (
+      requirementsByArea.get(area.id) ?? []
+    ).filter((requirement) => requirement.toIssue > 0.000001).map((requirement) => ({
+      areaId: area.id,
+      material: requirement,
+      unit: requirement.unit,
+      remaining: requirement.toIssue
+    })));
+
+    const rows: MaterialReturnRow[] = [];
+    inventoriedByMaterial.forEach((inventoryItem, inventoryKey) => {
+      const protectedQty = Math.min(inventoryItem.qty, Math.max(0, numberValue(inventoryItem.protectedQty)));
+      let availableQty = Math.max(0, inventoryItem.qty - protectedQty);
+      if (availableQty <= 0.000001 || returnExclusionIds.has(inventoryKey)) return;
+
+      const usedInSourceArea = [
+        ...(activeMaterialsByArea.get(inventoryItem.areaId) ?? []),
+        ...unassignedActiveMaterials
+      ].some((material) => materialIdentityMatches(material, inventoryItem));
+      if (usedInSourceArea) return;
+
+      let transferred = false;
+      targetNeeds.forEach((target) => {
+        if (availableQty <= 0.000001 || target.remaining <= 0.000001 || target.areaId === inventoryItem.areaId) return;
+        if (!materialIdentityMatches(target.material, inventoryItem)) return;
+        const targetNeedInSourceUnit = convertQuantity(target.remaining, target.unit, inventoryItem.unit);
+        if (targetNeedInSourceUnit === null || targetNeedInSourceUnit <= 0.000001) return;
+        const transferQty = Math.min(availableQty, targetNeedInSourceUnit);
+        const transferQtyInTargetUnit = convertQuantity(transferQty, inventoryItem.unit, target.unit);
+        if (transferQtyInTargetUnit === null || transferQty <= 0.000001) return;
+
+        const id = `${planDate}|${inventoryKey}|transfer|${target.areaId}`;
+        rows.push({
           id,
           planDate,
           materialKey: materialKey(inventoryItem),
@@ -4253,16 +4551,46 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
           category: inventoryItem.category ?? 'Pozostałe',
           unit: inventoryItem.unit,
           areaId: inventoryItem.areaId,
-          reason: protectedQty > 0.000001
-            ? 'Brak w technologiach planu; ilość w suszarce lub buforze CS pozostaje na hali'
-            : 'Brak w technologiach aktualnego planu',
+          reason: `Materiał nie jest używany w ${areaName(inventoryItem.areaId)}, a brakuje go w ${areaName(target.areaId)}`,
           inventoried: inventoryItem.qty,
           protectedQty,
-          surplus: Math.max(0, inventoryItem.qty - protectedQty),
-          destination: 'Zwrot do magazynu',
+          surplus: transferQty,
+          action: 'transfer',
+          destinationAreaId: target.areaId,
+          destination: `Przesunięcie do: ${areaName(target.areaId)}`,
           status: state.returnStatuses[id] ?? 'open'
-        } satisfies MaterialReturnRow;
+        });
+        transferred = true;
+        availableQty = Math.max(0, availableQty - transferQty);
+        target.remaining = Math.max(0, target.remaining - transferQtyInTargetUnit);
       });
+
+      if (availableQty <= 0.000001) return;
+      const id = `${planDate}|${inventoryKey}|return`;
+      const legacyId = `${planDate}|${inventoryKey}`;
+      rows.push({
+        id,
+        planDate,
+        materialKey: materialKey(inventoryItem),
+        code: inventoryItem.code,
+        name: inventoryItem.name,
+        category: inventoryItem.category ?? 'Pozostałe',
+        unit: inventoryItem.unit,
+        areaId: inventoryItem.areaId,
+        reason: transferred
+          ? 'Pozostałość po pokryciu niedoboru innych stref'
+          : protectedQty > 0.000001
+            ? 'Brak w technologiach planu; ilość w suszarce lub buforze CS pozostaje na hali'
+            : 'Brak w technologiach aktualnego planu',
+        inventoried: inventoryItem.qty,
+        protectedQty,
+        surplus: availableQty,
+        action: 'warehouse_return',
+        destination: 'Zwrot do magazynu',
+        status: state.returnStatuses[id] ?? state.returnStatuses[legacyId] ?? 'open'
+      });
+    });
+    return rows;
   };
 
   const excludeReturnRow = (row: MaterialReturnRow) => {
@@ -4304,7 +4632,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       <PlanQuantityWarnings items={state.plan.filter((item) => item.included && (item.areaId === state.selectedAreaId || !item.areaId))} resolvedItemIds={quantityResolvedPlanItemIds} calculations />
       <Card className="space-y-4">
         <div className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_minmax(260px,1fr)_auto] lg:items-end">
-          <Field label="Data planu"><Input className="h-12 min-h-12 rounded-2xl border-[var(--control-border)] bg-[image:var(--control-bg)] px-4 py-2.5 text-sm font-semibold text-title shadow-[var(--control-shadow)] hover:border-[var(--brand-border-hover)] hover:bg-[image:var(--control-bg-hover)] focus:border-[var(--brand-border-strong)]" type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
+          <Field label="Data planu"><Input className="h-12 min-h-12 rounded-2xl border-[var(--control-border)] bg-[image:var(--control-bg)] px-4 py-2.5 text-sm font-semibold text-title shadow-[var(--control-shadow)] hover:border-[var(--brand-border-hover)] hover:bg-[image:var(--control-bg-hover)] focus:border-[var(--brand-border-strong)]" type="date" min={historyCutoffDate} value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
           <Field label="Strefa"><SelectField className="h-12 min-h-12" value={state.selectedAreaId} onChange={(event) => selectPlanningArea(event.target.value)}>{state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField></Field>
           {!readOnly ? <Button className="h-12 min-h-12 px-5" onClick={createOrRefreshPickingDocument}><FilePlus2 className="mr-2 h-4 w-4" />{documents.some((document) => document.status === 'draft' || document.status === 'outdated') ? 'Przelicz dokument roboczy' : 'Utwórz dokument'}</Button> : null}
         </div>
@@ -4411,12 +4739,13 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     const visibleReturnExclusions = (state.returnExclusions ?? [])
       .filter((exclusion) => exclusionAreas.some((area) => area.id === exclusion.areaId))
       .sort((left, right) => areaName(left.areaId).localeCompare(areaName(right.areaId), 'pl') || left.name.localeCompare(right.name, 'pl'));
-    const openRows = returnRows.filter((row) => row.status === 'open');
-    const activeTechnologyMaterialCount = state.plan
-      .filter((item) => item.included)
-      .flatMap((item) => materialsForItem(item))
-      .filter((material) => Boolean(normalize(material.code) || normalize(material.name)))
-      .length;
+    const openTransferRows = returnRows.filter((row) => row.status === 'open' && row.action === 'transfer');
+    const openWarehouseReturnRows = returnRows.filter((row) => row.status === 'open' && row.action !== 'transfer');
+    const hasActiveTechnology = state.plan.some((item) => (
+      item.included && (Boolean(item.technologyId) || materialsForItem(item).some((material) => (
+        Boolean(normalize(material.code) || normalize(material.name))
+      )))
+    ));
     const inventoriedAreaRows = state.inventory.filter((item) => (
       item.qty > 0.000001
       && !state.areas.find((area) => area.id === item.areaId)?.shared
@@ -4426,39 +4755,40 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
       ? <EmptyState title="Brak danych ze Spisu rzeczywistego" description="Po wykonaniu spisu wróć do tej zakładki i odśwież dane." />
       : !state.plan.length
         ? <EmptyState title="Brak wgranego planu" description="Zwroty można wyznaczyć dopiero po wgraniu planu produkcyjnego." />
-        : !activeTechnologyMaterialCount
+        : !hasActiveTechnology
           ? <EmptyState title="Brak przypisanych technologii" description="Najpierw przypisz technologie do pozycji uwzględnionych w planie." />
           : activeReturnAreaFilter !== 'all' && allReturnRows.length && !returnRows.length
-            ? <EmptyState title={`Brak zwrotów w strefie: ${areaName(activeReturnAreaFilter)}`} description="Wybierz inną strefę albo pokaż wszystkie strefy." />
-          : <EmptyState title="Brak materiałów do zwrotu" description="Pozostałe materiały występują w technologiach albo są oznaczone jako pozostające w swojej strefie." />;
+            ? <EmptyState title={`Brak przesunięć i zwrotów w strefie: ${areaName(activeReturnAreaFilter)}`} description="Wybierz inną strefę albo pokaż wszystkie strefy." />
+          : <EmptyState title="Brak materiałów do przesunięcia lub zwrotu" description="Materiały są używane w swoich strefach albo zostały oznaczone jako pozostające na hali." />;
     return <div className="space-y-5">
-      {renderHeader('Zwroty', 'Materiały ze Spisu rzeczywistego, których nie ma w żadnej technologii aktualnego planu.')}
+      {renderHeader('Zwroty i przesunięcia', 'Najpierw pokrywamy niedobory innych hal. Do magazynu wraca dopiero pozostała ilość materiału nieużywanego w swojej strefie.')}
       <PlanQuantityWarnings items={state.plan.filter((item) => item.included)} resolvedItemIds={quantityResolvedPlanItemIds} calculations />
       <Card className="space-y-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,300px)_minmax(220px,300px)_1fr_auto] xl:items-end">
-          <Field label="Data planu"><Input className="h-12 min-h-12 rounded-2xl border-[var(--control-border)] bg-[image:var(--control-bg)] px-4 py-2.5 text-sm font-semibold text-title shadow-[var(--control-shadow)] hover:border-[var(--brand-border-hover)] hover:bg-[image:var(--control-bg-hover)] focus:border-[var(--brand-border-strong)]" type="date" value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
+          <Field label="Data planu"><Input className="h-12 min-h-12 rounded-2xl border-[var(--control-border)] bg-[image:var(--control-bg)] px-4 py-2.5 text-sm font-semibold text-title shadow-[var(--control-shadow)] hover:border-[var(--brand-border-hover)] hover:bg-[image:var(--control-bg-hover)] focus:border-[var(--brand-border-strong)]" type="date" min={historyCutoffDate} value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
           <Field label="Strefa"><SelectField className="h-12 min-h-12" aria-label="Strefa zwrotów" value={activeReturnAreaFilter} onChange={(event) => setReturnAreaFilter(event.target.value)}><option value="all">Wszystkie strefy</option>{returnAreas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField></Field>
           <p className="text-sm text-muted">Spis z dnia: <span className="font-bold text-title">{state.inventorySourceDate ? formatPlanDate(state.inventorySourceDate) : 'brak danych'}</span>{state.inventorySyncedAt ? ` · pobrano ${state.inventorySyncedAt}` : ''}</p>
           <Button variant="outline" onClick={() => void syncOriginalInventory()}><RefreshCw className="mr-2 h-4 w-4" />Odśwież spis</Button>
         </div>
-        <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Stat label="Do zwrotu" value={String(openRows.length)} tone={openRows.length ? 'warning' : 'success'} active={returnListMode === 'returns'} onClick={() => setReturnListMode('returns')} />
+        <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2 xl:grid-cols-5">
+          <Stat label="Do przesunięcia" value={String(openTransferRows.length)} tone={openTransferRows.length ? 'info' : 'success'} active={returnListMode === 'returns'} onClick={() => setReturnListMode('returns')} />
+          <Stat label="Do zwrotu" value={String(openWarehouseReturnRows.length)} tone={openWarehouseReturnRows.length ? 'warning' : 'success'} active={returnListMode === 'returns'} onClick={() => setReturnListMode('returns')} />
           <Stat label="Pozycje spisane" value={String(inventoriedAreaRows.length)} />
           <Stat label="Pozostaje na hali" value={String(visibleReturnExclusions.length)} active={returnListMode === 'kept'} onClick={() => setReturnListMode('kept')} />
           <Stat label="Data planu" value={formatPlanDate(state.selectedPlanDate)} />
         </div>
       </Card>
       {returnListMode === 'returns' ? (
-        returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="sticky top-0 z-10 bg-[image:var(--table-sticky-header-bg)] text-left text-[11px] uppercase text-dim"><tr><th className="p-3">Materiał</th><th className="p-3">Strefa</th><th className="p-3 text-right">Do zwrotu</th><th className="p-3">Status</th><th className="p-3">Decyzja</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className={cn('border-t border-border', row.status === 'completed' && 'bg-[color:color-mix(in_srgb,var(--success)_7%,transparent)]')}><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3 text-right text-lg font-black text-warning"><span>{fmt(row.surplus)} {row.unit}</span>{row.protectedQty > 0.000001 ? <p className="mt-1 text-[11px] font-semibold text-muted">W urządzeniu zostaje: {fmt(row.protectedQty)} {row.unit}</p> : null}</td><td className="p-3"><Button disabled={readOnly} variant={row.status === 'completed' ? 'ghost' : 'secondary'} onClick={() => updateState((current) => ({ ...current, returnStatuses: { ...current.returnStatuses, [row.id]: row.status === 'completed' ? 'open' : 'completed' } }))}>{row.status === 'completed' ? <Undo2 className="mr-2 h-4 w-4" /> : <Check className="mr-2 h-4 w-4" />}{row.status === 'completed' ? 'Przywróć' : 'Wykonano'}</Button></td><td className="p-3"><Button aria-label={'Pozostaw w strefie ' + areaName(row.areaId) + ': ' + row.name} disabled={readOnly || row.status === 'completed'} title={row.status === 'completed' ? 'Najpierw przywróć pozycję ze statusu Wykonano' : 'Nie pokazuj tego materiału w zwrotach dla tej strefy'} variant="outline" onClick={() => excludeReturnRow(row)}><Archive className="mr-2 h-4 w-4" />Zostaje na hali</Button></td></tr>)}</tbody></table></div></Card> : returnsEmptyState
+        returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[1120px] text-sm"><thead className="sticky top-0 z-10 bg-[image:var(--table-sticky-header-bg)] text-left text-[11px] uppercase text-dim"><tr><th className="p-3">Materiał</th><th className="p-3">Z hali</th><th className="p-3">Kierunek</th><th className="p-3 text-right">Ilość</th><th className="p-3">Status</th><th className="p-3">Decyzja</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className={cn('border-t border-border', row.status === 'completed' && 'bg-[color:color-mix(in_srgb,var(--success)_7%,transparent)]')}><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td><td className="p-3 font-bold text-title">{areaName(row.areaId)}</td><td className="p-3"><div className="flex items-center gap-2"><ArrowRight className="h-4 w-4 shrink-0 text-muted" /><Badge tone={row.action === 'transfer' ? 'info' : 'default'}>{row.action === 'transfer' && row.destinationAreaId ? areaName(row.destinationAreaId) : 'Magazyn'}</Badge></div><p className="mt-1 max-w-md text-xs text-muted">{row.reason}</p></td><td className="p-3 text-right text-lg font-black text-warning"><span>{fmt(row.surplus)} {row.unit}</span>{row.protectedQty > 0.000001 ? <p className="mt-1 text-[11px] font-semibold text-muted">W urządzeniu zostaje: {fmt(row.protectedQty)} {row.unit}</p> : null}</td><td className="p-3"><Button disabled={readOnly} variant={row.status === 'completed' ? 'ghost' : 'secondary'} onClick={() => updateState((current) => ({ ...current, returnStatuses: { ...current.returnStatuses, [row.id]: row.status === 'completed' ? 'open' : 'completed' } }))}>{row.status === 'completed' ? <Undo2 className="mr-2 h-4 w-4" /> : <Check className="mr-2 h-4 w-4" />}{row.status === 'completed' ? 'Przywróć' : 'Wykonano'}</Button></td><td className="p-3"><Button aria-label={'Pozostaw w strefie ' + areaName(row.areaId) + ': ' + row.name} disabled={readOnly || row.status === 'completed'} title={row.status === 'completed' ? 'Najpierw przywróć pozycję ze statusu Wykonano' : 'Nie pokazuj tego materiału w przesunięciach ani zwrotach dla tej strefy'} variant="outline" onClick={() => excludeReturnRow(row)}><Archive className="mr-2 h-4 w-4" />Zostaje na hali</Button></td></tr>)}</tbody></table></div></Card> : returnsEmptyState
       ) : (
         <section className="space-y-3">
-          <SectionTitle title="Pozostaje na hali" subtitle="Stałe wyjątki zwrotów. Każda strefa ma własną listę, niezależną od dnia planu." />
+          <SectionTitle title="Pozostaje na hali" subtitle="Stałe wyjątki przesunięć i zwrotów. Każda strefa ma własną listę, niezależną od dnia planu." />
           <div className="grid gap-3 xl:grid-cols-2">
             {exclusionAreas.map((area) => {
               const exclusions = visibleReturnExclusions.filter((item) => item.areaId === area.id);
               return <Card key={area.id} className="overflow-hidden p-0">
                 <div className="flex items-center justify-between gap-3 border-b border-border bg-[var(--brand-faint)] px-4 py-3">
-                  <div className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--brand-border-soft)] bg-[var(--brand-soft)] text-brand"><Warehouse className="h-5 w-5" /></span><div className="min-w-0"><p className="truncate font-black text-title">{area.name}</p><p className="text-xs text-muted">Tych pozycji nie proponujemy do zwrotu</p></div></div>
+                  <div className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--brand-border-soft)] bg-[var(--brand-soft)] text-brand"><Warehouse className="h-5 w-5" /></span><div className="min-w-0"><p className="truncate font-black text-title">{area.name}</p><p className="text-xs text-muted">Tych pozycji nie proponujemy do przesunięcia ani zwrotu</p></div></div>
                   <Badge tone={exclusions.length ? 'info' : 'default'}>{exclusions.length} poz.</Badge>
                 </div>
                 {exclusions.length ? <div className="divide-y divide-border">{exclusions.map((exclusion) => <div key={exclusion.id} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="font-bold text-title">{exclusion.code || '—'}</p><p className="catalog-label break-words text-sm font-semibold">{exclusion.name}</p><p className="mt-1 text-xs text-muted">{exclusion.unit}{exclusion.createdBy ? ' · dodał: ' + exclusion.createdBy : ''}{exclusion.createdAt ? ' · ' + exclusion.createdAt : ''}</p></div><Button aria-label={'Przywróć do zwrotów w strefie ' + area.name + ': ' + exclusion.name} className="shrink-0" disabled={readOnly} variant="outline" onClick={() => restoreReturnExclusion(exclusion.id)}><Undo2 className="mr-2 h-4 w-4" />Przywróć do zwrotów</Button></div>)}</div> : <p className="px-4 py-5 text-sm text-muted">Brak pozycji stale pozostających w tej strefie.</p>}
@@ -4476,7 +4806,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     const documents = [...state.documents].sort((left, right) => right.planDate.localeCompare(left.planDate) || right.createdAt.localeCompare(left.createdAt, 'pl'));
     const returnRows = deriveReturnsForDate(state.selectedPlanDate);
     return <div className="space-y-5">
-      {renderHeader('Historia', 'Wersje planów, korekty i dokumenty pozostają zapisane. Zwroty pokazują bieżące porównanie planu ze Spisem rzeczywistym.')}
+      {renderHeader('Historia', 'Wersje planów, korekty i dokumenty pozostają zapisane. Przesunięcia i zwroty pokazują bieżące porównanie planu ze Spisem rzeczywistym.')}
 
       <section className="space-y-3">
         <SectionTitle title="Wersje planów" subtitle={`${versions.length} zapisanych wersji`} />
@@ -4505,7 +4835,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
 
       <section className="space-y-3"><SectionTitle title="Dokumenty i wydania" subtitle={`${documents.length} dokumentów`} />{documents.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-[var(--surface-soft)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Dokument</th><th className="p-3">Data / strefa</th><th className="p-3">Wersja i zakres</th><th className="p-3">Utworzył</th><th className="p-3">Typ</th><th className="p-3">Status</th><th className="p-3 text-right">Pozycje</th></tr></thead><tbody>{documents.map((document) => <tr key={document.id} className="border-t border-border"><td className="p-3 font-black text-title">{document.documentNo}</td><td className="p-3"><p>{formatPlanDate(document.planDate)}</p><p className="text-xs text-muted">{areaName(document.areaId)}</p></td><td className="p-3"><p>Wersja {document.planVersionNo || '—'}</p><p className="text-xs text-muted">{document.scopeLabel}</p></td><td className="p-3"><p>{document.createdBy}</p><p className="text-xs text-muted">{document.createdAt}</p></td><td className="p-3"><Badge tone={document.kind === 'correction' ? 'warning' : 'info'}>{document.kind === 'correction' ? 'Korekta' : 'Podstawowy'}</Badge></td><td className="p-3"><Badge tone={documentTone(document.status)}>{documentStatusLabel[document.status]}</Badge></td><td className="p-3 text-right">{document.rows.length}</td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak dokumentów" description="Dokumenty podstawowe i korekty pojawią się po ich utworzeniu." />}</section>
 
-      <section className="space-y-3"><SectionTitle title="Zwroty" subtitle={`${returnRows.length} wykrytych pozycji dla aktualnego spisu`} />{returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="bg-[var(--surface-soft)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data planu</th><th className="p-3">Materiał</th><th className="p-3">Strefa</th><th className="p-3">Przyczyna</th><th className="p-3 text-right">Do zwrotu</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className="border-t border-border"><td className="p-3">{formatPlanDate(row.planDate)}</td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label text-xs font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3">{row.reason}</td><td className="p-3 text-right font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Badge tone={row.status === 'completed' ? 'success' : 'warning'}>{row.status === 'completed' ? 'Wykonany' : 'Otwarty'}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak zwrotów" description="Materiały do zwrotu są wyznaczane z aktualnego Spisu rzeczywistego i technologii planu." />}</section>
+      <section className="space-y-3"><SectionTitle title="Przesunięcia i zwroty" subtitle={`${returnRows.length} wykrytych pozycji dla aktualnego spisu`} />{returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[920px] text-sm"><thead className="bg-[var(--surface-soft)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data planu</th><th className="p-3">Materiał</th><th className="p-3">Z hali</th><th className="p-3">Kierunek</th><th className="p-3">Przyczyna</th><th className="p-3 text-right">Ilość</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className="border-t border-border"><td className="p-3">{formatPlanDate(row.planDate)}</td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label text-xs font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3"><Badge tone={row.action === 'transfer' ? 'info' : 'default'}>{row.action === 'transfer' && row.destinationAreaId ? areaName(row.destinationAreaId) : 'Magazyn'}</Badge></td><td className="p-3">{row.reason}</td><td className="p-3 text-right font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Badge tone={row.status === 'completed' ? 'success' : 'warning'}>{row.status === 'completed' ? 'Wykonany' : 'Otwarty'}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak przesunięć i zwrotów" description="Materiały są porównywane z aktywnym planem i stanami wszystkich stref." />}</section>
 
       {state.archive.length ? <section className="space-y-3"><SectionTitle title="Wstrzymane i zakończone produkcje" subtitle={`${state.archive.length} pozycji`} /><div className="divide-y divide-border border-y border-border">{state.archive.map((entry) => <div key={entry.id} className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between"><div><div className="flex flex-wrap gap-2"><Badge tone={entry.status === 'suspended' ? 'warning' : 'success'}>{entry.status === 'suspended' ? 'Wstrzymana' : 'Zakończona'}</Badge>{entry.planItem.manualOverride ? <Badge tone="info">Technologia robocza</Badge> : null}</div><p className="mt-2 font-bold"><span className="text-title">{entry.planItem.index}</span><span className="catalog-label"> · {entry.planItem.name}</span></p><p className="mt-1 text-sm text-muted">{entry.planItem.station || 'Brak stanowiska'} · {entry.technologyName} · {entry.at}</p><p className="mt-1 text-xs text-dim">{entry.reason}</p></div>{entry.status === 'suspended' && !readOnly ? <Button variant="ghost" onClick={() => updateState((current) => ({ ...current, archive: current.archive.map((row) => row.id === entry.id ? { ...row, status: 'completed', reason: 'Produkcja zakończona ręcznie', at: nowLabel() } : row) }))}><Archive className="mr-2 h-4 w-4" />Zakończ produkcję</Button> : null}</div>)}</div></section> : null}
     </div>;
@@ -4514,7 +4844,15 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
   const updateFixedDevice = (deviceId: string, patch: Partial<FixedInventoryDevice>) => {
     updateState((current) => ({
       ...current,
-      fixedDevices: current.fixedDevices.map((device) => device.id === deviceId ? { ...device, ...patch } : device)
+      fixedDevices: current.fixedDevices.map((device) => device.id === deviceId
+        ? {
+            ...device,
+            ...patch,
+            orderNo: patch.areaId !== undefined && patch.areaId !== device.areaId
+              ? undefined
+              : device.orderNo
+          }
+        : device)
     }));
   };
 
@@ -4552,6 +4890,37 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     setExpandedFixedDeviceId((current) => current === device.id ? '' : current);
   };
 
+  const moveFixedDevice = (deviceId: string, direction: -1 | 1) => {
+    updateState((current) => {
+      const device = current.fixedDevices.find((item) => item.id === deviceId);
+      if (!device) return current;
+
+      const orderedDevices = sortFixedInventoryDevices(
+        current.fixedDevices.filter((item) => item.areaId === device.areaId)
+      );
+      const currentIndex = orderedDevices.findIndex((item) => item.id === deviceId);
+      const targetIndex = currentIndex + direction;
+      if (currentIndex < 0 || targetIndex < 0 || targetIndex >= orderedDevices.length) return current;
+
+      [orderedDevices[currentIndex], orderedDevices[targetIndex]] = [
+        orderedDevices[targetIndex],
+        orderedDevices[currentIndex]
+      ];
+      const orderById = new Map(
+        orderedDevices.map((item, index) => [item.id, (index + 1) * 10])
+      );
+
+      return {
+        ...current,
+        fixedDevices: current.fixedDevices.map((item) =>
+          item.areaId === device.areaId
+            ? { ...item, orderNo: orderById.get(item.id) }
+            : item
+        )
+      };
+    });
+  };
+
   const fixedDeviceAreaOptions = state.areas.filter(
     (area) => area.id === 'hala-1' || area.id === 'hala-2'
   );
@@ -4563,48 +4932,81 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     ...fixedDeviceAreaOptions.map((area) => ({
       id: area.id,
       name: area.name,
-      devices: state.fixedDevices
-        .filter((device) => device.areaId === area.id)
-        .sort((left, right) => left.name.localeCompare(right.name, 'pl', { numeric: true, sensitivity: 'base' }))
+      devices: sortFixedInventoryDevices(
+        state.fixedDevices.filter((device) => device.areaId === area.id)
+      )
     })),
     ...(fixedDevicesWithoutArea.length ? [{
       id: 'bez-hali',
       name: 'Bez przypisanej hali',
-      devices: [...fixedDevicesWithoutArea].sort((left, right) => left.name.localeCompare(right.name, 'pl', { numeric: true, sensitivity: 'base' }))
+      devices: sortFixedInventoryDevices(fixedDevicesWithoutArea)
     }] : [])
   ];
 
-  const renderFixedDeviceSettingsRow = (device: FixedInventoryDevice) => {
+  const renderFixedDeviceSettingsRow = (
+    device: FixedInventoryDevice,
+    position: number,
+    deviceCount: number
+  ) => {
     const expanded = expandedFixedDeviceId === device.id;
     const ready = isFixedInventoryDeviceReady(device);
     return <div key={device.id} className={cn('border-t border-border', device.active ? 'bg-[var(--brand-faint)]' : 'bg-[var(--surface-faint)]')}>
-      <button
-        type="button"
-        className="flex w-full flex-col gap-3 px-4 py-3 text-left transition hover:bg-[var(--interactive-soft-hover)] sm:flex-row sm:items-center sm:justify-between"
-        aria-expanded={expanded}
-        onClick={() => setExpandedFixedDeviceId(expanded ? '' : device.id)}
-      >
-        <span className="min-w-0">
-          <span className="block break-words text-base font-black text-title">{device.name.trim() || 'Nowe urządzenie'}</span>
-          <span className="mt-1 block text-xs font-semibold uppercase tracking-wide text-muted">
-            {fixedInventoryDeviceTypeLabel(device.type)}
-            {device.location.trim() ? <> · {device.location}</> : null}
+      <div className="flex flex-col sm:flex-row sm:items-stretch">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 flex-col gap-3 px-4 py-3 text-left transition hover:bg-[var(--interactive-soft-hover)] sm:flex-row sm:items-center sm:justify-between"
+          aria-expanded={expanded}
+          onClick={() => setExpandedFixedDeviceId(expanded ? '' : device.id)}
+        >
+          <span className="min-w-0">
+            <span className="block break-words text-base font-black text-title">{device.name.trim() || 'Nowe urządzenie'}</span>
+            <span className="mt-1 block text-xs font-semibold uppercase tracking-wide text-muted">
+              {fixedInventoryDeviceTypeLabel(device.type)}
+              {device.location.trim() ? <> · {device.location}</> : null}
+            </span>
+            <span className={cn('mt-1 block break-words text-sm font-bold', device.materialName.trim() ? 'catalog-label' : 'text-muted')}>
+              {device.materialName.trim() || 'Brak przypisanego tworzywa'}
+            </span>
           </span>
-          <span className={cn('mt-1 block break-words text-sm font-bold', device.materialName.trim() ? 'catalog-label' : 'text-muted')}>
-            {device.materialName.trim() || 'Brak przypisanego tworzywa'}
+          <span className="flex w-full shrink-0 items-center justify-between gap-3 sm:w-auto sm:justify-end">
+            <span className="text-left sm:text-right">
+              <span className="block text-lg font-black tabular-nums text-title">{device.fullQty > 0 ? fmt(device.fullQty) : '—'}{device.fullQty > 0 ? <> {device.unit}</> : null}</span>
+              <span className="block text-[10px] font-bold uppercase tracking-wide text-dim">Pojemność</span>
+            </span>
+            <Badge tone={device.active ? 'success' : 'default'}>{device.active ? 'Aktywne' : 'Wyłączone'}</Badge>
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border text-muted">
+              {expanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+            </span>
           </span>
-        </span>
-        <span className="flex w-full shrink-0 items-center justify-between gap-3 sm:w-auto sm:justify-end">
-          <span className="text-left sm:text-right">
-            <span className="block text-lg font-black tabular-nums text-title">{device.fullQty > 0 ? fmt(device.fullQty) : '—'}{device.fullQty > 0 ? <> {device.unit}</> : null}</span>
-            <span className="block text-[10px] font-bold uppercase tracking-wide text-dim">Pojemność</span>
+        </button>
+        <div className="flex shrink-0 items-center justify-end gap-1.5 px-4 pb-3 sm:border-l sm:border-border sm:px-3 sm:py-3">
+          <span className="mr-auto text-[10px] font-black uppercase tracking-wide text-dim sm:mr-1" title={`Pozycja ${position + 1} z ${deviceCount}`}>
+            {position + 1}/{deviceCount}
           </span>
-          <Badge tone={device.active ? 'success' : 'default'}>{device.active ? 'Aktywne' : 'Wyłączone'}</Badge>
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border text-muted">
-            {expanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
-          </span>
-        </span>
-      </button>
+          <Button
+            type="button"
+            variant="ghost"
+            className="min-h-[44px] w-11 px-0 py-0"
+            title="Przesuń wyżej"
+            aria-label={`Przesuń ${device.name || 'urządzenie'} wyżej`}
+            disabled={readOnly || position === 0}
+            onClick={() => moveFixedDevice(device.id, -1)}
+          >
+            <ArrowUp className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            className="min-h-[44px] w-11 px-0 py-0"
+            title="Przesuń niżej"
+            aria-label={`Przesuń ${device.name || 'urządzenie'} niżej`}
+            disabled={readOnly || position === deviceCount - 1}
+            onClick={() => moveFixedDevice(device.id, 1)}
+          >
+            <ArrowDown className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
       {expanded ? <div className="border-t border-border bg-[var(--surface-1)] p-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-muted">{ready ? 'Konfiguracja kompletna — urządzenie może być widoczne podczas spisu.' : 'Uzupełnij nazwę urządzenia, halę, materiał i pojemność.'}</p>
@@ -4626,11 +5028,76 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     </div>;
   };
 
-  const renderSettings = () => <div className="space-y-5">
-    {renderHeader('Ustawienia modułu', 'Tutaj konfigurujesz przypisania stanowisk oraz stałe urządzenia hali. W samym spisie pracownik potwierdza już tylko ich ilość.')}
+  const openSettingsSection = (section: SettingsSection | null) => {
+    router.push(section
+      ? '/planowanie-zapotrzebowania?view=ustawienia&settings=' + section
+      : '/planowanie-zapotrzebowania?view=ustawienia');
+  };
+
+  const renderSettingsBack = () => (
+    <Button variant="ghost" className="w-fit px-2 text-muted hover:text-title" onClick={() => openSettingsSection(null)}>
+      <ArrowLeft className="mr-2 h-4 w-4" />
+      Wszystkie ustawienia
+    </Button>
+  );
+
+  const renderSettingsOverview = () => <div className="space-y-5">
+    {renderHeader('Ustawienia modułu', 'Konfiguracja stałych urządzeń hali oraz przypisań stanowisk do obszarów produkcyjnych.')}
+    <div className="grid gap-4 md:grid-cols-2">
+      <button
+        type="button"
+        aria-label="Otwórz ustawienia stałych urządzeń hali"
+        className="group relative min-h-[164px] overflow-hidden rounded-xl border border-[rgba(255,122,26,0.3)] bg-[linear-gradient(135deg,rgba(255,122,26,0.18),rgba(34,37,43,0.98)_58%,rgba(17,19,23,1))] p-5 text-left shadow-[0_12px_30px_rgba(0,0,0,0.2)] transition duration-200 hover:-translate-y-0.5 hover:border-[rgba(255,122,26,0.68)] hover:shadow-[0_16px_36px_rgba(0,0,0,0.3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+        onClick={() => openSettingsSection('devices')}
+      >
+        <span className="relative flex h-full flex-col justify-between gap-6">
+          <span className="flex items-start justify-between gap-4">
+            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[rgba(255,122,26,0.16)] text-brand ring-1 ring-[rgba(255,122,26,0.32)]">
+              <Warehouse className="h-5 w-5" />
+            </span>
+            <ChevronRight className="h-5 w-5 text-muted transition-transform duration-200 group-hover:translate-x-1 group-hover:text-title" />
+          </span>
+          <span>
+            <span className="block text-lg font-black text-title">Stałe urządzenia hali</span>
+            <span className="mt-1.5 block max-w-xl text-sm leading-5 text-muted">CS-y, bufory, suszarki i grawimetria wraz z ich kolejnością podczas spisu.</span>
+            <span className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold uppercase tracking-wide text-[rgba(255,174,113,0.95)]">
+              <span>Urządzenia: {state.fixedDevices.length}</span>
+              <span>Aktywne: {state.fixedDevices.filter((device) => device.active).length}</span>
+            </span>
+          </span>
+        </span>
+      </button>
+      <button
+        type="button"
+        aria-label="Otwórz ustawienia stanowisk i obszarów"
+        className="group relative min-h-[164px] overflow-hidden rounded-xl border border-[rgba(59,169,190,0.3)] bg-[linear-gradient(135deg,rgba(23,137,164,0.2),rgba(32,37,43,0.98)_58%,rgba(17,19,23,1))] p-5 text-left shadow-[0_12px_30px_rgba(0,0,0,0.2)] transition duration-200 hover:-translate-y-0.5 hover:border-[rgba(75,190,211,0.68)] hover:shadow-[0_16px_36px_rgba(0,0,0,0.3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(75,190,211,0.9)]"
+        onClick={() => openSettingsSection('areas')}
+      >
+        <span className="relative flex h-full flex-col justify-between gap-6">
+          <span className="flex items-start justify-between gap-4">
+            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[rgba(23,137,164,0.18)] text-[rgb(104,210,225)] ring-1 ring-[rgba(75,190,211,0.32)]">
+              <MapPin className="h-5 w-5" />
+            </span>
+            <ChevronRight className="h-5 w-5 text-muted transition-transform duration-200 group-hover:translate-x-1 group-hover:text-title" />
+          </span>
+          <span>
+            <span className="block text-lg font-black text-title">Stanowiska i obszary</span>
+            <span className="mt-1.5 block max-w-xl text-sm leading-5 text-muted">Przypisania stanowisk WTR i ST do obszarów produkcyjnych.</span>
+            <span className="mt-4 block text-xs font-bold uppercase tracking-wide text-[rgb(104,210,225)]">
+              Przypisania: {state.stationMappings.length}
+            </span>
+          </span>
+        </span>
+      </button>
+    </div>
+  </div>;
+
+  const renderDeviceSettings = () => <div className="space-y-5">
+    {renderSettingsBack()}
+    {renderHeader('Stałe urządzenia hali', 'Ustaw kolejność urządzeń osobno dla każdej hali. Układ zapisuje się automatycznie.')}
     <Card className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SectionTitle title="Suszarki i bufory CS" subtitle="Urządzenie jest podlokalizacją Hali 1 albo Hali 2. Jego stan dolicza się do spisu, ale nigdy nie trafia do zwrotów." />
+        <SectionTitle title="Urządzenia hali" subtitle="Przesuwaj pozycje strzałkami. Domyślnie: CS-y, bufory, suszarki, grawimetria." />
         <Button variant="outline" disabled={readOnly} onClick={addFixedDevice}><Plus className="mr-2 h-4 w-4" />Dodaj urządzenie</Button>
       </div>
       {state.fixedDevices.length ? (
@@ -4643,16 +5110,149 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
               </div>
               <Badge tone="info">{group.devices.length}</Badge>
             </div>
-            {group.devices.length ? <div>{group.devices.map(renderFixedDeviceSettingsRow)}</div> : <p className="border-t border-border px-4 py-4 text-sm text-muted">Brak urządzeń przypisanych do tej hali.</p>}
+            {group.devices.length ? <div>{group.devices.map((device, index) => renderFixedDeviceSettingsRow(device, index, group.devices.length))}</div> : <p className="border-t border-border px-4 py-4 text-sm text-muted">Brak urządzeń przypisanych do tej hali.</p>}
           </section>)}
         </div>
-      ) : <EmptyState title="Brak skonfigurowanych urządzeń" description="Dodaj pierwszy bufor CS lub suszarkę i przypisz mu halę, materiał oraz pojemność." />}
-    </Card>
-    <Card className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3"><SectionTitle title="Stanowiska i obszary" subtitle="Domyślnie WTR 1–28 należą do Hali 1, a WTR 29–52 do Hali 2." /><Button variant="outline" disabled={readOnly} onClick={() => updateState((current) => ({ ...current, stationMappings: [...current.stationMappings, { station: '', areaId: 'hala-1' }] }))}><Plus className="mr-2 h-4 w-4" />Dodaj</Button></div>
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{state.stationMappings.map((mapping, index) => <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2 rounded-xl border border-border p-2"><Input value={mapping.station} disabled={readOnly} placeholder="np. WTR 12 lub ST 3" onChange={(event) => updateState((current) => ({ ...current, stationMappings: current.stationMappings.map((row, rowIndex) => rowIndex === index ? { ...row, station: event.target.value } : row) }))} /><SelectField value={mapping.areaId} disabled={readOnly} onChange={(event) => updateState((current) => ({ ...current, stationMappings: current.stationMappings.map((row, rowIndex) => rowIndex === index ? { ...row, areaId: event.target.value } : row) }))}>{state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</SelectField><Button variant="ghost" disabled={readOnly} className="min-h-[44px] px-3 text-danger" onClick={() => updateState((current) => ({ ...current, stationMappings: current.stationMappings.filter((_, rowIndex) => rowIndex !== index) }))}><Trash2 className="h-4 w-4" /></Button></div>)}</div>
+      ) : <EmptyState title="Brak skonfigurowanych urządzeń" description="Dodaj pierwsze urządzenie i przypisz mu halę, materiał oraz pojemność." />}
     </Card>
   </div>;
+
+  const renderStationMappingRow = (mapping: StationMappingDraft) => {
+    const saving = stationMappingSavingId === mapping.draftId;
+    const controlsDisabled = readOnly || Boolean(stationMappingSavingId);
+    return <div
+      key={mapping.draftId}
+      className={cn(
+        'grid grid-cols-2 gap-2 rounded-xl border p-2 transition sm:grid-cols-[minmax(170px,1.25fr)_minmax(150px,1fr)_auto_auto] sm:items-start',
+        mapping.dirty
+          ? 'border-[rgba(255,122,26,0.55)] bg-[rgba(255,122,26,0.06)]'
+          : 'border-border bg-[var(--surface-faint)]'
+      )}
+    >
+      <div className="col-span-2 min-w-0 sm:col-span-1">
+        <Input
+          ref={(node) => {
+            if (node) stationMappingInputRefs.current.set(mapping.draftId, node);
+            else stationMappingInputRefs.current.delete(mapping.draftId);
+          }}
+          value={mapping.station}
+          disabled={controlsDisabled}
+          placeholder="np. WTR 12 lub ST 24"
+          onChange={(event) => updateStationMappingDraft(mapping.draftId, { station: event.target.value })}
+        />
+        {mapping.dirty ? <p className="mt-1 px-1 text-[11px] font-bold text-brand">Niezapisane zmiany</p> : null}
+      </div>
+      <div className="col-span-2 min-w-0 sm:col-span-1">
+        <SelectField
+          value={mapping.areaId}
+          disabled={controlsDisabled}
+          onChange={(event) => updateStationMappingDraft(mapping.draftId, { areaId: event.target.value })}
+        >
+          {state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
+        </SelectField>
+      </div>
+      <Button
+        disabled={controlsDisabled || !mapping.dirty}
+        className="min-h-[44px] self-start px-4 py-2.5"
+        onClick={() => { void saveStationMappingDraft(mapping.draftId); }}
+      >
+        {saving ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+        {saving ? 'Zapisywanie' : 'Zapisz'}
+      </Button>
+      <Button
+        variant="ghost"
+        disabled={controlsDisabled}
+        className="min-h-[44px] self-start px-3 text-danger"
+        aria-label={'Usuń przypisanie ' + (mapping.station.trim() || 'nowego stanowiska')}
+        title="Usuń przypisanie"
+        onClick={() => removeStationMappingDraft(mapping.draftId)}
+      >
+        <Trash2 className="h-4 w-4" />
+      </Button>
+    </div>;
+  };
+
+  const renderAreaSettings = () => {
+    const groups: Array<{
+      id: StationMappingGroupId;
+      title: string;
+      subtitle: string;
+      icon: React.ReactNode;
+      mappings: StationMappingDraft[];
+      add?: { kind: 'wtr' | 'st'; label: string };
+    }> = [
+      {
+        id: 'wtr',
+        title: 'Wtryskarki',
+        subtitle: 'Stanowiska oznaczone kodem WTR',
+        icon: <Factory className="h-5 w-5" />,
+        mappings: stationMappingDrafts.filter((mapping) => stationMappingGroup(mapping.station) === 'wtr').sort(compareStationMappings),
+        add: { kind: 'wtr', label: 'Dodaj wtryskarkę' }
+      },
+      {
+        id: 'st',
+        title: 'Stanowiska montażowe',
+        subtitle: 'Stanowiska oznaczone kodem ST',
+        icon: <PackageCheck className="h-5 w-5" />,
+        mappings: stationMappingDrafts.filter((mapping) => stationMappingGroup(mapping.station) === 'st').sort(compareStationMappings),
+        add: { kind: 'st', label: 'Dodaj stanowisko' }
+      },
+      {
+        id: 'other',
+        title: 'Pozostałe obszary',
+        subtitle: 'Przypisania bez oznaczenia WTR lub ST',
+        icon: <MapPin className="h-5 w-5" />,
+        mappings: stationMappingDrafts.filter((mapping) => stationMappingGroup(mapping.station) === 'other').sort(compareStationMappings)
+      }
+    ];
+    const visibleGroups = groups.filter((group) => group.id !== 'other' || group.mappings.length > 0);
+
+    return <div className="space-y-5">
+      {renderSettingsBack()}
+      {renderHeader('Stanowiska i obszary', 'Przypisania stanowisk produkcyjnych do właściwych hal i obszarów.')}
+      <Card className="space-y-5">
+        <SectionTitle title="Przypisania stanowisk" subtitle="Maszyny i stanowiska montażowe są uporządkowane w osobnych sekcjach." />
+        {visibleGroups.map((group, groupIndex) => <section
+          key={group.id}
+          className={cn('space-y-3', groupIndex > 0 && 'border-t border-border pt-5')}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brandSoft text-brand">
+                {group.icon}
+              </span>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-black text-title">{group.title}</h3>
+                  <Badge tone="info">{group.mappings.length}</Badge>
+                </div>
+                <p className="mt-0.5 text-xs text-muted">{group.subtitle}</p>
+              </div>
+            </div>
+            {group.add ? <Button
+              variant="outline"
+              disabled={readOnly || Boolean(stationMappingSavingId)}
+              onClick={() => addStationMappingDraft(group.add!.kind)}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              {group.add.label}
+            </Button> : null}
+          </div>
+          {group.mappings.length ? (
+            <div className="grid gap-2 2xl:grid-cols-2">{group.mappings.map(renderStationMappingRow)}</div>
+          ) : (
+            <p className="rounded-xl bg-[var(--surface-faint)] px-4 py-5 text-sm text-muted">Brak przypisanych stanowisk w tej sekcji.</p>
+          )}
+        </section>)}
+      </Card>
+    </div>;
+  };
+
+  const renderSettings = () => {
+    if (settingsSection === 'devices') return renderDeviceSettings();
+    if (settingsSection === 'areas') return renderAreaSettings();
+    return renderSettingsOverview();
+  };
 
   const renderGuide = () => <div className="space-y-5">{renderHeader('Instrukcja modułu', 'Krótki opis pełnego obiegu i najważniejszych zasad działania.')}{[
     ['1. Plan produkcyjny', 'Wgraj Excel i wybierz jedną zakładkę. Stanowiska zostaną przypisane do obszarów zgodnie z ustawieniami. Pozycje bez przypisu pozostaną widoczne na obu halach z ostrzeżeniem.'],
@@ -4662,7 +5262,7 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
     ['5. Rzeczywisty spis', 'W tej zakładce prowadzisz pełny Spis rzeczywisty. Lokalizacja rozdziela pozycje na Halę 1, Halę 2, Bakomę, Lakiernię i wspólne Silosy. Obliczenia pobierają stąd aktualne ilości hali.'],
     ['6. Silosy', 'Silos jest wspólnym źródłem dla wszystkich hal. Ostrzeżenie liczy łączne zapotrzebowanie wszystkich obszarów, aby ten sam stan nie został obiecany dwa razy.'],
     ['7. Dokument do wypisania', 'Dokument pokazuje wyłącznie materiały, które trzeba dobrać. Osoba wypisująca klika jeden przycisk przy gotowej pozycji; wiersz zaznacza się na zielono.'],
-    ['8. Zwroty', 'Materiał spisany na strefie trafia do zwrotów tylko wtedy, gdy nie występuje w żadnej technologii aktualnego planu. Zwroty można filtrować według strefy.']
+    ['8. Zwroty i przesunięcia', 'Materiał używany w aktywnym planie swojej strefy pozostaje na miejscu. Nieużywany zapas najpierw pokrywa niedobór innej strefy, a dopiero pozostałość trafia do zwrotu do magazynu.']
   ].map(([title, text]) => <Card key={title}><h2 className="font-black text-title">{title}</h2><p className="mt-2 text-sm leading-6 text-muted">{text}</p></Card>)}</div>;
 
   if (!hydrated) return <div className="py-8 text-sm text-dim" role="status">Wczytywanie planowania...</div>;
@@ -4692,7 +5292,9 @@ function MaterialPlanningWorkspace({ requestedView }: { requestedView: string | 
 }
 
 export default function MaterialPlanningPage() {
-  const requestedView = useSearchParams().get('view');
+  const searchParams = useSearchParams();
+  const requestedView = searchParams.get('view');
+  const requestedSettingsSection = searchParams.get('settings');
   if (requestedView === 'spis') return <SpisRzeczywisty />;
-  return <MaterialPlanningWorkspace requestedView={requestedView} />;
+  return <MaterialPlanningWorkspace requestedView={requestedView} requestedSettingsSection={requestedSettingsSection} />;
 }

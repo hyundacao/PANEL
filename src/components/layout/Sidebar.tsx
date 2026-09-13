@@ -6,6 +6,7 @@ import {
   LayoutGrid,
   ClipboardList,
   ClipboardCheck,
+  ListTodo,
   FileText,
   Layers,
   UsersRound,
@@ -28,12 +29,14 @@ import { withProductionPlanDate } from '@/lib/utils/productionPlanDate';
 import { useUiStore } from '@/lib/store/ui';
 import {
   canSeeTab,
+  canViewProductionPreparationMaterials,
   getAccessibleWarehouses,
   getRoleLabel,
   getWarehouseLabel,
   isWarehouseAdmin
 } from '@/lib/auth/access';
 import type { WarehouseKey, WarehouseTab } from '@/lib/api/types';
+import type { ProductionTeam } from '@/lib/utils/productionTeamComments';
 import { logoutUser } from '@/lib/api';
 
 type NavItem = {
@@ -42,6 +45,8 @@ type NavItem = {
   icon: typeof LayoutGrid;
   tab?: WarehouseTab;
   requiresAdmin?: boolean;
+  requiresMaterialAccess?: boolean;
+  preparationTeams?: ProductionTeam[];
 };
 
 const navItemsPrzemialy: NavItem[] = [
@@ -105,13 +110,14 @@ const navItemsFarbyTasmy: NavItem[] = [
 ];
 
 const navItemsPrzygotowanieProdukcji: NavItem[] = [
-  { label: 'Plan zmian', href: '/przygotowanie-produkcji', icon: ClipboardList },
-  { label: 'Plan pracy — technologia', href: '/przygotowanie-produkcji?view=work-plan-technology', icon: ClipboardCheck },
-  { label: 'Plan pracy — przygotowanie produkcji', href: '/przygotowanie-produkcji?view=work-plan-preparation', icon: ClipboardCheck },
-  { label: 'Rozpiska materiałowa', href: '/przygotowanie-produkcji?view=material', icon: Layers },
-  { label: 'Historia planów', href: '/przygotowanie-produkcji?view=history', icon: History },
-  { label: 'Raport prac', href: '/przygotowanie-produkcji?view=report', icon: FileText },
-  { label: 'Zarządzanie', href: '/przygotowanie-produkcji?view=management', icon: Settings2 }
+  { label: 'Plan zmian', href: '/przygotowanie-produkcji', icon: ClipboardList, requiresAdmin: true },
+  { label: 'Moje zadania', href: '/przygotowanie-produkcji?view=personal', icon: ListTodo },
+  { label: 'Plan pracy — technologia', href: '/przygotowanie-produkcji?view=work-plan-technology', icon: ClipboardCheck, preparationTeams: ['mechanics', 'process', 'graphics'] },
+  { label: 'Plan pracy — przygotowanie produkcji', href: '/przygotowanie-produkcji?view=work-plan-preparation', icon: ClipboardCheck, preparationTeams: ['distribution', 'technician', 'additional'] },
+  { label: 'Rozpiska materiałowa', href: '/przygotowanie-produkcji?view=material', icon: Layers, requiresMaterialAccess: true },
+  { label: 'Historia planów', href: '/przygotowanie-produkcji?view=history', icon: History, requiresAdmin: true },
+  { label: 'Raport prac', href: '/przygotowanie-produkcji?view=report', icon: FileText, requiresAdmin: true },
+  { label: 'Zarządzanie', href: '/przygotowanie-produkcji?view=management', icon: Settings2, requiresAdmin: true }
 ];
 
 const navItemsPlanowanieZapotrzebowania: NavItem[] = [
@@ -129,6 +135,8 @@ export const Sidebar = () => {
   const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse, clearActiveWarehouse, theme, toggleTheme } = useUiStore();
   const warehouse = activeWarehouse as WarehouseKey | null;
   const isAdminRoute = pathname.startsWith('/admin');
+  const warehouseAdmin = warehouse ? isWarehouseAdmin(user, warehouse) : false;
+  const preparationTeamIds = user?.access?.warehouses?.PRZYGOTOWANIE_PRODUKCJI?.preparationTeams ?? [];
   const roleLabel = getRoleLabel(user, warehouse);
   const displayName = user?.name ?? 'Gość';
   const items =
@@ -149,8 +157,14 @@ export const Sidebar = () => {
               : navItemsPrzemialy;
   const visibleItems = items.filter((item) => {
     if (!warehouse) return false;
-    if (item.requiresAdmin && !isWarehouseAdmin(user, warehouse)) {
+    if (item.requiresAdmin && !warehouseAdmin) {
       return false;
+    }
+    if (item.requiresMaterialAccess && !canViewProductionPreparationMaterials(user)) {
+      return false;
+    }
+    if (warehouse === 'PRZYGOTOWANIE_PRODUKCJI' && item.preparationTeams && !warehouseAdmin) {
+      return item.preparationTeams.some((team) => preparationTeamIds.includes(team));
     }
     if (!item.tab) return true;
     return canSeeTab(user, warehouse, item.tab);
@@ -166,6 +180,9 @@ export const Sidebar = () => {
     }
     if (href === '/przygotowanie-produkcji') {
       return pathname === href && !searchParams.get('view');
+    }
+    if (href === '/przygotowanie-produkcji?view=personal') {
+      return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'personal';
     }
     if (href === '/przygotowanie-produkcji?view=material') {
       return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'material';
