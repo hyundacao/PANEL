@@ -260,6 +260,19 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
       error = code;
       notify();
     },
+    acceptRemote(state: T, revision: number) {
+      if (stopped) return;
+      clearSaveTimer();
+      clearCacheTimer();
+      generation += 1;
+      draft = { state, revision, pending: false };
+      status = 'saved';
+      error = '';
+      failures = 0;
+      manual = false;
+      manualCheckpoint = null;
+      persist();
+    },
     retry() {
       if (manual || status === 'conflict' || stopped) return Promise.resolve();
       status = draft.pending ? 'pending' : 'saved';

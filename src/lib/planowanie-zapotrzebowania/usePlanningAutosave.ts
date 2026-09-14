@@ -25,7 +25,6 @@ export const usePlanningAutosave = <T,>({
   const [info, setInfo] = useState<PlanningSaveInfo>(initialInfo);
   const [reloadVersion, setReloadVersion] = useState(0);
   const engineRef = useRef<ReturnType<typeof createPlanningAutosave<T>> | null>(null);
-  const restoredDraftRef = useRef<PlanningDraft<T> | null>(null);
   const writableRef = useRef(!readOnly);
   const cacheKey = storageKey + '-autosave-v1';
 
@@ -56,9 +55,8 @@ export const usePlanningAutosave = <T,>({
     const load = async () => {
       await finishingWrites.get(cacheKey)?.catch(() => undefined);
       if (!active) return;
-      let local: PlanningDraft<T> | null = restoredDraftRef.current;
-      restoredDraftRef.current = null;
-      if (!local) try {
+      let local: PlanningDraft<T> | null = null;
+      try {
         const cached = JSON.parse(window.localStorage.getItem(cacheKey) || 'null') as (PlanningDraft<T> & { format?: number }) | null;
         const parsedCachedState = cached?.format === 1 ? parse(cached.state) : null;
         if (cached?.format === 1 && parsedCachedState
@@ -240,23 +238,32 @@ export const usePlanningAutosave = <T,>({
 
   const loadLatest = useCallback(async () => {
     const engine = engineRef.current;
-    if (!engine || !window.confirm('Wczytać aktualną wersję z bazy? Niezapisane zmiany pozostaną w lokalnej kopii odzyskiwania. Przed wczytaniem możesz też pobrać kopię do pliku.')) return false;
-    setHydrated(false);
+    if (!engine || !window.confirm('Wczytać aktualną wersję z bazy? Bieżące niezapisane zmiany zostaną zastąpione. Jeśli chcesz je zachować, najpierw pobierz kopię do pliku.')) return false;
+    setInfo({ ...engine.getInfo(), status: 'loading', error: '' });
     try {
       const remote = await readRemote();
       if (engineRef.current !== engine) return false;
-      window.localStorage.setItem(cacheKey + '-recovery', JSON.stringify(engine.getDraft()));
-      // Hand the confirmed version to the next mount without depending on another cache write.
-      restoredDraftRef.current = { state: remote.state ?? initial(), revision: remote.revision, pending: false };
-      setInfo(initialInfo);
-      setReloadVersion((value) => value + 1);
+      try {
+        window.localStorage.setItem(cacheKey + '-recovery', JSON.stringify(engine.getDraft()));
+      } catch {
+        // Brak miejsca na dodatkową kopię nie może blokować wersji pobranej z bazy.
+      }
+      try {
+        // Stary szkic z konfliktem nie może wrócić po odświeżeniu, nawet gdy pamięć jest pełna.
+        window.localStorage.removeItem(cacheKey);
+      } catch {
+        // Niedostępna pamięć lokalna nie blokuje pracy na wersji centralnej.
+      }
+      const nextState = prepare(remote.state ?? initial());
+      stateRef.current = nextState;
+      setReactState(nextState);
+      engine.acceptRemote(nextState, remote.revision);
       return true;
     } catch {
-      setInfo((current) => ({ ...current, error: 'RELOAD_FAILED' }));
-      setHydrated(true);
+      setInfo({ ...engine.getInfo(), error: 'RELOAD_FAILED' });
       return false;
     }
-  }, [cacheKey, initial, readRemote]);
+  }, [cacheKey, initial, prepare, readRemote]);
 
   return {
     state,

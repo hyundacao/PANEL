@@ -328,6 +328,22 @@ test('an unavailable browser cache does not block a central save or claim a loca
   assert.equal(h.queue.getInfo().backupAvailable, false);
 });
 
+test('accepting the current database version clears a conflict and the pending local draft', () => {
+  const h = setup();
+  h.queue.beginManual();
+  h.queue.setSnapshot({ quantity: 200 }, true);
+  h.queue.pause('conflict', 'REVISION_CONFLICT');
+
+  h.queue.acceptRemote({ quantity: 500 }, 8);
+
+  assert.deepEqual(h.queue.getDraft(), { state: { quantity: 500 }, revision: 8, pending: false });
+  assert.deepEqual(h.queue.getInfo(), {
+    status: 'saved', pending: false, backupAvailable: true, error: ''
+  });
+  assert.equal(h.queue.isManual(), false);
+  assert.deepEqual(h.backups.at(-1), { state: { quantity: 500 }, revision: 8, pending: false });
+});
+
 test('reopening restores pending local work when the base revision is unchanged', () => {
   const restored = restorePlanningDraft(
     { state: { quantity: 100 }, revision: 4 },
