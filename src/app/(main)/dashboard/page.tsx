@@ -193,8 +193,8 @@ export default function DashboardPage() {
   const { data: currentTotals } = useQuery({
     queryKey: ['material-totals', today, 'company'],
     queryFn: () => getCurrentMaterialTotals('company'),
-    refetchInterval: 5000,
-    refetchIntervalInBackground: true
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false
   });
 
   const currentTotal = (currentTotals ?? []).reduce((sum, item) => sum + item.total, 0);

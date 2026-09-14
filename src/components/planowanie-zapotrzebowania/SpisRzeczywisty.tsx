@@ -605,9 +605,11 @@ export default function SpisRzeczywisty() {
     () => warehouses.filter((warehouse) => isOriginalInventoryWarehouseVisible(warehouse.name)),
     [warehouses]
   );
+  const inventoryHistoryRequired = activeTab === 'raporty';
   const { data: entries = [], isLoading } = useQuery({
-    queryKey: ['spis-oryginalow'],
-    queryFn: getOriginalInventory
+    queryKey: ['spis-oryginalow', inventoryHistoryRequired ? 'history' : spisDate],
+    queryFn: () => getOriginalInventory(inventoryHistoryRequired ? undefined : spisDate),
+    enabled: Boolean(spisDate) && activeTab !== 'kartoteki'
   });
   const { data: erpCatalogState = { items: [], sourceUnavailable: false }, error: catalogError } = useQuery({
     queryKey: ['spis-oryginalow-catalog-erp'],
@@ -627,6 +629,7 @@ export default function SpisRzeczywisty() {
         throw error;
       }
     },
+    enabled: activeTab === 'kartoteki' || activeTab === 'stany-erp' || activeTab === 'raporty',
     retry: false
   });
   const { data: localCatalog = [] } = useQuery({
@@ -640,13 +643,13 @@ export default function SpisRzeczywisty() {
   const { data: fixedDevices = [] } = useQuery<FixedInventoryDevice[]>({
     queryKey: ['material-planning-fixed-devices'],
     queryFn: async () => {
-      const response = await fetch('/api/planowanie-zapotrzebowania', { cache: 'no-store' });
+      const response = await fetch('/api/planowanie-zapotrzebowania?source=fixed-devices', { cache: 'no-store' });
       if (!response.ok) throw new Error('FIXED_DEVICES_LOAD_FAILED');
-      const payload = await response.json() as { state?: { fixedDevices?: unknown } | null };
-      return normalizeFixedInventoryDevices(payload.state?.fixedDevices);
+      const payload = await response.json() as { items?: unknown };
+      return normalizeFixedInventoryDevices(payload.items);
     },
-    staleTime: 0,
-    refetchOnMount: 'always',
+    enabled: activeTab === 'spis' || activeTab === 'raporty',
+    staleTime: 30_000,
     retry: false
   });
   const { data: siloEntries = [] } = useQuery({
@@ -656,11 +659,13 @@ export default function SpisRzeczywisty() {
   });
   const { data: grindTasks = [] } = useQuery({
     queryKey: ['original-inventory-grind-tasks'],
-    queryFn: getOriginalInventoryGrindTasks
+    queryFn: getOriginalInventoryGrindTasks,
+    enabled: activeTab === 'do-zmielenia' || activeTab === 'raporty'
   });
   const { data: grindTargetSourceMaterials = [] } = useQuery({
     queryKey: ['catalog'],
-    queryFn: getCatalog
+    queryFn: getCatalog,
+    enabled: activeTab === 'do-zmielenia'
   });
   const erpCatalogItems = useMemo(
     () => (Array.isArray(erpCatalogState?.items) ? erpCatalogState.items : []),
@@ -684,7 +689,7 @@ export default function SpisRzeczywisty() {
         throw error;
       }
     },
-    enabled: Boolean(spisDate),
+    enabled: Boolean(spisDate) && (activeTab === 'stany-erp' || activeTab === 'raporty'),
     retry: false
   });
   const catalog = useMemo(() => {
@@ -1865,7 +1870,7 @@ export default function SpisRzeczywisty() {
         throw error;
       }
     },
-    enabled: reportHistoryDates.length > 0,
+    enabled: activeTab === 'raporty' && reportHistoryDates.length > 0,
     retry: false
   });
   const erpSnapshotSummary = useMemo(() => {

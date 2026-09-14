@@ -434,13 +434,21 @@ const FlowList = ({
 };
 
 export default function ReportsPage() {
-  const { data } = useQuery({ queryKey: ['reports'], queryFn: getReports });
-  const { data: history } = useQuery({ queryKey: ['daily-history'], queryFn: getDailyHistory });
   const [summaryMode, setSummaryMode] = useState<SummaryMode>('weekly');
   const [activeTab, setActiveTab] = useState<ReportTab>(() => {
     if (typeof window === 'undefined') return 'daily';
     const saved = window.localStorage.getItem(REPORTS_TAB_STORAGE_KEY);
     return saved === 'daily' || saved === 'summary' || saved === 'overall' ? saved : 'daily';
+  });
+  const { data } = useQuery({
+    queryKey: ['reports'],
+    queryFn: getReports,
+    enabled: activeTab === 'daily'
+  });
+  const { data: history } = useQuery({
+    queryKey: ['daily-history'],
+    queryFn: getDailyHistory,
+    enabled: activeTab === 'daily' || activeTab === 'summary'
   });
   const [dailySort, setDailySort] = useState<{
     key: SortKey;
@@ -453,12 +461,12 @@ export default function ReportsPage() {
   const { data: periodReport } = useQuery({
     queryKey: ['report-period', rangeFrom, rangeTo],
     queryFn: () => getPeriodReport(rangeFrom, rangeTo),
-    enabled: Boolean(rangeFrom && rangeTo)
+    enabled: activeTab === 'summary' && Boolean(rangeFrom && rangeTo)
   });
   const { data: yearlyReport } = useQuery({
     queryKey: ['report-yearly', rangeFrom, rangeTo],
     queryFn: () => getYearlyReport(rangeFrom, rangeTo),
-    enabled: summaryMode === 'yearly' && Boolean(rangeFrom && rangeTo)
+    enabled: activeTab === 'summary' && summaryMode === 'yearly' && Boolean(rangeFrom && rangeTo)
   });
   const overallYearFrom = `${overallYear}-01-01`;
   const overallYearTo = `${overallYear}-12-31`;
@@ -467,15 +475,18 @@ export default function ReportsPage() {
   const previousYearTo = `${previousYear}-12-31`;
   const { data: overallYearReport } = useQuery({
     queryKey: ['report-yearly-overall', overallYear],
-    queryFn: () => getYearlyReport(overallYearFrom, overallYearTo)
+    queryFn: () => getYearlyReport(overallYearFrom, overallYearTo),
+    enabled: activeTab === 'overall'
   });
   const { data: overallYearMaterialReport } = useQuery({
     queryKey: ['report-period-overall', overallYearFrom, overallYearTo],
-    queryFn: () => getPeriodReport(overallYearFrom, overallYearTo)
+    queryFn: () => getPeriodReport(overallYearFrom, overallYearTo),
+    enabled: activeTab === 'overall'
   });
   const { data: previousYearReport } = useQuery({
     queryKey: ['report-yearly-overall', previousYear],
-    queryFn: () => getYearlyReport(previousYearFrom, previousYearTo)
+    queryFn: () => getYearlyReport(previousYearFrom, previousYearTo),
+    enabled: activeTab === 'overall'
   });
 
   const summaryRows = periodReport?.rows ?? [];

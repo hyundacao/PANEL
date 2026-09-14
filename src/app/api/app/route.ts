@@ -2245,22 +2245,75 @@ const fetchCatalogs = async () => {
 };
 
 const ORIGINAL_CATALOG_PAGE_SIZE = 1000;
+const ORIGINAL_CATALOG_PAGE_CONCURRENCY = 4;
 const ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE = 1000;
 const ORIGINAL_INVENTORY_ENTRY_PAGE_SIZE = 1000;
+const ORIGINAL_LARGE_READ_PAGE_CONCURRENCY = 4;
+const ORIGINAL_CATALOG_CACHE_MS = 5 * 60 * 1000;
+const ORIGINAL_ERP_CATALOG_CACHE_MS = 5 * 60 * 1000;
+const ORIGINAL_INVENTORY_PURGE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+let originalErpCatalogCache: { items: OriginalInventoryCatalogEntry[]; expiresAt: number } | null = null;
+let originalErpCatalogLoad: Promise<OriginalInventoryCatalogEntry[]> | null = null;
+let originalCatalogCache: { items: OriginalInventoryCatalogEntry[]; expiresAt: number } | null = null;
+let originalCatalogLoad: Promise<OriginalInventoryCatalogEntry[]> | null = null;
+let originalInventoryPurgeAt = 0;
+let originalInventoryPurge: Promise<void> | null = null;
+
+const scheduleOriginalInventoryPurge = (retentionCutoffIso: string) => {
+  if (originalInventoryPurge || Date.now() - originalInventoryPurgeAt < ORIGINAL_INVENTORY_PURGE_INTERVAL_MS) return;
+  originalInventoryPurgeAt = Date.now();
+  originalInventoryPurge = (async () => {
+    const { error } = await supabaseAdmin
+      .from('original_inventory_entries')
+      .delete()
+      .lt('at', retentionCutoffIso);
+    if (error) throw error;
+  })()
+    .catch((error) => {
+      originalInventoryPurgeAt = 0;
+      console.error('ORIGINAL_INVENTORY_RETENTION_PURGE_FAILED', error);
+    })
+    .finally(() => {
+      originalInventoryPurge = null;
+    });
+};
 
 const fetchAllOriginalCatalogRows = async () => {
   const rows: any[] = [];
-  for (let from = 0; ; from += ORIGINAL_CATALOG_PAGE_SIZE) {
-    const to = from + ORIGINAL_CATALOG_PAGE_SIZE - 1;
-    const { data, error } = await supabaseAdmin
-      .from('original_inventory_catalog')
-      .select('*')
-      .range(from, to);
-    if (error) throw error;
-    const page = data ?? [];
-    rows.push(...page);
-    if (page.length < ORIGINAL_CATALOG_PAGE_SIZE) {
-      break;
+  const firstResult = await supabaseAdmin
+    .from('original_inventory_catalog')
+    .select('*', { count: 'exact' })
+    .range(0, ORIGINAL_CATALOG_PAGE_SIZE - 1);
+  if (firstResult.error) throw firstResult.error;
+  rows.push(...(firstResult.data ?? []));
+
+  const total = firstResult.count;
+  if (total === null) {
+    for (let from = ORIGINAL_CATALOG_PAGE_SIZE; rows.length === from; from += ORIGINAL_CATALOG_PAGE_SIZE) {
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_catalog')
+        .select('*')
+        .range(from, from + ORIGINAL_CATALOG_PAGE_SIZE - 1);
+      if (error) throw error;
+      rows.push(...(data ?? []));
+    }
+  } else {
+    const pageCount = Math.ceil(total / ORIGINAL_CATALOG_PAGE_SIZE);
+    for (let firstPage = 1; firstPage < pageCount; firstPage += ORIGINAL_CATALOG_PAGE_CONCURRENCY) {
+      const pages = await Promise.all(Array.from(
+        { length: Math.min(ORIGINAL_CATALOG_PAGE_CONCURRENCY, pageCount - firstPage) },
+        async (_, offset) => {
+          const from = (firstPage + offset) * ORIGINAL_CATALOG_PAGE_SIZE;
+          const { data, error } = await supabaseAdmin
+            .from('original_inventory_catalog')
+            .select('*')
+            .range(from, from + ORIGINAL_CATALOG_PAGE_SIZE - 1);
+          if (error) throw error;
+          return data ?? [];
+        }
+      ));
+      pages.forEach((page) => rows.push(...page));
     }
   }
   return rows;
@@ -2271,6 +2324,24 @@ const fetchOriginalCatalog = async () => {
   return data
     .filter((row) => String(row.index_code ?? '').trim().length > 0)
     .map(mapOriginalInventoryCatalogEntry);
+};
+
+const loadOriginalCatalog = async () => {
+  if (originalCatalogCache && originalCatalogCache.expiresAt > Date.now()) {
+    return originalCatalogCache.items;
+  }
+  if (!originalCatalogLoad) originalCatalogLoad = fetchOriginalCatalog();
+  try {
+    const items = await originalCatalogLoad;
+    originalCatalogCache = { items, expiresAt: Date.now() + ORIGINAL_CATALOG_CACHE_MS };
+    return items;
+  } finally {
+    originalCatalogLoad = null;
+  }
+};
+
+const invalidateOriginalCatalogCache = () => {
+  originalCatalogCache = null;
 };
 
 const isMissingOriginalInventoryErpSnapshotsTableError = (error: unknown) => {
@@ -2544,12 +2615,13 @@ const fetchOriginalInventoryErpSnapshotsByDates = async (snapshotDates: string[]
   );
   if (uniqueDates.length === 0) return [];
 
-  const rows: any[] = [];
-  for (let from = 0; ; from += ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE) {
+  const fetchPage = async (pageIndex: number, includeCount = false) => {
+    const from = pageIndex * ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE;
     const to = from + ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE - 1;
-    const { data, error } = await supabaseAdmin
-      .from('original_inventory_erp_snapshots')
-      .select('*')
+    const selection = includeCount
+      ? supabaseAdmin.from('original_inventory_erp_snapshots').select('*', { count: 'exact' })
+      : supabaseAdmin.from('original_inventory_erp_snapshots').select('*');
+    const { data, error, count } = await selection
       .in('snapshot_date', uniqueDates)
       .order('snapshot_date', { ascending: false })
       .order('name', { ascending: true })
@@ -2560,11 +2632,25 @@ const fetchOriginalInventoryErpSnapshotsByDates = async (snapshotDates: string[]
       }
       throw error;
     }
+    return { page: data ?? [], count };
+  };
 
-    const page = data ?? [];
-    rows.push(...page);
-    if (page.length < ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE) {
-      break;
+  const rows: any[] = [];
+  const firstResult = await fetchPage(0, true);
+  rows.push(...firstResult.page);
+  if (firstResult.count === null) {
+    for (let pageIndex = 1; rows.length === pageIndex * ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE; pageIndex += 1) {
+      const result = await fetchPage(pageIndex);
+      rows.push(...result.page);
+    }
+  } else {
+    const pageCount = Math.ceil(firstResult.count / ORIGINAL_ERP_SNAPSHOT_PAGE_SIZE);
+    for (let firstPage = 1; firstPage < pageCount; firstPage += ORIGINAL_LARGE_READ_PAGE_CONCURRENCY) {
+      const pages = await Promise.all(Array.from(
+        { length: Math.min(ORIGINAL_LARGE_READ_PAGE_CONCURRENCY, pageCount - firstPage) },
+        (_, offset) => fetchPage(firstPage + offset)
+      ));
+      pages.forEach(({ page }) => rows.push(...page));
     }
   }
 
@@ -2720,6 +2806,23 @@ const fetchOriginalCatalogFromErpProxy = async (): Promise<OriginalInventoryCata
     throw new Error('ERP_ORIGINALS_PROXY_UNAVAILABLE');
   } finally {
     clearTimeout(timeout);
+  }
+};
+
+const loadOriginalCatalogFromErpProxy = async (): Promise<OriginalInventoryCatalogEntry[]> => {
+  if (originalErpCatalogCache && originalErpCatalogCache.expiresAt > Date.now()) {
+    return originalErpCatalogCache.items;
+  }
+  if (!originalErpCatalogLoad) originalErpCatalogLoad = fetchOriginalCatalogFromErpProxy();
+  try {
+    const items = await originalErpCatalogLoad;
+    originalErpCatalogCache = {
+      items,
+      expiresAt: Date.now() + ORIGINAL_ERP_CATALOG_CACHE_MS
+    };
+    return items;
+  } finally {
+    originalErpCatalogLoad = null;
   }
 };
 
@@ -6482,7 +6585,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           const materialId = String(payload.materialId);
           const [materials, originals] = await Promise.all([
             fetchMaterials(),
-            fetchOriginalCatalog()
+            loadOriginalCatalog()
           ]);
           const isMaterial = materials.some((mat) => mat.id === materialId && mat.isActive);
           const isOriginal = originals.some((item) => item.id === materialId);
@@ -6549,35 +6652,56 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const retentionCutoff = new Date();
       retentionCutoff.setMonth(retentionCutoff.getMonth() - 2);
       const retentionCutoffIso = retentionCutoff.toISOString();
+      scheduleOriginalInventoryPurge(retentionCutoffIso);
 
-      const { error: purgeError } = await supabaseAdmin
-        .from('original_inventory_entries')
-        .delete()
-        .lt('at', retentionCutoffIso);
-      if (purgeError) throw purgeError;
+      const requestedDateKey = /^\d{4}-\d{2}-\d{2}$/.test(String(payload?.dateKey ?? ''))
+        ? String(payload.dateKey)
+        : '';
+      const queryFromIso = requestedDateKey
+        ? `${addDays(requestedDateKey, -1)}T00:00:00.000Z`
+        : retentionCutoffIso;
+      const queryToIso = requestedDateKey
+        ? `${addDays(requestedDateKey, 2)}T00:00:00.000Z`
+        : '';
 
-      const rows: any[] = [];
-      for (let from = 0; ; from += ORIGINAL_INVENTORY_ENTRY_PAGE_SIZE) {
+      const fetchPage = async (pageIndex: number, includeCount = false) => {
+        const from = pageIndex * ORIGINAL_INVENTORY_ENTRY_PAGE_SIZE;
         const to = from + ORIGINAL_INVENTORY_ENTRY_PAGE_SIZE - 1;
-        const { data, error } = await supabaseAdmin
-          .from('original_inventory_entries')
-          .select('*')
-          .gte('at', retentionCutoffIso)
+        let query = includeCount
+          ? supabaseAdmin.from('original_inventory_entries').select('*', { count: 'exact' })
+          : supabaseAdmin.from('original_inventory_entries').select('*');
+        query = query.gte('at', queryFromIso);
+        if (queryToIso) query = query.lt('at', queryToIso);
+        const { data, error, count } = await query
           .order('at', { ascending: false })
           .range(from, to);
         if (error) throw error;
+        return { page: data ?? [], count };
+      };
 
-        const page = data ?? [];
-        rows.push(...page);
-        if (page.length < ORIGINAL_INVENTORY_ENTRY_PAGE_SIZE) {
-          break;
+      const rows: any[] = [];
+      const firstResult = await fetchPage(0, true);
+      rows.push(...firstResult.page);
+      if (firstResult.count === null) {
+        for (let pageIndex = 1; rows.length === pageIndex * ORIGINAL_INVENTORY_ENTRY_PAGE_SIZE; pageIndex += 1) {
+          const result = await fetchPage(pageIndex);
+          rows.push(...result.page);
+        }
+      } else {
+        const pageCount = Math.ceil(firstResult.count / ORIGINAL_INVENTORY_ENTRY_PAGE_SIZE);
+        for (let firstPage = 1; firstPage < pageCount; firstPage += ORIGINAL_LARGE_READ_PAGE_CONCURRENCY) {
+          const pages = await Promise.all(Array.from(
+            { length: Math.min(ORIGINAL_LARGE_READ_PAGE_CONCURRENCY, pageCount - firstPage) },
+            (_, offset) => fetchPage(firstPage + offset)
+          ));
+          pages.forEach(({ page }) => rows.push(...page));
         }
       }
 
       return rows.map(mapOriginalInventoryEntry);
     }
     case 'getOriginalInventoryCatalog': {
-      const catalog = await fetchOriginalCatalog();
+      const catalog = await loadOriginalCatalog();
       return [...catalog].sort((a, b) => a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' }));
     }
     case 'getOriginalInventorySilosConfig': {
@@ -7593,7 +7717,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return;
     }
     case 'getOriginalInventoryCatalogFromErp': {
-      return fetchOriginalCatalogFromErpProxy();
+      return loadOriginalCatalogFromErpProxy();
     }
     case 'getOriginalInventoryErpSnapshot': {
       const snapshotDate = String(payload?.snapshotDate ?? '').trim();
@@ -7878,6 +8002,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .select('*')
         .maybeSingle();
       if (insertError) throw insertError;
+      invalidateOriginalCatalogCache();
       return mapOriginalInventoryCatalogEntry(data);
     }
     case 'addOriginalInventoryCatalogBulk': {
@@ -7951,6 +8076,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         if (insertError) throw insertError;
         inserted += chunk.length;
       }
+      invalidateOriginalCatalogCache();
 
       return {
         total: normalized.length,
@@ -7999,6 +8125,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .maybeSingle();
       if (error) throw error;
       if (!data) throw new Error('ENTRY_MISSING');
+      invalidateOriginalCatalogCache();
       return;
     }
     case 'removeOriginalInventoryErpSnapshot': {

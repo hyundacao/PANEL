@@ -1483,3 +1483,552 @@ html.light .shortage-report-page > .space-y-4 > article {
     transform: none;
   }
 }
+
+
+/* Natural light theme: calm cool-gray canvas and layered neutral surfaces. */
+html.light {
+  --bg-0: #c8d0d7;
+  --scrim: rgba(31, 41, 55, 0.32);
+  --content-scrim: #e1e5e9;
+  --surface-1: #edf0f2;
+  --surface-2: #f5f7f8;
+  --surface-3: #fafbfc;
+  --card-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 5px 14px rgba(15, 23, 42, 0.06);
+  --content-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  --field-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.05);
+  --textured-nav-bg: #edf0f2;
+  --textured-nav-hover: #f5f7f8;
+  --shortage-hero-bg: linear-gradient(135deg, #e1e5e9, #e7ebee 58%, #f0ddd3);
+  --report-hero-bg: none;
+  --border: #aeb7c0;
+  --border-strong: #7b8793;
+  --border-subtle: #c7cdd3;
+  --inner-highlight: rgba(255, 255, 255, 0.76);
+  --t-title: #1f2937;
+  --t-body: #334155;
+  --t-muted: #475569;
+  --t-dim: #52606f;
+  --t-disabled: rgba(51, 65, 85, 0.5);
+  --brand: #9a3412;
+  --brand-hover: #7c2d12;
+  --brand-soft: #f0ddd3;
+  --catalog-accent: #9a3412;
+  --location-blue: #1d4f91;
+  --value-purple: #5b3fa3;
+  --success: #17603a;
+  --danger: #9f2a20;
+  --warning: #754500;
+  --ring: rgba(154, 52, 18, 0.25);
+  --brand-ring: rgba(154, 52, 18, 0.2);
+  --brand-border-soft: rgba(154, 52, 18, 0.28);
+  --brand-border: rgba(154, 52, 18, 0.46);
+  --brand-border-hover: rgba(124, 45, 18, 0.68);
+  --brand-border-strong: #7c2d12;
+  --brand-faint: rgba(154, 52, 18, 0.06);
+  --brand-soft-hover: rgba(154, 52, 18, 0.1);
+  --brand-soft-active: rgba(154, 52, 18, 0.15);
+  --interactive-soft: #e7ebee;
+  --interactive-soft-hover: #dde3e7;
+  --field-bg: #fafbfc;
+  --control-border: #9da7b1;
+  --control-bg: linear-gradient(180deg, #fafbfc, #f3f5f7);
+  --control-bg-hover: linear-gradient(180deg, #ffffff, #f1f4f6);
+  --control-shadow: 0 1px 2px rgba(15, 23, 42, 0.09), inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  --popover-border: #9da7b1;
+  --popover-bg: linear-gradient(180deg, #fafbfc, #f3f5f7);
+  --popover-shadow: 0 14px 34px rgba(15, 23, 42, 0.17), 0 2px 6px rgba(15, 23, 42, 0.08);
+  --table-frame-border: #aeb7c0;
+  --table-frame-bg: linear-gradient(180deg, #edf0f2, #e7ebee);
+  --table-frame-shadow: 0 1px 3px rgba(15, 23, 42, 0.09), 0 6px 16px rgba(15, 23, 42, 0.06);
+  --table-card-bg: linear-gradient(180deg, #f5f7f8, #eef1f3);
+  --table-card-shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 4px 12px rgba(15, 23, 42, 0.05);
+  --table-header-bg: linear-gradient(180deg, #d8dee4, #d2d8de);
+  --table-sticky-header-bg: linear-gradient(180deg, #d2d8de, #ccd3d9);
+  --row-hover: #efded5;
+  --row-alt: linear-gradient(90deg, #f5f7f8, #eef1f3);
+  --row-details-bg: #e7ebee;
+  --row-flat: #f5f7f8;
+  --surface-faint: rgba(255, 255, 255, 0.72);
+  --surface-soft: rgba(245, 247, 248, 0.78);
+  --segmented-bg: #dde2e6;
+  --inset-panel-bg: #e7ebee;
+  --separator-bg: #d0d6dc;
+  --neutral-chip-bg: #e7ebee;
+  --neutral-chip-border: #aeb7c0;
+  --toggle-off-bg: #cbd3da;
+  --sidebar-item-hover: #c7ced5;
+  --sidebar-item-active: #e9cdbf;
+  --sidebar-profile-border: #aeb7c0;
+  --sidebar-profile-bg: #edf0f2;
+  --sidebar-profile-overlay: linear-gradient(100deg, rgba(237, 240, 242, 0.98), rgba(245, 247, 248, 0.96));
+  --sidebar-profile-shadow: 0 4px 12px rgba(15, 23, 42, 0.09);
+  --sidebar-action-border: #aeb7c0;
+  --sidebar-action-bg: #f5f7f8;
+  --modal-bg: rgba(245, 247, 248, 0.99);
+  --modal-shadow: 0 18px 44px rgba(15, 23, 42, 0.2), 0 2px 6px rgba(15, 23, 42, 0.08);
+  --planning-bg: #c8d0d7;
+  --planning-art-opacity: 0;
+  --toast-bg: rgba(245, 247, 248, 0.99);
+  --deep-panel-bg: #edf0f2;
+  --technical-overlay: rgba(237, 240, 242, 0.96);
+  --task-choice-bg: linear-gradient(#f5f7f8, #f5f7f8);
+  --task-choice-active-bg: linear-gradient(#f0ddd3, #f0ddd3);
+}
+
+html.light body,
+html.light body::before {
+  background-color: var(--bg-0);
+}
+
+html.light body::before {
+  background-image: linear-gradient(var(--bg-0), var(--bg-0));
+  opacity: 1;
+}
+
+html.light aside.bg-surface,
+html.light header.bg-surface {
+  background-color: #d6dce2 !important;
+}
+
+html.light [class~="bg-[var(--content-scrim)]"] {
+  background-color: var(--content-scrim) !important;
+}
+
+html.light .bg-bg:not(body):not(.min-h-screen) {
+  background-color: var(--inset-panel-bg) !important;
+}
+
+html.light [class~="bg-bg/40"] {
+  background-color: color-mix(in srgb, var(--inset-panel-bg) 72%, transparent) !important;
+}
+
+html.light input[type='date'] {
+  color-scheme: light !important;
+}
+
+html.light [class~="bg-[rgba(10,10,12,0.65)]"],
+html.light [class~="bg-[rgba(7,8,12,0.9)]"],
+html.light [class~="bg-[rgba(0,0,0,0.32)]"],
+html.light [class~="bg-[rgba(8,11,16,0.72)]"],
+html.light [class~="bg-[#0b0c10]"],
+html.light [class~="bg-[#0c0e13]"] {
+  background-color: var(--surface-2) !important;
+  background-image: none !important;
+}
+
+html.light [class~="bg-white/[0.035]"],
+html.light [class~="bg-white/10"],
+html.light [class~="bg-[rgba(255,255,255,0.018)]"],
+html.light [class~="bg-[rgba(255,255,255,0.02)]"],
+html.light [class~="bg-[rgba(255,255,255,0.025)]"],
+html.light [class~="bg-[rgba(255,255,255,0.028)]"],
+html.light [class~="bg-[rgba(255,255,255,0.03)]"],
+html.light [class~="bg-[rgba(255,255,255,0.035)]"],
+html.light [class~="bg-[rgba(255,255,255,0.04)]"],
+html.light [class~="bg-[rgba(255,255,255,0.045)]"],
+html.light [class~="bg-[rgba(255,255,255,0.055)]"],
+html.light [class~="bg-[rgba(255,255,255,0.06)]"],
+html.light [class~="bg-[rgba(255,255,255,0.07)]"] {
+  background-color: var(--surface-soft) !important;
+}
+
+html.light [class~="border-white/10"],
+html.light [class~="border-white/20"],
+html.light [class~="border-[rgba(255,255,255,0.08)]"],
+html.light [class~="border-[rgba(255,255,255,0.09)]"],
+html.light [class~="border-[rgba(255,255,255,0.10)]"],
+html.light [class~="border-[rgba(255,255,255,0.12)]"],
+html.light [class~="border-[rgba(255,255,255,0.14)]"] {
+  border-color: var(--border) !important;
+}
+
+html.light [class~="hover:border-white/20"]:hover {
+  border-color: var(--border-strong) !important;
+}
+
+html.light [class~="hover:bg-white/[0.035]"]:hover,
+html.light [class~="hover:bg-white/10"]:hover,
+html.light [class~="hover:bg-[rgba(255,255,255,0.035)]"]:hover,
+html.light [class~="hover:bg-[rgba(255,255,255,0.045)]"]:hover,
+html.light [class~="hover:bg-[rgba(255,255,255,0.055)]"]:hover,
+html.light [class~="hover:bg-[rgba(255,255,255,0.06)]"]:hover,
+html.light [class~="hover:bg-[rgba(255,255,255,0.08)]"]:hover {
+  background-color: var(--row-hover) !important;
+}
+
+html.light [class~="bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(0,0,0,0.50))]"] {
+  background-color: var(--surface-2) !important;
+  background-image: var(--table-card-bg) !important;
+  border-color: var(--border) !important;
+  box-shadow: var(--table-card-shadow) !important;
+}
+
+html.light [class~="bg-[linear-gradient(180deg,color-mix(in_srgb,var(--success)_16%,rgba(255,255,255,0.04)),rgba(0,0,0,0.48))]"] {
+  background-color: var(--surface-2) !important;
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--success) 10%, var(--surface-2)), var(--surface-2)) !important;
+}
+
+html.light .dashboard-page .dashboard-card-bg,
+html.light .dashboard-page .dashboard-card-bg:hover {
+  border-color: var(--border);
+  background-color: var(--surface-1);
+  background-image: none !important;
+  box-shadow: var(--card-shadow);
+}
+
+html.light .dashboard-page .dashboard-card-bg:hover {
+  background-color: var(--surface-2);
+}
+
+html.light .dashboard-page .dashboard-card-bg::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(38, 49, 67, 0.035));
+}
+
+html.light .reports-page {
+  --reports-panel-bg: none;
+  --reports-control-bg: var(--control-bg);
+}
+
+html.light .reports-tabs-list,
+html.light .reports-panel,
+html.light .reports-metric-tile,
+html.light .reports-donut-panel,
+html.light .report-summary-period-tile {
+  border-color: var(--border);
+  background-color: var(--surface-1);
+  background-image: none !important;
+  box-shadow: var(--card-shadow);
+}
+
+html.light .reports-panel:hover,
+html.light .reports-metric-tile:hover {
+  border-color: var(--border-strong);
+  background-color: var(--surface-2);
+}
+
+html.light .reports-legend-button,
+html.light .reports-sort-button,
+html.light .reports-flow-row,
+html.light .original-inventory-tab,
+html.light .paint-inventory-button {
+  border-color: var(--control-border);
+  background-color: var(--surface-2);
+  background-image: var(--control-bg) !important;
+  color: var(--t-body);
+  text-shadow: none;
+  box-shadow: var(--control-shadow);
+}
+
+html.light .original-inventory-tab::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(38, 49, 67, 0.04));
+}
+
+html.light .paint-inventory-button:hover,
+html.light .paint-inventory-button-active {
+  background-color: var(--surface-2);
+  background-image: var(--control-bg-hover) !important;
+}
+
+html.light .report-summary-period-tile-active {
+  border-color: var(--brand-border);
+  background-color: color-mix(in srgb, var(--brand) 8%, var(--surface-1));
+  background-image: none !important;
+}
+
+html.light .production-report > div:first-child,
+html.light .production-report > div:nth-child(2) > div,
+html.light .work-report-dashboard > section:first-child,
+html.light .work-report-dashboard > div:nth-child(2) > div,
+html.light .work-report-dashboard > div:nth-child(3) > section {
+  border-color: var(--border);
+  background-color: var(--surface-1);
+  background-image: none !important;
+  box-shadow: var(--card-shadow);
+}
+
+html.light .production-report > div:first-child > div:first-child,
+html.light .production-report > div:first-child > div:last-child > div {
+  background-color: var(--surface-2);
+  background-image: none !important;
+}
+
+html.light .work-report-dashboard > div:nth-child(3) > section:first-child > div:last-child > div > div:first-child > span:last-child,
+html.light .work-report-dashboard > div:nth-child(3) > section:first-child > div:first-child > span:last-child {
+  background: var(--surface-2);
+  color: var(--brand) !important;
+  text-shadow: none;
+}
+
+html.light .dashboard-page .recharts-cartesian-grid line,
+html.light .production-report .recharts-cartesian-grid line,
+html.light .work-report-dashboard .recharts-cartesian-grid line {
+  stroke: var(--border) !important;
+}
+
+html.light .dashboard-page .recharts-default-tooltip,
+html.light .production-report .recharts-default-tooltip,
+html.light .work-report-dashboard .recharts-default-tooltip {
+  border-color: var(--popover-border) !important;
+  background: var(--popover-bg) !important;
+  color: var(--t-body) !important;
+  box-shadow: var(--popover-shadow);
+}
+
+html.light .transfer-kind-button:not(.transfer-kind-button-active),
+html.light .warehouse-choice-button:not(.warehouse-choice-button-active) {
+  border-color: var(--control-border);
+  background-color: var(--surface-2);
+  background-image: var(--control-bg);
+  color: var(--t-body);
+  text-shadow: none;
+  box-shadow: var(--control-shadow);
+}
+
+html.light .technical-texture-panel {
+  background-color: var(--surface-1);
+  background-image: none !important;
+}
+
+html.light .planning-plan-row {
+  background-color: color-mix(in srgb, var(--brand) 3%, var(--row-flat)) !important;
+  box-shadow:
+    inset 3px 0 0 color-mix(in srgb, var(--brand) 28%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--brand) 12%, var(--border)),
+    0 3px 12px rgba(16, 24, 40, 0.1);
+}
+
+html.light [data-plan-item]:hover > .planning-plan-row {
+  background-color: color-mix(in srgb, var(--brand) 6%, var(--row-flat)) !important;
+}
+
+html.light [data-plan-item][data-expanded='true'] > .planning-plan-row {
+  background-color: var(--row-hover) !important;
+}
+
+html.light [data-plan-item][data-calculated='true'][data-expanded='false'] > .planning-plan-row {
+  background-color: color-mix(in srgb, var(--success) 9%, var(--row-flat)) !important;
+}
+
+html.light .production-preparation .production-queues > section,
+html.light .production-preparation .production-task-actions {
+  border-color: var(--border) !important;
+}
+
+html.light .production-preparation .production-task-actions {
+  background: var(--surface-soft) !important;
+}
+
+html.light .production-preparation [data-cancelled='true'] {
+  border-color: color-mix(in srgb, var(--danger) 58%, var(--border)) !important;
+  background-color: color-mix(in srgb, var(--danger) 12%, var(--surface-2)) !important;
+}
+
+html.light .production-preparation [data-cancelled='true']:hover {
+  background-color: color-mix(in srgb, var(--danger) 18%, var(--surface-2)) !important;
+}
+
+html.light .planning-settings-card {
+  --settings-accent: var(--brand);
+  border-color: color-mix(in srgb, var(--settings-accent) 48%, var(--border)) !important;
+  background-color: var(--surface-1) !important;
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--settings-accent) 10%, var(--surface-2)), var(--surface-1) 62%) !important;
+  color: var(--t-body);
+  box-shadow: var(--card-shadow) !important;
+}
+
+html.light .planning-settings-card-areas {
+  --settings-accent: #0b6474;
+}
+
+html.light .planning-settings-card:hover {
+  border-color: var(--settings-accent) !important;
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--settings-accent) 15%, var(--surface-2)), var(--surface-1) 62%) !important;
+  box-shadow: 0 14px 30px rgba(16, 24, 40, 0.2) !important;
+}
+
+
+/* Natural light theme: final legacy compatibility layer. */
+html.light {
+  --content-scrim: #e1e5e9;
+}
+
+html.light [class~="bg-[var(--bg-0)]"] {
+  background-color: var(--surface-2) !important;
+}
+
+html.light [class~="text-bg"] {
+  color: var(--on-ember) !important;
+}
+
+html.light .production-preparation .recharts-default-tooltip {
+  border-color: var(--popover-border) !important;
+  background: var(--popover-bg) !important;
+  color: var(--t-body) !important;
+  box-shadow: var(--popover-shadow) !important;
+}
+
+html.light [class~="text-red-200"],
+html.light [class~="text-red-300"],
+html.light [class~="text-red-400"] {
+  color: var(--danger) !important;
+}
+
+html.light [class~="text-emerald-200"],
+html.light [class~="text-emerald-300"],
+html.light [class~="text-emerald-400"] {
+  color: var(--success) !important;
+}
+
+html.light [class~="text-amber-200"],
+html.light [class~="text-amber-300"],
+html.light [class~="text-amber-400"] {
+  color: var(--warning) !important;
+}
+
+html.light [class~="text-orange-100"],
+html.light [class~="text-orange-200"],
+html.light [class~="text-orange-300"],
+html.light [class~="text-orange-400"] {
+  color: var(--catalog-accent) !important;
+}
+
+html.light [class~="text-slate-100"],
+html.light [class~="text-slate-200"],
+html.light [class~="text-slate-300"] {
+  color: var(--t-muted) !important;
+}
+
+html.light [class~="text-violet-200"],
+html.light [class~="text-violet-300"],
+html.light [class~="text-[#debaff]"] {
+  color: var(--value-purple) !important;
+}
+
+html.light [class~="text-blue-300"],
+html.light [class~="text-sky-200"],
+html.light [class~="text-sky-300"],
+html.light [class~="text-cyan-100"],
+html.light [class~="text-cyan-200"],
+html.light [class~="text-cyan-300"],
+html.light [class~="text-[#8bd9f8]"],
+html.light [class~="text-[#2fb5f0]"],
+html.light [class~="text-[#60a5fa]"],
+html.light [class~="text-[#93c5fd]"],
+html.light [class~="text-[rgb(104,210,225)]"] {
+  color: var(--location-blue) !important;
+}
+
+html.light [class~="text-[rgba(255,174,113,0.95)]"] {
+  color: var(--catalog-accent) !important;
+}
+
+html.light [class~="bg-black/20"],
+html.light [class~="bg-black/25"],
+html.light [class~="bg-black/30"],
+html.light [class~="bg-black/35"],
+html.light [class~="bg-white/[0.025]"],
+html.light [class~="bg-white/5"],
+html.light [class~="bg-white/6"],
+html.light [class~="bg-[rgba(255,255,255,0.08)]"] {
+  background-color: var(--surface-soft) !important;
+}
+
+html.light [class~="bg-black/20"][class~="text-white"],
+html.light [class~="bg-black/25"][class~="text-white"],
+html.light [class~="bg-black/30"][class~="text-white"],
+html.light [class~="bg-black/35"][class~="text-white"],
+html.light [class~="bg-white/[0.025]"][class~="text-white"],
+html.light [class~="bg-white/5"][class~="text-white"],
+html.light [class~="bg-white/6"][class~="text-white"] {
+  color: var(--t-title) !important;
+}
+
+html.light .production-preparation .production-queues > * {
+  border-color: var(--border) !important;
+}
+
+html.light [class~="bg-[linear-gradient(135deg,rgba(255,122,26,0.22),rgba(255,122,26,0.06)_48%,rgba(0,0,0,0.24))]"] {
+  background-color: var(--surface-2) !important;
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--brand) 18%, var(--surface-2)), var(--surface-2) 58%, var(--surface-1)) !important;
+}
+
+html.light [class~="hover:bg-[linear-gradient(135deg,rgba(255,122,26,0.30),rgba(255,122,26,0.08)_48%,rgba(0,0,0,0.24))]"]:hover {
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--brand) 24%, var(--surface-2)), var(--surface-2) 58%, var(--surface-1)) !important;
+}
+
+
+/* Natural light theme: variant and nested legacy fixes. */
+html.light [data-state='active'][class~="data-[state=active]:text-bg"] {
+  color: var(--on-ember) !important;
+}
+
+html.light [class~="!text-[#60a5fa]"],
+html.light [class~="!text-[#93c5fd]"] {
+  color: var(--location-blue) !important;
+}
+
+html.light [class~="text-violet-400"],
+html.light [class~="text-purple-100"],
+html.light [class~="text-[rgb(251,207,232)]"] {
+  color: var(--value-purple) !important;
+}
+
+html.light [class~="text-slate-400"] {
+  color: var(--t-muted) !important;
+}
+
+html.light .production-preparation .production-queues > div > div:last-child > div {
+  border-color: var(--border) !important;
+}
+
+/* Wyraźny stan pozycji zatwierdzonej jako przeliczona. */
+[data-plan-item][data-calculated='true'][data-expanded='false'] > .planning-plan-row {
+  background-color: color-mix(in srgb, #22c55e 30%, var(--row-flat)) !important;
+  box-shadow:
+    inset 6px 0 0 #22c55e,
+    inset 0 0 0 2px rgba(34, 197, 94, 0.68),
+    inset 0 0 34px rgba(34, 197, 94, 0.18),
+    0 0 22px rgba(22, 163, 74, 0.3) !important;
+}
+
+[data-plan-item][data-calculated='true'][data-expanded='false']:hover > .planning-plan-row {
+  background-color: color-mix(in srgb, #22c55e 36%, var(--row-flat)) !important;
+}
+
+.planning-calculated-toggle[aria-pressed='true'] {
+  border-color: #22c55e !important;
+  background-color: rgba(34, 197, 94, 0.22) !important;
+  color: #4ade80 !important;
+  box-shadow:
+    0 0 0 1px rgba(34, 197, 94, 0.28),
+    0 0 18px rgba(34, 197, 94, 0.22);
+}
+
+.planning-calculated-toggle[aria-pressed='true'] > span {
+  border-color: #16a34a !important;
+  background-color: #16a34a !important;
+  color: #fff !important;
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.48);
+}
+
+html.light [data-plan-item][data-calculated='true'][data-expanded='false'] > .planning-plan-row {
+  background-color: #86efac !important;
+  box-shadow:
+    inset 6px 0 0 #15803d,
+    inset 0 0 0 2px rgba(21, 128, 61, 0.72),
+    inset 0 0 34px rgba(22, 163, 74, 0.24),
+    0 0 24px rgba(22, 163, 74, 0.4) !important;
+}
+
+html.light [data-plan-item][data-calculated='true'][data-expanded='false']:hover > .planning-plan-row {
+  background-color: #6ee7a0 !important;
+}
+
+html.light .planning-calculated-toggle[aria-pressed='true'] {
+  border-color: #14532d !important;
+  background-color: #16a34a !important;
+  color: #fff !important;
+  box-shadow:
+    0 0 0 2px rgba(21, 128, 61, 0.34),
+    0 0 20px rgba(22, 163, 74, 0.42);
+}

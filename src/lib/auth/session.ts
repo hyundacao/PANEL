@@ -9,6 +9,8 @@ const SESSION_COOKIE_NAME = 'apka_session';
 const SESSION_VERSION = 1;
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const SESSION_REMEMBER_TTL_SECONDS = 60 * 60 * 24 * 30;
+const AUTH_RESULT_CACHE_TTL_MS = 5000;
+const AUTH_RESULT_CACHE_MAX_ENTRIES = 256;
 
 type SessionPayload = {
   v: number;
@@ -35,6 +37,30 @@ export type AuthResult =
       user: null;
       code: 'UNAUTHORIZED' | 'SESSION_EXPIRED';
     };
+
+type AuthCacheEntry = {
+  expiresAt: number;
+  result: AuthResult;
+};
+
+const authResultCache = new Map<string, AuthCacheEntry>();
+const authResultLoads = new Map<string, Promise<AuthResult>>();
+
+const clearAuthResultCache = () => {
+  authResultCache.clear();
+  authResultLoads.clear();
+};
+
+const pruneAuthResultCache = (now: number) => {
+  authResultCache.forEach((entry, key) => {
+    if (entry.expiresAt <= now) authResultCache.delete(key);
+  });
+  while (authResultCache.size > AUTH_RESULT_CACHE_MAX_ENTRIES) {
+    const oldestKey = authResultCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    authResultCache.delete(oldestKey);
+  }
+};
 
 const getSessionSecret = () => {
   const secret =
@@ -132,6 +158,7 @@ export const setSessionCookie = (
   sessionId: string,
   rememberMe = false
 ) => {
+  clearAuthResultCache();
   const ttl = rememberMe ? SESSION_REMEMBER_TTL_SECONDS : SESSION_TTL_SECONDS;
   response.cookies.set({
     name: SESSION_COOKIE_NAME,
@@ -145,6 +172,7 @@ export const setSessionCookie = (
 };
 
 export const clearSessionCookie = (response: NextResponse) => {
+  clearAuthResultCache();
   response.cookies.set({
     name: SESSION_COOKIE_NAME,
     value: '',
@@ -170,30 +198,56 @@ export const getAuthenticatedUser = async (request: Request): Promise<AuthResult
     return { user: null, code: 'SESSION_EXPIRED' };
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('app_users')
-    .select(
-      'id, name, username, role, access, is_active, created_at, last_login, active_session_id'
-    )
-    .eq('id', parsed.userId)
-    .maybeSingle();
+  const cacheKey = `${parsed.userId}:${parsed.sessionId}`;
+  const now = Date.now();
+  const cached = authResultCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) return cached.result;
 
-  if (error) {
-    throw error;
-  }
-  if (!data) {
-    return { user: null, code: 'UNAUTHORIZED' };
-  }
+  const existingLoad = authResultLoads.get(cacheKey);
+  if (existingLoad) return existingLoad;
 
-  const row = data as DbUserRow & { active_session_id: string | null };
-  if (!row.active_session_id || row.active_session_id !== parsed.sessionId) {
-    return { user: null, code: 'SESSION_EXPIRED' };
-  }
+  const load = (async (): Promise<AuthResult> => {
+    const [userResult, groupsByUserId] = await Promise.all([
+      supabaseAdmin
+        .from('app_users')
+        .select(
+          'id, name, username, role, access, is_active, created_at, last_login, active_session_id'
+        )
+        .eq('id', parsed.userId)
+        .maybeSingle(),
+      loadUserGroupsByUserIds([parsed.userId])
+    ]);
+    const { data, error } = userResult;
 
-  const groupsByUserId = await loadUserGroupsByUserIds([row.id]);
-  const user = mapDbUser(row, groupsByUserId.get(row.id) ?? []);
-  if (!user.isActive) {
-    return { user: null, code: 'UNAUTHORIZED' };
+    if (error) {
+      throw error;
+    }
+    if (!data) {
+      return { user: null, code: 'UNAUTHORIZED' };
+    }
+
+    const row = data as DbUserRow & { active_session_id: string | null };
+    if (!row.active_session_id || row.active_session_id !== parsed.sessionId) {
+      return { user: null, code: 'SESSION_EXPIRED' };
+    }
+
+    const user = mapDbUser(row, groupsByUserId.get(row.id) ?? []);
+    if (!user.isActive) {
+      return { user: null, code: 'UNAUTHORIZED' };
+    }
+    return { user, code: null };
+  })();
+  authResultLoads.set(cacheKey, load);
+
+  try {
+    const result = await load;
+    authResultCache.set(cacheKey, {
+      expiresAt: Date.now() + AUTH_RESULT_CACHE_TTL_MS,
+      result
+    });
+    pruneAuthResultCache(Date.now());
+    return result;
+  } finally {
+    if (authResultLoads.get(cacheKey) === load) authResultLoads.delete(cacheKey);
   }
-  return { user, code: null };
 };

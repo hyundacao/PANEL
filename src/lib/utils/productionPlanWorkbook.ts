@@ -1,5 +1,7 @@
 import * as XLSX from 'xlsx';
 
+export const productionPlanXlsx = XLSX;
+
 export type ProductionPlanWorkbook = {
   buffer: ArrayBuffer;
   fileName: string;

@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import dynamic from 'next/dynamic';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import * as XLSX from 'xlsx';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import type { CellObject, WorkBook } from 'xlsx';
 import { CalendarClock, CalendarDays, Check, ChevronDown, Copy, LockKeyhole, MessageSquare, Pencil, Plus, RotateCcw, Settings2, ShieldCheck, Trash2, Upload, Wrench, X } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -43,7 +43,22 @@ import {
   type ProductionTeamProgress
 } from '@/lib/utils/productionWorkProgress';
 import { TOOLROOM_RETURN_LABEL, isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, withToolroomReturnTasks } from '@/lib/utils/productionToolroomTasks';
-import { readProductionPlanSheet, readProductionPlanWorkbook, type ProductionPlanWorkbook } from '@/lib/utils/productionPlanWorkbook';
+import type { ProductionPlanWorkbook } from '@/lib/utils/productionPlanWorkbook';
+
+const ProductionActivityChart = dynamic(
+  () => import('@/components/production-preparation/ProductionReportCharts').then((module) => module.ProductionActivityChart),
+  { ssr: false, loading: () => <div className="h-full animate-pulse bg-[rgba(255,255,255,0.03)]" /> }
+);
+const ProductionTrendCharts = dynamic(
+  () => import('@/components/production-preparation/ProductionReportCharts').then((module) => module.ProductionTrendCharts),
+  { ssr: false, loading: () => <div className="h-48 animate-pulse border border-border bg-[rgba(255,255,255,0.03)]" /> }
+);
+let XLSX: typeof import('xlsx') | null = null;
+let productionPlanWorkbookTools: typeof import('@/lib/utils/productionPlanWorkbook') | null = null;
+const loadProductionPlanWorkbookTools = async () => {
+  productionPlanWorkbookTools ??= await import('@/lib/utils/productionPlanWorkbook');
+  return productionPlanWorkbookTools;
+};
 
 type Team = ProductionTeam;
 type WorkKind = 'zmiana-formy' | 'forma-narzedziownia' | 'powrot-formy-narzedziownia' | 'rozruch' | 'wznowienie' | 'zmiana-koloru' | 'zmiana-grafiki' | 'regulacja' | 'proby' | 'przeglad-a' | 'anulowane' | 'inne';
@@ -176,6 +191,17 @@ const normalizePreparationAccess = (value: StoredPlan['access']) => {
         : 'none' as const
   };
 };
+
+const samePreparationAccess = (
+  left: ReturnType<typeof normalizePreparationAccess> | null,
+  right: ReturnType<typeof normalizePreparationAccess>
+) => Boolean(
+  left
+  && left.isAdmin === right.isAdmin
+  && left.materialAccess === right.materialAccess
+  && left.teams.length === right.teams.length
+  && left.teams.every((team, index) => team === right.teams[index])
+);
 
 const productionWaitingLabels = (task: Task, team: Team) => {
   const waitsForReturn = productionWaitsForToolroomReturn(task, team);
@@ -401,34 +427,33 @@ const WorkReportDashboard = ({
       <div className="flex flex-col gap-4 px-5 py-5 lg:flex-row lg:items-center lg:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-[var(--brand)]">Przygotowanie produkcji</p><h2 className="mt-1 text-2xl font-semibold text-title">Raport prac</h2><p className="mt-1 text-sm text-dim">{periodLabel}</p></div><div className="grid grid-cols-3 gap-2">{([{ id: 'week', label: 'Tydzień' }, { id: 'month', label: 'Miesiąc' }, { id: 'all', label: 'Wszystko' }] as const).map((item) => <Button className={cn('min-h-10 px-3 py-2 text-xs', period === item.id && 'bg-[rgba(255,122,0,0.18)] text-title')} key={item.id} onClick={() => onPeriodChange(item.id)} type="button" variant={period === item.id ? 'secondary' : 'outline'}>{item.label}</Button>)}</div></div>
     </section>
     <div className="grid gap-3 md:grid-cols-3"><div className="rounded-xl border border-[rgba(255,122,0,0.3)] bg-[linear-gradient(135deg,rgba(255,122,0,0.15),rgba(255,255,255,0.02))] p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Prace w okresie</p><p className="mt-2 text-4xl font-bold text-[var(--brand)]">{total}</p></div><div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Dni z planem</p><p className="mt-2 text-4xl font-bold text-title">{dayCount}</p></div><div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Wykonane</p><p className="mt-2 text-4xl font-bold text-title">{done}</p></div></div>
-    <div className="grid gap-4 xl:grid-cols-[1.1fr_1fr]"><section className="rounded-xl border border-border bg-surface p-5"><div className="mb-5 flex items-center justify-between"><div><p className="font-semibold text-title">Rozkład prac</p><p className="mt-1 text-sm text-dim">Najczęściej planowane działania</p></div><span className="text-sm font-semibold text-[var(--brand)]">{total}</span></div>{breakdown.length === 0 ? <p className="py-10 text-center text-sm text-dim">Brak prac w wybranym okresie.</p> : <div className="space-y-4">{breakdown.map((item) => <div key={item.label}><div className="mb-1.5 flex items-center justify-between text-sm"><span className="font-semibold text-title">{item.label}</span><span className="font-bold text-[var(--brand)]">{item.value}</span></div><div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.07)]"><div className="h-full rounded-full bg-[linear-gradient(90deg,#ff7a00,#ffad4d)]" style={{ width: `${(item.value / maxValue) * 100}%` }} /></div></div>)}</div>}</section><section className="rounded-xl border border-border bg-surface p-5"><p className="font-semibold text-title">Aktywność w czasie</p><p className="mt-1 text-sm text-dim">Liczba prac przypisanych każdego dnia</p>{chart.length < 2 ? <div className="flex h-64 flex-col items-center justify-center text-center"><p className="text-5xl font-bold text-[var(--brand)]">{total}</p><p className="mt-2 text-sm text-dim">Zbieramy kolejne dni, aby pokazać trend.</p></div> : <div className="mt-4 h-60"><ResponsiveContainer height="100%" width="100%"><BarChart data={chart} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}><CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" stroke="var(--t-dim)" tickLine={false} /><YAxis allowDecimals={false} stroke="var(--t-dim)" tickLine={false} /><Tooltip contentStyle={{ background: '#0b0c10', border: '1px solid rgba(255,122,0,0.45)', borderRadius: 8 }} cursor={{ fill: 'rgba(255,122,0,0.08)' }} /><Bar dataKey="prace" fill="var(--brand)" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer></div>}</section></div>
+    <div className="grid gap-4 xl:grid-cols-[1.1fr_1fr]"><section className="rounded-xl border border-border bg-surface p-5"><div className="mb-5 flex items-center justify-between"><div><p className="font-semibold text-title">Rozkład prac</p><p className="mt-1 text-sm text-dim">Najczęściej planowane działania</p></div><span className="text-sm font-semibold text-[var(--brand)]">{total}</span></div>{breakdown.length === 0 ? <p className="py-10 text-center text-sm text-dim">Brak prac w wybranym okresie.</p> : <div className="space-y-4">{breakdown.map((item) => <div key={item.label}><div className="mb-1.5 flex items-center justify-between text-sm"><span className="font-semibold text-title">{item.label}</span><span className="font-bold text-[var(--brand)]">{item.value}</span></div><div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.07)]"><div className="h-full rounded-full bg-[linear-gradient(90deg,#ff7a00,#ffad4d)]" style={{ width: `${(item.value / maxValue) * 100}%` }} /></div></div>)}</div>}</section><section className="rounded-xl border border-border bg-surface p-5"><p className="font-semibold text-title">Aktywność w czasie</p><p className="mt-1 text-sm text-dim">Liczba prac przypisanych każdego dnia</p>{chart.length < 2 ? <div className="flex h-64 flex-col items-center justify-center text-center"><p className="text-5xl font-bold text-[var(--brand)]">{total}</p><p className="mt-2 text-sm text-dim">Zbieramy kolejne dni, aby pokazać trend.</p></div> : <div className="mt-4 h-60"><ProductionActivityChart data={chart} /></div>}</section></div>
     <WorkKindTrendCharts series={series} />
   </div>;
 };
 
-const WorkKindTrendCharts = ({ series }: { series: WorkKindSeries[] }) => <section className="rounded-xl border border-border bg-surface p-5">
-  <div className="mb-5 flex flex-wrap items-center justify-between gap-2"><div><p className="font-semibold text-title">Zadania w czasie</p><p className="mt-1 text-sm text-dim">Liczba poszczególnych prac w kolejnych dniach.</p></div><span className="text-xs font-semibold text-dim">Według wybranego okresu</span></div>
-  <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">{series.map((item) => <div className="overflow-hidden rounded-lg border border-border bg-bg" key={item.id}><div className="flex items-center justify-between border-b border-border px-4 py-3"><p className="text-sm font-semibold text-title">{item.label}</p><span className="rounded border border-[rgba(255,122,0,0.55)] bg-[rgba(7,8,12,0.9)] px-2 py-0.5 text-sm font-bold text-[var(--brand)]">{item.total}</span></div><div className="h-36 px-2 py-2"><ResponsiveContainer height="100%" width="100%"><BarChart data={item.data} margin={{ top: 4, right: 2, left: -24, bottom: -4 }}><CartesianGrid stroke="rgba(255,255,255,0.07)" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" stroke="var(--t-dim)" tick={{ fontSize: 10 }} tickLine={false} /><YAxis allowDecimals={false} stroke="var(--t-dim)" tick={{ fontSize: 10 }} tickLine={false} /><Tooltip contentStyle={{ background: '#0b0c10', border: '1px solid rgba(255,122,0,0.45)', borderRadius: 8 }} cursor={{ fill: 'rgba(255,122,0,0.08)' }} /><Bar dataKey="value" fill="var(--brand)" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div></div>)}</div>
-</section>;
+const WorkKindTrendCharts = ({ series }: { series: WorkKindSeries[] }) => <ProductionTrendCharts series={series} />;
 
 const WorkHistoryDashboard = ({ history, onDeleteDay }: { history: PlanHistory[]; onDeleteDay: (planDate: string) => void }) => <section className="work-history-dashboard space-y-4">
   <div className="border-b border-border pb-4"><p className="font-semibold text-title">Historia przypisanych prac</p><p className="mt-1 text-sm text-dim">Snapshoty zadań dla zespołów. Nie jest to historia plików Excel.</p></div>
   {history.length === 0 ? <Card><p className="text-sm text-dim">Brak zapisanych prac. Snapshot pojawi się po pierwszym przypisaniu zadania.</p></Card> : history.map((entry) => <Card className="overflow-hidden p-0" key={entry.plan_date}><div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4"><div><p className="font-semibold text-title">{new Date(`${entry.plan_date}T12:00:00`).toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}</p><p className="mt-1 text-sm text-dim">{entry.tasks.length} przypisanych prac</p></div><button aria-label={`Usuń dzień ${entry.plan_date} z historii`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-red-500/45 text-red-300 transition hover:bg-red-500/10" onClick={() => onDeleteDay(entry.plan_date)} title="Usuń cały dzień z historii" type="button"><Trash2 className="h-4 w-4" /></button></div><div className="grid gap-px bg-border xl:grid-cols-3">{teamOptions.map((team) => { const queue = entry.tasks.filter((task) => task.teams.includes(team.id)); return <div className="min-h-28 bg-surface p-4" key={team.id}><div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold" style={{ color: team.color }}>{team.label}</p><Badge>{queue.length}</Badge></div>{queue.length === 0 ? <p className="text-xs text-dim">Brak przypisanych prac.</p> : <div className="space-y-2">{queue.map((task, index) => { const labels = [...new Set(kindsForTeam(task, team.id))].map((id) => workKinds.find((kind) => kind.id === id)?.label).filter(Boolean).join(', '); return <div className="rounded border border-border bg-bg p-2.5" key={`${task.station}-${task.detail}-${index}`}><p className="text-xs font-semibold text-[var(--brand)]">- {task.station} {task.detail}</p><p className="mt-1 text-xs text-body">{labels || 'Zadanie'}{task.notes[team.id] ? `: ${task.notes[team.id]}` : ''}</p>{isProductionTeamDone(task, team.id) && <p className="mt-1 text-xs font-semibold text-emerald-400">Wykonane</p>}</div>; })}</div>}</div>; })}</div></Card>)}</section>;
 
-const hasYellowFill = (cell: XLSX.CellObject | undefined) => {
+const hasYellowFill = (cell: CellObject | undefined) => {
   const style = cell?.s as { fill?: { fgColor?: { rgb?: string } }; fgColor?: { rgb?: string } } | undefined;
   return [style?.fill?.fgColor?.rgb, style?.fgColor?.rgb].some((color) => color?.toUpperCase().endsWith('FFFF00'));
 };
 
-const parseTasks = (workbook: XLSX.WorkBook, sheetName: string): Task[] => {
+const parseTasks = (workbook: WorkBook, sheetName: string): Task[] => {
+  const xlsx = XLSX;
+  if (!xlsx) return [];
   const sheet = workbook.Sheets[sheetName];
   if (!sheet) return [];
-  const data = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
+  const data = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
   const merges = sheet['!merges'] ?? [];
   const cellAt = (row: number, column: number) => {
-    const direct = sheet[XLSX.utils.encode_cell({ r: row, c: column })];
+    const direct = sheet[xlsx.utils.encode_cell({ r: row, c: column })];
     const merge = merges.find((item) => row >= item.s.r && row <= item.e.r && column >= item.s.c && column <= item.e.c);
-    return merge ? sheet[XLSX.utils.encode_cell({ r: merge.s.r, c: merge.s.c })] : direct;
+    return merge ? sheet[xlsx.utils.encode_cell({ r: merge.s.r, c: merge.s.c })] : direct;
   };
   const valueAt = (row: number, column: number) => cellText(cellAt(row, column)?.w ?? cellAt(row, column)?.v);
   let planGroup: PlanGroup = 'standard';
@@ -692,6 +717,7 @@ export default function PrzygotowanieProdukcjiPage() {
   const activeViewRef = useRef(activeView);
   const refreshCurrentPlanRef = useRef<(() => void) | null>(null);
   const lastSyncAttemptRef = useRef(0);
+  const lastSharedSettingsSyncRef = useRef(0);
 
   const apiRequest = async <T,>(body?: unknown) => {
     const response = await fetch('/api/przygotowanie-produkcji', body ? {
@@ -712,6 +738,7 @@ export default function PrzygotowanieProdukcjiPage() {
     let requestInFlight = false;
     sessionVersionRef.current = '';
     lastSyncAttemptRef.current = 0;
+    lastSharedSettingsSyncRef.current = 0;
     setLoadingSavedPlan(true);
     setPreparationAccess(null);
     setAccessLoadError(null);
@@ -740,13 +767,15 @@ export default function PrzygotowanieProdukcjiPage() {
         if (initialized) {
           query.set('sync', '1');
           if (sessionVersionRef.current) query.set('since', sessionVersionRef.current);
+          if (Date.now() - lastSharedSettingsSyncRef.current >= 60000) query.set('settings', '1');
         }
         const response = await fetch(`/api/przygotowanie-produkcji?${query.toString()}`, { cache: 'no-store' });
         if (!response.ok) throw new Error('Nie udało się wczytać ustawień komentarzy. Odśwież widok, aby spróbować ponownie.');
         const data = await response.json() as StoredPlan;
         if (!active || planImportInFlightRef.current || importVersion !== planImportVersionRef.current) return;
         if (data.access) {
-          setPreparationAccess(normalizePreparationAccess(data.access));
+          const nextAccess = normalizePreparationAccess(data.access);
+          setPreparationAccess((current) => samePreparationAccess(current, nextAccess) ? current : nextAccess);
           setAccessLoadError(null);
         } else if (!initialized) {
           throw new Error('Serwer nie zwrócił informacji o dostępie do przygotowania produkcji.');
@@ -761,6 +790,7 @@ export default function PrzygotowanieProdukcjiPage() {
         if (data.recurringTasks && recurringVersion === recurringTasksSaveVersionRef.current && recurringTasksSavingRef.current === 0) {
           setRecurringTasks(normalizeRecurringTasks(data.recurringTasks));
         }
+        if (data.teamComments || data.recurringTasks) lastSharedSettingsSyncRef.current = Date.now();
         if (data.unchanged) return;
         if (!initialized) {
           const roster = Array.isArray(data.processEngineerRoster)
@@ -846,26 +876,34 @@ export default function PrzygotowanieProdukcjiPage() {
       setHistory([]);
       return;
     }
+    if (activeView !== 'history' && activeView !== 'report') return;
     fetch('/api/przygotowanie-produkcji?history=1')
       .then((response) => response.ok ? response.json() as Promise<{ history: PlanHistory[] }> : Promise.reject())
       .then((data) => setHistory(data.history ?? []))
       .catch(() => undefined);
-  }, [preparationAccess?.isAdmin]);
+  }, [activeView, preparationAccess?.isAdmin]);
 
   useEffect(() => {
+    if (!preparationAccess?.isAdmin || loadingSavedPlan) return;
     let active = true;
     const readVersion = workbookReadVersionRef.current;
-    loadWorkbookLocally()
-      .then((savedWorkbook) => {
-        if (!active || !savedWorkbook || readVersion !== workbookReadVersionRef.current) return;
-        setWorkbookSource(readProductionPlanWorkbook(savedWorkbook.buffer, savedWorkbook.fileName));
-      })
-      .catch(() => undefined);
+    const timer = window.setTimeout(() => {
+      void loadWorkbookLocally()
+        .then(async (savedWorkbook) => {
+          if (!active || !savedWorkbook || readVersion !== workbookReadVersionRef.current) return;
+          const workbookTools = await loadProductionPlanWorkbookTools();
+          if (!active || readVersion !== workbookReadVersionRef.current) return;
+          XLSX = workbookTools.productionPlanXlsx;
+          setWorkbookSource(workbookTools.readProductionPlanWorkbook(savedWorkbook.buffer, savedWorkbook.fileName));
+        })
+        .catch(() => undefined);
+    }, 2500);
     return () => {
       active = false;
+      window.clearTimeout(timer);
       workbookReadVersionRef.current += 1;
     };
-  }, []);
+  }, [loadingSavedPlan, preparationAccess?.isAdmin]);
 
   const savePlan = async (nextTasks: Task[], nextFileName: string, nextSheetName: string) => {
     setSaveState('saving');
@@ -879,10 +917,6 @@ export default function PrzygotowanieProdukcjiPage() {
         sheetName: nextSheetName
       });
       sessionVersionRef.current = saved.session?.updated_at ?? '';
-      void fetch('/api/przygotowanie-produkcji?history=1')
-        .then((response) => response.ok ? response.json() as Promise<{ history: PlanHistory[] }> : Promise.reject())
-        .then((data) => setHistory(data.history ?? []))
-        .catch(() => undefined);
       setSaveState('saved');
       return true;
     } catch (error) {
@@ -924,10 +958,6 @@ export default function PrzygotowanieProdukcjiPage() {
         if (taskSaveQueuesRef.current.get(taskId) === request) taskSaveQueuesRef.current.delete(taskId);
         if (pendingSaveTotalRef.current === 0) {
           setSaveState(taskSaveFailedRef.current ? 'error' : 'saved');
-          void fetch('/api/przygotowanie-produkcji?history=1', { cache: 'no-store' })
-            .then((response) => response.ok ? response.json() as Promise<{ history: PlanHistory[] }> : Promise.reject())
-            .then((data) => setHistory(data.history ?? []))
-            .catch(() => undefined);
         }
       });
   };
@@ -940,9 +970,13 @@ export default function PrzygotowanieProdukcjiPage() {
     setWorkbookSource(null);
     setSelectedSheetName('');
     try {
-      const buffer = await file.arrayBuffer();
+      const [buffer, workbookTools] = await Promise.all([
+        file.arrayBuffer(),
+        loadProductionPlanWorkbookTools()
+      ]);
       if (readVersion !== workbookReadVersionRef.current) return;
-      setWorkbookSource(readProductionPlanWorkbook(buffer, file.name));
+      XLSX = workbookTools.productionPlanXlsx;
+      setWorkbookSource(workbookTools.readProductionPlanWorkbook(buffer, file.name));
     } catch (error) {
       if (readVersion === workbookReadVersionRef.current) {
         setImportError(error instanceof Error ? error.message : 'Nie udało się odczytać pliku Excel.');
@@ -972,7 +1006,9 @@ export default function PrzygotowanieProdukcjiPage() {
     setImporting(true);
     setImportError(null);
     try {
-      const selectedWorkbook = readProductionPlanSheet(workbookSource, selectedSheetName);
+      const workbookTools = await loadProductionPlanWorkbookTools();
+      XLSX = workbookTools.productionPlanXlsx;
+      const selectedWorkbook = workbookTools.readProductionPlanSheet(workbookSource, selectedSheetName);
       const importedTasks = parseTasks(selectedWorkbook, selectedSheetName);
       if (importedTasks.length === 0) {
         setImportError('Wybrany arkusz nie zawiera pozycji planu. Wybierz inną zakładkę.');
@@ -1147,6 +1183,7 @@ export default function PrzygotowanieProdukcjiPage() {
   const activeTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station && task.planGroup !== 'planned' && !isPanelGroupHeader(task)), [tasks]);
   const plannedTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station && task.planGroup === 'planned'), [tasks]);
   const reportDays = useMemo(() => {
+    if (activeView !== 'report') return [];
     const allDays = [
       ...history
         .filter((entry) => entry.plan_date !== selectedPlanDate)
@@ -1158,7 +1195,7 @@ export default function PrzygotowanieProdukcjiPage() {
     from.setHours(0, 0, 0, 0);
     from.setDate(from.getDate() - (reportPeriod === 'week' ? 6 : 29));
     return allDays.filter((entry) => new Date(`${entry.date}T12:00:00`) >= from);
-  }, [history, reportPeriod, selectedPlanDate, tasks]);
+  }, [activeView, history, reportPeriod, selectedPlanDate, tasks]);
 
   const workReport = useMemo(() => {
     const totals = Object.fromEntries(reportKinds.map((kind) => [kind.id, { total: 0, done: 0 }])) as Record<ReportKind, { total: number; done: number }>;
@@ -2073,7 +2110,6 @@ export default function PrzygotowanieProdukcjiPage() {
         </TabsContent>
         <TabsContent value="report" className="production-report space-y-4">
           <WorkReportDashboard chart={reportChart} dayCount={reportDays.length} onPeriodChange={setReportPeriod} period={reportPeriod} report={workReport} series={workKindSeries} />
-          <Card className="overflow-hidden p-0"><div className="border-b border-border bg-[linear-gradient(135deg,rgba(255,122,0,0.16),rgba(255,255,255,0.02))] px-5 py-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-dim">Podsumowanie przygotowania produkcji</p><p className="mt-1 text-2xl font-semibold text-title">Raport prac</p></div><div className="flex flex-wrap gap-2">{([{ id: 'week', label: 'Tydzień' }, { id: 'month', label: 'Miesiąc' }, { id: 'all', label: 'Wszystko' }] as const).map((period) => <Button className={cn('min-h-10 px-4 py-2 text-xs', reportPeriod === period.id && 'bg-[rgba(255,122,0,0.18)] text-title')} key={period.id} onClick={() => setReportPeriod(period.id)} type="button" variant={reportPeriod === period.id ? 'secondary' : 'outline'}>{period.label}</Button>)}</div></div></div><div className="grid gap-px bg-border sm:grid-cols-3"><div className="bg-surface px-5 py-4"><p className="text-xs font-semibold uppercase text-dim">Wszystkie prace</p><p className="mt-2 text-3xl font-bold text-[var(--brand)]">{Object.values(workReport).reduce((sum, item) => sum + item.total, 0)}</p></div><div className="bg-surface px-5 py-4"><p className="text-xs font-semibold uppercase text-dim">Dni w okresie</p><p className="mt-2 text-3xl font-bold text-title">{reportDays.length}</p></div><div className="bg-surface px-5 py-4"><p className="text-xs font-semibold uppercase text-dim">Wykonane</p><p className="mt-2 text-3xl font-bold text-title">{Object.values(workReport).reduce((sum, item) => sum + item.done, 0)}</p></div></div></Card><div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]"><Card className="p-4"><p className="mb-4 font-semibold text-title">Prace w czasie</p><div className="h-72"><ResponsiveContainer height="100%" width="100%"><BarChart data={reportChart}><CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" stroke="var(--t-dim)" tickLine={false} /><YAxis allowDecimals={false} stroke="var(--t-dim)" tickLine={false} width={28} /><Tooltip contentStyle={{ background: '#0b0c10', border: '1px solid rgba(255,122,0,0.45)', borderRadius: 8 }} cursor={{ fill: 'rgba(255,122,0,0.08)' }} /><Bar dataKey="prace" fill="var(--brand)" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div></Card><Card className="overflow-hidden p-0"><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Rodzaje prac</p></div><div className="divide-y divide-border">{workKinds.map((kind) => <div className="flex items-center justify-between px-5 py-3" key={kind.id}><p className="text-sm font-semibold text-title">{kind.label}</p><div className="text-right"><p className="text-xl font-bold text-[var(--brand)]">{workReport[kind.id].total}</p>{workReport[kind.id].done > 0 && <p className="text-xs text-dim">Wykonane: {workReport[kind.id].done}</p>}</div></div>)}</div></Card></div>
         </TabsContent>
       </Tabs>
     </div>

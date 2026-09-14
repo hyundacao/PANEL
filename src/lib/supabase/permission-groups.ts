@@ -9,6 +9,7 @@ import {
 type UserGroupJoinRow = {
   user_id: string;
   group_id: string;
+  permission_groups: DbPermissionGroupRow | DbPermissionGroupRow[] | null;
 };
 
 const isPermissionGroupSchemaMissing = (error: unknown) => {
@@ -78,7 +79,7 @@ export const loadUserGroupsByUserIds = async (
 
   const { data: assignmentsData, error: assignmentsError } = await supabaseAdmin
     .from('user_permission_groups')
-    .select('user_id, group_id')
+    .select('user_id, group_id, permission_groups(id, name, description, access, is_active, created_at)')
     .in('user_id', ids);
 
   if (assignmentsError) {
@@ -86,32 +87,11 @@ export const loadUserGroupsByUserIds = async (
     throw assignmentsError;
   }
 
-  const assignments = (assignmentsData ?? []) as UserGroupJoinRow[];
-  const groupIds = Array.from(
-    new Set(
-      assignments
-        .map((row) => row.group_id?.trim())
-        .filter((value): value is string => Boolean(value))
-    )
-  );
-  if (groupIds.length === 0) return groupsByUserId;
-
-  const { data: groupsData, error: groupsError } = await supabaseAdmin
-    .from('permission_groups')
-    .select('id, name, description, access, is_active, created_at')
-    .in('id', groupIds);
-
-  if (groupsError) {
-    if (isPermissionGroupSchemaMissing(groupsError)) return groupsByUserId;
-    throw groupsError;
-  }
-
-  const groupsById = new Map(
-    ((groupsData ?? []) as DbPermissionGroupRow[]).map((row) => [row.id, toUserPermissionGroup(row)])
-  );
-
-  assignments.forEach((row) => {
-    const mapped = groupsById.get(row.group_id);
+  ((assignmentsData ?? []) as unknown as UserGroupJoinRow[]).forEach((row) => {
+    const rawGroup = Array.isArray(row.permission_groups)
+      ? row.permission_groups[0]
+      : row.permission_groups;
+    const mapped = rawGroup ? toUserPermissionGroup(rawGroup) : null;
     if (!mapped) return;
     const current = groupsByUserId.get(row.user_id) ?? [];
     current.push(mapped);

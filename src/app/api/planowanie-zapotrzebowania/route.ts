@@ -13,10 +13,42 @@ export const dynamic = 'force-dynamic';
 
 const MODULE_KEY = 'main';
 const PRODUCT_CATALOG_PAGE_SIZE = 1000;
+const PRODUCT_CATALOG_PAGE_CONCURRENCY = 4;
 const PRODUCT_CATALOG_CACHE_MS = 5 * 60 * 1000;
+const PLANNING_STATE_CACHE_MS = 30 * 1000;
 
 let productCatalogCache: { items: ProductCatalogItem[]; expiresAt: number } | null = null;
 let productCatalogLoadPromise: Promise<ProductCatalogItem[]> | null = null;
+type PlanningStateRecord = {
+  state: unknown;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  revision: number;
+  concurrencyMigrationRequired?: boolean;
+};
+let planningStateCache: (PlanningStateRecord & { expiresAt: number }) | null = null;
+
+const cachedPlanningState = () => (
+  planningStateCache && planningStateCache.expiresAt > Date.now() ? planningStateCache : null
+);
+
+const rememberPlanningState = (record: PlanningStateRecord) => {
+  planningStateCache = { ...record, expiresAt: Date.now() + PLANNING_STATE_CACHE_MS };
+  return record;
+};
+
+const planningStateResponse = (record: PlanningStateRecord, requestedRevision: number | null) => {
+  if (requestedRevision !== null && requestedRevision === record.revision) {
+    return NextResponse.json({ unchanged: true, revision: record.revision });
+  }
+  return NextResponse.json({
+    state: record.state,
+    updatedAt: record.updatedAt,
+    updatedBy: record.updatedBy,
+    revision: record.revision,
+    ...(record.concurrencyMigrationRequired ? { concurrencyMigrationRequired: true } : {})
+  });
+};
 
 const normalizeName = (value: unknown) =>
   String(value ?? '')
@@ -37,16 +69,44 @@ const warsawDateKey = (value = new Date()) =>
 
 const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
   const rows: Array<{ id: string; name: string; index_code: string | null; warehouse_code: string | null; unit: string | null }> = [];
-  for (let from = 0; ; from += PRODUCT_CATALOG_PAGE_SIZE) {
-    const { data, error } = await supabaseAdmin
-      .from('original_inventory_catalog')
-      .select('id, name, index_code, warehouse_code, unit')
-      .order('name', { ascending: true })
-      .range(from, from + PRODUCT_CATALOG_PAGE_SIZE - 1);
-    if (error) throw error;
-    const page = data ?? [];
-    rows.push(...page);
-    if (page.length < PRODUCT_CATALOG_PAGE_SIZE) break;
+  const fields = 'id, name, index_code, warehouse_code, unit';
+  const firstResult = await supabaseAdmin
+    .from('original_inventory_catalog')
+    .select(fields, { count: 'exact' })
+    .order('name', { ascending: true })
+    .range(0, PRODUCT_CATALOG_PAGE_SIZE - 1);
+  if (firstResult.error) throw firstResult.error;
+  rows.push(...(firstResult.data ?? []));
+
+  const total = firstResult.count;
+  if (total === null) {
+    for (let from = PRODUCT_CATALOG_PAGE_SIZE; rows.length === from; from += PRODUCT_CATALOG_PAGE_SIZE) {
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_catalog')
+        .select(fields)
+        .order('name', { ascending: true })
+        .range(from, from + PRODUCT_CATALOG_PAGE_SIZE - 1);
+      if (error) throw error;
+      rows.push(...(data ?? []));
+    }
+  } else {
+    const pageCount = Math.ceil(total / PRODUCT_CATALOG_PAGE_SIZE);
+    for (let firstPage = 1; firstPage < pageCount; firstPage += PRODUCT_CATALOG_PAGE_CONCURRENCY) {
+      const pages = await Promise.all(Array.from(
+        { length: Math.min(PRODUCT_CATALOG_PAGE_CONCURRENCY, pageCount - firstPage) },
+        async (_, offset) => {
+          const from = (firstPage + offset) * PRODUCT_CATALOG_PAGE_SIZE;
+          const { data, error } = await supabaseAdmin
+            .from('original_inventory_catalog')
+            .select(fields)
+            .order('name', { ascending: true })
+            .range(from, from + PRODUCT_CATALOG_PAGE_SIZE - 1);
+          if (error) throw error;
+          return data ?? [];
+        }
+      ));
+      pages.forEach((page) => rows.push(...page));
+    }
   }
 
   const unique = new Map<string, ProductCatalogItem>();
@@ -165,7 +225,8 @@ const ensureAccess = async (request: NextRequest, write = false) => {
 export async function GET(request: NextRequest) {
   const access = await ensureAccess(request);
   if (access.response) return access.response;
-  if (request.nextUrl.searchParams.get('source') === 'product-catalog') {
+  const source = request.nextUrl.searchParams.get('source');
+  if (source === 'product-catalog') {
     try {
       const query = request.nextUrl.searchParams.get('query')?.slice(0, 160) ?? '';
       const requestedMode = request.nextUrl.searchParams.get('mode');
@@ -189,7 +250,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ code: 'PRODUCT_CATALOG_LOAD_FAILED', detail }, { status: 500 });
     }
   }
-  if (request.nextUrl.searchParams.get('source') === 'original-inventory') {
+  if (source === 'original-inventory') {
     try {
       return NextResponse.json(await loadOriginalInventory(request.nextUrl.searchParams.get('date') ?? ''));
     } catch (error) {
@@ -197,28 +258,65 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ code: 'ORIGINAL_INVENTORY_LOAD_FAILED', detail }, { status: 500 });
     }
   }
+  if (source === 'fixed-devices') {
+    const cached = cachedPlanningState();
+    if (cached) {
+      const state = cached.state && typeof cached.state === 'object'
+        ? cached.state as { fixedDevices?: unknown }
+        : null;
+      return NextResponse.json({ items: state?.fixedDevices ?? [] });
+    }
+    const { data, error } = await supabaseAdmin
+      .from('material_planning_state')
+      .select('fixed_devices:state->fixedDevices')
+      .eq('id', MODULE_KEY)
+      .maybeSingle();
+    if (error) return NextResponse.json({ code: 'LOAD_FAILED', detail: error.message }, { status: 500 });
+    const row = data as unknown as { fixed_devices?: unknown } | null;
+    return NextResponse.json({ items: row?.fixed_devices ?? [] });
+  }
+
+  const requestedRevisionValue = request.nextUrl.searchParams.get('revision');
+  const parsedRequestedRevision = requestedRevisionValue === null ? NaN : Number(requestedRevisionValue);
+  const requestedRevision = Number.isSafeInteger(parsedRequestedRevision) && parsedRequestedRevision >= 0
+    ? parsedRequestedRevision
+    : null;
+  const cached = cachedPlanningState();
+  if (cached) return planningStateResponse(cached, requestedRevision);
+
+  if (requestedRevision !== null) {
+    const revisionOnly = await supabaseAdmin
+      .from('material_planning_state')
+      .select('revision')
+      .eq('id', MODULE_KEY)
+      .maybeSingle();
+    if (!revisionOnly.error && Number(revisionOnly.data?.revision ?? 0) === requestedRevision) {
+      return NextResponse.json({ unchanged: true, revision: requestedRevision });
+    }
+  }
+
   const withRevision = await supabaseAdmin
     .from('material_planning_state')
     .select('state, updated_at, updated_by, revision')
     .eq('id', MODULE_KEY)
     .maybeSingle();
   if (!withRevision.error) {
-    return NextResponse.json({
+    return planningStateResponse(rememberPlanningState({
       state: withRevision.data?.state ?? null,
       updatedAt: withRevision.data?.updated_at ?? null,
       updatedBy: withRevision.data?.updated_by ?? null,
       revision: Number(withRevision.data?.revision ?? 0)
-    });
+    }), requestedRevision);
   }
   const legacy = await supabaseAdmin.from('material_planning_state').select('state, updated_at, updated_by').eq('id', MODULE_KEY).maybeSingle();
   if (legacy.error) return NextResponse.json({ code: 'MIGRATION_REQUIRED', detail: legacy.error.message }, { status: 503 });
-  return NextResponse.json({
+  return planningStateResponse(rememberPlanningState({
     state: legacy.data?.state ?? null,
     updatedAt: legacy.data?.updated_at ?? null,
     updatedBy: legacy.data?.updated_by ?? null,
     revision: 0,
     concurrencyMigrationRequired: true
-  });
+  }), requestedRevision);
 }
 
 export async function PUT(request: NextRequest) {
@@ -257,5 +355,7 @@ export async function PUT(request: NextRequest) {
   if (result?.has_conflict) {
     return NextResponse.json({ code: 'REVISION_CONFLICT', revision }, { status: 409 });
   }
-  return NextResponse.json({ ok: true, revision, updatedAt: new Date().toISOString() });
+  const updatedAt = new Date().toISOString();
+  rememberPlanningState({ state, updatedAt, updatedBy, revision });
+  return NextResponse.json({ ok: true, revision, updatedAt });
 }

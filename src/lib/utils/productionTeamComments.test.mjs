@@ -428,14 +428,17 @@ test('deleted comments stay deleted after reload and roster saves', async () => 
   assert.deepEqual(data.teamComments.process,{enabled:false,text:'',showQuantity:false});
 });
 
-test('unchanged plan responses still refresh shared comments', async () => {
+test('unchanged plan polling skips shared settings until the periodic settings refresh', async () => {
   const api=testApi();
   const date=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Warsaw'}).format(new Date());
   api.db.przygotowanie_produkcji_sessions.push({id:'daily',session_date:date,updated_at:'version-1'});
   await api.save('process',{enabled:true,text:'Nowa wspólna instrukcja'});
-  const data=await (await api.get('?sync=1&since=version-1%7Cedit')).json();
-  assert.equal(data.unchanged,true);
-  assert.equal(data.teamComments.process.text,'Nowa wspólna instrukcja');
+  const fastPoll=await (await api.get('?sync=1&since=version-1%7Cedit')).json();
+  assert.equal(fastPoll.unchanged,true);
+  assert.equal(fastPoll.teamComments,undefined);
+  const settingsPoll=await (await api.get('?sync=1&since=version-1%7Cedit&settings=1')).json();
+  assert.equal(settingsPoll.unchanged,true);
+  assert.equal(settingsPoll.teamComments.process.text,'Nowa wspólna instrukcja');
 });
 
 test('invalid requests and access restrictions never write settings', async () => {

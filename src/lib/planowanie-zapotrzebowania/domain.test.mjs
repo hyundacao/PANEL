@@ -8,10 +8,32 @@ import {
   correctedQuantity,
   diffPlanItems,
   effectiveProducerQuantity,
+  effectiveTechnologyMaterials,
   latestPlanVersion,
   nextPlanVersionNumber,
   setRemainingQuantity
 } from './domain.ts';
+
+test('plan bez ręcznej korekty korzysta z aktualnych materiałów biblioteki', () => {
+  const previousPlanCopy = [{ id: 'old', code: 'MAT-OLD', usage: 0.1 }];
+  const updatedLibrary = [{ id: 'new', code: 'MAT-NEW', usage: 0.2 }];
+
+  assert.equal(effectiveTechnologyMaterials(previousPlanCopy, updatedLibrary, false), updatedLibrary);
+});
+
+test('świadoma korekta robocza pozostaje niezależna od zmian biblioteki', () => {
+  const workingCopy = [{ id: 'working', code: 'MAT-WORKING', usage: 0.15 }];
+  const updatedLibrary = [{ id: 'base', code: 'MAT-BASE', usage: 0.2 }];
+
+  assert.equal(effectiveTechnologyMaterials(workingCopy, updatedLibrary, true), workingCopy);
+});
+
+test('stara kopia planu jest awaryjnym źródłem, gdy wybranej technologii brakuje w bibliotece', () => {
+  const savedPlanCopy = [{ id: 'saved', code: 'MAT-SAVED', usage: 0.1 }];
+
+  assert.equal(effectiveTechnologyMaterials(savedPlanCopy, undefined, false), savedPlanCopy);
+  assert.deepEqual(effectiveTechnologyMaterials(undefined, undefined, false), []);
+});
 
 test('produkcja pod powiązanie uzupełnia brakującą ilość i zachowuje większy plan własny', () => {
   assert.equal(effectiveProducerQuantity(0, 6580, 'linked'), 6580);

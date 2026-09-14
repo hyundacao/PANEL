@@ -122,22 +122,48 @@ const isModuleSettings = (task: Record<string, unknown>) =>
   || String(task.task_key ?? task.id ?? '').startsWith('__personal_task__:')
   || String(task.task_key ?? task.id ?? '').startsWith(TEAM_COMMENT_KEY_PREFIX);
 
-const readGlobalTeamComments = async () => {
-  const comments = defaultTeamComments();
+type GlobalSettingsRow = { task_key: unknown; notes: unknown };
+const GLOBAL_SETTINGS_CACHE_MS = 60 * 1000;
+let globalSettingsRowsCache: { rows: GlobalSettingsRow[]; expiresAt: number } | null = null;
+let globalSettingsRowsLoad: Promise<GlobalSettingsRow[]> | null = null;
+
+const queryGlobalSettingsRows = async (): Promise<GlobalSettingsRow[]> => {
   const { data: session, error: sessionError } = await supabaseAdmin
     .from('przygotowanie_produkcji_sessions')
     .select('id')
     .eq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE)
     .maybeSingle();
   if (sessionError) throw sessionError;
-  if (!session) return comments;
-  const { data: rows, error } = await supabaseAdmin
+  if (!session) return [];
+  const { data, error } = await supabaseAdmin
     .from('przygotowanie_produkcji_tasks')
     .select('task_key, notes')
-    .eq('session_id', session.id)
-    .in('task_key', PRODUCTION_TEAMS.map((team) => `${TEAM_COMMENT_KEY_PREFIX}${team}`));
+    .eq('session_id', session.id);
   if (error) throw error;
-  for (const row of rows ?? []) {
+  return (data ?? []) as GlobalSettingsRow[];
+};
+
+const readGlobalSettingsRows = async () => {
+  if (globalSettingsRowsCache && globalSettingsRowsCache.expiresAt > Date.now()) {
+    return globalSettingsRowsCache.rows;
+  }
+  if (!globalSettingsRowsLoad) globalSettingsRowsLoad = queryGlobalSettingsRows();
+  try {
+    const rows = await globalSettingsRowsLoad;
+    globalSettingsRowsCache = { rows, expiresAt: Date.now() + GLOBAL_SETTINGS_CACHE_MS };
+    return rows;
+  } finally {
+    globalSettingsRowsLoad = null;
+  }
+};
+
+const invalidateGlobalSettingsCache = () => {
+  globalSettingsRowsCache = null;
+};
+
+const readGlobalTeamComments = async () => {
+  const comments = defaultTeamComments();
+  for (const row of await readGlobalSettingsRows()) {
     const team = String(row.task_key).slice(TEAM_COMMENT_KEY_PREFIX.length);
     if (isProductionTeam(team)) {
       const notes = row.notes && typeof row.notes === 'object' ? row.notes as Record<string, unknown> : {};
@@ -180,40 +206,18 @@ const normalizeProcessEngineerRoster = (value: unknown, legacyNames?: unknown): 
 };
 
 const readGlobalProcessEngineerRoster = async () => {
-  const { data: settingsSession, error: sessionError } = await supabaseAdmin
-    .from('przygotowanie_produkcji_sessions')
-    .select('id')
-    .eq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE)
-    .maybeSingle();
-  if (sessionError) throw sessionError;
-  if (!settingsSession) return null;
-  const { data: settingsRow, error: settingsError } = await supabaseAdmin
-    .from('przygotowanie_produkcji_tasks')
-    .select('notes')
-    .eq('session_id', settingsSession.id)
-    .eq('task_key', PROCESS_ENGINEERS_SETTINGS_KEY)
-    .maybeSingle();
-  if (settingsError) throw settingsError;
+  const settingsRow = (await readGlobalSettingsRows()).find((row) => (
+    String(row.task_key ?? '') === PROCESS_ENGINEERS_SETTINGS_KEY
+  ));
   if (!settingsRow?.notes || typeof settingsRow.notes !== 'object') return null;
   const notes = settingsRow.notes as Record<string, unknown>;
   return normalizeProcessEngineerRoster(notes.processEngineerRoster, notes.processEngineers);
 };
 
 const readGlobalRecurringTasks = async (): Promise<RecurringTaskDefinition[]> => {
-  const { data: settingsSession, error: sessionError } = await supabaseAdmin
-    .from('przygotowanie_produkcji_sessions')
-    .select('id')
-    .eq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE)
-    .maybeSingle();
-  if (sessionError) throw sessionError;
-  if (!settingsSession) return [];
-  const { data: settingsRow, error: settingsError } = await supabaseAdmin
-    .from('przygotowanie_produkcji_tasks')
-    .select('notes')
-    .eq('session_id', settingsSession.id)
-    .eq('task_key', RECURRING_TASK_SETTINGS_KEY)
-    .maybeSingle();
-  if (settingsError) throw settingsError;
+  const settingsRow = (await readGlobalSettingsRows()).find((row) => (
+    String(row.task_key ?? '') === RECURRING_TASK_SETTINGS_KEY
+  ));
   if (!settingsRow?.notes || typeof settingsRow.notes !== 'object') return [];
   return normalizeRecurringTasks((settingsRow.notes as Record<string, unknown>).recurringTasks);
 };
@@ -294,45 +298,61 @@ const saveHistorySnapshot = async (
 
 const archivePreviousDays = async () => {
   try {
-    const { data: previousSessions, error: sessionError } = await supabaseAdmin
-      .from('przygotowanie_produkcji_sessions')
-      .select('id, session_date, file_name, plan_sheet, created_by')
-      .lt('session_date', todayKey())
-      .neq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE);
-    if (sessionError) throw sessionError;
-
-    for (const session of previousSessions ?? []) {
-      const { data: existingHistory, error: historyLookupError } = await supabaseAdmin
+    const archiveBefore = todayKey();
+    const [sessionsResult, historyResult] = await Promise.all([
+      supabaseAdmin
+        .from('przygotowanie_produkcji_sessions')
+        .select('id, session_date, file_name, plan_sheet, created_by')
+        .lt('session_date', archiveBefore)
+        .neq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE),
+      supabaseAdmin
         .from('przygotowanie_produkcji_history')
         .select('plan_date')
-        .eq('plan_date', session.session_date)
-        .maybeSingle();
-      if (historyLookupError) throw historyLookupError;
-      if (existingHistory) continue;
+        .lt('plan_date', archiveBefore)
+    ]);
+    const { data: previousSessions, error: sessionError } = sessionsResult;
+    if (sessionError) throw sessionError;
+    if (historyResult.error) throw historyResult.error;
 
-      const { data: taskRows, error: taskError } = await supabaseAdmin
-        .from('przygotowanie_produkcji_tasks')
-        .select('*')
-        .eq('session_id', session.id)
-        .order('position_no');
-      if (taskError) throw taskError;
-      const tasks = withToolroomReturnTasks((taskRows ?? []).filter((task) => {
+    const archivedDates = new Set((historyResult.data ?? []).map((entry) => String(entry.plan_date)));
+    const sessionsToArchive = (previousSessions ?? []).filter((session) => !archivedDates.has(String(session.session_date)));
+    if (sessionsToArchive.length === 0) return;
+
+    const sessionIds = sessionsToArchive.map((session) => session.id);
+    const { data: taskRows, error: taskError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_tasks')
+      .select('*')
+      .in('session_id', sessionIds)
+      .order('position_no');
+    if (taskError) throw taskError;
+    const rowsBySession = new Map<string, Array<Record<string, unknown>>>();
+    for (const row of taskRows ?? []) {
+      const sessionId = String(row.session_id);
+      const rows = rowsBySession.get(sessionId) ?? [];
+      rows.push(row as Record<string, unknown>);
+      rowsBySession.set(sessionId, rows);
+    }
+
+    const historyRows = sessionsToArchive.flatMap((session) => {
+      const tasks = withToolroomReturnTasks((rowsBySession.get(String(session.id)) ?? []).filter((task) => {
         const record = task as Record<string, unknown>;
         return !isModuleSettings(record) && hasAssignment(record);
       }).map((row) => fromDbTask(row as Record<string, unknown>)), false);
-      if (!tasks.length) continue;
-
-      const { error: historyError } = await supabaseAdmin
-        .from('przygotowanie_produkcji_history')
-        .insert({
+      return tasks.length === 0
+        ? []
+        : [{
           plan_date: session.session_date,
           file_name: session.file_name,
           plan_sheet: session.plan_sheet,
           tasks,
           archived_by: session.created_by
-        });
-      if (historyError) throw historyError;
-    }
+        }];
+    });
+    if (historyRows.length === 0) return;
+    const { error: historyError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_history')
+      .upsert(historyRows, { onConflict: 'plan_date', ignoreDuplicates: true });
+    if (historyError) throw historyError;
   } catch (error) {
     // History is optional. A missing migration must never block the current plan or delete data.
     console.error('[przygotowanie-produkcji] History archive skipped:', error);
@@ -621,35 +641,40 @@ const ensureRecurringTaskInstances = async (
   planDate: string,
   definitions: RecurringTaskDefinition[],
   userName: string,
-  syncExisting = false
-) => {
+  syncExisting = false,
+  knownSessionId = ''
+): Promise<boolean> => {
   const dueTasks = recurringTasksForDate(definitions, planDate);
-  if (dueTasks.length === 0) return;
+  if (dueTasks.length === 0) return false;
 
   const now = new Date().toISOString();
-  const { error: createSessionError } = await supabaseAdmin
-    .from('przygotowanie_produkcji_sessions')
-    .upsert({
-      session_date: planDate,
-      file_name: 'ZADANIA CYKLICZNE',
-      plan_sheet: '',
-      created_by: userName,
-      updated_at: now
-    }, { onConflict: 'session_date', ignoreDuplicates: true });
-  if (createSessionError) throw createSessionError;
+  let sessionId = knownSessionId;
+  if (!sessionId) {
+    const { error: createSessionError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_sessions')
+      .upsert({
+        session_date: planDate,
+        file_name: 'ZADANIA CYKLICZNE',
+        plan_sheet: '',
+        created_by: userName,
+        updated_at: now
+      }, { onConflict: 'session_date', ignoreDuplicates: true });
+    if (createSessionError) throw createSessionError;
 
-  const { data: session, error: sessionError } = await supabaseAdmin
-    .from('przygotowanie_produkcji_sessions')
-    .select('id')
-    .eq('session_date', planDate)
-    .single();
-  if (sessionError) throw sessionError;
+    const { data: session, error: sessionError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_sessions')
+      .select('id')
+      .eq('session_date', planDate)
+      .single();
+    if (sessionError) throw sessionError;
+    sessionId = String(session.id);
+  }
 
   const taskKeys = dueTasks.map((task) => recurringTaskInstanceId(task.id, planDate));
   const { data: existingRows, error: existingError } = await supabaseAdmin
     .from('przygotowanie_produkcji_tasks')
     .select('*')
-    .eq('session_id', session.id)
+    .eq('session_id', sessionId)
     .in('task_key', taskKeys);
   if (existingError) throw existingError;
   const existingByKey = new Map((existingRows ?? []).map((row) => [String(row.task_key), row]));
@@ -674,7 +699,7 @@ const ensureRecurringTaskInstances = async (
           ? Object.fromEntries(removedTeams.map((team) => [team, null]))
           : undefined
       }, { completedAt: '', completedBy: '' });
-      const row = toDbTask(next, session.id, Number(existingRow.position_no ?? 100000 + index), userName);
+      const row = toDbTask(next, sessionId, Number(existingRow.position_no ?? 100000 + index), userName);
       const updates = omitFields(row, ['session_id', 'task_key', 'position_no'] as const);
       const { error } = await supabaseAdmin
         .from('przygotowanie_produkcji_tasks')
@@ -704,10 +729,10 @@ const ensureRecurringTaskInstances = async (
       dryer: '',
       temperature: ''
     };
-    const row = toDbTask(task, session.id, 100000 + index, 'System cykliczny');
+    const row = toDbTask(task, sessionId, 100000 + index, 'System cykliczny');
     const { error } = await supabaseAdmin
       .from('przygotowanie_produkcji_tasks')
-      .insert({ id: stableTaskRowUuid(session.id, taskKey), ...row });
+      .insert({ id: stableTaskRowUuid(sessionId, taskKey), ...row });
     if (error && error.code !== '23505') throw error;
     if (!error) changed = true;
   }
@@ -716,9 +741,10 @@ const ensureRecurringTaskInstances = async (
     const { error } = await supabaseAdmin
       .from('przygotowanie_produkcji_sessions')
       .update({ updated_at: new Date().toISOString() })
-      .eq('id', session.id);
+      .eq('id', sessionId);
     if (error) throw error;
   }
+  return changed;
 };
 
 const requiresToolroomReturn = (task: StoredTask) =>
@@ -862,8 +888,8 @@ export async function GET(request: NextRequest) {
     if (historyOnly && !responseAccess.isAdmin) {
       return NextResponse.json({ code: 'FORBIDDEN' }, { status: 403 });
     }
-    if (!syncOnly && responseAccess.isAdmin) await archivePreviousDays();
     if (historyOnly) {
+      await archivePreviousDays();
       const { data: history, error: historyError } = await supabaseAdmin
         .from('przygotowanie_produkcji_history')
         .select('plan_date, file_name, plan_sheet, tasks, archived_at')
@@ -879,25 +905,63 @@ export async function GET(request: NextRequest) {
     }
     const planDate = resolveProductionPlanDate(request.nextUrl.searchParams.get('date'));
     if (!planDate || planDate === PROCESS_ENGINEERS_SETTINGS_DATE) return invalidPlanDate();
-    const teamComments = await readGlobalTeamComments();
-    const recurringTasks = await readGlobalRecurringTasks();
-    if (planDate === todayKey()) {
-      await ensureRecurringTaskInstances(planDate, recurringTasks, access.user.name);
-    }
-    const { data: session, error: sessionError } = await supabaseAdmin
+    const readPlanSession = () => supabaseAdmin
       .from('przygotowanie_produkcji_sessions')
       .select('id, session_date, file_name, plan_sheet, updated_at')
       .eq('session_date', planDate)
       .maybeSingle();
+    const initialSettingsLoad = !syncOnly ? Promise.all([
+      readGlobalTeamComments(),
+      readGlobalRecurringTasks(),
+      readGlobalProcessEngineerRoster()
+    ]) : null;
+    const sessionResult = await readPlanSession();
+    const prefetchedSettings = initialSettingsLoad ? await initialSettingsLoad : null;
+    let session = sessionResult.data;
+    const sessionError = sessionResult.error;
     if (sessionError) throw sessionError;
     const requestedVersion = request.nextUrl.searchParams.get('since');
-    const syncVersion = session
+    let syncVersion = session
       ? `${String(session.updated_at ?? '')}|${responseAccess.materialAccess}`
       : '';
-    if (syncOnly && session && requestedVersion && requestedVersion === syncVersion) {
-      return NextResponse.json({ unchanged: true, updatedAt: session.updated_at, syncVersion, teamComments, recurringTasks, access: responseAccess });
+    const refreshSharedSettings = !syncOnly || !session || request.nextUrl.searchParams.get('settings') === '1';
+    if (syncOnly && session && requestedVersion && requestedVersion === syncVersion && !refreshSharedSettings) {
+      return NextResponse.json({ unchanged: true, updatedAt: session.updated_at, syncVersion, access: responseAccess });
     }
-    const globalRoster = syncOnly ? null : await readGlobalProcessEngineerRoster();
+
+    const [teamComments, recurringTasks, globalRoster] = prefetchedSettings ?? await Promise.all([
+      refreshSharedSettings ? readGlobalTeamComments() : Promise.resolve(undefined),
+      refreshSharedSettings ? readGlobalRecurringTasks() : Promise.resolve(undefined),
+      syncOnly ? Promise.resolve(null) : readGlobalProcessEngineerRoster()
+    ]);
+    if (syncOnly && session && requestedVersion && requestedVersion === syncVersion) {
+      return NextResponse.json({
+        unchanged: true,
+        updatedAt: session.updated_at,
+        syncVersion,
+        teamComments,
+        recurringTasks,
+        access: responseAccess
+      });
+    }
+
+    if (!syncOnly && planDate === todayKey()) {
+      const recurringTasksChanged = await ensureRecurringTaskInstances(
+        planDate,
+        recurringTasks ?? [],
+        access.user.name,
+        false,
+        String(session?.id ?? '')
+      );
+      if (recurringTasksChanged) {
+        const refreshedSession = await readPlanSession();
+        if (refreshedSession.error) throw refreshedSession.error;
+        session = refreshedSession.data;
+        syncVersion = session
+          ? `${String(session.updated_at ?? '')}|${responseAccess.materialAccess}`
+          : '';
+      }
+    }
     if (!session) {
       const processEngineerRoster = globalRoster ?? defaultProcessEngineerRoster();
       return NextResponse.json({
@@ -1043,10 +1107,9 @@ export async function POST(request: NextRequest) {
           if (update.error) throw update.error;
         } else if (error) throw error;
       }
+      invalidateGlobalSettingsCache();
       return NextResponse.json({ team, comment });
     }
-
-    if (isAdmin) await archivePreviousDays();
 
     if (body.action === 'deleteHistoryDay') {
       const planDate = String(body.planDate ?? '');
@@ -1129,6 +1192,7 @@ export async function POST(request: NextRequest) {
       if (planDate === todayKey()) {
         await ensureRecurringTaskInstances(planDate, recurringTasks, access.user.name, true);
       }
+      invalidateGlobalSettingsCache();
       return NextResponse.json({ recurringTasks });
     }
 
@@ -1193,6 +1257,7 @@ export async function POST(request: NextRequest) {
           .insert({ ...settings, session_id: session.id, task_key: PROCESS_ENGINEERS_SETTINGS_KEY });
         if (insertError) throw insertError;
       }
+      invalidateGlobalSettingsCache();
       return NextResponse.json({ processEngineers, processEngineerRoster });
     }
 
@@ -1220,19 +1285,19 @@ export async function POST(request: NextRequest) {
       tasks = withToolroomReturnTasks([...tasks, ...storedReturns]);
       const storedByTaskKey = new Map((storedRows ?? []).map((row) => [String(row.task_key), String(row.id)]));
       const importedRows = tasks.map((task, index) => toDbTask(task, session.id, index, access.user.name));
+      const rowsToUpdate = importedRows.flatMap((row) => {
+        const storedId = storedByTaskKey.get(String(row.task_key));
+        return storedId ? [{ id: storedId, ...row }] : [];
+      });
       const rowsToInsert = importedRows.filter((row) => !storedByTaskKey.has(String(row.task_key)))
         .map((row) => isToolroomReturnTask(fromDbTask(row)) ? { ...row, id: toolroomRowUuid(session.id, row.task_key) } : row);
 
-      // The production database may not yet have the unique index required by Supabase upsert.
-      // Updating known rows by their primary key makes repeated imports work with both schemas.
-      for (const row of importedRows) {
-        const storedId = storedByTaskKey.get(String(row.task_key));
-        if (!storedId) continue;
-        const updates = omitFields(row, ['session_id', 'task_key'] as const);
+      // Existing rows already have stable primary keys, so the whole imported plan
+      // can be updated in one request without relying on the optional task_key index.
+      if (rowsToUpdate.length) {
         const { error: updateError } = await supabaseAdmin
           .from('przygotowanie_produkcji_tasks')
-          .update(updates)
-          .eq('id', storedId);
+          .upsert(rowsToUpdate, { onConflict: 'id' });
         if (updateError) throw updateError;
       }
       if (rowsToInsert.length) {

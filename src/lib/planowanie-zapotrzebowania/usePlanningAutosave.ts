@@ -31,17 +31,23 @@ export const usePlanningAutosave = <T,>({
 
   useEffect(() => { writableRef.current = !readOnly; }, [readOnly]);
 
-  const readRemote = useCallback(async (): Promise<PlanningRemote<T>> => {
-    const response = await fetch('/api/planowanie-zapotrzebowania', {
+  const readRemote = useCallback(async (known?: { state: T; revision: number }): Promise<PlanningRemote<T>> => {
+    const query = known ? `?revision=${known.revision}` : '';
+    const response = await fetch(`/api/planowanie-zapotrzebowania${query}`, {
       cache: 'no-store', signal: AbortSignal.timeout(15000)
     });
     if (!response.ok) throw new PlanningSaveError(response.status === 401 ? 'UNAUTHORIZED'
       : response.status === 403 ? 'FORBIDDEN' : 'LOAD_FAILED');
-    const payload = await response.json() as { state?: unknown; revision?: number };
+    const payload = await response.json() as { state?: unknown; revision?: number; unchanged?: boolean };
     const revision = Number(payload.revision ?? 0);
     if (!Number.isSafeInteger(revision) || revision < 0) throw new PlanningSaveError('INVALID_REVISION');
-    if (payload.state != null && !parse(payload.state)) throw new PlanningSaveError('INVALID_STATE');
-    return { state: (payload.state ?? null) as T | null, revision };
+    if (payload.unchanged) {
+      if (!known || revision !== known.revision) throw new PlanningSaveError('INVALID_STATE');
+      return { state: known.state, revision };
+    }
+    const parsedState = payload.state == null ? null : parse(payload.state);
+    if (payload.state != null && !parsedState) throw new PlanningSaveError('INVALID_STATE');
+    return { state: parsedState, revision };
   }, [parse]);
 
   useEffect(() => {
@@ -54,9 +60,18 @@ export const usePlanningAutosave = <T,>({
       restoredDraftRef.current = null;
       if (!local) try {
         const cached = JSON.parse(window.localStorage.getItem(cacheKey) || 'null') as (PlanningDraft<T> & { format?: number }) | null;
-        if (cached?.format === 1 && parse(cached.state)
+        const parsedCachedState = cached?.format === 1 ? parse(cached.state) : null;
+        if (cached?.format === 1 && parsedCachedState
           && (cached.revision === null || (Number.isSafeInteger(cached.revision) && cached.revision >= 0))) {
-          local = { ...cached, pending: cached.pending === true };
+          const parsedLastAttemptState = cached.lastAttempt ? parse(cached.lastAttempt.state) : null;
+          local = {
+            ...cached,
+            state: parsedCachedState,
+            pending: cached.pending === true,
+            lastAttempt: cached.lastAttempt && parsedLastAttemptState
+              ? { ...cached.lastAttempt, state: parsedLastAttemptState }
+              : undefined
+          };
         } else {
           const legacy = parse(JSON.parse(window.localStorage.getItem(storageKey) || 'null'));
           if (legacy) local = { state: legacy, revision: null, pending: false };
@@ -68,7 +83,9 @@ export const usePlanningAutosave = <T,>({
       let loadError = '';
       let conflict = false;
       try {
-        const remote = await readRemote();
+        const remote = await readRemote(local?.revision !== null && local?.revision !== undefined
+          ? { state: local.state, revision: local.revision }
+          : undefined);
         const restored = restorePlanningDraft(remote, local, initial());
         draft = restored;
         conflict = restored.conflict;
@@ -76,7 +93,7 @@ export const usePlanningAutosave = <T,>({
         loadError = failure instanceof PlanningSaveError ? failure.code : 'LOAD_FAILED';
       }
       if (!active) return;
-      const nextState = prepare(parse(draft.state) ?? initial());
+      const nextState = prepare(draft.state);
       stateRef.current = nextState;
       setReactState(nextState);
       engine = createPlanningAutosave<T>({
@@ -103,7 +120,12 @@ export const usePlanningAutosave = <T,>({
           if (!Number.isSafeInteger(nextRevision) || nextRevision <= revision) throw new PlanningSaveError('SAVE_FAILED');
           return nextRevision;
         },
-        cache: (next) => window.localStorage.setItem(cacheKey, JSON.stringify({ format: 1, ...next })),
+        cache: (next) => {
+          const cacheDraft = next.lastAttempt?.state === next.state
+            ? { ...next, lastAttempt: undefined }
+            : next;
+          window.localStorage.setItem(cacheKey, JSON.stringify({ format: 1, ...cacheDraft }));
+        },
         onChange: (nextInfo) => { if (active) setInfo(nextInfo); }
       });
       engineRef.current = engine;

@@ -5,6 +5,16 @@ export type PlanningScope =
 
 export type TechnologyProductionMode = 'planned' | 'continuous' | 'linked';
 
+export const effectiveTechnologyMaterials = <T>(
+  workingMaterials: T[] | null | undefined,
+  libraryMaterials: T[] | null | undefined,
+  manualOverride: boolean
+): T[] => {
+  const primaryMaterials = manualOverride ? workingMaterials : libraryMaterials;
+  const fallbackMaterials = manualOverride ? libraryMaterials : workingMaterials;
+  return primaryMaterials ?? fallbackMaterials ?? [];
+};
+
 export const effectiveProducerQuantity = (
   plannedQuantity: number,
   allocatedQuantity: number,

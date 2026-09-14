@@ -38,6 +38,7 @@ function setup() {
     state:{plan:[],technologies:[],archive:[],planVersions:[],documents:[],quantityCorrections:[],stationMappings:[],selectedPlanDate:'2026-08-31',selectedAreaId:'hala-2',dailyPlans:{},returnStatuses:{},returnExclusions:[],inventory:[],areas:[],calculationMode:'all',horizonShifts:3.5},
     pending:{fileName:'test.xlsx',purpose:'plan',workbook:{SheetNames:['Plan'],Sheets:{Plan:{rows}}}},sheetName:'Plan',currentUserName:'Test',quantityInputs:{},readOnly:false,
     calculationEditorOpen:false,closeCalculationEditorIfAllowed:()=>true,inventorySyncRequestRef:{current:0},
+    technologyById:{get:(id)=>ctx?.state?.technologies?.find((technology)=>technology.id===id)},
     XLSX:{read:(data)=>data,utils:{sheet_to_json:(sheet)=>sheet.rows,decode_range:()=>({s:{r:0}})}},
     flash:(message)=>messages.push(message),nowLabel:()=>new Date().toISOString(),localDateKey:()=>'2026-08-31',formatPlanDate:(date)=>date,
     areaName:(areaId)=>ctx?.state?.areas?.find((area)=>area.id===areaId)?.name ?? 'Brak przypisu',
@@ -110,8 +111,12 @@ test('a continuation candidate still receives its base technology automatically'
   assert.equal(assigned.technologyId,'tech-base');
   assert.equal(assigned.continuationCandidateId,'previous-run');
   assert.equal(assigned.shiftNorm,550);
-  assert.notEqual(assigned.workingMaterials,technology.materials);
-  assert.equal(assigned.workingMaterials[0].code,'MAT-1');
+  assert.equal(assigned.workingMaterials,null,'library materials are resolved by technology id without duplicating them in the plan');
+
+  const [missingLibraryTechnology]=h.applyDefaultTechnologyAssignments([{
+    ...assigned,technologyId:'removed-tech',workingMaterials:[material]
+  }],[]);
+  assert.equal(missingLibraryTechnology.workingMaterials[0].code,'MAT-1','a legacy snapshot remains available if its library technology was removed');
 });
 
 test('technology mass factors are edited in grams without changing stored kilograms',()=>{

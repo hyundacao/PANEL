@@ -82,6 +82,7 @@ const createHarness = () => {
   const cached = [];
   const context = {
     XLSX, Error, readProductionPlanWorkbook, readProductionPlanSheet, isToolroomReturnTask, withToolroomReturnTasks, exports: {},
+    loadProductionPlanWorkbookTools: async () => ({ productionPlanXlsx: XLSX, readProductionPlanWorkbook, readProductionPlanSheet }),
     workbookSource: null, selectedSheetName: '', readingWorkbook: false,
     loadingSavedPlan: false, saveState: 'saved', importing: false, importError: null,
     fileName: 'previous.xlsx', sheetName: 'Previous', tasks: [],

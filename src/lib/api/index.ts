@@ -601,8 +601,8 @@ export const getSpareParts = async (): Promise<SparePart[]> => appRequest('getSp
 export const getSparePartHistory = async (): Promise<SparePartHistory[]> =>
   appRequest('getSparePartHistory');
 
-export const getOriginalInventory = async (): Promise<OriginalInventoryEntry[]> =>
-  appRequest('getOriginalInventory');
+export const getOriginalInventory = async (dateKey?: string): Promise<OriginalInventoryEntry[]> =>
+  appRequest('getOriginalInventory', dateKey ? { dateKey } : undefined);
 
 export const getOriginalInventoryCatalog = async (): Promise<OriginalInventoryCatalogEntry[]> =>
   appRequest('getOriginalInventoryCatalog');

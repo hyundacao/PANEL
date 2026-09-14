@@ -2,8 +2,9 @@
 
 import { forwardRef, Fragment, useCallback, useDeferredValue, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
-import * as XLSX from 'xlsx';
+import type { WorkBook } from 'xlsx';
 import {
   ArrowDown,
   ArrowLeft,
@@ -43,7 +44,6 @@ import { Input as BaseInput } from '@/components/ui/Input';
 import { SelectField } from '@/components/ui/Select';
 import { WarningTriangle } from '@/components/ui/WarningTriangle';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
-import SpisRzeczywisty from '@/components/planowanie-zapotrzebowania/SpisRzeczywisty';
 import { PlanningSaveNotice, PlanningSaveStatus } from '@/components/planowanie-zapotrzebowania/PlanningSaveStatus';
 import { usePlanningAutosave } from '@/lib/planowanie-zapotrzebowania/usePlanningAutosave';
 import {
@@ -84,12 +84,21 @@ import {
   coalesceQuantityCorrection,
   diffPlanItems,
   effectiveProducerQuantity,
+  effectiveTechnologyMaterials,
   latestPlanVersion,
   nextPlanVersionNumber,
   setRemainingQuantity,
   type PlanDifference,
   type TechnologyProductionMode
 } from '@/lib/planowanie-zapotrzebowania/domain';
+
+const SpisRzeczywisty = dynamic(
+  () => import('@/components/planowanie-zapotrzebowania/SpisRzeczywisty'),
+  {
+    ssr: false,
+    loading: () => <div className="py-8 text-sm text-dim" role="status">Wczytywanie spisu...</div>
+  }
+);
 
 type View =
   | 'plan'
@@ -391,7 +400,8 @@ type Requirement = {
   globalSharedShortage: number;
 };
 
-type PendingWorkbook = { workbook: XLSX.WorkBook; fileName: string; purpose: 'plan' | 'inventory' };
+type PendingWorkbook = { workbook: WorkBook; fileName: string; purpose: 'plan' | 'inventory' };
+let XLSX: typeof import('xlsx') | null = null;
 const LOCAL_KEY = 'apka-kamila-planowanie-zapotrzebowania-v2';
 const CATEGORIES: MaterialCategory[] = [
   'Tworzywo',
@@ -769,8 +779,14 @@ const pickingRowWasWritten = (
 ) => document.status === 'issued' || (document.status !== 'cancelled' && Boolean(row.confirmed));
 const cloneMaterials = (items: TechnologyMaterial[]) => items.map((item) => ({ ...item, id: uid('mat') }));
 
-const applyDefaultTechnologyAssignments = (plan: PlanItem[], technologies: Technology[]) => plan.map((item) => {
-  if (item.technologyId) return item;
+const applyDefaultTechnologyAssignments = (plan: PlanItem[], technologies: Technology[]) => {
+  const technologyIds = new Set(technologies.map((technology) => technology.id));
+  return plan.map((item) => {
+  if (item.technologyId) {
+    return technologyIds.has(item.technologyId) && !item.manualOverride && item.workingMaterials
+      ? { ...item, workingMaterials: null }
+      : item;
+  }
   const variants = technologies.filter((technology) => !technology.archived && productIdentityMatches(
     technology.productIndex,
     technology.productName,
@@ -783,12 +799,13 @@ const applyDefaultTechnologyAssignments = (plan: PlanItem[], technologies: Techn
     ...item,
     technologyId: technology.id,
     shiftNorm: item.productionGroupId && item.shiftNorm > 0 ? item.shiftNorm : technology.shiftNorm || item.shiftNorm,
-    workingMaterials: cloneMaterials(technology.materials),
+    workingMaterials: null,
     linkedSources: item.linkedSources ?? {},
     packagingMode: 'base' as const,
     manualOverride: false
   };
-});
+  });
+};
 
 const inferCategory = (category: unknown, name: unknown, code: unknown): MaterialCategory => {
   const source = normalize(`${category ?? ''} ${name ?? ''} ${code ?? ''}`);
@@ -1137,6 +1154,7 @@ const parseStoredState = (value: unknown): AppState | null => {
   });
   const legacyEmergencyMigration = migrateLegacyEmergencyTechnologies(normalizedTechnologies);
   const technologies = legacyEmergencyMigration.technologies;
+  const technologiesById = new Map(technologies.map((technology) => [technology.id, technology]));
   const protectedPlanItemIds = new Set(
     (Array.isArray(record.documents) ? record.documents : [])
       .flatMap((document) => (Array.isArray(document.rows) ? document.rows : [])
@@ -1145,23 +1163,27 @@ const parseStoredState = (value: unknown): AppState | null => {
       .map((source) => source.planItemId)
       .filter(Boolean)
   );
-  const cleanPlanItem = (item: PlanItem): PlanItem => {
+  const cleanPlanItem = (item: PlanItem, preserveLibrarySnapshot = false): PlanItem => {
     const product = splitProductFields(item.name, item.index);
     const migratedTechnologyId = item.packagingMode === 'emergency'
       ? legacyEmergencyMigration.alternativeByBaseId[item.technologyId]
       : undefined;
     const migratedTechnology = migratedTechnologyId
-      ? technologies.find((technology) => technology.id === migratedTechnologyId)
+      ? technologiesById.get(migratedTechnologyId)
       : undefined;
+    const effectiveTechnologyId = migratedTechnologyId ?? item.technologyId;
+    const libraryTechnology = technologiesById.get(effectiveTechnologyId);
     return {
       ...item,
       name: product.name,
       index: product.index,
       planGroup: item.planGroup ?? 'standard',
       technologyId: migratedTechnologyId ?? item.technologyId,
-      workingMaterials: migratedTechnology && !item.manualOverride
-        ? cloneMaterials(migratedTechnology.materials)
-        : item.workingMaterials,
+      workingMaterials: item.manualOverride
+        ? item.workingMaterials
+        : preserveLibrarySnapshot
+          ? (migratedTechnology ? cloneMaterials(migratedTechnology.materials) : item.workingMaterials)
+          : libraryTechnology ? null : item.workingMaterials,
       packagingMode: 'base',
       plannedDate: item.plannedDate ?? '',
       scopeMode: item.scopeMode ?? 'global',
@@ -1170,15 +1192,15 @@ const parseStoredState = (value: unknown): AppState | null => {
       linkedSources: normalizeLinkedSources(item.linkedSources)
     };
   };
-  const cleanPlanItems = (items: PlanItem[]) => applyStationMappings(items.flatMap((item) => {
-    if (protectedPlanItemIds.has(item.id)) return [cleanPlanItem(item)];
+  const cleanPlanItems = (items: PlanItem[], preserveLibrarySnapshots = false) => applyStationMappings(items.flatMap((item) => {
+    if (protectedPlanItemIds.has(item.id)) return [cleanPlanItem(item, preserveLibrarySnapshots)];
     const outputs = splitPlanningRowOutputs({
       ...item,
       norm: item.shiftNorm,
       planGroup: item.planGroup ?? 'standard',
       plannedDate: item.plannedDate ?? ''
     });
-    if (outputs.length < 2) return [cleanPlanItem(item)];
+    if (outputs.length < 2) return [cleanPlanItem(item, preserveLibrarySnapshots)];
     const remainingRatio = item.totalQty > 0
       ? Math.min(1, Math.max(0, item.remainingQty / item.totalQty))
       : 1;
@@ -1195,7 +1217,7 @@ const parseStoredState = (value: unknown): AppState | null => {
       packagingMode: 'base',
       linkedSources: {},
       manualOverride: false
-    }));
+    }, preserveLibrarySnapshots));
   }), stationMappings);
   const plan = cleanPlanItems(record.plan);
   const selectedPlanDate = record.selectedPlanDate || localDateKey();
@@ -1209,7 +1231,7 @@ const parseStoredState = (value: unknown): AppState | null => {
   const storedVersions = Array.isArray(record.planVersions) ? record.planVersions : [];
   const planVersions: PlanVersion[] = storedVersions.length ? storedVersions.map((planVersion) => ({
     ...planVersion,
-    items: Array.isArray(planVersion.items) ? cleanPlanItems(planVersion.items) : [],
+    items: Array.isArray(planVersion.items) ? cleanPlanItems(planVersion.items, true) : [],
     differences: Array.isArray(planVersion.differences) ? planVersion.differences : []
   })) : (plan.length ? [{
     id: uid('version'),
@@ -1258,6 +1280,16 @@ const technologyLabel = (technology: Technology) =>
 const technologySelectLabel = (technology: Technology) => technology.variant === 'base'
   ? 'Bazowa'
   : [technologyLabel(technology), cleanImportedTechnologyDescription(technology.description)].filter(Boolean).join(' · ');
+
+const WORKING_TECHNOLOGY_SELECT_PREFIX = '__working__:';
+const technologySelectValue = (item: Pick<PlanItem, 'technologyId' | 'manualOverride'>) => (
+  item.manualOverride && item.technologyId
+    ? `${WORKING_TECHNOLOGY_SELECT_PREFIX}${item.technologyId}`
+    : item.technologyId
+);
+const workingTechnologySelectLabel = (technology?: Technology) => (
+  `Robocza · ${technology ? technologySelectLabel(technology) : 'wybrany wariant'}`
+);
 
 const technologyMatchesProduct = (technology: Technology, productIndex: string, productName: string) => {
   return productIdentityMatches(technology.productIndex, technology.productName, productIndex, productName);
@@ -2257,16 +2289,25 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   const technologiesFor = (item: Pick<PlanItem, 'index' | 'name'>) => state.technologies.filter((technology) => (
     !technology.archived && technologyMatchesProduct(technology, item.index, item.name)
   ));
-  const technologyForItem = (item: PlanItem) => state.technologies.find((technology) => technology.id === item.technologyId);
-  const materialsForItem = (item: PlanItem) => item.workingMaterials ?? technologyForItem(item)?.materials ?? [];
+  const technologyById = useMemo(
+    () => new Map(state.technologies.map((technology) => [technology.id, technology])),
+    [state.technologies]
+  );
+  const technologyForItem = (item: PlanItem) => technologyById.get(item.technologyId);
+  const materialsForItem = (item: PlanItem) => effectiveTechnologyMaterials(
+    item.workingMaterials,
+    technologyForItem(item)?.materials,
+    item.manualOverride
+  );
 
   const selectTechnology = (itemId: string, technologyId: string) => {
+    if (technologyId.startsWith(WORKING_TECHNOLOGY_SELECT_PREFIX)) return;
     updateState((current) => ({
       ...current,
       plan: current.plan.map((item) => {
         if (item.id !== itemId) return item;
         const technology = current.technologies.find((entry) => entry.id === technologyId);
-        return { ...item, technologyId, shiftNorm: item.productionGroupId && item.shiftNorm > 0 ? item.shiftNorm : technology?.shiftNorm || item.shiftNorm, workingMaterials: technology ? cloneMaterials(technology.materials) : null, packagingMode: 'base', manualOverride: false };
+        return { ...item, technologyId, shiftNorm: item.productionGroupId && item.shiftNorm > 0 ? item.shiftNorm : technology?.shiftNorm || item.shiftNorm, workingMaterials: null, packagingMode: 'base', manualOverride: false };
       })
     }));
   };
@@ -2626,7 +2667,9 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   const handleWorkbook = async (file: File, purpose: PendingWorkbook['purpose'], preferredSheet?: string) => {
     if (purpose === 'plan' && readOnly) return;
     try {
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellStyles: true });
+      const xlsx = XLSX ?? await import('xlsx');
+      XLSX = xlsx;
+      const workbook = xlsx.read(await file.arrayBuffer(), { type: 'array', cellStyles: true });
       const selected = purpose === 'plan'
         ? preferredSheet && workbook.SheetNames.includes(preferredSheet) ? preferredSheet : ''
         : workbook.SheetNames.at(-1) ?? '';
@@ -2640,9 +2683,11 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
 
   const importSelectedSheet = () => {
     if (!pending || !sheetName) return;
+    const xlsx = XLSX;
+    if (!xlsx) return flash('Najpierw wybierz plik Excel.');
     const sheet = pending.workbook.Sheets[sheetName];
     if (pending.purpose === 'plan' && (readOnly || !sheet)) return;
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
+    const rows = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
     if (pending.purpose === 'inventory') {
       const imported = parseInventoryRows(rows, state.areas);
       if (!imported.length) return flash('Nie znaleziono rozpoznawalnych pozycji spisu.');
@@ -2651,7 +2696,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       flash(`Wczytano i pogrupowano ${imported.length} pozycji spisu.`);
       return;
     }
-    const rowOffset = XLSX.utils.decode_range(sheet['!ref'] || 'A1').s.r;
+    const rowOffset = xlsx.utils.decode_range(sheet['!ref'] || 'A1').s.r;
     const imported = parsePlanRows(rows, state.stationMappings, rowOffset, highlightedPlanSourceRows(sheet));
     if (!imported.length) return flash('Nie znaleziono rozpoznawalnych pozycji planu.');
     const importedProductionCount = new Set(imported.map((item) => item.productionGroupId || item.id)).size;
@@ -2697,7 +2742,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           ...incoming,
           continuationCandidateId: candidate?.id ?? '',
           technologyId: defaultTechnology?.id ?? '',
-          workingMaterials: defaultTechnology ? cloneMaterials(defaultTechnology.materials) : null,
+          workingMaterials: null,
           scopeMode: 'global' as const,
           scopeShifts: 3.5,
           scopeQuantity: 0
@@ -2728,7 +2773,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           status: 'suspended',
           planItem: item,
           technologyName: technology ? technologyLabel(technology) : 'Brak technologii',
-          materials: item.workingMaterials ?? technology?.materials ?? [],
+          materials: materialsForItem(item),
           at: importedAt,
           reason: `Pozycja zniknęła z wersji ${importedVersionNo} planu na ${formatPlanDate(current.selectedPlanDate)}`
         };
@@ -3096,7 +3141,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         plan: current.plan.map((row) => row.id === item.id ? {
           ...row,
           technologyId: saved.baseId,
-          workingMaterials: cloneMaterials(baseMaterials),
+          workingMaterials: null,
           manualOverride: false
         } : row)
       };
@@ -3135,7 +3180,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       plan: current.plan.map((row) => row.id === item.id ? {
         ...row,
         technologyId: alternative.id,
-        workingMaterials: cloneMaterials(alternative.materials),
+        workingMaterials: null,
         manualOverride: false
       } : row)
     }));
@@ -3274,7 +3319,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
                 </div>
                 <div className="p-3 text-right"><PlanQuantity item={item} productionMode={technologyForItem(item)?.productionMode} calculatedQuantity={itemProductionQty(item)} shiftNorm={shiftNormForItem(item)} /></div>
                 <div className="p-3 text-right text-base font-bold text-title">{fmt(shiftNormForItem(item))}</div>
-                <div className="self-start p-3">{variants.length ? <SelectField className="min-h-11 rounded-lg shadow-none" value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}><option value="">Wybierz technologię</option>{variants.map((technology) => <option key={technology.id} value={technology.id}>{technologySelectLabel(technology)}</option>)}</SelectField> : <Button variant="outline" className="h-11 min-h-11 w-full max-w-[180px] rounded-lg shadow-none" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button>}{!item.technologyId ? <p className="mt-1.5 flex items-center gap-2 text-xs font-bold text-warning"><WarningTriangle />Brak technologii</p> : item.manualOverride ? <p className="mt-1.5 text-xs font-bold text-warning">Technologia robocza</p> : <p className="mt-1.5 text-xs font-semibold text-success">Gotowa</p>}</div>
+                <div className="self-start p-3">{variants.length ? <SelectField className="min-h-11 rounded-lg shadow-none" value={technologySelectValue(item)} onChange={(event) => selectTechnology(item.id, event.target.value)}><option value="">Wybierz technologię</option>{item.manualOverride ? <option value={technologySelectValue(item)}>{workingTechnologySelectLabel(technologyForItem(item))}</option> : null}{variants.map((technology) => <option key={technology.id} value={technology.id}>{technologySelectLabel(technology)}</option>)}</SelectField> : <Button variant="outline" className="h-11 min-h-11 w-full max-w-[180px] rounded-lg shadow-none" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button>}{!item.technologyId ? <p className="mt-1.5 flex items-center gap-2 text-xs font-bold text-warning"><WarningTriangle />Brak technologii</p> : item.manualOverride ? <p className="mt-1.5 text-xs font-bold text-warning">Technologia robocza</p> : <p className="mt-1.5 text-xs font-semibold text-success">Gotowa</p>}</div>
                 <div className="flex self-start justify-center p-3">
                   <button
                     type="button"
@@ -3284,7 +3329,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
                     disabled={readOnly}
                     onClick={() => togglePlanItemCalculated(item.id)}
                     className={cn(
-                      'inline-flex h-11 min-h-11 min-w-[106px] items-center justify-center gap-2 rounded-lg border px-2.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-55',
+                      'planning-calculated-toggle inline-flex h-11 min-h-11 min-w-[106px] items-center justify-center gap-2 rounded-lg border px-2.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-55',
                       calculated
                         ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_16%,transparent)] text-success'
                         : 'border-border text-muted hover:border-success hover:text-title'
@@ -3952,8 +3997,9 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
               </SelectField>
             </Field>
             <Field label="Technologia">
-              {itemTechnologies.length ? <SelectField aria-label="Wariant technologii" className="h-11 min-h-11 rounded-lg shadow-none" disabled={editorLocked} value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}>
+              {itemTechnologies.length ? <SelectField aria-label="Wariant technologii" className="h-11 min-h-11 rounded-lg shadow-none" disabled={editorLocked} value={technologySelectValue(item)} onChange={(event) => selectTechnology(item.id, event.target.value)}>
                 <option value="">Wybierz technologię</option>
+                {item.manualOverride ? <option value={technologySelectValue(item)}>{workingTechnologySelectLabel(technology)}</option> : null}
                 {itemTechnologies.map((variant) => <option key={variant.id} value={variant.id}>{technologySelectLabel(variant)}</option>)}
               </SelectField> : <Button className="h-11 min-h-11 w-full rounded-lg py-2" variant="outline" disabled={editorLocked} onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button>}
             </Field>
@@ -4038,7 +4084,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       {!technology ? <p className="border-l-2 border-warning bg-[rgba(245,158,11,0.055)] px-3 py-2.5 text-sm font-semibold text-warning">Wybierz technologię, aby wyświetlić materiały.</p> : <>
         {item.manualOverride ? <div className="flex flex-wrap items-center justify-end gap-2">
           <Badge tone="warning">Technologia robocza zmieniona</Badge>
-          <Button className="h-9 min-h-9 rounded-lg px-3 py-1.5 text-xs" variant="ghost" disabled={editorLocked} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, workingMaterials: cloneMaterials(technology.materials), manualOverride: false } : row) }))}><RefreshCw className="mr-2 h-3.5 w-3.5" />Przywróć wybraną</Button>
+          <Button className="h-9 min-h-9 rounded-lg px-3 py-1.5 text-xs" variant="ghost" disabled={editorLocked} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, workingMaterials: null, manualOverride: false } : row) }))}><RefreshCw className="mr-2 h-3.5 w-3.5" />Przywróć wybraną</Button>
         </div> : null}
         {materials.length ? <div className="overflow-x-auto rounded-lg border border-borderStrong bg-[image:var(--table-frame-bg)]">
           <table className="w-full min-w-[1394px] table-fixed text-xs">
@@ -4158,8 +4204,9 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
                         <td className="p-3"><p>{item.station || 'Nie podano'}</p><p className="mt-1 text-xs text-muted">{item.areaId ? areaName(item.areaId) : 'Brak przypisu - sprawdź ustawienia'}</p></td>
                         <td className="min-w-[260px] p-3">
                           {variants.length ? (
-                            <SelectField value={item.technologyId} onChange={(event) => selectTechnology(item.id, event.target.value)}>
+                            <SelectField value={technologySelectValue(item)} onChange={(event) => selectTechnology(item.id, event.target.value)}>
                               <option value="">Wybierz technologię</option>
+                              {item.manualOverride ? <option value={technologySelectValue(item)}>{workingTechnologySelectLabel(technologyForItem(item))}</option> : null}
                               {variants.map((technology) => <option key={technology.id} value={technology.id}>{technologySelectLabel(technology)}</option>)}
                             </SelectField>
                           ) : <Button variant="outline" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}>Dodaj technologię</Button>}
@@ -4404,7 +4451,9 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     flash('Dokument został usunięty.');
   };
 
-  const exportPickingDocument = (pickingDocument: PickingDocument, visibleRows = pickingDocument.rows) => {
+  const exportPickingDocument = async (pickingDocument: PickingDocument, visibleRows = pickingDocument.rows) => {
+    const xlsx = XLSX ?? await import('xlsx');
+    XLSX = xlsx;
     const rows: Array<Array<string | number>> = [[
       'Dokument', 'Status', 'Typ', 'Data planu', 'Wersja planu', 'Strefa', 'Magazyn', 'Zakres', 'Materiał', 'Kod',
       'Zapotrzebowanie', 'Stan rzeczywisty MAG 40', 'Wydano wcześniej', 'Oczekuje', 'Ilość do wypisania', 'J.m.', 'Źródła'
@@ -4428,12 +4477,12 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       technologyResultUnit(row.unit),
       row.sources.map((source) => `${source.index} - ${source.name}: ${fmt(technologyResultQuantity(source.demand, row.unit))}`).join(' | ')
     ]));
-    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    const worksheet = xlsx.utils.aoa_to_sheet(rows);
     worksheet['!cols'] = [18, 12, 12, 13, 12, 16, 14, 22, 48, 22, 16, 14, 16, 12, 14, 10, 64].map((wch) => ({ wch }));
     worksheet['!autofilter'] = { ref: `A1:Q${Math.max(1, rows.length)}` };
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Do wypisania');
-    XLSX.writeFile(workbook, `${pickingDocument.documentNo}.xlsx`, { compression: true });
+    const workbook = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(workbook, worksheet, 'Do wypisania');
+    xlsx.writeFile(workbook, `${pickingDocument.documentNo}.xlsx`, { compression: true });
   };
 
   const deriveReturnsForDate = (planDate: string): MaterialReturnRow[] => {
@@ -5047,7 +5096,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       <button
         type="button"
         aria-label="Otwórz ustawienia stałych urządzeń hali"
-        className="group relative min-h-[164px] overflow-hidden rounded-xl border border-[rgba(255,122,26,0.3)] bg-[linear-gradient(135deg,rgba(255,122,26,0.18),rgba(34,37,43,0.98)_58%,rgba(17,19,23,1))] p-5 text-left shadow-[0_12px_30px_rgba(0,0,0,0.2)] transition duration-200 hover:-translate-y-0.5 hover:border-[rgba(255,122,26,0.68)] hover:shadow-[0_16px_36px_rgba(0,0,0,0.3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+        className="planning-settings-card planning-settings-card-devices group relative min-h-[164px] overflow-hidden rounded-xl border border-[rgba(255,122,26,0.3)] bg-[linear-gradient(135deg,rgba(255,122,26,0.18),rgba(34,37,43,0.98)_58%,rgba(17,19,23,1))] p-5 text-left shadow-[0_12px_30px_rgba(0,0,0,0.2)] transition duration-200 hover:-translate-y-0.5 hover:border-[rgba(255,122,26,0.68)] hover:shadow-[0_16px_36px_rgba(0,0,0,0.3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
         onClick={() => openSettingsSection('devices')}
       >
         <span className="relative flex h-full flex-col justify-between gap-6">
@@ -5070,7 +5119,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       <button
         type="button"
         aria-label="Otwórz ustawienia stanowisk i obszarów"
-        className="group relative min-h-[164px] overflow-hidden rounded-xl border border-[rgba(59,169,190,0.3)] bg-[linear-gradient(135deg,rgba(23,137,164,0.2),rgba(32,37,43,0.98)_58%,rgba(17,19,23,1))] p-5 text-left shadow-[0_12px_30px_rgba(0,0,0,0.2)] transition duration-200 hover:-translate-y-0.5 hover:border-[rgba(75,190,211,0.68)] hover:shadow-[0_16px_36px_rgba(0,0,0,0.3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(75,190,211,0.9)]"
+        className="planning-settings-card planning-settings-card-areas group relative min-h-[164px] overflow-hidden rounded-xl border border-[rgba(59,169,190,0.3)] bg-[linear-gradient(135deg,rgba(23,137,164,0.2),rgba(32,37,43,0.98)_58%,rgba(17,19,23,1))] p-5 text-left shadow-[0_12px_30px_rgba(0,0,0,0.2)] transition duration-200 hover:-translate-y-0.5 hover:border-[rgba(75,190,211,0.68)] hover:shadow-[0_16px_36px_rgba(0,0,0,0.3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(75,190,211,0.9)]"
         onClick={() => openSettingsSection('areas')}
       >
         <span className="relative flex h-full flex-col justify-between gap-6">
