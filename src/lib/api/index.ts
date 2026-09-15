@@ -93,10 +93,15 @@ const apiRequest = async <T,>(path: string, options?: RequestInit): Promise<T> =
   return response.json() as Promise<T>;
 };
 
-const appRequest = async <T,>(action: string, payload?: unknown): Promise<T> =>
+const appRequest = async <T,>(
+  action: string,
+  payload?: unknown,
+  signal?: AbortSignal
+): Promise<T> =>
   apiRequest<T>('/api/app', {
     method: 'POST',
     cache: 'no-store',
+    signal,
     body: JSON.stringify({ action, payload })
   });
 
@@ -606,6 +611,13 @@ export const getOriginalInventory = async (dateKey?: string): Promise<OriginalIn
 
 export const getOriginalInventoryCatalog = async (): Promise<OriginalInventoryCatalogEntry[]> =>
   appRequest('getOriginalInventoryCatalog');
+
+export const searchOriginalInventoryCatalog = async (
+  query: string,
+  limit = 24,
+  signal?: AbortSignal
+): Promise<OriginalInventoryCatalogEntry[]> =>
+  appRequest('searchOriginalInventoryCatalog', { query, limit }, signal);
 
 export const getOriginalInventorySilosConfig = async (): Promise<OriginalInventorySiloConfig[]> =>
   appRequest('getOriginalInventorySilosConfig');

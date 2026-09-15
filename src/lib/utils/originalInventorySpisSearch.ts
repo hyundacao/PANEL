@@ -92,6 +92,34 @@ export const prioritizeOriginalInventorySpisSuggestions = <T extends OriginalInv
   });
 };
 
+export const searchOriginalInventorySpisSuggestions = <T extends OriginalInventorySpisSuggestion>(
+  suggestions: readonly T[],
+  query: unknown,
+  inventoriedNames: Iterable<unknown>,
+  limit = 8
+) => {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return [];
+  const safeLimit = Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 8));
+  const matches = dedupeOriginalInventorySpisSuggestions(
+    suggestions.filter((item) =>
+      matchesOriginalInventorySpisSearch(query, item.name, item.indexCode2)
+    )
+  );
+  const namesWithWarehouseVariant = new Set(
+    matches
+      .filter((item) => Boolean(item.warehouseCode))
+      .map((item) => normalizeSearchText(item.name))
+  );
+  const uniqueMatches = matches.filter(
+    (item) => Boolean(item.warehouseCode) || !namesWithWarehouseVariant.has(normalizeSearchText(item.name))
+  );
+  return prioritizeOriginalInventorySpisSuggestions(
+    uniqueMatches,
+    inventoriedNames
+  ).slice(0, safeLimit);
+};
+
 export const getOriginalInventorySpisIndex2 = (
   indexCode: unknown,
   explicitIndexCode2?: unknown

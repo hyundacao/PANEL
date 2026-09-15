@@ -1,6 +1,6 @@
 'use client';
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { type RefObject, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Cell } from 'exceljs';
 import {
@@ -11,6 +11,7 @@ import {
   getOriginalInventory,
   getOriginalInventoryCatalog,
   getOriginalInventoryCatalogFromErp,
+  searchOriginalInventoryCatalog,
   getOriginalInventoryErpSnapshot,
   getOriginalInventoryErpSnapshotsByDates,
   getOriginalInventoryGrindTasks,
@@ -41,11 +42,9 @@ import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { parseQtyInput } from '@/lib/utils/format';
 import { cn } from '@/lib/utils/cn';
 import {
-  dedupeOriginalInventorySpisSuggestions,
   getOriginalInventorySpisWarehousePriority,
   getOriginalInventorySpisIndex2,
-  matchesOriginalInventorySpisSearch,
-  prioritizeOriginalInventorySpisSuggestions
+  searchOriginalInventorySpisSuggestions
 } from '@/lib/utils/originalInventorySpisSearch';
 import {
   BarChart3,
@@ -512,6 +511,205 @@ const parseCatalogImportFile = async (
   return parseOriginalInventoryCatalogRows(rows);
 };
 
+type OriginalInventoryNameSuggestion = {
+  name: string;
+  unit: string;
+  warehouseCode: string | null;
+  indexCode: string | null;
+  indexCode2: string | null;
+  isMag55: boolean;
+};
+
+const SPIS_SEARCH_DEBOUNCE_MS = 160;
+const SPIS_SEARCH_MIN_LENGTH = 2;
+const SPIS_SEARCH_SERVER_LIMIT = 24;
+
+const toOriginalInventoryNameSuggestion = (item: {
+  name: string;
+  unit: string;
+  warehouseCode?: string | null;
+  indexCode?: string | null;
+  indexCode2?: string | null;
+}): OriginalInventoryNameSuggestion => {
+  const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
+  const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
+  return {
+    name: item.name,
+    unit: item.unit,
+    warehouseCode,
+    indexCode,
+    indexCode2: getOriginalInventorySpisIndex2(indexCode, item.indexCode2) || null,
+    isMag55: warehouseCode === 'M-55'
+  };
+};
+
+const OriginalInventoryNameSearch = ({
+  value,
+  existingSuggestions,
+  inventoriedNames,
+  inputRef,
+  onCommit,
+  onSelect
+}: {
+  value: string;
+  existingSuggestions: OriginalInventoryNameSuggestion[];
+  inventoriedNames: string[];
+  inputRef: RefObject<HTMLInputElement | null>;
+  onCommit: (value: string) => void;
+  onSelect: (suggestion: OriginalInventoryNameSuggestion) => void;
+}) => {
+  const [query, setQuery] = useState(value);
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const normalizedQuery = normalizeCatalogNameKey(query);
+  const remoteSearchEnabled = normalizedQuery.replace(/\s/g, '').length >= SPIS_SEARCH_MIN_LENGTH;
+
+  useEffect(() => {
+    setQuery(value);
+  }, [value]);
+
+  useEffect(() => {
+    if (!remoteSearchEnabled) {
+      setDebouncedQuery('');
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setDebouncedQuery(query), SPIS_SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [query, remoteSearchEnabled]);
+
+  const normalizedDebouncedQuery = normalizeCatalogNameKey(debouncedQuery);
+  const { data: remoteCatalogSuggestions = [], isFetching } = useQuery({
+    queryKey: ['spis-oryginalow-catalog-search', normalizedDebouncedQuery],
+    queryFn: ({ signal }) => searchOriginalInventoryCatalog(
+      debouncedQuery,
+      SPIS_SEARCH_SERVER_LIMIT,
+      signal
+    ),
+    enabled: normalizedDebouncedQuery.replace(/\s/g, '').length >= SPIS_SEARCH_MIN_LENGTH,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: false
+  });
+
+  const suggestions = useMemo(() => {
+    if (!normalizedQuery) return [];
+    const remoteResultsAreCurrent = normalizedDebouncedQuery === normalizedQuery;
+    const remoteSuggestions = remoteResultsAreCurrent
+      ? remoteCatalogSuggestions.map(toOriginalInventoryNameSuggestion)
+      : [];
+    return searchOriginalInventorySpisSuggestions(
+      [...existingSuggestions, ...remoteSuggestions],
+      query,
+      inventoriedNames,
+      8
+    );
+  }, [existingSuggestions, inventoriedNames, normalizedDebouncedQuery, normalizedQuery, query, remoteCatalogSuggestions]);
+
+  const remoteResultsPending = remoteSearchEnabled && (
+    normalizedDebouncedQuery !== normalizedQuery || isFetching
+  );
+  const chooseSuggestion = (suggestion: OriginalInventoryNameSuggestion) => {
+    setQuery(suggestion.name);
+    setShowSuggestions(false);
+    onSelect(suggestion);
+  };
+
+  return (
+    <div className="relative">
+      <Input
+        ref={inputRef}
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setShowSuggestions(true);
+        }}
+        placeholder="Nazwa lub indeks 2, np. STAREX 8178"
+        className={query ? 'min-h-[46px] pr-10' : 'min-h-[46px]'}
+        onFocus={() => setShowSuggestions(true)}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter') return;
+          event.preventDefault();
+          if (suggestions[0]) {
+            chooseSuggestion(suggestions[0]);
+            return;
+          }
+          onCommit(query);
+        }}
+        onBlur={() => {
+          onCommit(query);
+          window.setTimeout(() => setShowSuggestions(false), 120);
+        }}
+      />
+      {query && (
+        <button
+          type="button"
+          aria-label="Wyczysc nazwe"
+          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            setQuery('');
+            setShowSuggestions(false);
+            onCommit('');
+          }}
+        >
+          X
+        </button>
+      )}
+
+      {showSuggestions && (suggestions.length > 0 || remoteResultsPending) && (
+        <div className="absolute z-20 mt-2 w-full rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+          {suggestions.map((suggestion) => (
+            <button
+              key={`${suggestion.name}|${suggestion.warehouseCode ?? ''}|${suggestion.indexCode2 ?? ''}`}
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                chooseSuggestion(suggestion);
+              }}
+              className={cn(
+                'flex w-full items-start justify-between gap-3 px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]',
+                suggestion.isMag55 && 'bg-[rgba(244,114,182,0.10)] hover:bg-[rgba(244,114,182,0.16)]'
+              )}
+            >
+              <span className="min-w-0 flex-1">
+                <span className="catalog-label block whitespace-normal break-words font-bold leading-5">{suggestion.name}</span>
+                {suggestion.indexCode2 && (
+                  <span
+                    className={cn(
+                      'break-all text-xs font-semibold',
+                      suggestion.indexCode2.trim() === '873'
+                        ? 'mt-1 inline-flex w-fit rounded-md border border-[rgba(239,68,68,0.5)] bg-[rgba(239,68,68,0.14)] px-1.5 py-0.5 font-black text-danger'
+                        : 'block text-dim'
+                    )}
+                  >
+                    Indeks 2: {suggestion.indexCode2}
+                  </span>
+                )}
+              </span>
+              {suggestion.warehouseCode && (
+                <span
+                  className={cn(
+                    'shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                    suggestion.isMag55
+                      ? 'border-[rgba(244,114,182,0.45)] bg-[rgba(244,114,182,0.16)] text-[rgb(251,207,232)]'
+                      : 'border-border bg-surface2 text-dim'
+                  )}
+                >
+                  {suggestion.warehouseCode}
+                </span>
+              )}
+            </button>
+          ))}
+          {remoteResultsPending && (
+            <p className="px-3 py-2 text-xs font-semibold text-dim" role="status">Wyszukiwanie...</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function SpisRzeczywisty() {
   const toast = useToastStore((state) => state.push);
   const { user } = useUiStore();
@@ -545,7 +743,6 @@ export default function SpisRzeczywisty() {
   const fixedDeviceSaveSequenceRef = useRef(0);
   const latestFixedDeviceSaveRequestRef = useRef(new Map<string, number>());
   const fixedDeviceSaveQueuesRef = useRef(new Map<string, Promise<void>>());
-  const [showNameSuggestions, setShowNameSuggestions] = useState(false);
   const entryFormRef = useRef<HTMLFormElement | null>(null);
   const entryFormViewportTopRef = useRef<number | null>(null);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
@@ -634,7 +831,11 @@ export default function SpisRzeczywisty() {
   });
   const { data: localCatalog = [] } = useQuery({
     queryKey: ['spis-oryginalow-catalog-local'],
-    queryFn: getOriginalInventoryCatalog
+    queryFn: getOriginalInventoryCatalog,
+    enabled: activeTab === 'kartoteki' || activeTab === 'raporty',
+    staleTime: 5 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    refetchOnWindowFocus: false
   });
   const { data: siloConfigs = [] } = useQuery({
     queryKey: ['original-inventory-silos-config'],
@@ -1543,136 +1744,19 @@ export default function SpisRzeczywisty() {
     if (!needle) return null;
     return erpSnapshotMap.get(needle) ?? null;
   }, [erpSnapshotMap, form.name]);
-  const nameSuggestions = useMemo(() => {
-    const seen = new Set<string>();
-    const namesWithIndexedSuggestions = new Set<string>();
-    const list: Array<{
-      name: string;
-      unit: string;
-      warehouseCode: string | null;
-      indexCode: string | null;
-      indexCode2: string | null;
-      isMag55: boolean;
-    }> = [];
-    const registerIndexedName = (
-      name: string,
-      warehouseCode: string | null | undefined,
-      indexCode2: string | null | undefined
-    ) => {
-      if (warehouseCode || indexCode2) {
-        namesWithIndexedSuggestions.add(normalizeCatalogNameKey(name));
-      }
-    };
-
-    erpSnapshotEntries.forEach((item) =>
-      registerIndexedName(
-        item.name,
-        item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null,
-        getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2) || null
-      )
-    );
-    erpCatalogItems.forEach((item) =>
-      registerIndexedName(
-        item.name,
-        item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null,
-        getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2) || null
-      )
-    );
-    catalog.forEach((item) =>
-      registerIndexedName(
-        item.name,
-        item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null,
-        getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2) || null
-      )
-    );
-
-    erpSnapshotEntries.forEach((item) => {
-      const nameKey = normalizeCatalogNameKey(item.name);
-      const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
-      const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
-      const indexCode2 = getOriginalInventorySpisIndex2(indexCode, item.indexCode2) || null;
-      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      list.push({
-        name: item.name,
-        unit: item.unit,
-        warehouseCode,
-        indexCode,
-        indexCode2,
-        isMag55: warehouseCode === 'M-55'
-      });
-    });
-    erpCatalogItems.forEach((item) => {
-      const nameKey = normalizeCatalogNameKey(item.name);
-      const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
-      const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
-      const indexCode2 = getOriginalInventorySpisIndex2(indexCode, item.indexCode2) || null;
-      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      list.push({
-        name: item.name,
-        unit: item.unit,
-        warehouseCode,
-        indexCode,
-        indexCode2,
-        isMag55: warehouseCode === 'M-55'
-      });
-    });
-    existingList.forEach((item) => {
-      const nameKey = normalizeCatalogNameKey(item.name);
-      if (namesWithIndexedSuggestions.has(nameKey)) return;
-      const key = `${nameKey}|||`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      list.push({
+  const existingNameSuggestions = useMemo<OriginalInventoryNameSuggestion[]>(
+    () =>
+      existingList.map((item) => ({
         name: item.name,
         unit: item.unit,
         warehouseCode: null,
         indexCode: null,
         indexCode2: null,
         isMag55: false
-      });
-    });
-    catalog.forEach((item) => {
-      const nameKey = normalizeCatalogNameKey(item.name);
-      const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
-      const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
-      const indexCode2 = getOriginalInventorySpisIndex2(indexCode, item.indexCode2) || null;
-      if (!warehouseCode && !indexCode2 && namesWithIndexedSuggestions.has(nameKey)) return;
-      const key = `${nameKey}|${warehouseCode ?? ''}|${indexCode2 ?? ''}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      list.push({
-        name: item.name,
-        unit: item.unit,
-        warehouseCode,
-        indexCode,
-        indexCode2,
-        isMag55: warehouseCode === 'M-55'
-      });
-    });
-    const values = dedupeOriginalInventorySpisSuggestions(list);
-    const namesWithWarehouseVariant = new Set(
-      values
-        .filter((item) => Boolean(item.warehouseCode))
-        .map((item) => normalizeCatalogNameKey(item.name))
-    );
-    return values.filter(
-      (item) => Boolean(item.warehouseCode) || !namesWithWarehouseVariant.has(normalizeCatalogNameKey(item.name))
-    );
-  }, [catalog, erpCatalogItems, erpSnapshotEntries, existingList]);
-  const filteredNameSuggestions = useMemo(() => {
-    if (!normalizeCatalogNameKey(form.name)) return [];
-    const filtered = nameSuggestions
-      .filter((item) => matchesOriginalInventorySpisSearch(form.name, item.name, item.indexCode2));
-    return prioritizeOriginalInventorySpisSuggestions(
-      dedupeOriginalInventorySpisSuggestions(filtered),
-      existingByName.keys()
-    )
-      .slice(0, 8);
-  }, [existingByName, form.name, nameSuggestions]);
+      })),
+    [existingList]
+  );
+  const inventoriedNameKeys = useMemo(() => [...existingByName.keys()], [existingByName]);
   const filteredCatalog = useMemo(() => {
     if (activeTab !== 'kartoteki') return [];
     if (!normalizeCatalogNameKey(deferredCatalogSearch)) return catalog;
@@ -1707,7 +1791,7 @@ export default function SpisRzeczywisty() {
   const applyNameToForm = (rawName: string) => {
     setForm((prev) => ({ ...prev, name: rawName }));
   };
-  const applyNameSuggestionToForm = (suggestion: (typeof nameSuggestions)[number]) => {
+  const applyNameSuggestionToForm = (suggestion: OriginalInventoryNameSuggestion) => {
     setForm((prev) => ({
       ...prev,
       name: suggestion.name,
@@ -3000,90 +3084,14 @@ export default function SpisRzeczywisty() {
                 <label className="text-xs uppercase tracking-wide text-dim">
                   Wyszukiwarka / nazwa / indeks 2
                 </label>
-                <div className="relative">
-                  <Input
-                    ref={nameInputRef}
-                    value={form.name}
-                    onChange={(event) => {
-                      applyNameToForm(event.target.value);
-                      setShowNameSuggestions(true);
-                    }}
-                    placeholder="Nazwa lub indeks 2, np. STAREX 8178"
-                    className={form.name ? 'min-h-[46px] pr-10' : 'min-h-[46px]'}
-                    onFocus={() => setShowNameSuggestions(true)}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter' || filteredNameSuggestions.length === 0) return;
-                      event.preventDefault();
-                      applyNameSuggestionToForm(filteredNameSuggestions[0]);
-                      setShowNameSuggestions(false);
-                    }}
-                    onBlur={() => {
-                      setTimeout(() => setShowNameSuggestions(false), 120);
-                    }}
-                  />
-                  {form.name && (
-                    <button
-                      type="button"
-                      aria-label="Wyczysc nazwe"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => {
-                        setForm((prev) => ({ ...prev, name: '' }));
-                        setShowNameSuggestions(false);
-                      }}
-                    >
-                      X
-                    </button>
-                  )}
-
-                  {showNameSuggestions && filteredNameSuggestions.length > 0 && (
-                    <div className="absolute z-20 mt-2 w-full rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
-                      {filteredNameSuggestions.map((suggestion) => (
-                        <button
-                          key={`${suggestion.name}|${suggestion.warehouseCode ?? ''}|${suggestion.indexCode2 ?? ''}`}
-                          type="button"
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            applyNameSuggestionToForm(suggestion);
-                            setShowNameSuggestions(false);
-                          }}
-                          className={cn(
-                            'flex w-full items-start justify-between gap-3 px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]',
-                            suggestion.isMag55 && 'bg-[rgba(244,114,182,0.10)] hover:bg-[rgba(244,114,182,0.16)]'
-                          )}
-                        >
-                          <span className="min-w-0 flex-1">
-                            <span className="catalog-label block whitespace-normal break-words font-bold leading-5">{suggestion.name}</span>
-                            {suggestion.indexCode2 && (
-                              <span
-                                className={cn(
-                                  'break-all text-xs font-semibold',
-                                  suggestion.indexCode2.trim() === '873'
-                                    ? 'mt-1 inline-flex w-fit rounded-md border border-[rgba(239,68,68,0.5)] bg-[rgba(239,68,68,0.14)] px-1.5 py-0.5 font-black text-danger'
-                                    : 'block text-dim'
-                                )}
-                              >
-                                Indeks 2: {suggestion.indexCode2}
-                              </span>
-                            )}
-                          </span>
-                          {suggestion.warehouseCode && (
-                            <span
-                              className={cn(
-                                'shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-                                suggestion.isMag55
-                                  ? 'border-[rgba(244,114,182,0.45)] bg-[rgba(244,114,182,0.16)] text-[rgb(251,207,232)]'
-                                  : 'border-border bg-surface2 text-dim'
-                              )}
-                            >
-                              {suggestion.warehouseCode}
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <OriginalInventoryNameSearch
+                  value={form.name}
+                  existingSuggestions={existingNameSuggestions}
+                  inventoriedNames={inventoriedNameKeys}
+                  inputRef={nameInputRef}
+                  onCommit={applyNameToForm}
+                  onSelect={applyNameSuggestionToForm}
+                />
                 {matchedExisting && (
                   <p className="mt-1 text-xs text-dim">
                     Aktualnie spisane: {matchedExisting.total} {matchedExisting.unit}

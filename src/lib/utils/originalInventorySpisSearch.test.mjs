@@ -5,7 +5,8 @@ import {
   getOriginalInventorySpisWarehousePriority,
   getOriginalInventorySpisIndex2,
   matchesOriginalInventorySpisSearch,
-  prioritizeOriginalInventorySpisSuggestions
+  prioritizeOriginalInventorySpisSuggestions,
+  searchOriginalInventorySpisSuggestions
 } from './originalInventorySpisSearch.ts';
 
 test('spis search uses the explicit second index and ignores the first index', () => {
@@ -123,5 +124,27 @@ test('unassigned catalog rows precede warehouses outside M1 M4 M10 and M11', () 
   assert.deepEqual(
     suggestions.map((item) => item.name),
     ['M1', 'M4', 'M10', 'M11', 'BRAK', 'M55', 'M89']
+  );
+});
+
+test('server-sized spis suggestions keep matching, priorities and the result limit', () => {
+  const suggestions = [
+    { name: 'ABS STAREX 8178', warehouseCode: 'M-55', indexCode2: '8178' },
+    { name: 'ABS STAREX 8178', warehouseCode: 'M-1', indexCode2: '8178' },
+    { name: 'ABS STAREX 8178', warehouseCode: null, indexCode2: '8178' },
+    { name: 'ABS STAREX 9000', warehouseCode: 'M-4', indexCode2: '9000' },
+    { name: 'ABS STAREX 7000', warehouseCode: null, indexCode2: '7000' }
+  ];
+
+  const results = searchOriginalInventorySpisSuggestions(
+    suggestions,
+    'abs starex',
+    ['ABS STAREX 7000'],
+    3
+  );
+
+  assert.deepEqual(
+    results.map((item) => `${item.name}|${item.warehouseCode ?? ''}`),
+    ['ABS STAREX 7000|', 'ABS STAREX 8178|M-1', 'ABS STAREX 9000|M-4']
   );
 });

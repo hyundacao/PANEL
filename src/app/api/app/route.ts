@@ -16,6 +16,10 @@ import {
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { normalizeOriginalInventoryCatalogIdentityKey } from '@/lib/utils/originalInventoryCatalog';
 import {
+  getOriginalInventorySpisIndex2,
+  searchOriginalInventorySpisSuggestions
+} from '@/lib/utils/originalInventorySpisSearch';
+import {
   FIXED_INVENTORY_DEVICE_SOURCE_TYPE,
   fixedInventoryDeviceSourceId,
   isFixedInventoryDeviceReady,
@@ -1093,6 +1097,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requireOriginalInventoryReadAccess(user);
       return;
     case 'getOriginalInventoryCatalog':
+    case 'searchOriginalInventoryCatalog':
     case 'getOriginalInventorySilosConfig':
     case 'getOriginalInventorySiloEntries':
     case 'getOriginalInventoryGrindTasks':
@@ -2257,6 +2262,9 @@ let originalErpCatalogCache: { items: OriginalInventoryCatalogEntry[]; expiresAt
 let originalErpCatalogLoad: Promise<OriginalInventoryCatalogEntry[]> | null = null;
 let originalCatalogCache: { items: OriginalInventoryCatalogEntry[]; expiresAt: number } | null = null;
 let originalCatalogLoad: Promise<OriginalInventoryCatalogEntry[]> | null = null;
+let originalCatalogSpisSearchSource: OriginalInventoryCatalogEntry[] | null = null;
+let originalCatalogSpisSearchItems: OriginalInventoryCatalogEntry[] = [];
+const originalCatalogSpisSearchResults = new Map<string, OriginalInventoryCatalogEntry[]>();
 let originalInventoryPurgeAt = 0;
 let originalInventoryPurge: Promise<void> | null = null;
 
@@ -2340,8 +2348,42 @@ const loadOriginalCatalog = async () => {
   }
 };
 
+const loadOriginalCatalogSpisSearchItems = async () => {
+  const catalog = await loadOriginalCatalog();
+  if (originalCatalogSpisSearchSource === catalog) return originalCatalogSpisSearchItems;
+  originalCatalogSpisSearchSource = catalog;
+  originalCatalogSpisSearchItems = catalog.map((item) => ({
+    ...item,
+    indexCode2: getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2) || null
+  }));
+  originalCatalogSpisSearchResults.clear();
+  return originalCatalogSpisSearchItems;
+};
+
+const searchOriginalCatalogForSpis = async (rawQuery: unknown, rawLimit: unknown) => {
+  const query = String(rawQuery ?? '').replace(/\s+/g, ' ').trim();
+  if (query.replace(/\s/g, '').length < 2) return [];
+  const requestedLimit = Math.floor(Number(rawLimit));
+  const limit = Number.isFinite(requestedLimit) ? Math.min(32, Math.max(1, requestedLimit)) : 24;
+  const cacheKey = `${query.toLocaleLowerCase('pl')}|${limit}`;
+  const cached = originalCatalogSpisSearchResults.get(cacheKey);
+  if (cached) return cached;
+
+  const items = await loadOriginalCatalogSpisSearchItems();
+  const result = searchOriginalInventorySpisSuggestions(items, query, [], limit);
+  if (originalCatalogSpisSearchResults.size >= 100) {
+    const oldestKey = originalCatalogSpisSearchResults.keys().next().value;
+    if (oldestKey) originalCatalogSpisSearchResults.delete(oldestKey);
+  }
+  originalCatalogSpisSearchResults.set(cacheKey, result);
+  return result;
+};
+
 const invalidateOriginalCatalogCache = () => {
   originalCatalogCache = null;
+  originalCatalogSpisSearchSource = null;
+  originalCatalogSpisSearchItems = [];
+  originalCatalogSpisSearchResults.clear();
 };
 
 const isMissingOriginalInventoryErpSnapshotsTableError = (error: unknown) => {
@@ -6703,6 +6745,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'getOriginalInventoryCatalog': {
       const catalog = await loadOriginalCatalog();
       return [...catalog].sort((a, b) => a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' }));
+    }
+    case 'searchOriginalInventoryCatalog': {
+      return searchOriginalCatalogForSpis(payload?.query, payload?.limit);
     }
     case 'getOriginalInventorySilosConfig': {
       const { data, error } = await supabaseAdmin
