@@ -22,6 +22,7 @@ import { defaultTeamComments, normalizeTeamComments, productionMetricsForTask, t
 import { cn } from '@/lib/utils/cn';
 import { getWarsawProductionPlanDate, isProductionPlanDate } from '@/lib/utils/productionPlanDate';
 import { RECURRING_TASK_STATION, normalizeRecurringTasks, validateRecurringTasks, type RecurringTaskDefinition } from '@/lib/utils/productionRecurringTasks';
+import { PRODUCTION_WORK_COMMENT_MAX_LENGTH, normalizeProductionWorkCommentText, productionWorkCommentFromNotes, withProductionWorkComment } from '@/lib/utils/productionWorkComments';
 import { normalizeProductionWorkPlanView, teamsForProductionWorkPlan } from '@/lib/utils/productionWorkPlan';
 import {
   canProductionTeamStart,
@@ -123,6 +124,7 @@ type TaskMutation = {
   setNotes?: Record<string, string | null>;
   setNotesIfMissing?: Record<string, string>;
   setTeamDone?: { team: Team; done: boolean };
+  setWorkComment?: { team: Team; text: string };
   clearWork?: boolean;
 };
 
@@ -257,6 +259,83 @@ const TaskWorkSummary = ({ task, team, kindLabels, compact = false }: { task: Ta
     </p>
     {revision?.wasChanged && <p className={cn('mt-1 flex items-center gap-1 font-bold uppercase tracking-wide text-fuchsia-300', compact ? 'text-[9px]' : 'text-[10px]')}><RotateCcw className="h-3 w-3" />Nowe po wykonaniu</p>}
   </>;
+};
+
+const DistributionWorkComment = ({ task, compact = false }: { task: Task; compact?: boolean }) => {
+  const comment = productionWorkCommentFromNotes(task.notes, 'distribution');
+  if (!comment) return null;
+  const timestamp = Date.parse(comment.updatedAt);
+  const details = [
+    comment.author,
+    Number.isFinite(timestamp)
+      ? new Date(timestamp).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      : ''
+  ].filter(Boolean).join(' · ');
+  return <div className={cn(
+    'mt-2 rounded border border-emerald-500/35 bg-emerald-500/[0.08] px-2.5 py-2',
+    compact && 'px-2 py-1.5'
+  )}>
+    <p className={cn('flex items-center gap-1.5 font-bold text-emerald-300', compact ? 'text-[9px]' : 'text-[10px]')}>
+      <MessageSquare className={compact ? 'h-3 w-3' : 'h-3.5 w-3.5'} />
+      Rozdzielca{details ? ` · ${details}` : ''}
+    </p>
+    <p className={cn('mt-1 whitespace-pre-line break-words text-title', compact ? 'text-[10px] leading-snug' : 'text-xs leading-relaxed')}>
+      {comment.text}
+    </p>
+  </div>;
+};
+
+const DistributionWorkCommentEditor = ({
+  task,
+  editing,
+  draft,
+  onBegin,
+  onCancel,
+  onChange,
+  onSave
+}: {
+  task: Task;
+  editing: boolean;
+  draft: string;
+  onBegin: () => void;
+  onCancel: () => void;
+  onChange: (value: string) => void;
+  onSave: () => void;
+}) => {
+  const existing = productionWorkCommentFromNotes(task.notes, 'distribution');
+  if (!editing) {
+    return <button
+      className="mx-2 mb-2 flex min-h-11 w-[calc(100%-1rem)] items-center justify-center gap-1.5 rounded-lg border border-emerald-500/45 px-3 text-xs font-bold text-emerald-300 transition hover:border-emerald-300 hover:bg-emerald-500/10 md:min-h-8"
+      onClick={onBegin}
+      type="button"
+    >
+      <MessageSquare className="h-4 w-4" />
+      {existing ? 'Edytuj komentarz' : 'Dodaj komentarz'}
+    </button>;
+  }
+  return <div className="space-y-2 border-t border-emerald-500/25 bg-emerald-500/[0.04] p-3">
+    <label className="block text-xs font-bold text-emerald-300">
+      Komentarz dla inżyniera procesu
+      <textarea
+        autoFocus
+        className="mt-1 min-h-20 w-full resize-y rounded-lg border border-emerald-500/40 bg-bg px-3 py-2 text-sm font-normal text-title outline-none focus:border-emerald-300"
+        maxLength={PRODUCTION_WORK_COMMENT_MAX_LENGTH}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Np. Suszarka gotowa o 10:35"
+        value={draft}
+      />
+    </label>
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-[10px] text-dim">{draft.length}/{PRODUCTION_WORK_COMMENT_MAX_LENGTH}</span>
+      <div className="flex gap-2">
+        <Button className="min-h-9 px-3 py-2 text-xs" onClick={onCancel} type="button" variant="ghost">Anuluj</Button>
+        <Button className="min-h-9 px-3 py-2 text-xs" onClick={onSave} type="button" variant="primaryEmber">
+          <Check className="mr-1.5 h-3.5 w-3.5" />
+          {draft.trim() ? 'Zapisz' : 'Usuń'}
+        </Button>
+      </div>
+    </div>
+  </div>;
 };
 
 const TeamDoneButton = ({ task, team, onToggle }: { task: Task; team: Team; onToggle: () => void }) => {
@@ -637,6 +716,8 @@ export default function PrzygotowanieProdukcjiPage() {
   const [copiedQueueTask, setCopiedQueueTask] = useState<string | null>(null);
   const [editingQueueTask, setEditingQueueTask] = useState<string | null>(null);
   const [queueTaskDraft, setQueueTaskDraft] = useState<QueueTaskDraft | null>(null);
+  const [editingDistributionCommentTask, setEditingDistributionCommentTask] = useState<string | null>(null);
+  const [distributionCommentDraft, setDistributionCommentDraft] = useState('');
   const [expandedPlannedTasks, setExpandedPlannedTasks] = useState<string[]>([]);
   const [showManualTaskForm, setShowManualTaskForm] = useState(false);
   const [manualTaskText, setManualTaskText] = useState('');
@@ -749,6 +830,8 @@ export default function PrzygotowanieProdukcjiPage() {
     setTasks([]);
     setEditingQueueTask(null);
     setQueueTaskDraft(null);
+    setEditingDistributionCommentTask(null);
+    setDistributionCommentDraft('');
     setExpandedPlannedTasks([]);
     setShowManualTaskForm(false);
     setManualTaskText('');
@@ -1105,6 +1188,39 @@ export default function PrzygotowanieProdukcjiPage() {
       const normalizedTask = { ...nextTask, teamProgress: normalizedProgress };
       return { ...normalizedTask, done: isProductionTaskDone({ ...normalizedTask, done: false }) };
     });
+  };
+  const closeDistributionCommentEditor = () => {
+    setEditingDistributionCommentTask(null);
+    setDistributionCommentDraft('');
+  };
+  const beginDistributionCommentEditor = (task: Task) => {
+    setEditingDistributionCommentTask(task.id);
+    setDistributionCommentDraft(productionWorkCommentFromNotes(task.notes, 'distribution')?.text ?? '');
+  };
+  const saveDistributionComment = (task: Task) => {
+    if (!isPreparationAdmin && !grantedTeamIds.includes('distribution')) return;
+    const text = normalizeProductionWorkCommentText(distributionCommentDraft);
+    const previous = productionWorkCommentFromNotes(task.notes, 'distribution')?.text ?? '';
+    if (text === previous) {
+      closeDistributionCommentEditor();
+      return;
+    }
+    const updatedAt = new Date().toISOString();
+    mutateTask(
+      task.id,
+      { setWorkComment: { team: 'distribution', text } },
+      (current) => ({
+        ...current,
+        notes: withProductionWorkComment(
+          current.notes,
+          'distribution',
+          text,
+          currentUser?.name ?? '',
+          updatedAt
+        )
+      })
+    );
+    closeDistributionCommentEditor();
   };
   const addManualTask = () => {
     const detail = manualTaskText.trim();
@@ -1956,7 +2072,7 @@ export default function PrzygotowanieProdukcjiPage() {
                 return !(task.kinds.length === 1 && task.kinds[0] === 'przeglad-a' && ['mechanics', 'distribution', 'technician'].includes(team.id));
               });
               const columnCopyId = `column-${team.id}`;
-              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><div className="flex items-center gap-2"><button aria-label={`Kopiuj wszystkie zadania: ${team.label}`} className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-lg border border-border text-dim transition active:scale-[0.98] hover:border-[rgba(255,122,0,0.65)] hover:text-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40 md:h-8 md:w-8 md:rounded" disabled={queue.length === 0} onClick={() => void copyTeamQueue(team.id, queue)} title="Kopiuj całą kolumnę" type="button"><Copy className="h-5 w-5 md:h-4 md:w-4" /></button><Badge>{queue.filter((task) => !isProductionTeamDone(task, team.id)).length}</Badge></div></div>{copiedQueueTask === columnCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-400">Skopiowano całą kolumnę.</p>}<div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].filter((id) => id !== 'anulowane').map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; const teamDone = isProductionTeamDone(task, team.id); const waitingTeams = productionWaitingTeams(task, team.id); const teamReady = isProductionStartupTeam(team.id) && waitingTeams.length === 0 && !teamDone && !task.kinds.includes('anulowane'); return <div className={cn('overflow-hidden rounded-lg border bg-bg transition', teamDone ? 'border-emerald-500/65 bg-emerald-500/[0.08]' : 'border-border', teamReady && 'border-emerald-400/80 bg-emerald-500/[0.07] shadow-[0_0_18px_rgba(34,197,94,0.18)]')} data-cancelled={task.kinds.includes('anulowane') || undefined} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', teamDone && 'bg-emerald-500/[0.04]')} onClick={() => void copyQueueTask(task, team.id)} type="button">{task.kinds.includes('anulowane') && <p className="cancelled-task-label">ANULOWANE</p>}<TaskTitle task={task} team={team.id} />{taskMetrics(task, team.id) && <p className="mt-1 text-xs text-body">{taskMetrics(task, team.id)}</p>}<TaskWorkSummary kindLabels={kindLabels} task={task} team={team.id} />{taskComment(task, team.id) && <p className="mt-1 whitespace-pre-line break-words text-xs text-body">{taskComment(task, team.id)}</p>}<TeamProgressStatus task={task} team={team.id} />{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button>{isPreparationAdmin && team.id === 'process' && <div className="border-t border-border p-2"><SelectField aria-label={`Przypisz inżyniera do zadania ${task.station}`} className="min-h-9 rounded-lg border-[rgba(47,181,240,0.35)] px-2 py-1.5 text-xs" onChange={(event) => assignProcessEngineer(task, event.target.value)} value={task.notes.processAssignee ?? ''}><option value="">Nieprzypisane</option>{(['1', '2'] as const).map((shift) => { const shiftEngineers = processEngineerRoster.filter((engineer) => engineer.active && engineer.shift === shift); return shiftEngineers.length > 0 ? <optgroup key={shift} label={`Zmiana ${shift}`}>{shiftEngineers.map((engineer) => <option key={engineer.name} value={engineer.name}>{engineer.name}</option>)}</optgroup> : null; })}</SelectField></div>}<div className="production-task-actions flex justify-end gap-1.5 border-t border-border p-2"><TeamDoneButton onToggle={() => toggleTeamDone(task, team.id)} task={task} team={team.id} />{isPreparationAdmin && <><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-11 w-auto min-w-11 touch-manipulation items-center justify-center rounded-lg border border-border px-3 text-dim transition active:scale-[0.98] hover:border-[rgba(255,122,0,0.65)] hover:text-title md:h-8 md:w-8 md:min-w-0 md:rounded md:px-0" onClick={() => editing ? closeQueueTaskEditor() : beginQueueTaskEditor(task, copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-5 w-5 md:h-4 md:w-4" /><span className="ml-1.5 text-[11px] font-bold md:hidden">{editing ? 'Zamknij' : 'Edytuj'}</span></button><button aria-label="Usuń zadanie z tego działu" className="flex h-11 w-auto min-w-11 touch-manipulation items-center justify-center rounded-lg border border-red-500/45 px-3 text-red-300 transition active:scale-[0.98] hover:bg-red-500/10 md:h-8 md:w-8 md:min-w-0 md:rounded md:px-0" onClick={() => { removeTaskFromTeam(task, team.id); closeQueueTaskEditor(); }} title="Usuń zadanie z tego działu" type="button"><X className="h-5 w-5 md:h-4 md:w-4" /><span className="ml-1.5 text-[11px] font-bold md:hidden">Usuń</span></button></>}</div>{isPreparationAdmin && editing && <div className="space-y-3 border-t border-border p-3"><div className="space-y-2 border-b border-border pb-3"><p className="text-[11px] font-bold uppercase tracking-wide text-title">Dane pozycji</p><label className="block text-xs font-semibold text-dim">Wtryskarka / stanowisko<Input className="mt-1" value={queueTaskDraft?.station ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, station: event.target.value } : current)} /></label><label className="block text-xs font-semibold text-dim">Indeks / nazwa produktu<Input className="mt-1" value={queueTaskDraft?.detail ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, detail: event.target.value } : current)} /></label><div className="grid grid-cols-2 gap-2"><label className="block text-xs font-semibold text-dim">Ilość<Input className="mt-1" inputMode="decimal" value={queueTaskDraft?.quantity ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, quantity: event.target.value } : current)} /></label><label className="block text-xs font-semibold text-dim">Norma<Input className="mt-1" inputMode="decimal" value={queueTaskDraft?.norm ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, norm: event.target.value } : current)} /></label></div><div className="grid grid-cols-2 gap-2"><Button className="min-h-10 px-3 py-2 text-xs" disabled={!queueTaskDraft?.station.trim() || !queueTaskDraft?.detail.trim()} onClick={() => saveQueueTaskDetails(task)} type="button"><Check className="mr-1.5 h-3.5 w-3.5" />Zapisz dane</Button><Button className="min-h-10 px-3 py-2 text-xs" onClick={closeQueueTaskEditor} type="button" variant="outline"><X className="mr-1.5 h-3.5 w-3.5" />Anuluj</Button></div></div><p className="text-[11px] font-bold uppercase tracking-wide text-title">Rodzaj pracy</p><div className="grid grid-cols-2 gap-1.5">{editableWorkKinds(task).map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTaskNote(task.id, team.id, event.target.value)} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); closeQueueTaskEditor(); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
+              return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><div className="flex items-center gap-2"><button aria-label={`Kopiuj wszystkie zadania: ${team.label}`} className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-lg border border-border text-dim transition active:scale-[0.98] hover:border-[rgba(255,122,0,0.65)] hover:text-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40 md:h-8 md:w-8 md:rounded" disabled={queue.length === 0} onClick={() => void copyTeamQueue(team.id, queue)} title="Kopiuj całą kolumnę" type="button"><Copy className="h-5 w-5 md:h-4 md:w-4" /></button><Badge>{queue.filter((task) => !isProductionTeamDone(task, team.id)).length}</Badge></div></div>{copiedQueueTask === columnCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-400">Skopiowano całą kolumnę.</p>}<div className="space-y-2 p-3">{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].filter((id) => id !== 'anulowane').map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; const teamDone = isProductionTeamDone(task, team.id); const waitingTeams = productionWaitingTeams(task, team.id); const teamReady = isProductionStartupTeam(team.id) && waitingTeams.length === 0 && !teamDone && !task.kinds.includes('anulowane'); return <div className={cn('overflow-hidden rounded-lg border bg-bg transition', teamDone ? 'border-emerald-500/65 bg-emerald-500/[0.08]' : 'border-border', teamReady && 'border-emerald-400/80 bg-emerald-500/[0.07] shadow-[0_0_18px_rgba(34,197,94,0.18)]')} data-cancelled={task.kinds.includes('anulowane') || undefined} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', teamDone && 'bg-emerald-500/[0.04]')} onClick={() => void copyQueueTask(task, team.id)} type="button">{task.kinds.includes('anulowane') && <p className="cancelled-task-label">ANULOWANE</p>}<TaskTitle task={task} team={team.id} />{taskMetrics(task, team.id) && <p className="mt-1 text-xs text-body">{taskMetrics(task, team.id)}</p>}<TaskWorkSummary kindLabels={kindLabels} task={task} team={team.id} />{(team.id === 'distribution' || team.id === 'process') && <DistributionWorkComment task={task} />}{taskComment(task, team.id) && <p className="mt-1 whitespace-pre-line break-words text-xs text-body">{taskComment(task, team.id)}</p>}<TeamProgressStatus task={task} team={team.id} />{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button>{team.id === 'distribution' && (isPreparationAdmin || grantedTeamIds.includes('distribution')) && <DistributionWorkCommentEditor draft={editingDistributionCommentTask === task.id ? distributionCommentDraft : ''} editing={editingDistributionCommentTask === task.id} onBegin={() => beginDistributionCommentEditor(task)} onCancel={closeDistributionCommentEditor} onChange={setDistributionCommentDraft} onSave={() => saveDistributionComment(task)} task={task} />}{isPreparationAdmin && team.id === 'process' && <div className="border-t border-border p-2"><SelectField aria-label={`Przypisz inżyniera do zadania ${task.station}`} className="min-h-9 rounded-lg border-[rgba(47,181,240,0.35)] px-2 py-1.5 text-xs" onChange={(event) => assignProcessEngineer(task, event.target.value)} value={task.notes.processAssignee ?? ''}><option value="">Nieprzypisane</option>{(['1', '2'] as const).map((shift) => { const shiftEngineers = processEngineerRoster.filter((engineer) => engineer.active && engineer.shift === shift); return shiftEngineers.length > 0 ? <optgroup key={shift} label={`Zmiana ${shift}`}>{shiftEngineers.map((engineer) => <option key={engineer.name} value={engineer.name}>{engineer.name}</option>)}</optgroup> : null; })}</SelectField></div>}<div className="production-task-actions flex justify-end gap-1.5 border-t border-border p-2"><TeamDoneButton onToggle={() => toggleTeamDone(task, team.id)} task={task} team={team.id} />{isPreparationAdmin && <><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-11 w-auto min-w-11 touch-manipulation items-center justify-center rounded-lg border border-border px-3 text-dim transition active:scale-[0.98] hover:border-[rgba(255,122,0,0.65)] hover:text-title md:h-8 md:w-8 md:min-w-0 md:rounded md:px-0" onClick={() => editing ? closeQueueTaskEditor() : beginQueueTaskEditor(task, copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-5 w-5 md:h-4 md:w-4" /><span className="ml-1.5 text-[11px] font-bold md:hidden">{editing ? 'Zamknij' : 'Edytuj'}</span></button><button aria-label="Usuń zadanie z tego działu" className="flex h-11 w-auto min-w-11 touch-manipulation items-center justify-center rounded-lg border border-red-500/45 px-3 text-red-300 transition active:scale-[0.98] hover:bg-red-500/10 md:h-8 md:w-8 md:min-w-0 md:rounded md:px-0" onClick={() => { removeTaskFromTeam(task, team.id); closeQueueTaskEditor(); }} title="Usuń zadanie z tego działu" type="button"><X className="h-5 w-5 md:h-4 md:w-4" /><span className="ml-1.5 text-[11px] font-bold md:hidden">Usuń</span></button></>}</div>{isPreparationAdmin && editing && <div className="space-y-3 border-t border-border p-3"><div className="space-y-2 border-b border-border pb-3"><p className="text-[11px] font-bold uppercase tracking-wide text-title">Dane pozycji</p><label className="block text-xs font-semibold text-dim">Wtryskarka / stanowisko<Input className="mt-1" value={queueTaskDraft?.station ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, station: event.target.value } : current)} /></label><label className="block text-xs font-semibold text-dim">Indeks / nazwa produktu<Input className="mt-1" value={queueTaskDraft?.detail ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, detail: event.target.value } : current)} /></label><div className="grid grid-cols-2 gap-2"><label className="block text-xs font-semibold text-dim">Ilość<Input className="mt-1" inputMode="decimal" value={queueTaskDraft?.quantity ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, quantity: event.target.value } : current)} /></label><label className="block text-xs font-semibold text-dim">Norma<Input className="mt-1" inputMode="decimal" value={queueTaskDraft?.norm ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, norm: event.target.value } : current)} /></label></div><div className="grid grid-cols-2 gap-2"><Button className="min-h-10 px-3 py-2 text-xs" disabled={!queueTaskDraft?.station.trim() || !queueTaskDraft?.detail.trim()} onClick={() => saveQueueTaskDetails(task)} type="button"><Check className="mr-1.5 h-3.5 w-3.5" />Zapisz dane</Button><Button className="min-h-10 px-3 py-2 text-xs" onClick={closeQueueTaskEditor} type="button" variant="outline"><X className="mr-1.5 h-3.5 w-3.5" />Anuluj</Button></div></div><p className="text-[11px] font-bold uppercase tracking-wide text-title">Rodzaj pracy</p><div className="grid grid-cols-2 gap-1.5">{editableWorkKinds(task).map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', task.kinds.includes(kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input checked={task.kinds.includes(kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTaskNote(task.id, team.id, event.target.value)} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); closeQueueTaskEditor(); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
             })}</div>}
             {isPreparationAdmin && workPlanView === 'work-plan-technology' && <section className="overflow-hidden border-y border-[rgba(47,181,240,0.3)] bg-[rgba(8,11,16,0.72)]">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[rgba(47,181,240,0.25)] px-4 py-3">
@@ -1970,7 +2086,7 @@ export default function PrzygotowanieProdukcjiPage() {
                 {processEngineersError && <p className="mt-2 text-xs font-semibold text-red-300">{processEngineersError}</p>}
                 <div className="mt-3 flex flex-wrap justify-end gap-2"><Button className="min-h-9 px-3 py-2 text-xs" onClick={() => setProcessEngineerDrafts((current) => [...current, { id: `new-engineer-${Date.now()}`, originalName: null, name: '', shift: '1', active: true }])} type="button" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" />Dodaj osobę</Button><Button className="min-h-9 px-3 py-2 text-xs" disabled={savingProcessEngineers} onClick={() => void saveProcessEngineers()} type="button" variant="primaryEmber">{savingProcessEngineers ? 'Zapisywanie...' : 'Zapisz skład'}</Button></div>
               </div>}
-              {processEngineers.length === 0 ? <p className="px-4 py-6 text-sm text-dim">Brak dostępnych inżynierów. Użyj „Edytuj skład”, aby dodać osoby na zmianę.</p> : <div className="process-engineer-columns grid divide-y divide-border lg:divide-x lg:divide-y-0" style={{ '--process-engineer-count': Math.max(processEngineers.length, 1) } as React.CSSProperties}>{processEngineers.map((engineer) => { const queue = processTasksByEngineer.get(engineer) ?? []; const rosterEntry = processEngineerRoster.find((item) => item.name === engineer); const engineerCopyId = `engineer-column-${engineer}`; return <div className="min-w-0 px-2 py-2.5" key={engineer}><div className="mb-1.5 flex min-w-0 items-start justify-between gap-1 border-b border-border pb-1.5"><button aria-label={`Kopiuj wszystkie zadania: ${engineer}`} className="group flex min-w-0 items-start gap-1.5 text-left disabled:cursor-not-allowed disabled:opacity-55" disabled={queue.length === 0} onClick={() => void copyProcessEngineerQueue(engineer, queue)} title={queue.length > 0 ? 'Kopiuj wszystkie zadania do jednej kolumny Excela' : 'Brak zadań do skopiowania'} type="button"><Copy className="mt-0.5 h-3 w-3 shrink-0 text-[#2fb5f0] transition group-hover:text-[var(--brand)]" /><span className="min-w-0"><span className="block break-words text-xs font-semibold leading-tight text-[#8bd9f8] group-hover:text-[var(--brand)]">{engineer}</span><span className="mt-0.5 block text-[9px] font-semibold uppercase text-dim">Zmiana {rosterEntry?.shift ?? '1'}</span></span></button><Badge>{queue.filter((task) => !isProductionTeamDone(task, 'process')).length}</Badge></div>{copiedQueueTask === engineerCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-1.5 py-1.5 text-[9px] font-semibold text-emerald-300">Skopiowano {queue.length} {queue.length === 1 ? 'pracę' : 'prace'} do Excela.</p>}<div className="divide-y divide-border">{queue.length === 0 ? <p className="py-2 text-[10px] leading-snug text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `process-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, 'process'))].filter((id) => id !== 'anulowane').map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const teamDone = isProductionTeamDone(task, 'process'); const waitingTeams = productionWaitingTeams(task, 'process'); const teamReady = waitingTeams.length === 0 && !teamDone && !task.kinds.includes('anulowane'); return <div className={cn('my-1 overflow-hidden rounded border transition', teamDone ? 'border-emerald-500/65 bg-emerald-500/[0.08]' : 'border-transparent', teamReady && 'border-emerald-400/80 bg-emerald-500/[0.07] shadow-[0_0_18px_rgba(34,197,94,0.18)]')} data-cancelled={task.kinds.includes('anulowane') || undefined} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className="w-full select-text px-2 py-2 text-left" onClick={() => void copyQueueTask(task, 'process')} type="button">{task.kinds.includes('anulowane') && <p className="cancelled-task-label">ANULOWANE</p>}<TaskTitle compact task={task} team="process" />{taskMetrics(task, 'process') && <p className="mt-1 break-words text-[10px] leading-snug text-body">{taskMetrics(task, 'process')}</p>}<TaskWorkSummary compact kindLabels={kindLabels} task={task} team="process" />{taskComment(task, 'process') && <p className="mt-1 whitespace-pre-line break-words text-[10px] leading-snug text-body">{taskComment(task, 'process')}</p>}<TeamProgressStatus task={task} team="process" />{copiedQueueTask === copyId && <p className="mt-2 text-[10px] font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button><div className="process-team-actions flex justify-end border-t border-border/80 p-1.5"><TeamDoneButton onToggle={() => toggleTeamDone(task, 'process')} task={task} team="process" /></div></div>; })}</div></div>; })}</div>}
+              {processEngineers.length === 0 ? <p className="px-4 py-6 text-sm text-dim">Brak dostępnych inżynierów. Użyj „Edytuj skład”, aby dodać osoby na zmianę.</p> : <div className="process-engineer-columns grid divide-y divide-border lg:divide-x lg:divide-y-0" style={{ '--process-engineer-count': Math.max(processEngineers.length, 1) } as React.CSSProperties}>{processEngineers.map((engineer) => { const queue = processTasksByEngineer.get(engineer) ?? []; const rosterEntry = processEngineerRoster.find((item) => item.name === engineer); const engineerCopyId = `engineer-column-${engineer}`; return <div className="min-w-0 px-2 py-2.5" key={engineer}><div className="mb-1.5 flex min-w-0 items-start justify-between gap-1 border-b border-border pb-1.5"><button aria-label={`Kopiuj wszystkie zadania: ${engineer}`} className="group flex min-w-0 items-start gap-1.5 text-left disabled:cursor-not-allowed disabled:opacity-55" disabled={queue.length === 0} onClick={() => void copyProcessEngineerQueue(engineer, queue)} title={queue.length > 0 ? 'Kopiuj wszystkie zadania do jednej kolumny Excela' : 'Brak zadań do skopiowania'} type="button"><Copy className="mt-0.5 h-3 w-3 shrink-0 text-[#2fb5f0] transition group-hover:text-[var(--brand)]" /><span className="min-w-0"><span className="block break-words text-xs font-semibold leading-tight text-[#8bd9f8] group-hover:text-[var(--brand)]">{engineer}</span><span className="mt-0.5 block text-[9px] font-semibold uppercase text-dim">Zmiana {rosterEntry?.shift ?? '1'}</span></span></button><Badge>{queue.filter((task) => !isProductionTeamDone(task, 'process')).length}</Badge></div>{copiedQueueTask === engineerCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-1.5 py-1.5 text-[9px] font-semibold text-emerald-300">Skopiowano {queue.length} {queue.length === 1 ? 'pracę' : 'prace'} do Excela.</p>}<div className="divide-y divide-border">{queue.length === 0 ? <p className="py-2 text-[10px] leading-snug text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `process-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, 'process'))].filter((id) => id !== 'anulowane').map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const teamDone = isProductionTeamDone(task, 'process'); const waitingTeams = productionWaitingTeams(task, 'process'); const teamReady = waitingTeams.length === 0 && !teamDone && !task.kinds.includes('anulowane'); return <div className={cn('my-1 overflow-hidden rounded border transition', teamDone ? 'border-emerald-500/65 bg-emerald-500/[0.08]' : 'border-transparent', teamReady && 'border-emerald-400/80 bg-emerald-500/[0.07] shadow-[0_0_18px_rgba(34,197,94,0.18)]')} data-cancelled={task.kinds.includes('anulowane') || undefined} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className="w-full select-text px-2 py-2 text-left" onClick={() => void copyQueueTask(task, 'process')} type="button">{task.kinds.includes('anulowane') && <p className="cancelled-task-label">ANULOWANE</p>}<TaskTitle compact task={task} team="process" />{taskMetrics(task, 'process') && <p className="mt-1 break-words text-[10px] leading-snug text-body">{taskMetrics(task, 'process')}</p>}<TaskWorkSummary compact kindLabels={kindLabels} task={task} team="process" /><DistributionWorkComment compact task={task} />{taskComment(task, 'process') && <p className="mt-1 whitespace-pre-line break-words text-[10px] leading-snug text-body">{taskComment(task, 'process')}</p>}<TeamProgressStatus task={task} team="process" />{copiedQueueTask === copyId && <p className="mt-2 text-[10px] font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button><div className="process-team-actions flex justify-end border-t border-border/80 p-1.5"><TeamDoneButton onToggle={() => toggleTeamDone(task, 'process')} task={task} team="process" /></div></div>; })}</div></div>; })}</div>}
             </section>}
           </>}
         </TabsContent>

@@ -26,6 +26,7 @@ import {
 } from '@/lib/utils/productionRecurringTasks';
 import { isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, toolroomReturnId, withToolroomReturnTasks } from '@/lib/utils/productionToolroomTasks';
 import { PRODUCTION_TEAMS, TEAM_COMMENT_KEY_PREFIX, defaultTeamComments, isProductionTeam, normalizeTeamComment, validateTeamComment } from '@/lib/utils/productionTeamComments';
+import { productionWorkCommentNoteKey, validateProductionWorkCommentText, withProductionWorkComment } from '@/lib/utils/productionWorkComments';
 import {
   PRODUCTION_TEAM_PROGRESS_NOTE_KEY,
   PRODUCTION_STARTUP_TEAMS,
@@ -95,6 +96,7 @@ type StoredTaskMutation = {
   setNotes?: Record<string, string | null>;
   setNotesIfMissing?: Record<string, string>;
   setTeamDone?: { team?: unknown; done?: unknown };
+  setWorkComment?: { team?: unknown; text?: unknown };
   clearWork?: boolean;
 };
 
@@ -431,8 +433,13 @@ const invalidTeamCompletion = () => NextResponse.json({
 
 const completionOnlyForbidden = () => NextResponse.json({
   code: 'COMPLETION_ONLY',
-  message: 'Możesz jedynie potwierdzić lub cofnąć wykonanie pracy swojego działu.'
+  message: 'Możesz potwierdzić wykonanie lub dodać komentarz do pracy swojego działu.'
 }, { status: 403 });
+
+const invalidWorkComment = (message = 'Nieprawidłowy komentarz do pracy.') => NextResponse.json({
+  code: 'INVALID_WORK_COMMENT',
+  message
+}, { status: 400 });
 
 const invalidMaterialEdit = () => NextResponse.json({
   code: 'INVALID_MATERIAL_EDIT',
@@ -573,6 +580,21 @@ const applyTaskMutation = (
     if (value === null || value === '') delete next.notes[key];
     else next.notes[key] = String(value);
   });
+  const workComment = mutation.setWorkComment;
+  if (
+    workComment
+    && isProductionTeam(workComment.team)
+    && typeof workComment.text === 'string'
+    && validateProductionWorkCommentText(workComment.text) === null
+  ) {
+    next.notes = withProductionWorkComment(
+      next.notes,
+      workComment.team,
+      workComment.text,
+      completion.completedBy,
+      completion.completedAt
+    );
+  }
   for (const team of PRODUCTION_TEAMS) {
     const value = mutation.setNotes?.[team];
     const base = productionReopenedNoteBase(task.notes, team);
@@ -600,6 +622,7 @@ const applyTaskMutation = (
     if (!isProductionTeam(team)) continue;
     delete next.notes[productionReopenedNoteKey(team)];
     delete next.notes[productionReopenedDetailKey(team)];
+    delete next.notes[productionWorkCommentNoteKey(team)];
   }
 
   next.teamProgress = productionTeamProgressForTask({ ...next, done: false });
@@ -1043,6 +1066,23 @@ export async function POST(request: NextRequest) {
             message: 'Nie masz uprawnienia do potwierdzania pracy tego działu.'
           }, { status: 403 });
         }
+      } else if (hasExactlyKeys(mutation, ['setWorkComment'])) {
+        const workComment = isRecord(mutation.setWorkComment) ? mutation.setWorkComment : null;
+        if (
+          !workComment
+          || !hasExactlyKeys(workComment, ['team', 'text'])
+          || !isProductionTeam(workComment.team)
+        ) {
+          return invalidWorkComment();
+        }
+        const validationError = validateProductionWorkCommentText(workComment.text);
+        if (validationError) return invalidWorkComment(validationError);
+        if (!canCompleteProductionPreparationTeam(access.user, workComment.team)) {
+          return NextResponse.json({
+            code: 'WORK_COMMENT_FORBIDDEN',
+            message: 'Nie masz uprawnienia do komentowania pracy tego działu.'
+          }, { status: 403 });
+        }
       } else if (hasExactlyKeys(mutation, ['fields'])) {
         if (!canEditProductionPreparationMaterials(access.user)) {
           return materialEditForbidden();
@@ -1348,10 +1388,16 @@ export async function POST(request: NextRequest) {
 
     if (body.action === 'mutateTask' && body.taskId && body.mutation) {
       const teamDoneMutation = body.mutation.setTeamDone;
+      const workCommentMutation = body.mutation.setWorkComment;
       if (teamDoneMutation !== undefined && (
         !isProductionCompletableTeam(teamDoneMutation.team) || typeof teamDoneMutation.done !== 'boolean'
       )) {
         return invalidTeamCompletion();
+      }
+      if (workCommentMutation !== undefined) {
+        if (!isRecord(workCommentMutation) || !isProductionTeam(workCommentMutation.team)) return invalidWorkComment();
+        const validationError = validateProductionWorkCommentText(workCommentMutation.text);
+        if (validationError) return invalidWorkComment(validationError);
       }
       const planDate = resolveProductionPlanDate(body.planDate);
       if (!planDate || planDate === PROCESS_ENGINEERS_SETTINGS_DATE) return invalidPlanDate();
@@ -1400,6 +1446,16 @@ export async function POST(request: NextRequest) {
               waitingForToolroomReturn
             }, { status: 409 });
           }
+        }
+        if (
+          workCommentMutation
+          && isProductionTeam(workCommentMutation.team)
+          && !currentTask.teams.includes(workCommentMutation.team)
+        ) {
+          return NextResponse.json({
+            code: 'TEAM_NOT_ASSIGNED',
+            message: 'Ten dział nie jest przypisany do zadania.'
+          }, { status: 409 });
         }
         const nextTask = applyTaskMutation(currentTask, body.mutation, {
           completedAt: now,

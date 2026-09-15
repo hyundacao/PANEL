@@ -7,6 +7,7 @@ import * as comments from './productionTeamComments.ts';
 import * as planDates from './productionPlanDate.ts';
 import * as workPlan from './productionWorkPlan.ts';
 import * as workProgress from './productionWorkProgress.ts';
+import * as workComments from './productionWorkComments.ts';
 import * as toolroom from './productionToolroomTasks.ts';
 
 const require = createRequire(import.meta.url);
@@ -377,6 +378,7 @@ function testApi() {
     '@/lib/utils/productionPlanDate':planDates,
     '@/lib/utils/productionRecurringTasks':recurring,
     '@/lib/utils/productionTeamComments':comments,
+    '@/lib/utils/productionWorkComments':workComments,
     '@/lib/utils/productionWorkProgress':workProgress,
     '@/lib/utils/productionToolroomTasks':toolroom
   };
@@ -913,6 +915,52 @@ test('worker can only toggle completion for an allowed assigned section', async 
   const saved=(await(await api.get()).json()).tasks.find(item=>item.id===task.id);
   assert.equal(saved.done,true);
   assert.equal(saved.teamProgress.additional,undefined);
+});
+
+test('dispatcher work comment is attributed and visible to the process engineer', async () => {
+  const api=testApi();
+  const task={
+    ...toolroomSource(),
+    id:'dispatcher-comment',
+    kinds:['inne'],
+    teams:['distribution','process'],
+    notes:{distribution:'Przygotuj suszarkę',process:'Uruchom maszynę'},
+    teamProgress:{},
+    done:false
+  };
+  assert.equal((await api.post({action:'savePlan',tasks:[task]})).status,200);
+  assert.equal((await api.post({
+    action:'mutateTask',
+    taskId:task.id,
+    mutation:{setTeamDone:{team:'distribution',done:true}}
+  })).status,200);
+
+  api.state.isAdmin=false;
+  api.state.preparationTeams=['distribution'];
+  const response=await api.post({
+    action:'mutateTask',
+    taskId:task.id,
+    mutation:{setWorkComment:{team:'distribution',text:'Suszarka gotowa o 10:35'}}
+  });
+  assert.equal(response.status,200);
+  const updated=(await response.json()).task;
+  assert.equal(updated.notes.distribution,'Przygotuj suszarkę');
+  const comment=workComments.productionWorkCommentFromNotes(updated.notes,'distribution');
+  assert.equal(comment.text,'Suszarka gotowa o 10:35');
+  assert.equal(comment.author,'Test');
+  assert.ok(Number.isFinite(Date.parse(comment.updatedAt)));
+  assert.equal(updated.teamProgress.distribution.completedBy,'Test');
+
+  api.state.preparationTeams=['process'];
+  const visible=(await(await api.get()).json()).tasks.find(item=>item.id===task.id);
+  assert.equal(workComments.productionWorkCommentFromNotes(visible.notes,'distribution').text,'Suszarka gotowa o 10:35');
+  const forbidden=await api.post({
+    action:'mutateTask',
+    taskId:task.id,
+    mutation:{setWorkComment:{team:'distribution',text:'Podszyty wpis'}}
+  });
+  assert.equal(forbidden.status,403);
+  assert.equal((await forbidden.json()).code,'WORK_COMMENT_FORBIDDEN');
 });
 
 test('API stores two linked work tasks and snapshots both, with just one production row', async()=>{
