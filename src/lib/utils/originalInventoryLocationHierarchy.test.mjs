@@ -108,7 +108,7 @@ test('inventory export sums every source of the same material within one area', 
   }]);
 });
 
-test('inventory export keeps every saved silo chamber as a separate detailed row', () => {
+test('inventory export keeps saved chambers and shows active uncounted chambers at zero percent', () => {
   const rows = buildOriginalInventoryExportRows([
     {
       name: 'HOSTACOM HBC 327L GREY',
@@ -132,6 +132,7 @@ test('inventory export keeps every saved silo chamber as a separate detailed row
       materialName: 'HOSTACOM HBC 327L GREY',
       percentKg: 330,
       hopperKg: 500,
+      isActive: true,
       orderNo: 5
     },
     {
@@ -141,7 +142,18 @@ test('inventory export keeps every saved silo chamber as a separate detailed row
       materialName: 'PP GF35',
       percentKg: 220,
       hopperKg: 350,
+      isActive: true,
       orderNo: 6
+    },
+    {
+      id: 'silo-old',
+      name: 'Silos nieaktywny',
+      chamber: 'Komora X',
+      materialName: 'MATERIAŁ HISTORYCZNY',
+      percentKg: 100,
+      hopperKg: 200,
+      isActive: false,
+      orderNo: 99
     }
   ], [
     {
@@ -170,6 +182,18 @@ test('inventory export keeps every saved silo chamber as a separate detailed row
       siloPercentKg: 330,
       siloHopperKg: 500,
       siloOrderNo: 5
+    },
+    {
+      materialName: 'PP GF35',
+      areaName: 'Silosy',
+      qty: 0,
+      unit: 'kg',
+      siloName: 'Silos główny',
+      siloChamber: 'Komora F',
+      siloPercent: 0,
+      siloPercentKg: 220,
+      siloHopperKg: 0,
+      siloOrderNo: 6
     }
   ]);
 });

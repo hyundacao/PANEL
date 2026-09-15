@@ -24,6 +24,7 @@ export type OriginalInventorySiloExportConfig = {
   materialName: string;
   percentKg: number;
   hopperKg: number;
+  isActive?: boolean;
   orderNo?: number;
 };
 
@@ -126,6 +127,7 @@ export const buildOriginalInventoryExportRows = (
   hierarchy: OriginalInventoryLocationHierarchy
 ): OriginalInventoryExportRow[] => {
   const siloConfigById = new Map(siloConfigs.map((config) => [config.id, config]));
+  const siloEntryByConfigId = new Map(siloEntries.map((entry) => [entry.configId, entry]));
   const detailedSiloConfigIds = new Set(
     siloEntries
       .map((entry) => entry.configId)
@@ -139,16 +141,16 @@ export const buildOriginalInventoryExportRows = (
     }),
     hierarchy
   );
-  const siloRows = siloEntries.flatMap<OriginalInventoryExportRow>((entry) => {
-    const config = siloConfigById.get(entry.configId);
-    if (!config) return [];
+  const siloRows = siloConfigs.flatMap<OriginalInventoryExportRow>((config) => {
+    const entry = siloEntryByConfigId.get(config.id);
+    if (!entry && config.isActive === false) return [];
 
-    const percent = Number.isFinite(entry.percent) ? entry.percent : 0;
+    const percent = entry && Number.isFinite(entry.percent) ? entry.percent : 0;
     const percentKg = Number.isFinite(config.percentKg) ? config.percentKg : 0;
-    const hopperKg = entry.hopperPresent && Number.isFinite(config.hopperKg)
+    const hopperKg = entry?.hopperPresent && Number.isFinite(config.hopperKg)
       ? config.hopperKg
       : 0;
-    const calculatedQty = Number.isFinite(entry.calculatedQty)
+    const calculatedQty = entry && Number.isFinite(entry.calculatedQty)
       ? entry.calculatedQty
       : (percent * percentKg) + hopperKg;
 

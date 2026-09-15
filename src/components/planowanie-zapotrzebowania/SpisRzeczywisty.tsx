@@ -42,6 +42,7 @@ import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { parseQtyInput } from '@/lib/utils/format';
 import { cn } from '@/lib/utils/cn';
 import {
+  getOriginalInventorySpisEntriesQueryKey,
   getOriginalInventorySpisWarehousePriority,
   getOriginalInventorySpisIndex2,
   searchOriginalInventorySpisSuggestions
@@ -804,7 +805,9 @@ export default function SpisRzeczywisty() {
   );
   const inventoryHistoryRequired = activeTab === 'raporty';
   const { data: entries = [], isLoading } = useQuery({
-    queryKey: ['spis-oryginalow', inventoryHistoryRequired ? 'history' : spisDate],
+    queryKey: getOriginalInventorySpisEntriesQueryKey(
+      inventoryHistoryRequired ? 'history' : spisDate
+    ),
     queryFn: () => getOriginalInventory(inventoryHistoryRequired ? undefined : spisDate),
     enabled: Boolean(spisDate) && activeTab !== 'kartoteki'
   });
@@ -1499,7 +1502,7 @@ export default function SpisRzeczywisty() {
             qty
           });
           queryClient.setQueryData<OriginalInventoryEntry[]>(
-            ['spis-oryginalow'],
+            getOriginalInventorySpisEntriesQueryKey(dateKey),
             (current) => upsertOriginalInventoryEntry(current, savedEntry)
           );
 
@@ -1516,6 +1519,10 @@ export default function SpisRzeczywisty() {
               const next = { ...current };
               delete next[device.id];
               return next;
+            });
+            toast({
+              title: source === 'full' ? 'Urządzenie oznaczone jako pełne.' : 'Zapisano ilość urządzenia.',
+              tone: 'success'
             });
           }
         } catch (error) {
@@ -3192,15 +3199,15 @@ export default function SpisRzeczywisty() {
                           {isManual ? <p className="mt-2 text-xs font-semibold text-muted">Pełna pojemność: {formatQty(device.fullQty)} {device.unit}</p> : null}
                         </div>
                         <div className="grid grid-cols-2 gap-2">
-                          <Button variant={isFull ? 'secondary' : 'outline'} className="min-h-[44px] px-2" aria-pressed={isFull} disabled={readOnly || isSaving} onClick={() => handleSaveFixedDevice(device, device.fullQty, 'full')}>Pełny</Button>
-                          <Button variant={isManual || isEditing ? 'secondary' : 'outline'} className="min-h-[44px] px-2" title="Wpisz dokładną ilość" aria-label={`Wpisz dokładną ilość dla ${device.name}`} aria-pressed={isManual || isEditing} disabled={readOnly || isSaving} onClick={() => {
+                          <Button type="button" variant={isFull ? 'secondary' : 'outline'} className="min-h-[44px] px-2" aria-pressed={isFull} disabled={readOnly || isSaving} onClick={() => handleSaveFixedDevice(device, device.fullQty, 'full')}>Pełny</Button>
+                          <Button type="button" variant={isManual || isEditing ? 'secondary' : 'outline'} className="min-h-[44px] px-2" title="Wpisz dokładną ilość" aria-label={`Wpisz dokładną ilość dla ${device.name}`} aria-pressed={isManual || isEditing} disabled={readOnly || isSaving} onClick={() => {
                             setEditingFixedDeviceId(isEditing ? null : device.id);
                             setFixedDeviceQtyDrafts((current) => ({ ...current, [device.id]: current[device.id] ?? String(entry?.qty ?? '') }));
                           }}><PencilLine className="h-4 w-4" /><span className="sr-only">Ilość</span></Button>
                         </div>
                         {isEditing ? <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-t border-border pt-3">
                           <Input value={fixedDeviceQtyDrafts[device.id] ?? ''} inputMode="decimal" placeholder={`Powyżej 0 do ${device.fullQty} kg`} autoFocus onChange={(event) => setFixedDeviceQtyDrafts((current) => ({ ...current, [device.id]: event.target.value }))} />
-                          <Button disabled={readOnly || isSaving} onClick={() => handleSaveFixedDevice(device, parseQtyInput(fixedDeviceQtyDrafts[device.id] ?? ''), 'manual')}>Zapisz</Button>
+                          <Button type="button" disabled={readOnly || isSaving} onClick={() => handleSaveFixedDevice(device, parseQtyInput(fixedDeviceQtyDrafts[device.id] ?? ''), 'manual')}>Zapisz</Button>
                         </div> : null}
                       </div>;
                     })}

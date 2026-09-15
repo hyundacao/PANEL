@@ -13,6 +13,9 @@ const compactSearchCode = (value: unknown) =>
 
 const PRIORITY_WAREHOUSE_CODES = ['M1', 'M4', 'M10', 'M11'] as const;
 
+export const getOriginalInventorySpisEntriesQueryKey = (scope: unknown) =>
+  ['spis-oryginalow', String(scope ?? '').trim()] as const;
+
 export const getOriginalInventorySpisWarehousePriority = (...values: unknown[]) => {
   let warehouseCode = '';
   for (const value of values) {

@@ -2,12 +2,24 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   dedupeOriginalInventorySpisSuggestions,
+  getOriginalInventorySpisEntriesQueryKey,
   getOriginalInventorySpisWarehousePriority,
   getOriginalInventorySpisIndex2,
   matchesOriginalInventorySpisSearch,
   prioritizeOriginalInventorySpisSuggestions,
   searchOriginalInventorySpisSuggestions
 } from './originalInventorySpisSearch.ts';
+
+test('spis cache keys keep each inventory day separate', () => {
+  assert.deepEqual(
+    getOriginalInventorySpisEntriesQueryKey('2026-09-15'),
+    ['spis-oryginalow', '2026-09-15']
+  );
+  assert.notDeepEqual(
+    getOriginalInventorySpisEntriesQueryKey('2026-09-15'),
+    getOriginalInventorySpisEntriesQueryKey('2026-09-16')
+  );
+});
 
 test('spis search uses the explicit second index and ignores the first index', () => {
   const index1 = 'M-1-TW-RSHWR-8178';
