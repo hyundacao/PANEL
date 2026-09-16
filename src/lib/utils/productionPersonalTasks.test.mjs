@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import * as planDates from './productionPlanDate.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
 const Module = require('module');
 const utilityFile = fileURLToPath(new URL('./productionPersonalTasks.ts', import.meta.url));
 const utilityModule = new Module(utilityFile);
+utilityModule.require = (id) => id === './productionPlanDate' ? planDates : require(id);
 utilityModule._compile(ts.transpileModule(readFileSync(utilityFile, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText, utilityFile);
@@ -34,11 +36,25 @@ test('personal recurrence advances overdue dates and preserves monthly anchor da
   assert.equal(personal.nextPersonalTaskDueDate('2026-09-13','once','2026-09-13'), null);
 });
 
+test('a daily task is green only on its completion day and becomes due again tomorrow', () => {
+  const task = {
+    done: false,
+    recurrence: 'daily',
+    dueDate: '2026-09-17',
+    lastCompletedAt: '2026-09-15T22:30:00.000Z'
+  };
+  assert.equal(personal.isPersonalTaskCompletedForCurrentCycle(task, '2026-09-16'), true);
+  assert.equal(personal.isPersonalTaskCompletedForCurrentCycle(task, '2026-09-17'), false);
+  assert.equal(personal.personalTaskDueDateForToday(task, '2026-09-17'), '2026-09-17');
+  assert.equal(personal.personalTaskDueDateForToday({ ...task, dueDate: '2026-09-19' }, '2026-09-17'), '2026-09-17');
+  assert.equal(personal.personalTaskDueDateForToday({ ...task, dueDate: '2026-09-19', lastCompletedAt: undefined }, '2026-09-17'), '2026-09-19');
+});
+
 function personalApi() {
   const USER_A = '11111111-1111-4111-8111-111111111111';
   const USER_B = '22222222-2222-4222-8222-222222222222';
   const db = { przygotowanie_produkcji_sessions: [], przygotowanie_produkcji_tasks: [] };
-  const state = { user:{id:USER_A,name:'Anna'}, allowed:true, writeCount:0, likeCalls:[] };
+  const state = { user:{id:USER_A,name:'Anna'}, allowed:true, writeCount:0, likeCalls:[], today:'2026-09-13' };
   let sequence = 0;
   const clone = (value) => structuredClone(value);
 
@@ -98,7 +114,7 @@ function personalApi() {
     '@/lib/auth/access':{canSeeTab:()=>state.allowed},
     '@/lib/auth/session':{getAuthenticatedUser:async()=>({user:state.user,code:state.user?null:'UNAUTHORIZED'})},
     '@/lib/supabase/admin':{supabaseAdmin:{from:(table)=>new Query(table)}},
-    '@/lib/utils/productionPlanDate':{getWarsawProductionPlanDate:()=> '2026-09-13'},
+    '@/lib/utils/productionPlanDate':{getWarsawProductionPlanDate:(date)=>date instanceof Date?planDates.getWarsawProductionPlanDate(date):state.today},
     '@/lib/utils/productionPersonalTasks':personal
   };
   mod.require=(id)=>{assert.ok(id in stubs,`Unmocked route dependency ${id}`);return stubs[id];};
@@ -191,6 +207,29 @@ test('recurring completion advances once, is idempotent and can be undone', asyn
   saved=(await response.json()).tasks[0];
   assert.equal(saved.dueDate,'2026-09-10');
   assert.equal(saved.lastCompletedAt,undefined);
+});
+
+test('a previously over-advanced daily task is due the next day and cannot skip another day', async () => {
+  const api = personalApi();
+  const task = (await (await api.post({ action: 'create', task: taskInput({ recurrence: 'daily' }) })).json()).tasks[0];
+  const row = api.db.przygotowanie_produkcji_tasks.find((item) => String(item.task_key).endsWith(task.id));
+  row.notes.personalTask.dueDate = '2026-09-16';
+  row.notes.personalTask.lastCompletedAt = '2026-09-13T08:00:00.000Z';
+  row.notes.personalTask.lastCompletedDueDate = '2026-09-15';
+  api.state.today = '2026-09-14';
+
+  const visible = (await (await api.get()).json()).tasks[0];
+  assert.equal(visible.dueDate, '2026-09-14');
+  assert.equal(visible.done, false);
+  const completed = await api.post({ action: 'complete', id: task.id, occurrenceDate: '2026-09-14' });
+  assert.equal(completed.status, 200);
+  assert.equal((await completed.json()).tasks[0].dueDate, '2026-09-15');
+  const writes = api.state.writeCount;
+
+  const premature = await api.post({ action: 'complete', id: task.id, occurrenceDate: '2026-09-15' });
+  assert.equal(premature.status, 409);
+  assert.equal((await premature.json()).code, 'PERSONAL_TASK_NOT_DUE');
+  assert.equal(api.state.writeCount, writes);
 });
 
 test('daily plan route keeps personal storage rows out of module task data', () => {

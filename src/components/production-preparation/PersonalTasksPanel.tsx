@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils/cn';
 import { getWarsawProductionPlanDate } from '@/lib/utils/productionPlanDate';
 import {
   MAX_PERSONAL_TASK_TITLE_LENGTH,
+  isPersonalTaskCompletedForCurrentCycle,
   sortPersonalTasks,
   type PersonalTask,
   type PersonalTaskInput,
@@ -107,7 +108,7 @@ function PersonalTaskCard({
   onUndo,
   onArchive
 }: TaskCardProps) {
-  const completedForCurrentCycle = task.done || Boolean(task.lastCompletedAt && task.dueDate > today);
+  const completedForCurrentCycle = isPersonalTaskCompletedForCurrentCycle(task, today);
   const overdue = !completedForCurrentCycle && task.dueDate < today;
   const dueToday = !completedForCurrentCycle && task.dueDate === today;
   if (editing) {
@@ -140,11 +141,11 @@ function PersonalTaskCard({
         {task.done && task.completedAt && <p className="mt-1 text-xs text-[var(--success)]">Wykonano: {dateTimeLabel(task.completedAt)}</p>}
         {!task.done && task.lastCompletedAt && <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-dim">
           <span>Ostatnio wykonano: {dateTimeLabel(task.lastCompletedAt)}</span>
-          <button className="font-semibold text-brandHover hover:underline disabled:opacity-50" disabled={busy} onClick={onUndo} type="button">Cofnij ostatnie wykonanie</button>
+          {!completedForCurrentCycle && <button className="font-semibold text-brandHover hover:underline disabled:opacity-50" disabled={busy} onClick={onUndo} type="button">Cofnij ostatnie wykonanie</button>}
         </div>}
       </div>
       <div className="flex shrink-0 items-center justify-end gap-2">
-        {task.done ? <button
+        {completedForCurrentCycle ? <button
           aria-label="Cofnij wykonanie zadania"
           className="flex h-11 min-w-11 items-center justify-center rounded-xl border border-[var(--brand-border)] px-3 text-brandHover transition hover:bg-[var(--interactive-soft)] disabled:opacity-50"
           disabled={busy}
@@ -154,7 +155,7 @@ function PersonalTaskCard({
         ><RotateCcw className="h-4 w-4" /><span className="ml-2 text-xs font-bold">Cofnij</span></button> : <button
           aria-label={task.recurrence === 'once' ? 'Oznacz zadanie jako wykonane' : 'Wykonaj zadanie i ustaw kolejny termin'}
           className="flex h-11 min-w-11 items-center justify-center rounded-xl border border-emerald-500/55 bg-emerald-500/10 px-3 text-[var(--success)] transition hover:bg-emerald-500/20 disabled:opacity-50"
-          disabled={busy}
+          disabled={busy || (task.recurrence === 'daily' && task.dueDate > today)}
           onClick={onComplete}
           title={task.recurrence === 'once' ? 'Oznacz jako wykonane' : 'Wykonane — ustaw kolejny termin'}
           type="button"

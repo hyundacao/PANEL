@@ -48,6 +48,8 @@ import {
   searchOriginalInventorySpisSuggestions
 } from '@/lib/utils/originalInventorySpisSearch';
 import {
+  AlertTriangle,
+  Archive,
   BarChart3,
   Check,
   ChevronDown,
@@ -59,12 +61,23 @@ import {
   Maximize2,
   Minimize2,
   PencilLine,
-  Search
+  Search,
+  Undo2
 } from 'lucide-react';
 import {
   normalizeOriginalInventoryCatalogIdentityKey,
   parseOriginalInventoryCatalogRows
 } from '@/lib/utils/originalInventoryCatalog';
+import {
+  buildOriginalInventoryAlerts,
+  passesOriginalInventoryAlertThreshold,
+  type InventoryAlertRow,
+  type InventoryAlertThresholds
+} from '@/lib/utils/originalInventoryAlerts';
+import {
+  normalizeOriginalInventoryAlertExclusions,
+  type OriginalInventoryAlertExclusion
+} from '@/lib/utils/originalInventoryAlertExclusions';
 import {
   normalizeOriginalInventoryName
 } from '@/lib/utils/originalInventoryName';
@@ -88,6 +101,10 @@ const WAREHOUSE_STORAGE_KEY = 'spis-oryginalow-warehouse';
 const WAREHOUSE_NAME_STORAGE_KEY = 'spis-oryginalow-warehouse-name';
 const WAREHOUSE_QUERY_PARAM = 'hala';
 const TAB_STORAGE_KEY = 'spis-oryginalow-tab';
+const ALERT_THRESHOLDS_STORAGE_KEY = 'spis-oryginalow-alert-thresholds';
+const ALERT_EXCLUSIONS_QUERY_KEY = ['original-inventory-alert-exclusions'] as const;
+const DEFAULT_ALERT_THRESHOLDS = { szt: '100', kg: '300', l: '0' } as const;
+type AlertThresholdDrafts = Record<keyof InventoryAlertThresholds, string>;
 const SILOS_SELECT_VALUE = '__silos__';
 const normalizeWarehouseOptionName = (value: string) =>
   value
@@ -132,7 +149,7 @@ const getSiloConfigIdFromSourceId = (sourceId?: string | null) => {
   return match?.[1] ?? null;
 };
 
-type OriginalInventoryTab = 'spis' | 'kartoteki' | 'stany-erp' | 'raporty' | 'do-zmielenia';
+type OriginalInventoryTab = 'spis' | 'kartoteki' | 'stany-erp' | 'raporty' | 'alerty' | 'do-zmielenia';
 
 type OptimisticFixedDeviceEntry = {
   dateKey: string;
@@ -169,11 +186,31 @@ const getInitialTabValue = (): OriginalInventoryTab => {
     saved === 'kartoteki' ||
     saved === 'stany-erp' ||
     saved === 'raporty' ||
+    saved === 'alerty' ||
     saved === 'do-zmielenia'
   ) {
     return saved;
   }
   return 'spis';
+};
+
+const getInitialAlertThresholds = (): AlertThresholdDrafts => {
+  if (typeof window === 'undefined') return { ...DEFAULT_ALERT_THRESHOLDS };
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(ALERT_THRESHOLDS_STORAGE_KEY) ?? '{}') as Partial<AlertThresholdDrafts>;
+    return {
+      szt: typeof stored.szt === 'string' && Number(stored.szt) >= 0 ? stored.szt : DEFAULT_ALERT_THRESHOLDS.szt,
+      kg: typeof stored.kg === 'string' && Number(stored.kg) >= 0 ? stored.kg : DEFAULT_ALERT_THRESHOLDS.kg,
+      l: typeof stored.l === 'string' && Number(stored.l) >= 0 ? stored.l : DEFAULT_ALERT_THRESHOLDS.l
+    };
+  } catch {
+    return { ...DEFAULT_ALERT_THRESHOLDS };
+  }
+};
+
+const parseAlertThreshold = (value: string) => {
+  const parsed = Number(value.replace(',', '.'));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 };
 
 const getInitialWarehouseValue = () => {
@@ -729,6 +766,8 @@ export default function SpisRzeczywisty() {
     : isReadOnly(user, 'PRZEMIALY');
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<OriginalInventoryTab>(() => getInitialTabValue());
+  const [alertView, setAlertView] = useState<'active' | 'ignored'>('active');
+  const [alertThresholdDrafts, setAlertThresholdDrafts] = useState<AlertThresholdDrafts>(() => getInitialAlertThresholds());
   const [selectedWarehouseId, setSelectedWarehouseId] = useState('');
   const [selectedWarehouseName, setSelectedWarehouseName] = useState('');
   const [warehouseSelectionRestored, setWarehouseSelectionRestored] = useState(false);
@@ -881,7 +920,11 @@ export default function SpisRzeczywisty() {
     () => (Array.isArray(erpCatalogState?.items) ? erpCatalogState.items : []),
     [erpCatalogState]
   );
-  const { data: erpSnapshotState = { items: [] as OriginalInventoryErpSnapshotEntry[], migrationRequired: false } } = useQuery({
+  const {
+    data: erpSnapshotState = { items: [] as OriginalInventoryErpSnapshotEntry[], migrationRequired: false },
+    isLoading: isErpSnapshotLoading,
+    isError: isErpSnapshotError
+  } = useQuery({
     queryKey: ['spis-oryginalow-erp-snapshot', spisDate],
     queryFn: async () => {
       try {
@@ -899,8 +942,63 @@ export default function SpisRzeczywisty() {
         throw error;
       }
     },
-    enabled: Boolean(spisDate) && (activeTab === 'stany-erp' || activeTab === 'raporty'),
+    enabled: Boolean(spisDate) && (activeTab === 'stany-erp' || activeTab === 'raporty' || activeTab === 'alerty'),
     retry: false
+  });
+  const {
+    data: alertExclusions = [],
+    isLoading: isAlertExclusionsLoading,
+    isError: isAlertExclusionsError
+  } = useQuery<OriginalInventoryAlertExclusion[]>({
+    queryKey: ALERT_EXCLUSIONS_QUERY_KEY,
+    queryFn: async () => {
+      const response = await fetch('/api/original-inventory-alert-exclusions', { cache: 'no-store' });
+      if (!response.ok) throw new Error('ALERT_EXCLUSIONS_LOAD_FAILED');
+      const payload = await response.json() as { items?: unknown };
+      return normalizeOriginalInventoryAlertExclusions(payload.items);
+    },
+    enabled: activeTab === 'alerty',
+    retry: false
+  });
+  const alertExclusionMutation = useMutation({
+    mutationFn: async (change: { action: 'ignore'; row: InventoryAlertRow } | { action: 'restore'; key: string }) => {
+      const response = await fetch('/api/original-inventory-alert-exclusions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(change.action === 'ignore'
+          ? { action: 'ignore', key: change.row.key, name: change.row.name, unit: change.row.unit }
+          : { action: 'restore', key: change.key })
+      });
+      if (!response.ok) throw new Error('ALERT_EXCLUSIONS_SAVE_FAILED');
+      const payload = await response.json() as { items?: unknown };
+      return normalizeOriginalInventoryAlertExclusions(payload.items);
+    },
+    onMutate: async (change) => {
+      await queryClient.cancelQueries({ queryKey: ALERT_EXCLUSIONS_QUERY_KEY });
+      const previous = queryClient.getQueryData<OriginalInventoryAlertExclusion[]>(ALERT_EXCLUSIONS_QUERY_KEY) ?? [];
+      const next = change.action === 'ignore'
+        ? normalizeOriginalInventoryAlertExclusions([...previous, {
+          key: change.row.key,
+          name: change.row.name,
+          unit: change.row.unit,
+          createdAt: new Date().toISOString(),
+          createdBy: user?.username ?? user?.name ?? ''
+        }])
+        : previous.filter((item) => item.key !== change.key);
+      queryClient.setQueryData(ALERT_EXCLUSIONS_QUERY_KEY, next);
+      return { previous };
+    },
+    onSuccess: (items, change) => {
+      queryClient.setQueryData(ALERT_EXCLUSIONS_QUERY_KEY, items);
+      toast({ title: change.action === 'ignore' ? 'Przeniesiono do ignorowanych alertów' : 'Przywrócono do alertów', tone: 'success' });
+    },
+    onError: (_error, _change, context) => {
+      if (context) queryClient.setQueryData(ALERT_EXCLUSIONS_QUERY_KEY, context.previous);
+      toast({ title: 'Nie udało się zapisać decyzji. Spróbuj ponownie.', tone: 'error' });
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ALERT_EXCLUSIONS_QUERY_KEY });
+    }
   });
   const catalog = useMemo(() => {
     const merged = new Map<string, (typeof localCatalog)[number]>();
@@ -1040,6 +1138,11 @@ export default function SpisRzeczywisty() {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(TAB_STORAGE_KEY, activeTab);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(ALERT_THRESHOLDS_STORAGE_KEY, JSON.stringify(alertThresholdDrafts));
+  }, [alertThresholdDrafts]);
 
   useEffect(() => {
     setCatalogVisibleCount(CATALOG_TABLE_INITIAL_LIMIT);
@@ -1862,6 +1965,41 @@ export default function SpisRzeczywisty() {
       return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
     });
   }, [dailyEntries]);
+  const inventoryAlertRows = useMemo(() => buildOriginalInventoryAlerts(
+    erpSnapshotEntries.map((entry) => ({
+      key: normalizeCatalogNameKey(entry.name),
+      name: entry.name,
+      unit: entry.unit,
+      availableQty: entry.availableQty
+    })),
+    entriesForDate
+      .filter((entry) => !(
+        String(entry.sourceType ?? '').toUpperCase() === FIXED_INVENTORY_DEVICE_SOURCE_TYPE
+        && entry.qty <= 0.000001
+      ))
+      .map((entry) => ({
+        key: normalizeCatalogNameKey(entry.name),
+        name: entry.name,
+        unit: entry.unit,
+        qty: entry.qty
+      }))
+  ), [erpSnapshotEntries, entriesForDate]);
+  const alertThresholds = useMemo<InventoryAlertThresholds>(() => ({
+    szt: parseAlertThreshold(alertThresholdDrafts.szt),
+    kg: parseAlertThreshold(alertThresholdDrafts.kg),
+    l: parseAlertThreshold(alertThresholdDrafts.l)
+  }), [alertThresholdDrafts]);
+  const alertExclusionKeys = useMemo(() => new Set(alertExclusions.map((item) => item.key)), [alertExclusions]);
+  const activeInventoryAlertRows = useMemo(
+    () => inventoryAlertRows.filter((row) => !alertExclusionKeys.has(row.key)),
+    [alertExclusionKeys, inventoryAlertRows]
+  );
+  const visibleInventoryAlertRows = useMemo(
+    () => activeInventoryAlertRows.filter((row) => passesOriginalInventoryAlertThreshold(row, alertThresholds)),
+    [activeInventoryAlertRows, alertThresholds]
+  );
+  const uncountedInventoryAlertRows = visibleInventoryAlertRows.filter((row) => row.countedQty === null);
+  const countedInventoryAlertRows = visibleInventoryAlertRows.filter((row) => row.countedQty !== null);
   const reportSourceEntries = useMemo(() => {
     const rows = [...dailySummary];
     if (!showReportUncountedItems) return rows;
@@ -2988,7 +3126,7 @@ export default function SpisRzeczywisty() {
   return (
     <div className="space-y-4">
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-1 gap-2 rounded-none border-0 bg-transparent p-0 shadow-none sm:grid-cols-2 xl:grid-cols-5">
+        <TabsList className="grid w-full grid-cols-1 gap-2 rounded-none border-0 bg-transparent p-0 shadow-none sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <TabsTrigger
             value="spis"
             className={cn(
@@ -3028,6 +3166,16 @@ export default function SpisRzeczywisty() {
           >
             <BarChart3 className={originalInventoryTabIconClassName} />
             <span>Raporty</span>
+          </TabsTrigger>
+          <TabsTrigger
+            value="alerty"
+            className={cn(
+              originalInventoryTabTileClassName,
+              'original-inventory-tab-alerty'
+            )}
+          >
+            <AlertTriangle className={originalInventoryTabIconClassName} />
+            <span>Alerty</span>
           </TabsTrigger>
           <TabsTrigger
             value="do-zmielenia"
@@ -3180,7 +3328,9 @@ export default function SpisRzeczywisty() {
                       const isEmpty = Boolean(entry) && entry!.qty <= 0.000001;
                       const isFull = Boolean(entry) && Math.abs(entry!.qty - device.fullQty) <= 0.000001;
                       const isManual = Boolean(entry) && !isEmpty && !isFull;
-                      const isSaving = entry?.saving ?? false;
+                      const persistedEntry = fixedDeviceEntryById.get(device.id);
+                      const isRemoving = removeEntryMutation.isPending && removeEntryMutation.variables === persistedEntry?.id;
+                      const isSaving = (entry?.saving ?? false) || isRemoving;
                       const isEditing = editingFixedDeviceId === device.id;
                       const statusLabel = !entry ? 'Niepotwierdzone' : isFull ? 'Pełny' : isEmpty ? 'Pusty' : `${formatQty(entry.qty)} ${entry.unit}`;
                       return <div key={device.id} className={cn('space-y-3 rounded-2xl border p-4 transition-[border-color,background-color,box-shadow] duration-150', entry ? 'border-[rgba(34,197,94,0.8)] bg-[rgba(34,197,94,0.13)] shadow-[0_0_0_1px_rgba(34,197,94,0.28),0_0_28px_rgba(34,197,94,0.27),inset_0_0_24px_rgba(34,197,94,0.09)]' : 'border-border bg-[var(--surface-faint)]')}>
@@ -3191,7 +3341,7 @@ export default function SpisRzeczywisty() {
                             {device.location ? <p className="mt-1 text-xs text-muted">{device.location}</p> : null}
                           </div>
                           <span aria-live="polite" className={cn('shrink-0 rounded-full border px-2.5 py-1 text-xs font-black', entry ? 'border-[rgba(34,197,94,0.55)] bg-[rgba(34,197,94,0.08)] text-success' : 'border-border text-muted')}>
-                            {entry ? <Check className="mr-1 inline h-3.5 w-3.5" /> : null}{statusLabel}{isSaving ? <span className="ml-1 opacity-75">· zapisuję</span> : null}
+                            {entry ? <Check className="mr-1 inline h-3.5 w-3.5" /> : null}{statusLabel}{isSaving ? <span className="ml-1 opacity-75">· {isRemoving ? 'cofam' : 'zapisuję'}</span> : null}
                           </span>
                         </div>
                         <div className="rounded-xl border border-border bg-[rgba(255,255,255,0.025)] p-3">
@@ -3205,7 +3355,21 @@ export default function SpisRzeczywisty() {
                           {isManual ? <p className="mt-2 text-xs font-semibold text-muted">Pełna pojemność: {formatQty(device.fullQty)} {device.unit}</p> : null}
                         </div>
                         <div className="grid grid-cols-2 gap-2">
-                          <Button type="button" variant={isFull ? 'secondary' : 'outline'} className="min-h-[44px] px-2" aria-pressed={isFull} disabled={readOnly || isSaving} onClick={() => handleSaveFixedDevice(device, device.fullQty, 'full')}>Pełny</Button>
+                          <Button type="button" variant={isFull ? 'secondary' : 'outline'} className="min-h-[44px] px-2" aria-pressed={isFull} disabled={readOnly || isSaving} onClick={() => {
+                            if (!isFull) {
+                              handleSaveFixedDevice(device, device.fullQty, 'full');
+                              return;
+                            }
+                            if (!persistedEntry) return;
+                            removeEntryMutation.mutate(persistedEntry.id, {
+                              onSuccess: () => {
+                                queryClient.setQueryData<OriginalInventoryEntry[]>(
+                                  getOriginalInventorySpisEntriesQueryKey(spisDate),
+                                  (current) => current?.filter((item) => item.id !== persistedEntry.id)
+                                );
+                              }
+                            });
+                          }}>Pełny</Button>
                           <Button type="button" variant={isManual || isEditing ? 'secondary' : 'outline'} className="min-h-[44px] px-2" title="Wpisz dokładną ilość" aria-label={`Wpisz dokładną ilość dla ${device.name}`} aria-pressed={isManual || isEditing} disabled={readOnly || isSaving} onClick={() => {
                             setEditingFixedDeviceId(isEditing ? null : device.id);
                             setFixedDeviceQtyDrafts((current) => ({ ...current, [device.id]: current[device.id] ?? String(entry?.qty ?? '') }));
@@ -4220,6 +4384,207 @@ export default function SpisRzeczywisty() {
               </>
             )}
           </Card>
+        </TabsContent>
+
+        <TabsContent value="alerty" className="space-y-4">
+          <Card className="space-y-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-dim">Alerty spisu</p>
+              <h2 className="mt-1 text-xl font-black text-title">Pozycje do sprawdzenia</h2>
+              <p className="mt-1 text-sm text-dim">
+                Niespisane saldo ERP nie oznacza potwierdzonego braku. Różnica powstaje dopiero wtedy,
+                gdy materiał ma wpisaną ilość w spisie tego samego dnia.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2" aria-label="Widok alertów">
+              <Button variant={alertView === 'active' ? 'secondary' : 'outline'} onClick={() => setAlertView('active')}>
+                Do sprawdzenia
+              </Button>
+              <Button variant={alertView === 'ignored' ? 'secondary' : 'outline'} onClick={() => setAlertView('ignored')}>
+                <Archive className="mr-2 h-4 w-4" />Ignorowane ({alertExclusions.length})
+              </Button>
+            </div>
+            {alertView === 'active' ? <>
+            <div className="grid gap-3 sm:grid-cols-[220px_minmax(0,1fr)] sm:items-end">
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-wide text-dim" htmlFor="inventory-alert-date">Dzień</label>
+                <Input
+                  id="inventory-alert-date"
+                  type="date"
+                  value={spisDate}
+                  onChange={(event) => setSpisDate(event.target.value)}
+                  className="min-h-[46px]"
+                />
+              </div>
+              <p className="text-xs text-dim">
+                Źródło: stan do dyspozycji z wgranego snapshotu ERP dla wybranego dnia. Po zwrocie wgraj aktualny plik w „Stany ERP”,
+                aby zobaczyć nowe saldo. Dane nie są pobierane z ERP na żywo.
+                {currentErpSnapshotMeta ? ` Ostatni import: ${new Date(currentErpSnapshotMeta.importedAt).toLocaleString('pl-PL')}.` : ''}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border bg-surface2 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-title">Progi widoku</h3>
+                  <p className="mt-1 text-xs text-dim">
+                    Próg dotyczy salda ERP do dyspozycji przy braku spisu lub bezwzględnej różnicy spis − ERP do dyspozycji.
+                    Zmiany filtrują listę od razu i zapamiętują się na tym urządzeniu. Wpisz 0, aby pokazać każdą dodatnią ilość.
+                  </p>
+                </div>
+                <Button variant="outline" onClick={() => setAlertThresholdDrafts({ ...DEFAULT_ALERT_THRESHOLDS })}>
+                  Przywróć progi
+                </Button>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                {([
+                  ['szt', 'Sztuki', 'szt.'],
+                  ['kg', 'Kilogramy', 'kg'],
+                  ['l', 'Litry', 'l']
+                ] as const).map(([unit, label, suffix]) => (
+                  <div key={unit}>
+                    <label htmlFor={`inventory-alert-threshold-${unit}`} className="text-xs font-semibold uppercase tracking-wide text-dim">
+                      {label} — od ilu
+                    </label>
+                    <div className="relative mt-1">
+                      <Input
+                        id={`inventory-alert-threshold-${unit}`}
+                        type="number"
+                        min="0"
+                        step="any"
+                        inputMode="decimal"
+                        value={alertThresholdDrafts[unit]}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          if (!/^\d*(?:[.,]\d*)?$/.test(value)) return;
+                          setAlertThresholdDrafts((current) => ({ ...current, [unit]: value }));
+                        }}
+                        className="min-h-[46px] pr-14 text-base font-bold"
+                      />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-dim">{suffix}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-dim">Inne jednostki pokazujemy bez progu; różnych jednostek nie odejmujemy od siebie.</p>
+            </div>
+            </> : <p className="text-sm text-dim">Ignorowane pozycje są ukryte tylko w Alertach — pozostają w spisie, stanach ERP i raportach. Możesz je przywrócić w dowolnym dniu.</p>}
+          </Card>
+
+          {isAlertExclusionsError ? (
+            <Card><p className="text-sm text-danger">Nie udało się wczytać listy ignorowanych. Odśwież stronę i spróbuj ponownie.</p></Card>
+          ) : isAlertExclusionsLoading ? (
+            <Card><p className="text-sm text-dim">Wczytywanie listy ignorowanych...</p></Card>
+          ) : alertView === 'ignored' ? (
+            <Card className="space-y-3">
+              <div>
+                <h3 className="text-lg font-black text-title">Ignorowane w Alertach</h3>
+                <p className="text-sm text-dim">Lista wspólna dla wszystkich użytkowników i dni. Ignorowanie dotyczy nazwy materiału i jednostki.</p>
+              </div>
+              {alertExclusions.length === 0 ? (
+                <p className="rounded-xl border border-border p-4 text-sm text-dim">Nie ma jeszcze ignorowanych pozycji.</p>
+              ) : (
+                <DataTable
+                  columns={['Materiał', 'Jedn.', 'Dodano', 'Decyzja']}
+                  rows={alertExclusions.map((exclusion) => [
+                    <span key={exclusion.key} className="font-bold text-brand">{exclusion.name}</span>,
+                    exclusion.unit,
+                    <span key={exclusion.key} className="text-xs text-dim">
+                      {exclusion.createdAt ? new Date(exclusion.createdAt).toLocaleString('pl-PL') : '—'}
+                      {exclusion.createdBy ? ` · ${exclusion.createdBy}` : ''}
+                    </span>,
+                    <Button
+                      key={exclusion.key}
+                      variant="outline"
+                      className="min-h-[40px]"
+                      disabled={readOnly || alertExclusionMutation.isPending}
+                      onClick={() => alertExclusionMutation.mutate({ action: 'restore', key: exclusion.key })}
+                      aria-label={`Przywróć ${exclusion.name} do alertów`}
+                    >
+                      <Undo2 className="mr-2 h-4 w-4" />Przywróć
+                    </Button>
+                  ])}
+                />
+              )}
+            </Card>
+          ) : erpSnapshotMigrationRequired ? (
+            <Card><p className="text-sm text-danger">Brakuje migracji bazy dla stanów ERP. Uruchom SQL z `supabase/setup_full.sql`.</p></Card>
+          ) : isErpSnapshotError ? (
+            <Card><p className="text-sm text-danger">Nie udało się pobrać stanów ERP. Spróbuj ponownie za chwilę.</p></Card>
+          ) : isErpSnapshotLoading || isLoading ? (
+            <Card><p className="text-sm text-dim">Wczytywanie stanów ERP i spisu...</p></Card>
+          ) : erpSnapshotEntries.length === 0 ? (
+            <Card><p className="text-sm text-dim">Brak snapshotu ERP dla wybranego dnia. Wgraj go w zakładce „Stany ERP”.</p></Card>
+          ) : (
+            <>
+              <Card className="space-y-3">
+                <div className="flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <h3 className="text-lg font-black text-title">Niespisane — do sprawdzenia</h3>
+                    <p className="text-sm text-dim">Stan do dyspozycji jest w ERP, ale nie ma porównywalnej ilości w spisie tego dnia.</p>
+                  </div>
+                  <span className="text-sm font-bold text-title">{uncountedInventoryAlertRows.length} z {activeInventoryAlertRows.filter((row) => row.countedQty === null).length}</span>
+                </div>
+                {uncountedInventoryAlertRows.length === 0 ? (
+                  <p className="rounded-xl border border-border p-4 text-sm text-dim">Brak niespisanych pozycji przy tych progach.</p>
+                ) : (
+                  <DataTable
+                    columns={['Materiał', 'ERP do dyspozycji', 'Status', 'Decyzja']}
+                    rows={uncountedInventoryAlertRows.map((row) => [
+                      <span key={row.key} className="font-bold text-brand">{row.name}</span>,
+                      <span key={row.key} className="font-bold text-title">{formatQty(row.availableErpQty)} {row.unit}</span>,
+                      <span key={row.key} className="font-semibold text-warning">
+                        {row.hasIncompatibleCount ? 'Spisane w innej jednostce — sprawdź' : 'Niespisane — sprawdź na hali'}
+                      </span>,
+                      <Button
+                        key={row.key}
+                        variant="outline"
+                        className="min-h-[40px]"
+                        disabled={readOnly || alertExclusionMutation.isPending}
+                        onClick={() => alertExclusionMutation.mutate({ action: 'ignore', row })}
+                        aria-label={`Ignoruj w alertach: ${row.name}`}
+                      >
+                        <Archive className="mr-2 h-4 w-4" />Ignoruj
+                      </Button>
+                    ])}
+                  />
+                )}
+              </Card>
+              <Card className="space-y-3">
+                <div className="flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <h3 className="text-lg font-black text-title">Spisane — różnica spisu i ERP do dyspozycji</h3>
+                    <p className="text-sm text-dim">Różnica = spis − ERP do dyspozycji. Ujemna oznacza brak fizyczny, dodatnia nadwyżkę.</p>
+                  </div>
+                  <span className="text-sm font-bold text-title">{countedInventoryAlertRows.length} z {activeInventoryAlertRows.filter((row) => row.countedQty !== null).length}</span>
+                </div>
+                {countedInventoryAlertRows.length === 0 ? (
+                  <p className="rounded-xl border border-border p-4 text-sm text-dim">Brak różnic przy tych progach.</p>
+                ) : (
+                  <DataTable
+                    columns={['Materiał', 'ERP do dyspozycji', 'Spis', 'Spis − ERP do dysp.', 'Decyzja']}
+                    rows={countedInventoryAlertRows.map((row) => [
+                      <span key={row.key} className="font-bold text-brand">{row.name}</span>,
+                      `${formatQty(row.availableErpQty)} ${row.unit}`,
+                      `${formatQty(row.countedQty)} ${row.unit}`,
+                      <span key={row.key} className={cn('font-bold', (row.differenceQty ?? 0) < 0 ? 'text-danger' : 'text-warning')}>
+                        {formatSignedQty(row.differenceQty)} {row.unit}
+                      </span>,
+                      <Button
+                        key={row.key}
+                        variant="outline"
+                        className="min-h-[40px]"
+                        disabled={readOnly || alertExclusionMutation.isPending}
+                        onClick={() => alertExclusionMutation.mutate({ action: 'ignore', row })}
+                        aria-label={`Ignoruj w alertach: ${row.name}`}
+                      >
+                        <Archive className="mr-2 h-4 w-4" />Ignoruj
+                      </Button>
+                    ])}
+                  />
+                )}
+              </Card>
+            </>
+          )}
         </TabsContent>
 
         <TabsContent value="do-zmielenia" className="space-y-4">

@@ -588,6 +588,12 @@ body > * {
   --tab-line: rgba(192, 132, 252, 0.86);
 }
 
+.original-inventory-tab-alerty {
+  --tab-accent: rgba(245, 158, 11, 0.28);
+  --tab-accent-soft: rgba(251, 191, 36, 0.24);
+  --tab-line: rgba(245, 158, 11, 0.92);
+}
+
 .original-inventory-tab-do-zmielenia {
   --tab-accent: rgba(34, 197, 94, 0.22);
   --tab-accent-soft: rgba(74, 222, 128, 0.20);

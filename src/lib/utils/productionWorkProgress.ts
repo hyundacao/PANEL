@@ -33,7 +33,15 @@ export type ProductionTeamCompletion = {
   completedBy: string;
 };
 
-export type ProductionTeamProgress = Partial<Record<ProductionTeam, ProductionTeamCompletion>>;
+export const PRODUCTION_DISTRIBUTION_STAGES = ['materials', 'station'] as const;
+export type ProductionDistributionStage = typeof PRODUCTION_DISTRIBUTION_STAGES[number];
+const distributionStageKeys = {
+  materials: 'distributionMaterials',
+  station: 'distributionStation'
+} as const;
+type DistributionStageKey = typeof distributionStageKeys[ProductionDistributionStage];
+
+export type ProductionTeamProgress = Partial<Record<ProductionTeam | DistributionStageKey, ProductionTeamCompletion>>;
 
 type ProgressTask = {
   teams?: readonly unknown[];
@@ -108,10 +116,14 @@ export const isProductionCompletableTeam = (team: unknown): team is typeof PRODU
   typeof team === 'string'
   && PRODUCTION_COMPLETABLE_TEAMS.includes(team as typeof PRODUCTION_COMPLETABLE_TEAMS[number]);
 
+export const isProductionDistributionStage = (stage: unknown): stage is ProductionDistributionStage =>
+  typeof stage === 'string'
+  && PRODUCTION_DISTRIBUTION_STAGES.includes(stage as ProductionDistributionStage);
+
 export const normalizeProductionTeamProgress = (value: unknown): ProductionTeamProgress => {
   if (!isRecord(value)) return {};
   const result: ProductionTeamProgress = {};
-  for (const team of PRODUCTION_COMPLETABLE_TEAMS) {
+  for (const team of [...PRODUCTION_COMPLETABLE_TEAMS, ...Object.values(distributionStageKeys)]) {
     const raw = value[team];
     if (raw === true) {
       result[team] = { completedAt: '', completedBy: '' };
@@ -141,7 +153,8 @@ export const productionTeamProgressForTask = (task: ProgressTask): ProductionTea
   const assigned = new Set(productionCompletableTeamsForTask(task));
   const normalized = normalizeProductionTeamProgress(task.teamProgress);
   let filtered = Object.fromEntries(
-    Object.entries(normalized).filter(([team]) => assigned.has(team as ProductionTeam))
+    Object.entries(normalized).filter(([team]) => assigned.has(team as ProductionTeam)
+      || (assigned.has('distribution') && Object.values(distributionStageKeys).includes(team as DistributionStageKey)))
   ) as ProductionTeamProgress;
   if (Object.keys(filtered).length === 0 && task.done === true) {
     const legacyActionTeams = productionActionTeamsForTask(task);
@@ -150,10 +163,24 @@ export const productionTeamProgressForTask = (task: ProgressTask): ProductionTea
       inferredDoneTeams.map((team) => [team, { completedAt: '', completedBy: '' }])
     ) as ProductionTeamProgress;
   }
+  if (assigned.has('distribution')) {
+    if (filtered.distribution && !filtered.distributionMaterials && !filtered.distributionStation) {
+      filtered.distributionMaterials = filtered.distribution;
+      filtered.distributionStation = filtered.distribution;
+    }
+    if (filtered.distributionMaterials && filtered.distributionStation) {
+      filtered.distribution = filtered.distributionStation;
+    } else {
+      delete filtered.distribution;
+    }
+  }
   for (const startupTeam of PRODUCTION_STARTUP_TEAMS) {
     if (!assigned.has(startupTeam)) continue;
     const missingPreparation = PRODUCTION_PREPARATION_TEAMS.some(
-      (preparationTeam) => assigned.has(preparationTeam) && !filtered[preparationTeam]
+      (preparationTeam) => assigned.has(preparationTeam)
+        && !(startupTeam === 'process' && preparationTeam === 'distribution'
+          ? filtered.distributionMaterials
+          : filtered[preparationTeam])
     );
     if (missingPreparation || productionWaitsForToolroomReturn(task, startupTeam)) delete filtered[startupTeam];
   }
@@ -168,10 +195,21 @@ export const productionTeamCompletion = (
 export const isProductionTeamDone = (task: ProgressTask, team: ProductionTeam): boolean =>
   Boolean(productionTeamCompletion(task, team));
 
+export const productionDistributionStageCompletion = (
+  task: ProgressTask,
+  stage: ProductionDistributionStage
+): ProductionTeamCompletion | undefined => productionTeamProgressForTask(task)[distributionStageKeys[stage]];
+
+export const isProductionDistributionStageDone = (task: ProgressTask, stage: ProductionDistributionStage): boolean =>
+  Boolean(productionDistributionStageCompletion(task, stage));
+
 export const productionWaitingTeams = (task: ProgressTask, team: ProductionTeam): ProductionTeam[] => {
   if (!isProductionStartupTeam(team)) return [];
   const waitingTeams = PRODUCTION_PREPARATION_TEAMS.filter(
-    (requiredTeam) => task.teams?.includes(requiredTeam) && !isProductionTeamDone(task, requiredTeam)
+    (requiredTeam) => task.teams?.includes(requiredTeam)
+      && !(team === 'process' && requiredTeam === 'distribution'
+        ? isProductionDistributionStageDone(task, 'materials')
+        : isProductionTeamDone(task, requiredTeam))
   );
   // A linked return is a second, separate mechanic operation. Keep startup cards
   // blocked even after the mechanic has completed the original removal task.
@@ -206,7 +244,40 @@ export const setProductionTeamCompletion = (
   completion: ProductionTeamCompletion = { completedAt: '', completedBy: '' }
 ): ProductionTeamProgress => {
   const next = normalizeProductionTeamProgress(value);
-  if (done && isProductionCompletableTeam(team)) next[team] = completion;
-  else delete next[team];
+  if (done && isProductionCompletableTeam(team)) {
+    next[team] = completion;
+    if (team === 'distribution') {
+      next.distributionMaterials = completion;
+      next.distributionStation = completion;
+    }
+  } else {
+    delete next[team];
+    if (team === 'distribution') {
+      delete next.distributionMaterials;
+      delete next.distributionStation;
+    }
+  }
+  return next;
+};
+
+export const setProductionDistributionStageCompletion = (
+  value: unknown,
+  stage: ProductionDistributionStage,
+  done: boolean,
+  completion: ProductionTeamCompletion = { completedAt: '', completedBy: '' }
+): ProductionTeamProgress => {
+  const next = normalizeProductionTeamProgress(value);
+  if (next.distribution && !next.distributionMaterials && !next.distributionStation) {
+    next.distributionMaterials = next.distribution;
+    next.distributionStation = next.distribution;
+  }
+  const key = distributionStageKeys[stage];
+  if (done) next[key] = completion;
+  else delete next[key];
+  if (next.distributionMaterials && next.distributionStation) {
+    next.distribution = next.distributionStation;
+  } else {
+    delete next.distribution;
+  }
   return next;
 };

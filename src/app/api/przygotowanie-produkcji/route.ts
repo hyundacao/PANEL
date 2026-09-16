@@ -33,6 +33,8 @@ import {
   canProductionTeamStart,
   encodeProductionReopenedNoteBase,
   isProductionCompletableTeam,
+  isProductionDistributionStage,
+  isProductionDistributionStageDone,
   isProductionTaskDone,
   isProductionTeamDone,
   normalizeProductionTeamProgress,
@@ -44,6 +46,7 @@ import {
   productionTeamProgressForTask,
   productionWaitingTeams,
   productionWaitsForToolroomReturn,
+  setProductionDistributionStageCompletion,
   setProductionTeamCompletion,
   type ProductionTeamCompletion,
   type ProductionTeamProgress
@@ -96,6 +99,7 @@ type StoredTaskMutation = {
   setNotes?: Record<string, string | null>;
   setNotesIfMissing?: Record<string, string>;
   setTeamDone?: { team?: unknown; done?: unknown };
+  setDistributionStageDone?: { stage?: unknown; done?: unknown };
   setWorkComment?: { team?: unknown; text?: unknown };
   clearWork?: boolean;
 };
@@ -564,11 +568,16 @@ const applyTaskMutation = (
     const value = mutation.setNotes?.[team];
     if (value === undefined || removedTeams.has(team)) return false;
     const nextValue = value === null ? '' : String(value);
-    return nextValue !== String(task.notes[team] ?? '') && isProductionTeamDone(task, team);
+    return nextValue !== String(task.notes[team] ?? '') && (isProductionTeamDone(task, team)
+      || (team === 'distribution' && (isProductionDistributionStageDone(task, 'materials')
+        || isProductionDistributionStageDone(task, 'station'))));
   });
   const detailChanged = fields.detail !== undefined && String(fields.detail) !== task.detail;
   const reopenedDetailTeams = detailChanged
-    ? PRODUCTION_TEAMS.filter((team) => !removedTeams.has(team) && task.teams.includes(team) && isProductionTeamDone(task, team))
+    ? PRODUCTION_TEAMS.filter((team) => !removedTeams.has(team) && task.teams.includes(team)
+      && (isProductionTeamDone(task, team) || (team === 'distribution'
+        && (isProductionDistributionStageDone(task, 'materials')
+          || isProductionDistributionStageDone(task, 'station')))))
     : [];
 
   Object.entries(mutation.setNotesIfMissing ?? {}).forEach(([key, value]) => {
@@ -641,6 +650,15 @@ const applyTaskMutation = (
       delete next.notes[productionReopenedNoteKey(teamDone.team)];
       delete next.notes[productionReopenedDetailKey(teamDone.team)];
     }
+  }
+  const distributionStage = mutation.setDistributionStageDone;
+  if (distributionStage && isProductionDistributionStage(distributionStage.stage) && typeof distributionStage.done === 'boolean') {
+    next.teamProgress = setProductionDistributionStageCompletion(
+      next.teamProgress,
+      distributionStage.stage,
+      distributionStage.done,
+      completion
+    );
   }
   for (const team of new Set([...reopenedTeams, ...reopenedDetailTeams])) {
     next.teamProgress = setProductionTeamCompletion(next.teamProgress, team, false);
@@ -1066,6 +1084,18 @@ export async function POST(request: NextRequest) {
             message: 'Nie masz uprawnienia do potwierdzania pracy tego działu.'
           }, { status: 403 });
         }
+      } else if (hasExactlyKeys(mutation, ['setDistributionStageDone'])) {
+        const stageDone = isRecord(mutation.setDistributionStageDone) ? mutation.setDistributionStageDone : null;
+        if (!stageDone || !hasExactlyKeys(stageDone, ['stage', 'done'])
+          || !isProductionDistributionStage(stageDone.stage) || typeof stageDone.done !== 'boolean') {
+          return invalidTeamCompletion();
+        }
+        if (!canCompleteProductionPreparationTeam(access.user, 'distribution')) {
+          return NextResponse.json({
+            code: 'TEAM_COMPLETION_FORBIDDEN',
+            message: 'Nie masz uprawnienia do potwierdzania pracy rozdzielcy.'
+          }, { status: 403 });
+        }
       } else if (hasExactlyKeys(mutation, ['setWorkComment'])) {
         const workComment = isRecord(mutation.setWorkComment) ? mutation.setWorkComment : null;
         if (
@@ -1388,9 +1418,17 @@ export async function POST(request: NextRequest) {
 
     if (body.action === 'mutateTask' && body.taskId && body.mutation) {
       const teamDoneMutation = body.mutation.setTeamDone;
+      const distributionStageMutation = body.mutation.setDistributionStageDone;
       const workCommentMutation = body.mutation.setWorkComment;
       if (teamDoneMutation !== undefined && (
         !isProductionCompletableTeam(teamDoneMutation.team) || typeof teamDoneMutation.done !== 'boolean'
+      )) {
+        return invalidTeamCompletion();
+      }
+      if (distributionStageMutation !== undefined && (
+        !isRecord(distributionStageMutation)
+        || !isProductionDistributionStage(distributionStageMutation.stage)
+        || typeof distributionStageMutation.done !== 'boolean'
       )) {
         return invalidTeamCompletion();
       }
@@ -1446,6 +1484,15 @@ export async function POST(request: NextRequest) {
               waitingForToolroomReturn
             }, { status: 409 });
           }
+        }
+        if (distributionStageMutation && !currentTask.teams.includes('distribution')) {
+          return NextResponse.json({
+            code: 'TEAM_NOT_ASSIGNED',
+            message: 'Rozdzielca nie jest przypisany do tego zadania.'
+          }, { status: 409 });
+        }
+        if (distributionStageMutation?.done === true && !canProductionTeamStart(currentTask, 'distribution')) {
+          return NextResponse.json({ code: 'TEAM_NOT_READY', message: 'To zadanie nie jest aktywne.' }, { status: 409 });
         }
         if (
           workCommentMutation

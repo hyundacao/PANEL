@@ -1,3 +1,5 @@
+import { getWarsawProductionPlanDate } from './productionPlanDate';
+
 export const PERSONAL_TASK_SETTINGS_DATE = '2000-01-01';
 export const PERSONAL_TASK_STORAGE_PREFIX = '__personal_task__:';
 export const PERSONAL_TASK_STATION = 'ZADANIE OSOBISTE';
@@ -87,6 +89,33 @@ export const nextPersonalTaskDueDate = (
     if (candidate > completedOn) return candidate;
   }
   return null;
+};
+
+export const isPersonalTaskCompletedForCurrentCycle = (
+  task: Pick<PersonalTask, 'done' | 'recurrence' | 'dueDate' | 'lastCompletedAt'>,
+  today: string
+) => {
+  if (task.done) return true;
+  if (!task.lastCompletedAt) return false;
+  if (task.recurrence !== 'daily') return task.dueDate > today;
+
+  const completedAt = new Date(task.lastCompletedAt);
+  return Number.isFinite(completedAt.getTime())
+    && getWarsawProductionPlanDate(completedAt) === today;
+};
+
+export const personalTaskDueDateForToday = (
+  task: Pick<PersonalTask, 'recurrence' | 'dueDate' | 'lastCompletedAt'>,
+  today: string
+) => {
+  if (task.recurrence !== 'daily' || task.dueDate <= today || !task.lastCompletedAt) {
+    return task.dueDate;
+  }
+  const completedAt = new Date(task.lastCompletedAt);
+  return Number.isFinite(completedAt.getTime())
+    && getWarsawProductionPlanDate(completedAt) < today
+    ? today
+    : task.dueDate;
 };
 
 export const validatePersonalTaskInput = (value: unknown): string | null => {

@@ -13,6 +13,7 @@ import {
   nextPersonalTaskDueDate,
   normalizePersonalTaskInput,
   personalTaskAnchorDay,
+  personalTaskDueDateForToday,
   personalTaskIdFromStorageKey,
   personalTaskOwnerPrefix,
   personalTaskStorageKey,
@@ -134,7 +135,7 @@ const taskFromRow = (row: PersonalTaskRow, ownerId: string): PersonalTask | null
     id,
     title: String(row.detail ?? '').trim(),
     recurrence: metadata.recurrence,
-    dueDate: metadata.dueDate,
+    dueDate: personalTaskDueDateForToday(metadata, getWarsawProductionPlanDate()),
     done: metadata.recurrence === 'once' && row.done === true,
     createdAt: metadata.createdAt,
     updatedAt: typeof row.updated_at === 'string' ? row.updated_at : metadata.createdAt,
@@ -291,7 +292,8 @@ export async function POST(request: NextRequest) {
       const validationError = validatePersonalTaskInput(rawBody.task);
       const input = normalizePersonalTaskInput(rawBody.task);
       if (validationError || !input) return jsonError('INVALID_PERSONAL_TASK', validationError ?? 'Nieprawidłowe dane zadania.', 400);
-      const scheduleChanged = input.dueDate !== metadata.dueDate || input.recurrence !== metadata.recurrence;
+      const currentDueDate = personalTaskDueDateForToday(metadata, getWarsawProductionPlanDate());
+      const scheduleChanged = input.dueDate !== currentDueDate || input.recurrence !== metadata.recurrence;
       const nextMetadata: PersonalTaskMetadata = {
         ownerId,
         recurrence: input.recurrence,
@@ -316,11 +318,24 @@ export async function POST(request: NextRequest) {
       if (!hasExactlyKeys(rawBody, ['action', 'id', 'occurrenceDate']) || !isPersonalTaskDate(rawBody.occurrenceDate)) {
         return jsonError('INVALID_PERSONAL_TASK_COMPLETION', 'Nieprawidłowe potwierdzenie zadania.', 400);
       }
-      if (metadata.recurrence !== 'once' && metadata.lastCompletedDueDate === rawBody.occurrenceDate) {
+      const today = getWarsawProductionPlanDate();
+      if (metadata.recurrence === 'daily' && metadata.lastCompletedAt) {
+        const completedAt = new Date(metadata.lastCompletedAt);
+        if (Number.isFinite(completedAt.getTime()) && getWarsawProductionPlanDate(completedAt) === today) {
+          return NextResponse.json({ tasks: await readPersonalTasks(ownerId) });
+        }
+      }
+      const currentDueDate = personalTaskDueDateForToday(metadata, today);
+      if (metadata.recurrence !== 'once'
+        && metadata.lastCompletedDueDate === rawBody.occurrenceDate
+        && currentDueDate !== rawBody.occurrenceDate) {
         return NextResponse.json({ tasks: await readPersonalTasks(ownerId) });
       }
-      if (rawBody.occurrenceDate !== metadata.dueDate) {
+      if (rawBody.occurrenceDate !== currentDueDate) {
         return jsonError('PERSONAL_TASK_OUTDATED', 'Termin zadania zmienił się. Lista została odświeżona.', 409);
+      }
+      if (metadata.recurrence === 'daily' && currentDueDate > today) {
+        return jsonError('PERSONAL_TASK_NOT_DUE', 'To zadanie będzie ponownie do wykonania w kolejnym dniu.', 409);
       }
       if (metadata.recurrence === 'once') {
         if (!owned.row.done) {
@@ -333,9 +348,9 @@ export async function POST(request: NextRequest) {
         }
       } else {
         const nextDueDate = nextPersonalTaskDueDate(
-          metadata.dueDate,
+          currentDueDate,
           metadata.recurrence,
-          getWarsawProductionPlanDate(),
+          today,
           metadata.recurrenceAnchorDay
         );
         if (!nextDueDate) return jsonError('INVALID_PERSONAL_TASK_RECURRENCE', 'Nie udało się wyznaczyć kolejnego terminu.', 400);
@@ -345,7 +360,7 @@ export async function POST(request: NextRequest) {
               ...metadata,
               dueDate: nextDueDate,
               lastCompletedAt: now,
-              lastCompletedDueDate: metadata.dueDate,
+              lastCompletedDueDate: currentDueDate,
               completedAt: undefined
             }
           },

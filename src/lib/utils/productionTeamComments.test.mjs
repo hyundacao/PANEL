@@ -287,6 +287,42 @@ test('work progress unlocks startup teams only after assigned preparation teams 
   assert.equal(workProgress.canProductionTeamStart({ ...task, kinds: ['anulowane'] }, 'process'), false);
 });
 
+test('dispatcher material stage unlocks process before packaging and station are ready', () => {
+  const task = { teams: ['mechanics', 'distribution', 'technician', 'process', 'graphics'], kinds: ['zmiana-formy'], teamProgress: {}, done: false };
+  task.teamProgress = workProgress.setProductionTeamCompletion(task.teamProgress, 'mechanics', true);
+  task.teamProgress = workProgress.setProductionTeamCompletion(task.teamProgress, 'technician', true);
+  assert.deepEqual(workProgress.productionWaitingTeams(task, 'process'), ['distribution']);
+
+  task.teamProgress = workProgress.setProductionDistributionStageCompletion(task.teamProgress, 'materials', true);
+  assert.equal(workProgress.isProductionDistributionStageDone(task, 'materials'), true);
+  assert.equal(workProgress.isProductionDistributionStageDone(task, 'station'), false);
+  assert.equal(workProgress.isProductionTeamDone(task, 'distribution'), false);
+  assert.equal(workProgress.canProductionTeamStart(task, 'process'), true);
+  assert.equal(workProgress.canProductionTeamStart(task, 'graphics'), false);
+
+  task.teamProgress = workProgress.setProductionTeamCompletion(task.teamProgress, 'process', true);
+  assert.equal(workProgress.isProductionTaskDone(task), false);
+  task.teamProgress = workProgress.setProductionDistributionStageCompletion(task.teamProgress, 'station', true);
+  assert.equal(workProgress.isProductionTeamDone(task, 'distribution'), true);
+  assert.equal(workProgress.canProductionTeamStart(task, 'graphics'), true);
+
+  task.teamProgress = workProgress.productionTeamProgressForTask({
+    ...task,
+    teamProgress: workProgress.setProductionDistributionStageCompletion(task.teamProgress, 'materials', false),
+    done: false
+  });
+  assert.equal(workProgress.isProductionTeamDone(task, 'distribution'), false);
+  assert.equal(workProgress.isProductionDistributionStageDone(task, 'station'), true);
+  assert.equal(workProgress.isProductionTeamDone(task, 'process'), false);
+  assert.deepEqual(workProgress.productionWaitingTeams(task, 'process'), ['distribution']);
+
+  const legacy = { teams: ['distribution', 'process'], kinds: ['inne'], teamProgress: {
+    distribution: { completedAt: '2026-09-16T08:00:00.000Z', completedBy: 'Rozdzielca' }
+  }, done: false };
+  assert.equal(workProgress.isProductionDistributionStageDone(legacy, 'materials'), true);
+  assert.equal(workProgress.isProductionDistributionStageDone(legacy, 'station'), true);
+});
+
 test('toolroom return is a separate mechanic gate for process startup', () => {
   const task = {
     teams: ['mechanics', 'process'],
@@ -716,7 +752,7 @@ test('API saves completion per department and unlocks process only after prepara
   let data=await(await api.get()).json();
   let saved=data.tasks.find(item=>item.id===task.id);
   assert.equal(saved.done,true);
-  assert.deepEqual(Object.keys(saved.teamProgress).sort(),['distribution','mechanics','process','technician']);
+  assert.deepEqual(Object.keys(saved.teamProgress).sort(),['distribution','distributionMaterials','distributionStation','mechanics','process','technician']);
   assert.ok(Object.values(saved.teamProgress).every(completion=>completion.completedBy==='Test'));
   assert.equal(saved.notes.__teamProgress,undefined);
   const raw=api.db.przygotowanie_produkcji_tasks.find(item=>item.task_key===task.id);
@@ -728,6 +764,52 @@ test('API saves completion per department and unlocks process only after prepara
   assert.equal(saved.done,false);
   assert.equal(saved.teamProgress.technician,undefined);
   assert.equal(saved.teamProgress.process,undefined);
+});
+
+test('API stores dispatcher stages independently and protects process readiness', async () => {
+  const api=testApi();
+  const task={...toolroomSource(),id:'staged-distribution',kinds:['inne'],teams:['distribution','process'],notes:{},teamProgress:{},done:false};
+  assert.equal((await api.post({action:'savePlan',tasks:[task]})).status,200);
+  api.state.isAdmin=false;
+  api.state.preparationTeams=['distribution'];
+
+  const invalid=await api.post({action:'mutateTask',taskId:task.id,mutation:{setDistributionStageDone:{stage:'unknown',done:true}}});
+  assert.equal(invalid.status,400);
+  const materials=await api.post({action:'mutateTask',taskId:task.id,mutation:{setDistributionStageDone:{stage:'materials',done:true}}});
+  assert.equal(materials.status,200);
+  let saved=(await materials.json()).task;
+  assert.ok(saved.teamProgress.distributionMaterials);
+  assert.equal(saved.teamProgress.distributionStation,undefined);
+  assert.equal(saved.teamProgress.distribution,undefined);
+  assert.equal(workProgress.canProductionTeamStart(saved,'process'),true);
+
+  api.state.preparationTeams=['process'];
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setDistributionStageDone:{stage:'station',done:true}}})).status,403);
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{setTeamDone:{team:'process',done:true}}})).status,200);
+
+  api.state.preparationTeams=['distribution'];
+  const station=await api.post({action:'mutateTask',taskId:task.id,mutation:{setDistributionStageDone:{stage:'station',done:true}}});
+  assert.equal(station.status,200);
+  saved=(await station.json()).task;
+  assert.equal(saved.done,true);
+  assert.ok(saved.teamProgress.distribution);
+  assert.ok(saved.teamProgress.distributionStation);
+
+  const reopened=await api.post({action:'mutateTask',taskId:task.id,mutation:{setDistributionStageDone:{stage:'materials',done:false}}});
+  assert.equal(reopened.status,200);
+  saved=(await reopened.json()).task;
+  assert.equal(saved.done,false);
+  assert.ok(saved.teamProgress.distributionStation);
+  assert.equal(saved.teamProgress.distributionMaterials,undefined);
+  assert.equal(saved.teamProgress.process,undefined);
+  assert.equal((await (await api.get()).json()).tasks.find(item=>item.id===task.id).teamProgress.distributionStation.completedBy,'Test');
+
+  api.state.isAdmin=true;
+  const changed=await api.post({action:'mutateTask',taskId:task.id,mutation:{fields:{detail:'Inny produkt'}}});
+  assert.equal(changed.status,200);
+  saved=(await changed.json()).task;
+  assert.equal(saved.teamProgress.distributionStation,undefined);
+  assert.equal(saved.teamProgress.distributionMaterials,undefined);
 });
 
 test('recurring task definitions validate days, groups and matching dates', () => {
