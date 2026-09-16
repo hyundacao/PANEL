@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   dedupeOriginalInventorySpisSuggestions,
   getOriginalInventorySpisEntriesQueryKey,
@@ -159,4 +161,18 @@ test('server-sized spis suggestions keep matching, priorities and the result lim
     results.map((item) => `${item.name}|${item.warehouseCode ?? ''}`),
     ['ABS STAREX 7000|', 'ABS STAREX 8178|M-1', 'ABS STAREX 9000|M-4']
   );
+});
+
+test('choosing a spis suggestion commits its full name before quantity focus blurs the search field', () => {
+  const pageFile = fileURLToPath(new URL('../../components/planowanie-zapotrzebowania/SpisRzeczywisty.tsx', import.meta.url));
+  const page = readFileSync(pageFile, 'utf8');
+  const search = page.slice(
+    page.indexOf('const OriginalInventoryNameSearch ='),
+    page.indexOf('export default function SpisRzeczywisty')
+  );
+
+  assert.match(search, /const queryRef = useRef\(value\)/);
+  assert.match(search, /const chooseSuggestion = [\s\S]*?queryRef\.current = suggestion\.name;[\s\S]*?onSelect\(suggestion\)/);
+  assert.match(search, /onBlur=\{\(\) => \{\s*onCommit\(queryRef\.current\)/);
+  assert.match(search, /onPointerDown=\{\(event\) => \{\s*event\.preventDefault\(\);\s*chooseSuggestion\(suggestion\)/);
 });

@@ -560,12 +560,14 @@ const OriginalInventoryNameSearch = ({
   onSelect: (suggestion: OriginalInventoryNameSuggestion) => void;
 }) => {
   const [query, setQuery] = useState(value);
+  const queryRef = useRef(value);
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const normalizedQuery = normalizeCatalogNameKey(query);
   const remoteSearchEnabled = normalizedQuery.replace(/\s/g, '').length >= SPIS_SEARCH_MIN_LENGTH;
 
   useEffect(() => {
+    queryRef.current = value;
     setQuery(value);
   }, [value]);
 
@@ -611,6 +613,7 @@ const OriginalInventoryNameSearch = ({
     normalizedDebouncedQuery !== normalizedQuery || isFetching
   );
   const chooseSuggestion = (suggestion: OriginalInventoryNameSuggestion) => {
+    queryRef.current = suggestion.name;
     setQuery(suggestion.name);
     setShowSuggestions(false);
     onSelect(suggestion);
@@ -622,6 +625,7 @@ const OriginalInventoryNameSearch = ({
         ref={inputRef}
         value={query}
         onChange={(event) => {
+          queryRef.current = event.target.value;
           setQuery(event.target.value);
           setShowSuggestions(true);
         }}
@@ -635,10 +639,10 @@ const OriginalInventoryNameSearch = ({
             chooseSuggestion(suggestions[0]);
             return;
           }
-          onCommit(query);
+          onCommit(queryRef.current);
         }}
         onBlur={() => {
-          onCommit(query);
+          onCommit(queryRef.current);
           window.setTimeout(() => setShowSuggestions(false), 120);
         }}
       />
@@ -649,6 +653,7 @@ const OriginalInventoryNameSearch = ({
           className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-surface2 px-2 py-1 text-xs font-semibold text-dim transition hover:border-borderStrong hover:text-title"
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => {
+            queryRef.current = '';
             setQuery('');
             setShowSuggestions(false);
             onCommit('');
@@ -664,10 +669,11 @@ const OriginalInventoryNameSearch = ({
             <button
               key={`${suggestion.name}|${suggestion.warehouseCode ?? ''}|${suggestion.indexCode2 ?? ''}`}
               type="button"
-              onMouseDown={(event) => {
+              onPointerDown={(event) => {
                 event.preventDefault();
                 chooseSuggestion(suggestion);
               }}
+              onClick={() => chooseSuggestion(suggestion)}
               className={cn(
                 'flex w-full items-start justify-between gap-3 px-3 py-2 text-left text-sm text-body transition hover:bg-[rgba(255,255,255,0.06)]',
                 suggestion.isMag55 && 'bg-[rgba(244,114,182,0.10)] hover:bg-[rgba(244,114,182,0.16)]'
