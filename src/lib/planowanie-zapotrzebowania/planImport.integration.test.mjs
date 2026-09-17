@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import * as imports from './planImport.ts';
 import * as fixedDevices from './fixedInventoryDevices.ts';
+import { shouldInvalidatePlanDocument } from './stateScopes.ts';
 
 const pageFile = process.env.PLANNING_TEST_PAGE_PATH || fileURLToPath(new URL('../../app/(main)/planowanie-zapotrzebowania/page.tsx', import.meta.url));
 const require = createRequire(pageFile);
@@ -34,10 +35,10 @@ const rows=[['Lp.','','Ilość','ST.','Norma','','Uwagi'],['1','LEFT + RIGHT (A1
 
 function setup() {
   const messages=[];
-  const ctx=vm.createContext({exports:{},...imports,...fixedDevices,...domain.exports,
+  const ctx=vm.createContext({exports:{},...imports,...fixedDevices,...domain.exports,shouldInvalidatePlanDocument,
     state:{plan:[],technologies:[],archive:[],planVersions:[],documents:[],quantityCorrections:[],stationMappings:[],selectedPlanDate:'2026-08-31',selectedAreaId:'hala-2',dailyPlans:{},returnStatuses:{},returnExclusions:[],inventory:[],areas:[],calculationMode:'all',horizonShifts:3.5},
     pending:{fileName:'test.xlsx',purpose:'plan',workbook:{SheetNames:['Plan'],Sheets:{Plan:{rows}}}},sheetName:'Plan',currentUserName:'Test',quantityInputs:{},readOnly:false,
-    calculationEditorOpen:false,closeCalculationEditorIfAllowed:()=>true,inventorySyncRequestRef:{current:0},
+    calculationEditorOpen:false,closeCalculationEditorIfAllowed:()=>true,inventorySyncRequestRef:{current:0},headAdmin:false,
     technologyById:{get:(id)=>ctx?.state?.technologies?.find((technology)=>technology.id===id)},
     XLSX:{read:(data)=>data,utils:{sheet_to_json:(sheet)=>sheet.rows,decode_range:()=>({s:{r:0}})}},
     flash:(message)=>messages.push(message),nowLabel:()=>new Date().toISOString(),localDateKey:()=>'2026-08-31',formatPlanDate:(date)=>date,
@@ -733,6 +734,46 @@ test('a completed draft document can be marked as issued directly',()=>{
   assert.equal(h.ctx.state.documents[0].status,'issued');
 });
 
+test('head admin can recalculate another users draft without creating a duplicate or losing warehouse assignments',()=>{
+  for (const status of ['draft','outdated']) {
+    const h=setup();
+    h.ctx.headAdmin=true;
+    h.ctx.requirementsForArea=()=>[{
+      key:'MAT',code:'M-1-PP',name:'PP',category:'Tworzywo',unit:'kg',
+      demand:150,areaStock:50,issued:0,pending:0,toIssue:100,sources:[]
+    }];
+    h.ctx.state.documents=[{
+      id:'existing-doc',documentNo:'DOC-1',planDate:'2026-08-31',areaId:'hala-2',
+      status,kind:'base',createdBy:'Other planner',
+      rows:[{key:'MAT',warehouseCode:'M-4',toIssue:20}]
+    }];
+    assert.equal(h.createOrRefreshPickingDocument(),true);
+    assert.equal(h.ctx.state.documents.length,1);
+    const document=h.ctx.state.documents[0];
+    assert.equal(document.id,'existing-doc');
+    assert.equal(document.documentNo,'DOC-1');
+    assert.equal(document.createdBy,'Test');
+    assert.equal(document.status,'draft');
+    assert.equal(document.rows[0].toIssue,100);
+    assert.equal(document.rows[0].warehouseCode,'M-4');
+  }
+});
+
+test('ordinary planners still cannot recalculate another users draft',()=>{
+  const h=setup();
+  h.ctx.requirementsForArea=()=>[{
+    key:'MAT',code:'PP',name:'PP',category:'Tworzywo',unit:'kg',toIssue:100,sources:[]
+  }];
+  const document={
+    id:'existing-doc',planDate:'2026-08-31',areaId:'hala-2',status:'draft',
+    kind:'base',createdBy:'Other planner',rows:[{key:'MAT',toIssue:20}]
+  };
+  h.ctx.state.documents=[document];
+  assert.equal(h.createOrRefreshPickingDocument(),false);
+  assert.equal(h.ctx.state.documents[0],document);
+  assert.match(h.messages.at(-1),/przygotowuje już Other planner/);
+});
+
 test('warehouse assignment remains editable after a document is issued',()=>{
   const h=setup();
   h.ctx.state.documents=[{
@@ -907,8 +948,9 @@ test('direct quantity editing groups typed digits and preserves the source and i
   const id=h.ctx.state.plan[0].id;
   h.updatePlanQuantity(id,90,'set-90');
   h.ctx.state.documents=[
-    {id:'draft',planDate:h.ctx.state.selectedPlanDate,status:'draft'},
-    {id:'issued',planDate:h.ctx.state.selectedPlanDate,status:'issued'}
+    {id:'draft',planDate:h.ctx.state.selectedPlanDate,status:'draft',createdBy:'Test'},
+    {id:'issued',planDate:h.ctx.state.selectedPlanDate,status:'issued',createdBy:'Test'},
+    {id:'other-users-draft',planDate:h.ctx.state.selectedPlanDate,status:'draft',createdBy:'Other'}
   ];
   for(const quantity of [1,12,120])h.updatePlanQuantity(id,quantity,'set-120');
   const edited=h.ctx.state.plan[0];
@@ -921,6 +963,7 @@ test('direct quantity editing groups typed digits and preserves the source and i
   assert.equal(h.ctx.state.quantityCorrections[0].newValue,120);
   assert.equal(h.ctx.state.documents[0].status,'outdated');
   assert.equal(h.ctx.state.documents[1].status,'issued');
+  assert.equal(h.ctx.state.documents[2].status,'draft');
   h.undoLastCorrection(edited);
   assert.equal(h.ctx.state.plan[0].remainingQty,90);
   assert.equal(h.ctx.state.plan[0].quantityStatus,'manual');

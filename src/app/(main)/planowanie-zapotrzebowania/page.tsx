@@ -46,6 +46,7 @@ import { WarningTriangle } from '@/components/ui/WarningTriangle';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { PlanningSaveNotice, PlanningSaveStatus } from '@/components/planowanie-zapotrzebowania/PlanningSaveStatus';
 import { usePlanningAutosave } from '@/lib/planowanie-zapotrzebowania/usePlanningAutosave';
+import { shouldInvalidatePlanDocument } from '@/lib/planowanie-zapotrzebowania/stateScopes';
 import {
   MATERIAL_PLANNING_HISTORY_DAYS,
   isMaterialPlanningDateRetained,
@@ -63,7 +64,7 @@ import {
   type PlanQuantityStatus,
   type PlanSourceFields
 } from '@/lib/planowanie-zapotrzebowania/planImport';
-import { isReadOnly } from '@/lib/auth/access';
+import { isHeadAdmin, isReadOnly } from '@/lib/auth/access';
 import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
 import type {
@@ -91,6 +92,7 @@ import {
   type PlanDifference,
   type TechnologyProductionMode
 } from '@/lib/planowanie-zapotrzebowania/domain';
+import { buildTechnologyQuickReferenceRows } from '@/lib/planowanie-zapotrzebowania/technologyQuickReference';
 
 const SpisRzeczywisty = dynamic(
   () => import('@/components/planowanie-zapotrzebowania/SpisRzeczywisty'),
@@ -1827,6 +1829,7 @@ const Stat = ({
 function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: { requestedView: string | null; requestedSettingsSection: string | null }) {
   const router = useRouter();
   const user = useUiStore((store) => store.user);
+  const headAdmin = isHeadAdmin(user);
   const readOnly = isReadOnly(user, 'PLANOWANIE_ZAPOTRZEBOWANIA');
   const view: View = requestedView && ['plan', 'technologie', 'spis', 'dokument', 'zwroty', 'ustawienia'].includes(requestedView)
     ? requestedView as View
@@ -1850,8 +1853,9 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     initial: emptyState,
     parse: parseStoredState,
     prepare: preparePlanningAutosaveState,
-    storageKey: LOCAL_KEY,
-    readOnly
+    storageKey: `${LOCAL_KEY}-${user?.id ?? 'anonymous'}`,
+    readOnly,
+    sharedRefreshEnabled: view !== 'technologie' && view !== 'ustawienia'
   });
   const [message, setMessage] = useState('');
   const [sheetName, setSheetName] = useState('');
@@ -2607,7 +2611,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         plan,
         pickingDone,
         documents: current.documents.map((document) =>
-          document.planDate === planDate && document.status === 'draft'
+          shouldInvalidatePlanDocument(document, planDate, currentUserName)
             ? { ...document, status: 'outdated' as const }
             : document)
       } : current;
@@ -2630,7 +2634,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           ? { ...item, included: !calculated }
           : item),
         documents: current.documents.map((document) =>
-          document.planDate === planDate && document.status === 'draft'
+          shouldInvalidatePlanDocument(document, planDate, currentUserName)
             ? { ...document, status: 'outdated' as const }
             : document)
       };
@@ -2791,7 +2795,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             ? { ...version, status: 'superseded' as const }
             : version)
         ],
-        documents: current.documents.map((document) => document.planDate === current.selectedPlanDate && document.status === 'draft'
+        documents: current.documents.map((document) => shouldInvalidatePlanDocument(document, current.selectedPlanDate, currentUserName)
           ? { ...document, status: 'outdated' as const }
           : document),
         archive: [...newSuspended, ...current.archive.filter((entry) => !newSuspended.some((item) => item.id === entry.id))]
@@ -2848,7 +2852,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           ...nextItem, quantityStatus: 'manual' as const
         } : row),
         quantityCorrections: coalesceQuantityCorrection(current.quantityCorrections, correction),
-        documents: current.documents.map((document) => document.planDate === current.selectedPlanDate && document.status === 'draft'
+        documents: current.documents.map((document) => shouldInvalidatePlanDocument(document, current.selectedPlanDate, currentUserName)
           ? { ...document, status: 'outdated' as const }
           : document)
       };
@@ -2867,7 +2871,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       return {
         ...current,
         plan: current.plan.map((row) => belongsToProduction(row) ? { ...row, shiftNorm } : row),
-        documents: current.documents.map((document) => document.planDate === current.selectedPlanDate && document.status === 'draft'
+        documents: current.documents.map((document) => shouldInvalidatePlanDocument(document, current.selectedPlanDate, currentUserName)
           ? { ...document, status: 'outdated' as const }
           : document)
       };
@@ -2887,7 +2891,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         remainingQty: Math.max(0, previous.previousValue - Math.max(0, row.totalQty - row.remainingQty))
       } : row),
       quantityCorrections: current.quantityCorrections.map((correction) => correction.id === previous.id ? { ...correction, revertedAt } : correction),
-      documents: current.documents.map((document) => document.planDate === current.selectedPlanDate && document.status === 'draft'
+      documents: current.documents.map((document) => shouldInvalidatePlanDocument(document, current.selectedPlanDate, currentUserName)
         ? { ...document, status: 'outdated' as const }
         : document)
     }));
@@ -3353,12 +3357,100 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     </section>;
   };
 
+  const exportTechnologyQuickReference = async () => {
+    const selected = areaPlan.filter((item) => item.included);
+    if (!selected.length) return flash('Zaznacz po lewej przynajmniej jeden wyrób do eksportu.');
+
+    const rows = buildTechnologyQuickReferenceRows(selected.map((item) => {
+      const technology = technologyForItem(item);
+      return {
+        included: item.included,
+        productIndex: item.index,
+        productName: item.name,
+        technologyName: technology
+          ? item.manualOverride ? workingTechnologySelectLabel(technology) : technologySelectLabel(technology)
+          : 'Brak technologii',
+        materials: materialsForItem(item),
+        linkedProducts: technology?.linkedProducts ?? []
+      };
+    }));
+
+    try {
+      const ExcelJSModule = await import('exceljs');
+      const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'APKA DLA KAMILA';
+      workbook.created = new Date();
+      const sheet = workbook.addWorksheet('Skład wyrobów', {
+        views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }]
+      });
+      sheet.columns = [
+        { header: 'Indeks wyrobu', key: 'productIndex', width: 22 },
+        { header: 'Wyrób', key: 'productName', width: 48 },
+        { header: 'Technologia', key: 'technologyName', width: 28 },
+        { header: 'Kod składnika', key: 'componentCode', width: 24 },
+        { header: 'Składnik', key: 'componentName', width: 52 }
+      ];
+      sheet.autoFilter = 'A1:E1';
+      sheet.getColumn('A').numFmt = '@';
+      sheet.getColumn('D').numFmt = '@';
+      const header = sheet.getRow(1);
+      header.height = 30;
+      header.eachCell((cell) => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6E3515' } };
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      });
+
+      let previousProduct = '';
+      let productGroup = -1;
+      rows.forEach((row) => {
+        const groupKey = `${row.productIndex}|${row.productName}|${row.technologyName}`;
+        const firstInGroup = groupKey !== previousProduct;
+        if (firstInGroup) {
+          productGroup += 1;
+          previousProduct = groupKey;
+        }
+        const excelRow = sheet.addRow(row);
+        excelRow.height = 25;
+        for (let column = 1; column <= 5; column += 1) {
+          const cell = excelRow.getCell(column);
+          cell.font = { name: 'Arial', size: 10, color: { argb: 'FF253244' } };
+          cell.alignment = { vertical: 'middle', wrapText: true };
+          if (productGroup % 2 === 1) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4F7FB' } };
+          }
+          if (firstInGroup) cell.border = { top: { style: 'thin', color: { argb: 'FFD6DEE8' } } };
+        }
+        excelRow.getCell(2).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFB45309' } };
+        if (row.technologyName === 'Brak technologii') {
+          excelRow.getCell(3).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFB42318' } };
+        }
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `podpowiedz-sklad-technologii-${state.selectedPlanDate}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+      flash(`Wyeksportowano skład technologii dla ${selected.length} wyrobów.`);
+    } catch {
+      flash('Nie udało się wyeksportować składu technologii do Excela.');
+    }
+  };
+
   const renderPlan = () => <div className="space-y-3">
     <input ref={fileInputRef} className="hidden" type="file" accept=".xlsx,.xls,.csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleWorkbook(file, 'plan', planUploadModeRef.current === 'update' ? state.planSheet : undefined); event.target.value = ''; }} />
 
     <section className="overflow-hidden border-y border-border bg-[var(--surface-faint)]">
       <div className="flex min-h-14 flex-wrap items-center justify-between gap-3 px-3 py-3 md:px-4">
-        <h1 className="text-xl font-bold text-title">Plan produkcyjny</h1>
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <h1 className="text-xl font-bold text-title">Plan produkcyjny</h1>
+          <Badge tone="info">Mój plan · {currentUserName}</Badge>
+        </div>
         <div className="flex items-center gap-3">
           {readOnly ? <Badge tone="info">Tylko podgląd</Badge> : calculationEditorOpen
             ? <Badge tone={calculationEditorDirty ? 'warning' : 'info'}>{calculationEditorDirty ? 'Niezapisane zmiany' : 'Zapis ręczny'}</Badge>
@@ -3471,6 +3563,22 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         section.group === 'planned' ? 'Pozycje przyszłe są wyłączone do ręcznego zaznaczenia.' : section.group === 'emergency' ? 'Pozycje wymagające reakcji.' : '', section.group)}</Fragment>)
         : <p className="py-8 text-center text-sm text-muted">{areaPlan.length ? 'Brak produktów pasujących do wyszukiwania.' : showAllPlanAreas ? 'Brak pozycji w planie.' : `Brak pozycji w strefie: ${areaName(state.selectedAreaId)}.`}</p>}
     </div> : <EmptyState title={`Brak planu na ${formatPlanDate(state.selectedPlanDate)}`} description={`Wgraj pierwszy plan dla wybranej daty. Poprzednie dni i wersje są dostępne przez ${MATERIAL_PLANNING_HISTORY_DAYS} dni.`} />}
+    {state.plan.length ? <Card className="flex flex-col gap-4 border-[rgba(255,122,26,0.32)] p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <p className="text-base font-bold text-title">Eksport składu technologii</p>
+        <p className="mt-1 text-sm text-muted">Indeksy i nazwy wyrobów oraz ich składników. Bez ilości i zapotrzebowania.</p>
+        <p className="mt-1 text-xs text-dim">Eksport obejmuje zaznaczone po lewej w wybranej strefie, także ukryte przez wyszukiwarkę.</p>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        className="min-h-11 shrink-0"
+        disabled={!areaPlan.some((item) => item.included)}
+        onClick={() => void exportTechnologyQuickReference()}
+      >
+        <FileDown className="mr-2 h-4 w-4" />Eksportuj Excel ({areaPlan.filter((item) => item.included).length})
+      </Button>
+    </Card> : null}
   </div>;
 
   const renderTechnologies = () => {
@@ -4295,6 +4403,22 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       }));
     if (!rows.length) {
       flash('Dla wybranej strefy nie ma materiałów wymagających wydania.');
+      return false;
+    }
+    const documentKind: PickingDocumentKind = state.documents.some((document) =>
+      document.planDate === state.selectedPlanDate &&
+      document.areaId === state.selectedAreaId &&
+      (document.status === 'handed' || document.status === 'issued')
+    ) ? 'correction' : 'base';
+    const anotherPersonsDraft = state.documents.find((document) =>
+      document.planDate === state.selectedPlanDate &&
+      document.areaId === state.selectedAreaId &&
+      document.kind === documentKind &&
+      (document.status === 'draft' || document.status === 'outdated') &&
+      document.createdBy !== currentUserName
+    );
+    if (anotherPersonsDraft && !headAdmin) {
+      flash(`Dokument dla tej strefy przygotowuje już ${anotherPersonsDraft.createdBy}.`);
       return false;
     }
     const createdAt = nowLabel();
@@ -5342,8 +5466,10 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
 
 export default function MaterialPlanningPage() {
   const searchParams = useSearchParams();
+  const user = useUiStore((store) => store.user);
   const requestedView = searchParams.get('view');
   const requestedSettingsSection = searchParams.get('settings');
   if (requestedView === 'spis') return <SpisRzeczywisty />;
-  return <MaterialPlanningWorkspace requestedView={requestedView} requestedSettingsSection={requestedSettingsSection} />;
+  if (!user) return <div className="py-8 text-sm text-dim" role="status">Wczytywanie użytkownika...</div>;
+  return <MaterialPlanningWorkspace key={user.id} requestedView={requestedView} requestedSettingsSection={requestedSettingsSection} />;
 }

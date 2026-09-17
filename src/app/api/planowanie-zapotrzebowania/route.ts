@@ -8,6 +8,15 @@ import {
   type ProductCatalogSearchMode
 } from '@/lib/planowanie-zapotrzebowania/productCatalogSearch';
 import { FIXED_INVENTORY_DEVICE_SOURCE_TYPE } from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
+import {
+  isSharedPlanningField,
+  loadPlanningWorkspace,
+  loadSharedPlanningSnapshot,
+  savePlanningWorkspace,
+  type PlanningRecord,
+  type PlanningStore,
+  type SharedPlanningField
+} from '@/lib/planowanie-zapotrzebowania/stateScopes';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,36 +28,51 @@ const PLANNING_STATE_CACHE_MS = 30 * 1000;
 
 let productCatalogCache: { items: ProductCatalogItem[]; expiresAt: number } | null = null;
 let productCatalogLoadPromise: Promise<ProductCatalogItem[]> | null = null;
-type PlanningStateRecord = {
-  state: unknown;
-  updatedAt: string | null;
-  updatedBy: string | null;
-  revision: number;
-  concurrencyMigrationRequired?: boolean;
-};
-let planningStateCache: (PlanningStateRecord & { expiresAt: number }) | null = null;
+let planningStateCache: (PlanningRecord & { expiresAt: number }) | null = null;
 
 const cachedPlanningState = () => (
   planningStateCache && planningStateCache.expiresAt > Date.now() ? planningStateCache : null
 );
 
-const rememberPlanningState = (record: PlanningStateRecord) => {
+const rememberPlanningState = (record: PlanningRecord) => {
   planningStateCache = { ...record, expiresAt: Date.now() + PLANNING_STATE_CACHE_MS };
   return record;
 };
 
-const planningStateResponse = (record: PlanningStateRecord, requestedRevision: number | null) => {
-  if (requestedRevision !== null && requestedRevision === record.revision) {
-    return NextResponse.json({ unchanged: true, revision: record.revision });
-  }
-  return NextResponse.json({
-    state: record.state,
-    updatedAt: record.updatedAt,
-    updatedBy: record.updatedBy,
-    revision: record.revision,
-    ...(record.concurrencyMigrationRequired ? { concurrencyMigrationRequired: true } : {})
-  });
+const readPlanningRecord = async (id: string): Promise<PlanningRecord> => {
+  const { data, error } = await supabaseAdmin
+    .from('material_planning_state')
+    .select('state, updated_at, updated_by, revision')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  return {
+    state: data?.state ?? null,
+    updatedAt: data?.updated_at ?? null,
+    updatedBy: data?.updated_by ?? null,
+    revision: Number(data?.revision ?? 0)
+  };
 };
+
+const savePlanningRecord = async (id: string, state: Record<string, unknown>, revision: number, updatedBy: string) => {
+  const { data, error } = await supabaseAdmin.rpc('save_material_planning_state', {
+    p_module_id: id,
+    p_state: state,
+    p_expected_revision: revision,
+    p_updated_by: updatedBy
+  });
+  if (error) throw error;
+  const result = Array.isArray(data) ? data[0] as { new_revision?: number; has_conflict?: boolean } | undefined : undefined;
+  return { revision: Number(result?.new_revision ?? revision), conflict: result?.has_conflict === true };
+};
+
+const readPlanningRevision = async (id: string) => {
+  const { data, error } = await supabaseAdmin.from('material_planning_state').select('revision').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return Number(data?.revision ?? 0);
+};
+
+const planningStore: PlanningStore = { read: readPlanningRecord, save: savePlanningRecord, readRevision: readPlanningRevision };
 
 const normalizeName = (value: unknown) =>
   String(value ?? '')
@@ -226,6 +250,15 @@ export async function GET(request: NextRequest) {
   const access = await ensureAccess(request);
   if (access.response) return access.response;
   const source = request.nextUrl.searchParams.get('source');
+  if (source === 'shared') {
+    const revision = request.nextUrl.searchParams.get('sharedRevision');
+    const knownRevision = revision !== null && /^\d+$/.test(revision) ? Number(revision) : null;
+    try {
+      return NextResponse.json(await loadSharedPlanningSnapshot(planningStore, knownRevision));
+    } catch {
+      return NextResponse.json({ code: 'LOAD_FAILED' }, { status: 503 });
+    }
+  }
   if (source === 'product-catalog') {
     try {
       const query = request.nextUrl.searchParams.get('query')?.slice(0, 160) ?? '';
@@ -276,47 +309,28 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ items: row?.fixed_devices ?? [] });
   }
 
-  const requestedRevisionValue = request.nextUrl.searchParams.get('revision');
-  const parsedRequestedRevision = requestedRevisionValue === null ? NaN : Number(requestedRevisionValue);
-  const requestedRevision = Number.isSafeInteger(parsedRequestedRevision) && parsedRequestedRevision >= 0
-    ? parsedRequestedRevision
-    : null;
-  const cached = cachedPlanningState();
-  if (cached) return planningStateResponse(cached, requestedRevision);
-
-  if (requestedRevision !== null) {
-    const revisionOnly = await supabaseAdmin
-      .from('material_planning_state')
-      .select('revision')
-      .eq('id', MODULE_KEY)
-      .maybeSingle();
-    if (!revisionOnly.error && Number(revisionOnly.data?.revision ?? 0) === requestedRevision) {
-      return NextResponse.json({ unchanged: true, revision: requestedRevision });
+  const revisionParam = request.nextUrl.searchParams.get('revision');
+  const sharedRevisionParam = request.nextUrl.searchParams.get('sharedRevision');
+  const requestedRevision = revisionParam !== null && /^\d+$/.test(revisionParam) ? Number(revisionParam) : null;
+  const requestedSharedRevision = sharedRevisionParam !== null && /^\d+$/.test(sharedRevisionParam)
+    ? Number(sharedRevisionParam) : null;
+  try {
+    const loaded = await loadPlanningWorkspace(planningStore, access.user!.id);
+    rememberPlanningState(loaded.shared);
+    if (requestedRevision === loaded.revision && requestedSharedRevision === loaded.sharedRevision) {
+      return NextResponse.json({ unchanged: true, revision: loaded.revision, sharedRevision: loaded.sharedRevision });
     }
+    return NextResponse.json({
+      state: loaded.state,
+      revision: loaded.revision,
+      sharedRevision: loaded.sharedRevision,
+      updatedAt: loaded.updatedAt,
+      updatedBy: loaded.updatedBy
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'LOAD_FAILED';
+    return NextResponse.json({ code: 'MIGRATION_REQUIRED', detail }, { status: 503 });
   }
-
-  const withRevision = await supabaseAdmin
-    .from('material_planning_state')
-    .select('state, updated_at, updated_by, revision')
-    .eq('id', MODULE_KEY)
-    .maybeSingle();
-  if (!withRevision.error) {
-    return planningStateResponse(rememberPlanningState({
-      state: withRevision.data?.state ?? null,
-      updatedAt: withRevision.data?.updated_at ?? null,
-      updatedBy: withRevision.data?.updated_by ?? null,
-      revision: Number(withRevision.data?.revision ?? 0)
-    }), requestedRevision);
-  }
-  const legacy = await supabaseAdmin.from('material_planning_state').select('state, updated_at, updated_by').eq('id', MODULE_KEY).maybeSingle();
-  if (legacy.error) return NextResponse.json({ code: 'MIGRATION_REQUIRED', detail: legacy.error.message }, { status: 503 });
-  return planningStateResponse(rememberPlanningState({
-    state: legacy.data?.state ?? null,
-    updatedAt: legacy.data?.updated_at ?? null,
-    updatedBy: legacy.data?.updated_by ?? null,
-    revision: 0,
-    concurrencyMigrationRequired: true
-  }), requestedRevision);
 }
 
 export async function PUT(request: NextRequest) {
@@ -328,7 +342,14 @@ export async function PUT(request: NextRequest) {
   } catch {
     return NextResponse.json({ code: 'INVALID_JSON' }, { status: 400 });
   }
-  const payload = body && typeof body === 'object' ? body as { state?: unknown; expectedRevision?: unknown } : {};
+  const payload = body && typeof body === 'object' ? body as {
+    state?: unknown;
+    expectedRevision?: unknown;
+    expectedSharedRevision?: unknown;
+    changedSharedFields?: unknown;
+    documentBaseline?: unknown;
+    sharedBaseline?: unknown;
+  } : {};
   const state = payload.state;
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
     return NextResponse.json({ code: 'INVALID_STATE' }, { status: 400 });
@@ -337,25 +358,34 @@ export async function PUT(request: NextRequest) {
   if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
     return NextResponse.json({ code: 'INVALID_REVISION' }, { status: 400 });
   }
+  if (payload.sharedBaseline !== undefined && (!payload.sharedBaseline ||
+    typeof payload.sharedBaseline !== 'object' || Array.isArray(payload.sharedBaseline))) {
+    return NextResponse.json({ code: 'INVALID_SHARED_BASELINE' }, { status: 400 });
+  }
+  const changedFields = payload.changedSharedFields ?? [];
+  if (!Array.isArray(changedFields) || changedFields.some((field) => typeof field !== 'string' || !isSharedPlanningField(field)) ||
+    new Set(changedFields).size !== changedFields.length) {
+    return NextResponse.json({ code: 'INVALID_SHARED_FIELDS' }, { status: 400 });
+  }
+  const expectedSharedRevision = Number(payload.expectedSharedRevision);
+  if (changedFields.length && (!Number.isSafeInteger(expectedSharedRevision) || expectedSharedRevision < 0)) {
+    return NextResponse.json({ code: 'INVALID_SHARED_REVISION' }, { status: 400 });
+  }
   const updatedBy = access.user.username ?? access.user.name;
-  const { data, error } = await supabaseAdmin.rpc('save_material_planning_state', {
-    p_module_id: MODULE_KEY,
-    p_state: state,
-    p_expected_revision: expectedRevision,
-    p_updated_by: updatedBy
-  });
-  if (error) {
-    return NextResponse.json({
-      code: error.code === 'PGRST202' ? 'CONCURRENCY_MIGRATION_REQUIRED' : 'SAVE_FAILED',
-      detail: error.message
-    }, { status: error.code === 'PGRST202' ? 503 : 500 });
+  try {
+    const result = await savePlanningWorkspace(
+      planningStore, access.user.id, state as Record<string, unknown>,
+      expectedRevision, expectedSharedRevision, changedFields as SharedPlanningField[],
+      payload.documentBaseline, updatedBy, payload.sharedBaseline as Record<string, unknown> | undefined
+    );
+    if (!result.ok) {
+      return NextResponse.json(result, { status: result.code.startsWith('INVALID_') ? 400 : 409 });
+    }
+    if (result.sharedSaved) rememberPlanningState(result.sharedSaved);
+    return NextResponse.json({ ok: true, revision: result.revision, sharedRevision: result.sharedRevision, updatedAt: new Date().toISOString() });
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error && error.code === 'PGRST202'
+      ? 'CONCURRENCY_MIGRATION_REQUIRED' : 'SAVE_FAILED';
+    return NextResponse.json({ code, detail: error instanceof Error ? error.message : 'SAVE_FAILED' }, { status: code === 'CONCURRENCY_MIGRATION_REQUIRED' ? 503 : 500 });
   }
-  const result = Array.isArray(data) ? data[0] as { new_revision?: number; has_conflict?: boolean } | undefined : undefined;
-  const revision = Number(result?.new_revision ?? expectedRevision);
-  if (result?.has_conflict) {
-    return NextResponse.json({ code: 'REVISION_CONFLICT', revision }, { status: 409 });
-  }
-  const updatedAt = new Date().toISOString();
-  rememberPlanningState({ state, updatedAt, updatedBy, revision });
-  return NextResponse.json({ ok: true, revision, updatedAt });
 }

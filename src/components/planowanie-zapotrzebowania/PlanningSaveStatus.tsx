@@ -23,7 +23,11 @@ export const PlanningSaveNotice = ({ info, retry, downloadDraft, loadLatest }: {
   const conflict = info.status === 'conflict';
   const migration = info.error === 'CONCURRENCY_MIGRATION_REQUIRED' || info.error === 'MIGRATION_REQUIRED';
   const message = info.error === 'RELOAD_FAILED' ? 'Nie udało się wczytać wersji z bazy. Twoje zmiany nie zostały usunięte.'
-    : conflict ? 'Inna osoba zapisała nowszą wersję. Zapis jest wstrzymany, aby nie nadpisać jej zmian.'
+    : conflict ? info.error === 'PARTIAL_SAVE_CONFLICT'
+      ? 'Zmiana wspólnej biblioteki lub dokumentu została zapisana, ale plan roboczy zmienił się w innej karcie. Niezapisana część planu jest zachowana na tym urządzeniu.'
+      : info.error === 'SHARED_REVISION_CONFLICT'
+      ? 'Wspólna biblioteka, dokument lub ustawienia zmieniły się podczas edycji. Zapis jest wstrzymany, aby nie nadpisać tych zmian.'
+      : 'Ten sam plan roboczy został zmieniony w innej karcie lub na innym urządzeniu. Zapis jest wstrzymany, aby nie nadpisać zmian.'
       : migration ? 'Autozapis wymaga istniejącej migracji zapisu planowania zapotrzebowania.'
         : info.error === 'UNAUTHORIZED' || info.error === 'FORBIDDEN' ? 'Sesja wygasła lub nie masz prawa do zapisu. Zaloguj się ponownie.'
           : info.error === 'LOAD_FAILED' ? 'Nie udało się pobrać aktualnego planu z bazy.'

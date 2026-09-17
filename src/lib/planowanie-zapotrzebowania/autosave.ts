@@ -14,7 +14,7 @@ export type PlanningDraft<T> = {
   lastAttempt?: { state: T; revision: number };
 };
 
-export type PlanningRemote<T> = { state: T | null; revision: number };
+export type PlanningRemote<T> = { state: T | null; revision: number; sharedRevision?: number };
 
 export class PlanningSaveError extends Error {
   code: string;
@@ -72,6 +72,7 @@ type AutosaveOptions<T> = {
   write: (state: T, revision: number) => Promise<number>;
   cache: (draft: PlanningDraft<T>) => void;
   onChange: (info: PlanningSaveInfo) => void;
+  restore?: typeof restorePlanningDraft<T>;
   delay?: number;
   clock?: Clock;
 };
@@ -144,7 +145,7 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
         // After a lost response, confirm the old attempt before sending a newer edit.
         if (draft.revision === null || draft.lastAttempt) {
           const remote = await options.read();
-          const restored = restorePlanningDraft(remote, draft, draft.state);
+          const restored = (options.restore ?? restorePlanningDraft)(remote, draft, draft.state);
           if (restored.conflict) throw new PlanningSaveError('REVISION_CONFLICT');
           draft = restored;
           if (!draft.pending) {
@@ -167,7 +168,7 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
         persist();
       } catch (failure) {
         error = failure instanceof PlanningSaveError ? failure.code : 'NETWORK_ERROR';
-        if (error === 'REVISION_CONFLICT') {
+        if (error === 'REVISION_CONFLICT' || error === 'SHARED_REVISION_CONFLICT' || error === 'PARTIAL_SAVE_CONFLICT') {
           status = 'conflict';
           draft = { ...draft, lastAttempt: undefined };
         } else if (terminalErrors.has(error)) {
@@ -190,10 +191,19 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
     return running;
   };
 
+  const canRefresh = () => !manual && !running && !stopped && !closing && !draft.pending && status === 'saved';
+
   return {
     getDraft: () => draft,
     getInfo: (): PlanningSaveInfo => ({ status, pending: draft.pending, backupAvailable, error }),
     isManual: () => manual,
+    canRefresh,
+    applyIdleSnapshot(state: T) {
+      if (!canRefresh()) return false;
+      draft = { ...draft, state };
+      persist();
+      return true;
+    },
     beginManual() {
       if (stopped || manual) return;
       clearSaveTimer();

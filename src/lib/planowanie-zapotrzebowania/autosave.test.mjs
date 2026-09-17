@@ -204,6 +204,17 @@ test('revision conflict pauses writes without advancing the expected revision', 
   assert.equal(h.backups.at(-1).pending, true);
 });
 
+test('a partial shared save pauses the private draft and keeps its backup', async () => {
+  const h = setup({ write: async () => { throw new PlanningSaveError('PARTIAL_SAVE_CONFLICT'); } });
+  h.queue.setSnapshot({ quantity: 200 }, true);
+  await h.queue.flush();
+  assert.equal(h.queue.getInfo().status, 'conflict');
+  assert.equal(h.queue.getInfo().error, 'PARTIAL_SAVE_CONFLICT');
+  assert.equal(h.queue.getDraft().revision, 4);
+  assert.equal(h.backups.at(-1).state.quantity, 200);
+  assert.equal(h.backups.at(-1).pending, true);
+});
+
 test('offline work remains backed up and retry attempts are bounded', async () => {
   let writes = 0;
   const h = setup({
@@ -456,4 +467,28 @@ test('empty storage stays idle while a legacy local plan is queued only for an e
   const restored = restorePlanningDraft({ state: { quantity: 300 }, revision: 8 }, local, fallback);
   assert.equal(restored.pending, false);
   assert.equal(restored.state.quantity, 300);
+});
+
+test('background snapshots update an idle plan without scheduling any writes', async () => {
+  const h = setup();
+  assert.equal(h.queue.canRefresh(), true);
+  assert.equal(h.queue.applyIdleSnapshot({ quantity: 100, library: ['updated'] }), true);
+  await h.clock.tick(60000);
+  assert.equal(h.writes.length, 0);
+  assert.equal(h.queue.getDraft().pending, false);
+  assert.deepEqual(h.queue.getDraft().state.library, ['updated']);
+});
+
+test('background responses cannot replace edits or a manual checkpoint', async () => {
+  const h = setup();
+  h.queue.beginManual();
+  assert.equal(h.queue.canRefresh(), false);
+  assert.equal(h.queue.applyIdleSnapshot({ quantity: 500 }), false);
+  h.queue.setSnapshot({ quantity: 200 }, true);
+  h.queue.discardManual();
+  assert.equal(h.queue.getDraft().state.quantity, 100);
+  h.queue.setSnapshot({ quantity: 300 }, true);
+  assert.equal(h.queue.applyIdleSnapshot({ quantity: 500 }), false);
+  assert.equal(h.queue.getDraft().state.quantity, 300);
+  await h.queue.flush();
 });

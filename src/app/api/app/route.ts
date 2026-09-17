@@ -1132,6 +1132,9 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'saveOriginalInventorySiloEntry':
     case 'saveOriginalInventoryFixedDeviceEntry':
     case 'addOriginalInventoryGrindTask':
+    case 'removeOriginalInventoryGrindTask':
+    case 'removeOriginalInventoryGrindTasks':
+    case 'updateOriginalInventoryGrindTaskTargets':
     case 'completeOriginalInventoryGrindTask':
     case 'completeOriginalInventoryGrindTasks':
     case 'reopenOriginalInventoryGrindTasks':
@@ -6871,6 +6874,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const sourceReportDate = String(payload?.sourceReportDate ?? '').trim() || null;
       if (!materialName) throw new Error('MATERIAL_REQUIRED');
       if (!Number.isFinite(qty) || qty <= 0) throw new Error('QTY_REQUIRED');
+      if (/^szt\.?$/i.test(unit) && !Number.isSafeInteger(qty)) throw new Error('QTY_INTEGER_REQUIRED');
       const { data, error } = await supabaseAdmin
         .from('original_inventory_grind_tasks')
         .insert({
@@ -6894,6 +6898,68 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }
       if (!data) throw new Error('NOT_FOUND');
       return mapOriginalInventoryGrindTask(data);
+    }
+    case 'removeOriginalInventoryGrindTask': {
+      const id = String(payload?.id ?? '').trim();
+      if (!id) throw new Error('NOT_FOUND');
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_grind_tasks')
+        .delete()
+        .eq('id', id)
+        .eq('status', 'PENDING')
+        .select('id')
+        .maybeSingle();
+      if (error) {
+        if (isMissingOriginalInventoryGrindTasksTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS');
+        }
+        throw error;
+      }
+      if (!data) throw new Error('NOT_FOUND');
+      return String(data.id);
+    }
+    case 'removeOriginalInventoryGrindTasks': {
+      const ids = Array.isArray(payload?.ids)
+        ? [...new Set(payload.ids.map((id: unknown) => String(id ?? '').trim()).filter(Boolean))]
+        : [];
+      if (ids.length === 0) throw new Error('NOT_FOUND');
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_grind_tasks')
+        .delete()
+        .in('id', ids)
+        .eq('status', 'PENDING')
+        .select('id');
+      if (error) {
+        if (isMissingOriginalInventoryGrindTasksTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS');
+        }
+        throw error;
+      }
+      if ((data ?? []).length !== ids.length) throw new Error('NOT_FOUND');
+      return (data ?? []).map((task) => String(task.id));
+    }
+    case 'updateOriginalInventoryGrindTaskTargets': {
+      const ids = Array.isArray(payload?.ids)
+        ? [...new Set(payload.ids.map((id: unknown) => String(id ?? '').trim()).filter(Boolean))]
+        : [];
+      const targetMaterialName = String(payload?.targetMaterialName ?? '').trim();
+      if (!ids.length) throw new Error('NOT_FOUND');
+      if (!targetMaterialName) throw new Error('TARGET_REQUIRED');
+      if (targetMaterialName.length > 240) throw new Error('TARGET_TOO_LONG');
+      const { data, error } = await supabaseAdmin
+        .from('original_inventory_grind_tasks')
+        .update({ target_material_name: targetMaterialName })
+        .in('id', ids)
+        .eq('status', 'PENDING')
+        .select('*');
+      if (error) {
+        if (isMissingOriginalInventoryGrindTasksTableError(error)) {
+          throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS');
+        }
+        throw error;
+      }
+      if ((data ?? []).length !== ids.length) throw new Error('NOT_FOUND');
+      return (data ?? []).map(mapOriginalInventoryGrindTask);
     }
     case 'completeOriginalInventoryGrindTask': {
       const id = String(payload?.id ?? '').trim();

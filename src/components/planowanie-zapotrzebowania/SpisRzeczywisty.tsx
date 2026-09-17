@@ -21,13 +21,15 @@ import {
   importOriginalInventoryErpSnapshotFile,
   getWarehouses,
   removeOriginalInventoryErpSnapshot,
+  removeOriginalInventoryGrindTasks,
+  updateOriginalInventoryGrindTaskTargets,
   removeOriginalInventory,
   reopenOriginalInventoryGrindTasks,
   saveOriginalInventoryFixedDeviceEntry,
   saveOriginalInventorySiloEntry,
   updateOriginalInventory
 } from '@/lib/api';
-import type { OriginalInventoryEntry, OriginalInventoryErpSnapshotEntry } from '@/lib/api/types';
+import type { OriginalInventoryEntry, OriginalInventoryErpSnapshotEntry, OriginalInventoryGrindTask } from '@/lib/api/types';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -40,6 +42,17 @@ import { useToastStore } from '@/components/ui/Toast';
 import { useUiStore } from '@/lib/store/ui';
 import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { parseQtyInput } from '@/lib/utils/format';
+import {
+  applyPieceGrindingReservations,
+  groupGrindingTasksByMaterial,
+  isKilogramGrindingUnit,
+  isPieceGrindingUnit
+} from '@/lib/utils/originalInventoryGrinding';
+import {
+  matchGrindingTechnologyMass,
+  type GrindingMassMatch,
+  type GrindingTechnology
+} from '@/lib/utils/grindingTechnologyMass';
 import { cn } from '@/lib/utils/cn';
 import {
   getOriginalInventorySpisEntriesQueryKey,
@@ -62,6 +75,7 @@ import {
   Minimize2,
   PencilLine,
   Search,
+  Trash2,
   Undo2
 } from 'lucide-react';
 import {
@@ -374,6 +388,15 @@ const normalizeCatalogNameKey = (value: unknown) =>
     .trim()
     .toLowerCase();
 
+const grindingMaterialKey = (name: string, unit: string) =>
+  `${normalizeCatalogNameKey(name)}|${isPieceGrindingUnit(unit) ? 'szt' : isKilogramGrindingUnit(unit) ? 'kg' : unit.trim().toLowerCase()}`;
+
+const isMissingDetailGrindTarget = (task: Pick<OriginalInventoryGrindTask, 'unit' | 'materialName' | 'targetMaterialName'>) =>
+  isPieceGrindingUnit(task.unit) && (
+    !task.targetMaterialName?.trim() ||
+    normalizeCatalogNameKey(task.targetMaterialName) === normalizeCatalogNameKey(task.materialName)
+  );
+
 const tokenizeCatalogSearch = (value: unknown) =>
   normalizeCatalogNameKey(value)
     .split(/[^a-z0-9]+/)
@@ -438,6 +461,15 @@ const matchesCatalogSearch = (
       compactCodes.some((code) => code.includes(compactToken))
     );
   });
+};
+
+const formatGrindKg = (value: number) =>
+  value.toLocaleString('pl-PL', { maximumFractionDigits: 5 });
+
+const grindingMassUnavailableLabel = (match: GrindingMassMatch) => {
+  if (match.status === 'ambiguous') return 'Niejednoznaczny indeks lub więcej niż jedna technologia bazowa.';
+  if (match.status === 'no-mass') return 'Technologia nie zawiera masy tworzywa lub barwnika na sztukę.';
+  return 'Brak jednoznacznie dopasowanej technologii bazowej.';
 };
 
 const parseSnapshotQty = (value: unknown) => {
@@ -797,6 +829,7 @@ export default function SpisRzeczywisty() {
   const [showReportSuggestions, setShowReportSuggestions] = useState(false);
   const [reportQuantityMode, setReportQuantityMode] = useState<'real' | 'available'>('real');
   const [showReportUncountedItems, setShowReportUncountedItems] = useState(false);
+  const [showReportIndex2, setShowReportIndex2] = useState(false);
   const reportFullscreenRef = useRef<HTMLDivElement | null>(null);
   const [isReportFullscreen, setIsReportFullscreen] = useState(false);
   const [isReportFullscreenFallback, setIsReportFullscreenFallback] = useState(false);
@@ -807,6 +840,10 @@ export default function SpisRzeczywisty() {
   } | null>(null);
   const [grindQty, setGrindQty] = useState('');
   const [grindTargetMaterial, setGrindTargetMaterial] = useState('');
+  const [grindDocumentTargetDrafts, setGrindDocumentTargetDrafts] = useState<Record<string, string>>({});
+  const [editingGrindDocumentKeys, setEditingGrindDocumentKeys] = useState<Record<string, boolean>>({});
+  const [grindKind, setGrindKind] = useState<'materials' | 'details'>('materials');
+  const [expandedGrindDocumentKeys, setExpandedGrindDocumentKeys] = useState<Record<string, boolean>>({});
   const [showGrindTargetSuggestions, setShowGrindTargetSuggestions] = useState(false);
   const [spisDate, setSpisDate] = useState(getLocalDateValue());
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -874,13 +911,13 @@ export default function SpisRzeczywisty() {
         throw error;
       }
     },
-    enabled: activeTab === 'kartoteki' || activeTab === 'stany-erp' || activeTab === 'raporty',
+    enabled: activeTab === 'kartoteki' || activeTab === 'stany-erp' || activeTab === 'raporty' || activeTab === 'do-zmielenia',
     retry: false
   });
   const { data: localCatalog = [] } = useQuery({
     queryKey: ['spis-oryginalow-catalog-local'],
     queryFn: getOriginalInventoryCatalog,
-    enabled: activeTab === 'kartoteki' || activeTab === 'raporty',
+    enabled: activeTab === 'kartoteki' || activeTab === 'raporty' || activeTab === 'do-zmielenia',
     staleTime: 5 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false
@@ -906,15 +943,31 @@ export default function SpisRzeczywisty() {
     queryFn: () => getOriginalInventorySiloEntries(spisDate),
     enabled: Boolean(spisDate)
   });
-  const { data: grindTasks = [] } = useQuery({
+  const { data: grindTasks = [], isLoading: isGrindTasksLoading, isError: isGrindTasksError } = useQuery({
     queryKey: ['original-inventory-grind-tasks'],
     queryFn: getOriginalInventoryGrindTasks,
-    enabled: activeTab === 'do-zmielenia' || activeTab === 'raporty'
+    enabled: activeTab === 'do-zmielenia' || activeTab === 'raporty' || activeTab === 'stany-erp' || activeTab === 'alerty'
   });
   const { data: grindTargetSourceMaterials = [] } = useQuery({
     queryKey: ['catalog'],
     queryFn: getCatalog,
-    enabled: activeTab === 'do-zmielenia'
+    enabled: activeTab === 'do-zmielenia' || (activeTab === 'raporty' && Boolean(grindDialogMaterial))
+  });
+  const {
+    data: grindingTechnologies = [],
+    isLoading: isGrindingTechnologyLoading,
+    isError: isGrindingTechnologyError
+  } = useQuery<GrindingTechnology[]>({
+    queryKey: ['original-inventory-grinding-technologies'],
+    queryFn: async () => {
+      const response = await fetch('/api/original-inventory-grinding-technologies', { cache: 'no-store' });
+      if (!response.ok) throw new Error('GRINDING_TECHNOLOGIES_LOAD_FAILED');
+      const payload = await response.json() as { items?: GrindingTechnology[] };
+      return Array.isArray(payload.items) ? payload.items : [];
+    },
+    enabled: activeTab === 'do-zmielenia' || activeTab === 'raporty',
+    staleTime: 30_000,
+    retry: false
   });
   const erpCatalogItems = useMemo(
     () => (Array.isArray(erpCatalogState?.items) ? erpCatalogState.items : []),
@@ -1023,13 +1076,17 @@ export default function SpisRzeczywisty() {
     () => (Array.isArray(erpSnapshotState?.items) ? erpSnapshotState.items : []),
     [erpSnapshotState]
   );
+  const effectiveErpSnapshotEntries = useMemo(
+    () => applyPieceGrindingReservations(erpSnapshotEntries, grindTasks, spisDate, normalizeCatalogNameKey),
+    [erpSnapshotEntries, grindTasks, spisDate]
+  );
   const erpSnapshotMigrationRequired = Boolean(erpSnapshotState?.migrationRequired);
   const erpSnapshotMap = useMemo(() => {
     const map = new Map<
       string,
       { name: string; unit: string; realQty: number; availableQty: number }
     >();
-    erpSnapshotEntries.forEach((item) => {
+    effectiveErpSnapshotEntries.forEach((item) => {
       const key = normalizeCatalogNameKey(item.name);
       const current = map.get(key);
       if (current) {
@@ -1048,7 +1105,7 @@ export default function SpisRzeczywisty() {
       }
     });
     return map;
-  }, [erpSnapshotEntries]);
+  }, [effectiveErpSnapshotEntries]);
   const activeSiloConfigs = useMemo(() => {
     const list = siloConfigs.filter((item) => item.isActive);
     list.sort((a, b) => {
@@ -1253,8 +1310,9 @@ export default function SpisRzeczywisty() {
   });
   const addGrindTaskMutation = useMutation({
     mutationFn: addOriginalInventoryGrindTask,
-    onSuccess: () => {
+    onSuccess: (_task, variables) => {
       queryClient.invalidateQueries({ queryKey: ['original-inventory-grind-tasks'] });
+      setGrindKind(isPieceGrindingUnit(variables.unit) ? 'details' : 'materials');
       setGrindDialogMaterial(null);
       setGrindQty('');
       setGrindTargetMaterial('');
@@ -1264,11 +1322,41 @@ export default function SpisRzeczywisty() {
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
         MATERIAL_REQUIRED: 'Nie wybrano materialu.',
-        QTY_REQUIRED: 'Wpisz poprawna ilosc kg.',
+        QTY_REQUIRED: 'Wpisz poprawną ilość.',
+        QTY_INTEGER_REQUIRED: 'Dla detali wpisz pełną liczbę sztuk.',
         MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS:
           'Brakuje migracji bazy dla listy do zmielenia.'
       };
       toast({ title: messageMap[err.message] ?? 'Nie dodano do zmielenia.', tone: 'error' });
+    }
+  });
+  const removeGrindTaskMutation = useMutation({
+    mutationFn: removeOriginalInventoryGrindTasks,
+    onSuccess: () => {
+      toast({ title: 'Usunięto detale z koszyka i zwolniono rezerwację', tone: 'success' });
+    },
+    onError: () => {
+      toast({ title: 'Nie udało się usunąć pozycji. Odśwież listę i spróbuj ponownie.', tone: 'error' });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-grind-tasks'] });
+    }
+  });
+  const updateGrindTargetMutation = useMutation({
+    mutationFn: updateOriginalInventoryGrindTaskTargets,
+    onSuccess: (items, variables) => {
+      const updated = new Map(items.map((task) => [task.id, task]));
+      queryClient.setQueryData<OriginalInventoryGrindTask[]>(['original-inventory-grind-tasks'], (current) =>
+        current?.map((task) => updated.get(task.id) ?? task) ?? items
+      );
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-grind-tasks'] });
+      setGrindDocumentTargetDrafts({});
+      setEditingGrindDocumentKeys({});
+      toast({ title: `Zapisano docelowy przemiał: ${variables.targetMaterialName}`, tone: 'success' });
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-grind-tasks'] });
+      toast({ title: 'Nie udało się zapisać docelowego przemiału.', tone: 'error' });
     }
   });
   const completeGrindDocumentMutation = useMutation({
@@ -1966,7 +2054,7 @@ export default function SpisRzeczywisty() {
     });
   }, [dailyEntries]);
   const inventoryAlertRows = useMemo(() => buildOriginalInventoryAlerts(
-    erpSnapshotEntries.map((entry) => ({
+    effectiveErpSnapshotEntries.map((entry) => ({
       key: normalizeCatalogNameKey(entry.name),
       name: entry.name,
       unit: entry.unit,
@@ -1983,7 +2071,7 @@ export default function SpisRzeczywisty() {
         unit: entry.unit,
         qty: entry.qty
       }))
-  ), [erpSnapshotEntries, entriesForDate]);
+  ), [effectiveErpSnapshotEntries, entriesForDate]);
   const alertThresholds = useMemo<InventoryAlertThresholds>(() => ({
     szt: parseAlertThreshold(alertThresholdDrafts.szt),
     kg: parseAlertThreshold(alertThresholdDrafts.kg),
@@ -2111,26 +2199,28 @@ export default function SpisRzeczywisty() {
   const erpSnapshotSummary = useMemo(() => {
     const map = new Map<
       string,
-      { key: string; name: string; unit: string; realQty: number; availableQty: number }
+      { key: string; name: string; unit: string; realQty: number; availableQty: number; reservedGrindingQty: number }
     >();
-    erpSnapshotEntries.forEach((entry) => {
+    effectiveErpSnapshotEntries.forEach((entry) => {
       const key = normalizeCatalogNameKey(entry.name);
       const current = map.get(key);
       if (current) {
         current.realQty += entry.realQty;
         current.availableQty += entry.availableQty;
+        current.reservedGrindingQty += entry.reservedGrindingQty;
       } else {
         map.set(key, {
           key,
           name: entry.name,
           unit: entry.unit,
           realQty: entry.realQty,
-          availableQty: entry.availableQty
+          availableQty: entry.availableQty,
+          reservedGrindingQty: entry.reservedGrindingQty
         });
       }
     });
     return [...map.values()].sort((a, b) => collator.compare(a.name, b.name));
-  }, [erpSnapshotEntries]);
+  }, [effectiveErpSnapshotEntries]);
   const historicalErpSnapshotEntries = useMemo(
     () =>
       Array.isArray(historicalErpSnapshotState?.items)
@@ -2169,10 +2259,10 @@ export default function SpisRzeczywisty() {
         });
       }
     };
-    erpSnapshotEntries.forEach(addEntry);
+    effectiveErpSnapshotEntries.forEach(addEntry);
     historicalErpSnapshotEntries.forEach(addEntry);
     return datesMap;
-  }, [erpSnapshotEntries, historicalErpSnapshotEntries]);
+  }, [effectiveErpSnapshotEntries, historicalErpSnapshotEntries]);
   const currentErpSnapshotMeta = useMemo(() => {
     if (erpSnapshotEntries.length === 0) return null;
     const latest = [...erpSnapshotEntries].sort((a, b) => b.importedAt.localeCompare(a.importedAt))[0];
@@ -2317,6 +2407,21 @@ export default function SpisRzeczywisty() {
         return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
       });
   }, [erpSnapshotByDateAndMaterial, erpSnapshotMap, inventoryHistoryByMaterial, reportHistoryDatesForExport, reportSourceEntries, spisDate]);
+  const reportIndex2ByName = useMemo(() => {
+    const codesByName = new Map<string, Set<string>>();
+    [...localCatalog, ...erpCatalogItems, ...erpSnapshotEntries].forEach((item) => {
+      const key = normalizeCatalogNameKey(item.name);
+      const code = getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2).trim();
+      if (!key || !code) return;
+      const codes = codesByName.get(key) ?? new Set<string>();
+      codes.add(code);
+      codesByName.set(key, codes);
+    });
+    return new Map([...codesByName].map(([key, codes]) => [
+      key,
+      [...codes].sort((a, b) => exportCatalogCollator.compare(a, b)).join(' / ')
+    ]));
+  }, [localCatalog, erpCatalogItems, erpSnapshotEntries]);
   const dailyComparison = useMemo(
     () =>
       reportRows.map((row) => ({
@@ -2434,8 +2539,8 @@ export default function SpisRzeczywisty() {
     const map = new Map<string, number>();
     grindTasks.forEach((task) => {
       if (task.status === 'DONE' || task.sourceReportDate !== spisDate) return;
-      const key = normalizeCatalogNameKey(task.materialName);
-      if (!key) return;
+      if (!normalizeCatalogNameKey(task.materialName)) return;
+      const key = grindingMaterialKey(task.materialName, task.unit);
       map.set(key, (map.get(key) ?? 0) + task.qty);
     });
     return map;
@@ -2519,6 +2624,15 @@ export default function SpisRzeczywisty() {
       };
       const exportReportModes = visibleReportModes;
       const exportColumns: ExportColumn[] = [
+        ...(showReportIndex2 ? [{
+          key: 'index2',
+          header: 'Indeks 2',
+          wrap: true,
+          align: 'left' as const,
+          minWidth: 12,
+          maxWidth: 30,
+          getValue: (row: (typeof reportRowsForExport)[number]) => reportIndex2ByName.get(row.key) ?? ''
+        }] : []),
         {
           key: 'name',
           header: 'Material',
@@ -2905,7 +3019,7 @@ export default function SpisRzeczywisty() {
     setIsReportFullscreenFallback(true);
   };
   const reportColumns = [
-    'Material',
+    showReportIndex2 ? 'Indeks 2 / Material' : 'Material',
     ...visibleReportModes.map((mode) => `ERP ${currentReportDateLabel} (${mode.shortLabel})`),
     `Spis ${currentReportDateLabel}`,
     ...visibleReportModes.map((mode) => `Roznica ${currentReportDateLabel} (${mode.shortLabel})`),
@@ -2915,19 +3029,27 @@ export default function SpisRzeczywisty() {
     'Jedn.'
   ];
   const renderReportMaterialCell = (row: (typeof reportRows)[number]) => {
-    const grindQty = pendingGrindQtyByMaterial.get(row.key) ?? 0;
-    if (grindQty <= 0) return row.name;
+    const grindQty = pendingGrindQtyByMaterial.get(grindingMaterialKey(row.name, row.unit)) ?? 0;
+    const materialName = showReportIndex2 ? (
+      <span className="flex min-w-0 items-baseline gap-3">
+        <span className="w-[100px] shrink-0 break-all text-xs font-semibold text-dim" title="Indeks 2">
+          {reportIndex2ByName.get(row.key) || '—'}
+        </span>
+        <span className="min-w-0 break-words">{row.name}</span>
+      </span>
+    ) : row.name;
+    if (grindQty <= 0) return materialName;
     return (
       <div className="min-w-0 space-y-1">
-        <div className="break-words">{row.name}</div>
+        <div className="break-words">{materialName}</div>
         <div className="text-xs font-semibold text-violet-200">
-          − {formatQty(grindQty)} kg do mielenia
+          − {formatQty(grindQty)} {isPieceGrindingUnit(row.unit) ? 'szt.' : row.unit} do mielenia
         </div>
       </div>
     );
   };
   const getReportRowClassName = (row: (typeof reportRows)[number]) =>
-    (pendingGrindQtyByMaterial.get(row.key) ?? 0) > 0
+    (pendingGrindQtyByMaterial.get(grindingMaterialKey(row.name, row.unit)) ?? 0) > 0
       ? 'border-[rgba(168,85,247,0.36)] bg-[linear-gradient(90deg,rgba(168,85,247,0.18),rgba(88,28,135,0.08))] hover:bg-[rgba(168,85,247,0.16)]'
       : '';
   const reportActionButtonBaseClassName =
@@ -3004,16 +3126,83 @@ export default function SpisRzeczywisty() {
         const key = normalizeCatalogNameKey(value);
         if (key && !options.has(key)) options.set(key, value);
       });
+    grindTasks.forEach((task) => {
+      const value = task.targetMaterialName?.trim() ?? '';
+      const key = normalizeCatalogNameKey(value);
+      if (key && key !== normalizeCatalogNameKey(task.materialName) && !options.has(key)) options.set(key, value);
+    });
     return [...options.values()].sort((a, b) => collator.compare(a, b));
-  }, [grindTargetSourceMaterials]);
+  }, [grindTargetSourceMaterials, grindTasks]);
+  const grindIdentifiersByName = useMemo(() => {
+    const byName = new Map<string, Map<string, { indexCode2: string | null; code: string | null }>>();
+    catalog.forEach((item) => {
+      if (!isPieceGrindingUnit(item.unit)) return;
+      const nameKey = normalizeCatalogNameKey(item.name);
+      const code = item.indexCode?.trim() || null;
+      const indexCode2 = getOriginalInventorySpisIndex2(code, item.indexCode2) || null;
+      if (!nameKey || (!indexCode2 && !code)) return;
+      const identifiers = byName.get(nameKey) ?? new Map<string, { indexCode2: string | null; code: string | null }>();
+      identifiers.set(`${indexCode2 ?? ''}|${code ?? ''}`.toLowerCase(), { indexCode2, code });
+      byName.set(nameKey, identifiers);
+    });
+    return new Map([...byName].map(([name, identifiers]) => [
+      name,
+      [...identifiers.values()].sort((left, right) =>
+        collator.compare(left.code ?? '', right.code ?? '') || collator.compare(left.indexCode2 ?? '', right.indexCode2 ?? '')
+      )
+    ]));
+  }, [catalog]);
+  const grindMassByName = useMemo(() => {
+    const indicesByName = new Map<string, Set<string>>();
+    catalog.forEach((item) => {
+      const key = normalizeCatalogNameKey(item.name);
+      const index = item.indexCode?.trim();
+      if (!key || !index) return;
+      const indices = indicesByName.get(key) ?? new Set<string>();
+      indices.add(index);
+      indicesByName.set(key, indices);
+    });
+    const names = new Map<string, string>();
+    grindTasks.filter((task) => isPieceGrindingUnit(task.unit)).forEach((task) => {
+      names.set(normalizeCatalogNameKey(task.materialName), task.materialName);
+    });
+    if (grindDialogMaterial && isPieceGrindingUnit(grindDialogMaterial.unit)) {
+      names.set(normalizeCatalogNameKey(grindDialogMaterial.name), grindDialogMaterial.name);
+    }
+    const estimates = new Map<string, GrindingMassMatch>();
+    names.forEach((name, key) => {
+      estimates.set(key, matchGrindingTechnologyMass(name, [...(indicesByName.get(key) ?? [])], grindingTechnologies));
+    });
+    return estimates;
+  }, [catalog, grindDialogMaterial, grindTasks, grindingTechnologies]);
+  const grindMassForName = (name: string): GrindingMassMatch =>
+    grindMassByName.get(normalizeCatalogNameKey(name)) ?? { status: 'not-found' };
+  const grindDocumentEstimatedKg = (tasks: typeof grindTasks) => {
+    let totalKg = 0;
+    for (const task of tasks) {
+      const match = grindMassForName(task.materialName);
+      if (match.status !== 'ready') return null;
+      totalKg += match.kgPerPiece * task.qty;
+    }
+    return totalKg;
+  };
+  const grindTaskMassLabel = (task: OriginalInventoryGrindTask) => {
+    if (isGrindingTechnologyLoading) return 'Wczytywanie technologii...';
+    if (isGrindingTechnologyError) return 'Nie udało się wczytać technologii.';
+    const match = grindMassForName(task.materialName);
+    return match.status === 'ready'
+      ? `Szacowany przemiał: ${formatGrindKg(match.kgPerPiece * task.qty)} kg (${formatGrindKg(match.kgPerPiece * 1000)} g/szt.)`
+      : grindingMassUnavailableLabel(match);
+  };
   const grindTargetSuggestions = useMemo(() => {
     if (!normalizeCatalogNameKey(grindTargetMaterial)) return grindTargetOptions.slice(0, 8);
     return grindTargetOptions
       .filter((option) => matchesCatalogSearch(grindTargetMaterial, option))
       .slice(0, 8);
   }, [grindTargetMaterial, grindTargetOptions]);
-  const pendingGrindTasks = grindTasks.filter((task) => task.status !== 'DONE');
-  const doneGrindTasks = grindTasks.filter((task) => task.status === 'DONE');
+  const isVisibleGrindTask = (unit: string) => grindKind === 'details' ? isPieceGrindingUnit(unit) : !isPieceGrindingUnit(unit);
+  const pendingGrindTasks = grindTasks.filter((task) => task.status !== 'DONE' && isVisibleGrindTask(task.unit));
+  const doneGrindTasks = grindTasks.filter((task) => task.status === 'DONE' && isVisibleGrindTask(task.unit));
   const buildGrindDocuments = (
     tasks: typeof grindTasks,
     mode: 'pending' | 'done'
@@ -3030,7 +3219,11 @@ export default function SpisRzeczywisty() {
     const sorted = [...tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
     sorted.forEach((task) => {
-      const targetMaterialName = task.targetMaterialName?.trim() || 'Brak docelowej kartoteki';
+      const savedTarget = task.targetMaterialName?.trim() ?? '';
+      const missingDetailTarget = isMissingDetailGrindTarget(task);
+      const targetMaterialName = missingDetailTarget
+        ? `Nie wybrano docelowego przemiału · ${task.materialName}`
+        : savedTarget || 'Brak docelowej kartoteki';
       const targetKey = normalizeCatalogNameKey(targetMaterialName) || targetMaterialName.toLowerCase();
       const doneKey = mode === 'done' ? `${task.completedAt ?? task.createdAt}|${task.completedBy ?? ''}` : '';
       const candidate =
@@ -3040,7 +3233,7 @@ export default function SpisRzeczywisty() {
               .find(
                 (document) =>
                   normalizeCatalogNameKey(document.targetMaterialName) === targetKey &&
-                  document.totalQty + task.qty <= 500
+                  (grindKind === 'details' || document.totalQty + task.qty <= 500)
               )
           : documents.find(
               (document) =>
@@ -3077,11 +3270,21 @@ export default function SpisRzeczywisty() {
   const pendingGrindDocuments = buildGrindDocuments(pendingGrindTasks, 'pending');
   const doneGrindDocuments = buildGrindDocuments(doneGrindTasks, 'done');
   const parsedGrindQty = parseQtyInput(grindQty);
+  const isGrindDialogDetail = isPieceGrindingUnit(grindDialogMaterial?.unit);
+  const grindDialogMass = grindDialogMaterial && isGrindDialogDetail
+    ? grindMassForName(grindDialogMaterial.name)
+    : null;
   const grindQtyLimitMessage =
-    parsedGrindQty !== null && Number.isFinite(parsedGrindQty) && parsedGrindQty > 500
-      ? `Maksymalna mo\u017cliwa ilo\u015b\u0107 do wpisania: ${formatQty(500)} kg`
-      : '';
+    isGrindDialogDetail && parsedGrindQty !== null && !Number.isSafeInteger(parsedGrindQty)
+      ? 'Dla detalu wpisz pełną liczbę sztuk.'
+      : parsedGrindQty !== null && Number.isFinite(parsedGrindQty) && isKilogramGrindingUnit(grindDialogMaterial?.unit) && parsedGrindQty > 500
+        ? `Maksymalna mo\u017cliwa ilo\u015b\u0107 do wpisania: ${formatQty(500)} kg`
+        : '';
   const openGrindDialog = (row: (typeof reportRows)[number]) => {
+    if (!isKilogramGrindingUnit(row.unit) && !isPieceGrindingUnit(row.unit)) {
+      toast({ title: `Mielenie obsługuje tylko kg i sztuki (ta pozycja ma jednostkę ${row.unit || 'brak'}).`, tone: 'error' });
+      return;
+    }
     setGrindDialogMaterial({
       name: row.name,
       unit: row.unit || 'kg',
@@ -3100,25 +3303,35 @@ export default function SpisRzeczywisty() {
   };
   const handleAddGrindTask = () => {
     if (!grindDialogMaterial) return;
+    if (addGrindTaskMutation.isPending) return;
+    const isDetail = isPieceGrindingUnit(grindDialogMaterial.unit);
     const qty = parseQtyInput(grindQty);
     if (qty === null || !Number.isFinite(qty) || qty <= 0) {
-      toast({ title: 'Wpisz poprawna ilosc kg.', tone: 'error' });
+      toast({ title: `Wpisz poprawną ilość ${isDetail ? 'sztuk' : 'kilogramów'}.`, tone: 'error' });
       return;
     }
-    if (qty > 500) {
+    if (isDetail && !Number.isSafeInteger(qty)) {
+      toast({ title: 'Dla detalu wpisz pełną liczbę sztuk.', tone: 'error' });
+      return;
+    }
+    if (!isDetail && qty > 500) {
       toast({ title: 'Jeden dokument moze miec maksymalnie 500 kg.', tone: 'error' });
       return;
     }
     const targetMaterialName = grindTargetMaterial.trim();
     if (!targetMaterialName) {
-      toast({ title: 'Wybierz docelowa kartoteke.', tone: 'error' });
+      toast({ title: isDetail ? 'Wybierz docelowy przemiał dla detalu.' : 'Wybierz docelową kartotekę.', tone: 'error' });
+      return;
+    }
+    if (isDetail && normalizeCatalogNameKey(targetMaterialName) === normalizeCatalogNameKey(grindDialogMaterial.name)) {
+      toast({ title: 'Docelowy przemiał musi być inną kartoteką niż detal.', tone: 'error' });
       return;
     }
     addGrindTaskMutation.mutate({
       materialName: grindDialogMaterial.name,
       targetMaterialName,
       qty,
-      unit: grindDialogMaterial.unit || 'kg',
+      unit: isDetail ? 'szt.' : 'kg',
       sourceReportDate: spisDate
     });
   };
@@ -4000,14 +4213,20 @@ export default function SpisRzeczywisty() {
               </p>
               <span className="text-xs text-dim">{erpSnapshotSummary.length} poz.</span>
             </div>
-            {erpSnapshotSummary.length === 0 ? (
+            {isGrindTasksError ? (
+              <p className="text-sm text-danger">Nie udało się pobrać rezerwacji mielenia. Stan do dyspozycji mógłby być zawyżony.</p>
+            ) : isGrindTasksLoading ? (
+              <p className="text-sm text-dim">Wczytywanie rezerwacji mielenia...</p>
+            ) : erpSnapshotSummary.length === 0 ? (
               <p className="text-sm text-dim">Brak wgranych stanow ERP dla wybranego dnia.</p>
             ) : (
               <DataTable
-                columns={['Nazwa', 'Stan rzeczywisty ERP', 'Stan do dyspozycji ERP', 'Jedn.']}
+                columns={['Nazwa', 'Stan rzeczywisty ERP', 'Import ERP — do dyspozycji', 'Rezerwacja mielenia', 'Do dyspozycji ERP po rezerwacji', 'Jedn.']}
                 rows={erpSnapshotSummary.map((row) => [
                   row.name,
                   row.realQty,
+                  row.availableQty + row.reservedGrindingQty,
+                  row.reservedGrindingQty > 0 ? `−${formatQty(row.reservedGrindingQty)}` : '—',
                   row.availableQty,
                   row.unit
                 ])}
@@ -4117,6 +4336,11 @@ export default function SpisRzeczywisty() {
                 onCheckedChange={setShowReportUncountedItems}
                 label="Pokaz pozycje nie spisane"
               />
+              <Toggle
+                checked={showReportIndex2}
+                onCheckedChange={setShowReportIndex2}
+                label="Pokaż indeks 2"
+              />
             </div>
             <div className="grid gap-3 md:grid-cols-3 md:items-end">
               <div>
@@ -4155,7 +4379,12 @@ export default function SpisRzeczywisty() {
                 </Button>
               </div>
             </div>
-            {reportErpSnapshotMigrationRequired ? (
+            <p className="text-xs text-dim">Dla detali w sztukach kolumna „dysp.” uwzględnia pozycje z koszyka mielenia. Oryginalny import ERP pozostaje bez zmian.</p>
+            {isGrindTasksError ? (
+              <p className="text-sm text-danger">Nie udało się pobrać rezerwacji mielenia. Odśwież raport przed sprawdzeniem dostępności ERP.</p>
+            ) : isGrindTasksLoading ? (
+              <p className="text-sm text-dim">Wczytywanie rezerwacji mielenia...</p>
+            ) : reportErpSnapshotMigrationRequired ? (
               <p className="text-sm text-dim">
                 Brakuje migracji bazy dla stanów ERP. Uruchom SQL z `supabase/setup_full.sql`.
               </p>
@@ -4223,7 +4452,7 @@ export default function SpisRzeczywisty() {
                   {isReportFullscreenActive && grindDialogMaterial && (
                     <div className="fixed inset-0 z-50">
                       <div className="absolute inset-0 bg-[var(--scrim)]" onClick={closeGrindDialog} />
-                      <div className="fixed left-1/2 top-1/2 z-10 w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[rgba(255,122,26,0.35)] bg-[var(--surface-1)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55),inset_0_1px_0_var(--inner-highlight)]">
+                      <div className="fixed left-1/2 top-1/2 z-10 max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-[rgba(255,122,26,0.35)] bg-[var(--surface-1)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55),inset_0_1px_0_var(--inner-highlight)]">
                         <button
                           type="button"
                           onClick={closeGrindDialog}
@@ -4243,12 +4472,12 @@ export default function SpisRzeczywisty() {
                           </div>
                           <div>
                             <label className="text-xs uppercase tracking-wide text-dim">
-                              Ile kg do wpisania
+                              Ile {isPieceGrindingUnit(grindDialogMaterial.unit) ? 'sztuk' : 'kg'} do wpisania
                             </label>
                             <Input
                               value={grindQty}
                               onChange={(event) => setGrindQty(event.target.value)}
-                              inputMode="decimal"
+                              inputMode={isPieceGrindingUnit(grindDialogMaterial.unit) ? 'numeric' : 'decimal'}
                               placeholder="np. 20"
                               className="mt-1 min-h-[54px] text-xl font-black"
                               aria-invalid={Boolean(grindQtyLimitMessage)}
@@ -4292,9 +4521,25 @@ export default function SpisRzeczywisty() {
                               </span>
                             </Button>
                           </div>
+                          {isGrindDialogDetail && (
+                            <div className="rounded-xl border border-[rgba(255,122,26,0.35)] bg-[rgba(255,122,26,0.07)] p-3 text-sm">
+                              <p className="font-bold text-brand">Szacowana masa przemiału</p>
+                              {isGrindingTechnologyLoading ? <p className="mt-1 text-dim">Wczytywanie technologii...</p>
+                                : isGrindingTechnologyError ? <p className="mt-1 text-danger">Nie udało się wczytać biblioteki technologii.</p>
+                                : grindDialogMass?.status === 'ready' ? (
+                                  <p className="mt-1 font-semibold text-title">
+                                    {formatGrindKg(grindDialogMass.kgPerPiece * 1000)} g/szt.
+                                    {parsedGrindQty !== null && Number.isSafeInteger(parsedGrindQty) && parsedGrindQty > 0
+                                      ? ` × ${formatQty(parsedGrindQty)} szt. = około ${formatGrindKg(grindDialogMass.kgPerPiece * parsedGrindQty)} kg`
+                                      : ''}
+                                  </p>
+                                ) : <p className="mt-1 text-dim">{grindingMassUnavailableLabel(grindDialogMass ?? { status: 'not-found' })}</p>}
+                              <p className="mt-1 text-xs text-dim">Szacunek z receptury tworzywa i barwnika, nie pomiar uzysku z młyna.</p>
+                            </div>
+                          )}
                           <div>
                             <label className="text-xs uppercase tracking-wide text-dim">
-                              Na jaka kartoteke zmielic
+                              {isGrindDialogDetail ? 'Na jaki przemiał zmielić detal' : 'Na jaką kartotekę zmielić'}
                             </label>
                             <div className="relative mt-1">
                               <Input
@@ -4307,7 +4552,7 @@ export default function SpisRzeczywisty() {
                                 onBlur={() => {
                                   setTimeout(() => setShowGrindTargetSuggestions(false), 120);
                                 }}
-                                placeholder="np. PRZEMIAL PP MIX"
+                                placeholder="np. PRZEMIAŁ PP MIX"
                                 className="min-h-[54px] font-semibold"
                               />
                               {showGrindTargetSuggestions && grindTargetSuggestions.length > 0 && (
@@ -4353,7 +4598,11 @@ export default function SpisRzeczywisty() {
             <p className="text-xs font-semibold uppercase tracking-wide text-dim">
               Porównanie bieżące ERP vs Spis
             </p>
-            {reportErpSnapshotMigrationRequired ? (
+            {isGrindTasksError ? (
+              <p className="text-sm text-danger">Nie udało się pobrać rezerwacji mielenia.</p>
+            ) : isGrindTasksLoading ? (
+              <p className="text-sm text-dim">Wczytywanie rezerwacji mielenia...</p>
+            ) : reportErpSnapshotMigrationRequired ? (
               <p className="text-sm text-dim">
                 Brakuje migracji bazy dla stanów ERP. Uruchom SQL z `supabase/setup_full.sql`.
               </p>
@@ -4508,9 +4757,9 @@ export default function SpisRzeczywisty() {
             </Card>
           ) : erpSnapshotMigrationRequired ? (
             <Card><p className="text-sm text-danger">Brakuje migracji bazy dla stanów ERP. Uruchom SQL z `supabase/setup_full.sql`.</p></Card>
-          ) : isErpSnapshotError ? (
-            <Card><p className="text-sm text-danger">Nie udało się pobrać stanów ERP. Spróbuj ponownie za chwilę.</p></Card>
-          ) : isErpSnapshotLoading || isLoading ? (
+          ) : isErpSnapshotError || isGrindTasksError ? (
+            <Card><p className="text-sm text-danger">Nie udało się pobrać stanów ERP lub rezerwacji mielenia. Spróbuj ponownie za chwilę.</p></Card>
+          ) : isErpSnapshotLoading || isLoading || isGrindTasksLoading ? (
             <Card><p className="text-sm text-dim">Wczytywanie stanów ERP i spisu...</p></Card>
           ) : erpSnapshotEntries.length === 0 ? (
             <Card><p className="text-sm text-dim">Brak snapshotu ERP dla wybranego dnia. Wgraj go w zakładce „Stany ERP”.</p></Card>
@@ -4595,17 +4844,45 @@ export default function SpisRzeczywisty() {
                   Do zmielenia
                 </p>
                 <p className="text-sm text-dim">
-                  Prosta lista pozycji dodanych z raportu.
+                  Pozycje dodane z raportu. Detale w sztukach rezerwują stan do dyspozycji w aplikacji.
                 </p>
               </div>
               <div className="rounded-lg bg-white/6 px-3 py-1.5 text-sm font-semibold text-title">
                 Aktywne dokumenty: {pendingGrindDocuments.length}
               </div>
             </div>
+            <div className="grid grid-cols-2 gap-2" role="group" aria-label="Rodzaj pozycji do zmielenia">
+              <button
+                type="button"
+                aria-pressed={grindKind === 'materials'}
+                onClick={() => setGrindKind('materials')}
+                className={cn('rounded-xl border px-4 py-3 text-sm font-bold transition', grindKind === 'materials' ? 'border-brand bg-[rgba(255,122,26,0.16)] text-brand' : 'border-border text-dim hover:text-title')}
+              >
+                Tworzywa / barwniki · kg
+              </button>
+              <button
+                type="button"
+                aria-pressed={grindKind === 'details'}
+                onClick={() => setGrindKind('details')}
+                className={cn('rounded-xl border px-4 py-3 text-sm font-bold transition', grindKind === 'details' ? 'border-brand bg-[rgba(255,122,26,0.16)] text-brand' : 'border-border text-dim hover:text-title')}
+              >
+                Detale · szt.
+              </button>
+            </div>
+            {grindKind === 'details' && (
+              <>
+                <p className="text-xs text-dim">
+                  Rezerwacja pomniejsza dostępność ERP tylko w aplikacji. Szacowana masa wynika z aktualnej technologii bazowej, nie z pomiaru uzysku.
+                </p>
+                <datalist id="grind-target-material-options">
+                  {grindTargetOptions.map((option) => <option key={option} value={option} />)}
+                </datalist>
+              </>
+            )}
 
             {pendingGrindDocuments.length === 0 ? (
               <p className="rounded-xl bg-white/5 p-4 text-sm text-dim">
-                Brak pozycji do zmielenia.
+                  Brak {grindKind === 'details' ? 'detali' : 'tworzyw'} do zmielenia.
               </p>
             ) : (
               <div className="space-y-3">
@@ -4614,56 +4891,173 @@ export default function SpisRzeczywisty() {
                     key={document.key}
                     className="rounded-2xl border border-[var(--table-frame-border)] bg-[image:var(--table-card-bg)] p-4 shadow-[var(--table-card-shadow)]"
                   >
-                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_150px] md:items-center">
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
-                          Dokument #{index + 1}
-                        </p>
-                        <h3 className="mt-1 break-words text-lg font-black text-brand">
-                          {document.targetMaterialName}
-                        </h3>
-                        <p className="mt-1 text-xs text-dim">
-                          {document.tasks.length} poz. | limit dokumentu 500 kg
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">
-                          Suma
-                        </p>
-                        <p className="text-2xl font-black text-title">
-                          {formatQty(document.totalQty)} kg
-                        </p>
-                      </div>
-                      <Button
-                        onClick={() =>
-                          completeGrindDocumentMutation.mutate(document.tasks.map((task) => task.id))
-                        }
-                        disabled={readOnly || completeGrindDocumentMutation.isPending}
-                        className="w-full bg-[var(--success)] text-bg hover:bg-[var(--success)]"
+                    {grindKind === 'details' ? (
+                      <button
+                        type="button"
+                        aria-expanded={Boolean(expandedGrindDocumentKeys[document.key])}
+                        onClick={() => setExpandedGrindDocumentKeys((current) => ({
+                          ...current,
+                          [document.key]: !current[document.key],
+                        }))}
+                        className="flex w-full items-center justify-between gap-4 rounded-xl text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand"
                       >
-                        Zmielone
-                      </Button>
-                    </div>
-                    <div className="mt-4 overflow-hidden rounded-xl border border-border">
-                      {document.tasks.map((task) => (
+                        <span className="min-w-0">
+                          <span className="block text-[10px] font-semibold uppercase tracking-wide text-dim">Dokument #{index + 1}</span>
+                          <span className="mt-1 block break-words text-lg font-black text-brand">
+                            {isMissingDetailGrindTarget(document.tasks[0])
+                              ? 'Nie wybrano docelowego przemiału'
+                              : `Przemiał: ${document.targetMaterialName}`}
+                          </span>
+                        </span>
+                        <span className="flex shrink-0 items-center gap-3">
+                          <span className="text-2xl font-black text-title">{formatQty(document.totalQty)} szt.</span>
+                          {expandedGrindDocumentKeys[document.key]
+                            ? <ChevronUp className="h-5 w-5 text-dim" aria-hidden="true" />
+                            : <ChevronDown className="h-5 w-5 text-dim" aria-hidden="true" />}
+                        </span>
+                      </button>
+                    ) : (
+                      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_150px] md:items-center">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">Dokument #{index + 1}</p>
+                          <h3 className="mt-1 break-words text-lg font-black text-brand">{document.targetMaterialName}</h3>
+                          <p className="mt-1 text-xs text-dim">{document.tasks.length} poz. | limit dokumentu 500 kg</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-dim">Suma</p>
+                          <p className="text-2xl font-black text-title">{formatQty(document.totalQty)} kg</p>
+                        </div>
+                        <Button
+                          onClick={() => completeGrindDocumentMutation.mutate(document.tasks.map((task) => task.id))}
+                          disabled={readOnly || completeGrindDocumentMutation.isPending}
+                          className="w-full bg-[var(--success)] text-bg hover:bg-[var(--success)]"
+                        >
+                          Zmielone
+                        </Button>
+                      </div>
+                    )}
+                    {grindKind === 'details' && expandedGrindDocumentKeys[document.key] && (
+                      <div className="mt-4 flex flex-wrap items-center gap-3">
+                        <p className="min-w-0 flex-1 text-xs font-semibold text-brand">
+                          {isGrindingTechnologyLoading ? 'Wczytywanie technologii...'
+                            : isGrindingTechnologyError ? 'Nie udało się wczytać technologii.'
+                            : grindDocumentEstimatedKg(document.tasks) !== null
+                              ? `Szacowany przemiał: ${formatGrindKg(grindDocumentEstimatedKg(document.tasks)!)} kg`
+                              : 'Masa nieustalona dla wszystkich detali'}
+                        </p>
+                        {!isMissingDetailGrindTarget(document.tasks[0]) && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={readOnly || updateGrindTargetMutation.isPending}
+                            onClick={() => {
+                              if (editingGrindDocumentKeys[document.key]) {
+                                setGrindDocumentTargetDrafts((current) => {
+                                  const next = { ...current };
+                                  delete next[document.key];
+                                  return next;
+                                });
+                              }
+                              setEditingGrindDocumentKeys((current) => ({
+                                ...current,
+                                [document.key]: !current[document.key],
+                              }));
+                            }}
+                            className="w-full sm:w-auto"
+                          >
+                            <PencilLine className="mr-1 h-4 w-4" aria-hidden="true" />
+                            {editingGrindDocumentKeys[document.key] ? 'Anuluj zmianę' : 'Zmień przemiał'}
+                          </Button>
+                        )}
+                        <Button
+                          onClick={() => completeGrindDocumentMutation.mutate(document.tasks.map((task) => task.id))}
+                          disabled={readOnly || completeGrindDocumentMutation.isPending || document.tasks.some(isMissingDetailGrindTarget)}
+                          className="w-full bg-[var(--success)] text-bg hover:bg-[var(--success)] sm:w-auto sm:min-w-[150px]"
+                        >
+                          Zmielone
+                        </Button>
+                      </div>
+                    )}
+                    {grindKind === 'details' && expandedGrindDocumentKeys[document.key] &&
+                      (isMissingDetailGrindTarget(document.tasks[0]) || editingGrindDocumentKeys[document.key]) && (
+                      <div className="mt-4 rounded-xl border border-[rgba(255,122,26,0.3)] bg-[rgba(255,122,26,0.06)] p-3">
+                        <label className="text-xs font-bold uppercase tracking-wide text-brand" htmlFor={`grind-target-${index}`}>
+                          Docelowy przemiał dla tego dokumentu
+                        </label>
+                        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                          <Input
+                            id={`grind-target-${index}`}
+                            list="grind-target-material-options"
+                            value={grindDocumentTargetDrafts[document.key] ?? (isMissingDetailGrindTarget(document.tasks[0]) ? '' : document.targetMaterialName)}
+                            onChange={(event) => setGrindDocumentTargetDrafts((current) => ({ ...current, [document.key]: event.target.value }))}
+                            placeholder="Wybierz lub wpisz nazwę przemiału"
+                            className="min-h-[44px] flex-1 font-semibold"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={readOnly || updateGrindTargetMutation.isPending}
+                            onClick={() => {
+                              const targetMaterialName = (grindDocumentTargetDrafts[document.key] ?? (isMissingDetailGrindTarget(document.tasks[0]) ? '' : document.targetMaterialName)).trim();
+                              if (!targetMaterialName || document.tasks.some((task) => normalizeCatalogNameKey(targetMaterialName) === normalizeCatalogNameKey(task.materialName))) {
+                                toast({ title: 'Wybierz przemiał inny niż nazwa detalu.', tone: 'error' });
+                                return;
+                              }
+                              updateGrindTargetMutation.mutate({ ids: document.tasks.map((task) => task.id), targetMaterialName });
+                            }}
+                            className="min-h-[44px]"
+                          >
+                            Zapisz przemiał
+                          </Button>
+                        </div>
+                        {document.tasks.some(isMissingDetailGrindTarget) && (
+                          <p className="mt-2 text-xs font-semibold text-brand">Pozycje z wcześniejszego koszyka wymagają przypisania przemiału przed oznaczeniem jako zmielone.</p>
+                        )}
+                      </div>
+                    )}
+                    {(grindKind === 'materials' || expandedGrindDocumentKeys[document.key]) && <div className="mt-4 overflow-hidden rounded-xl border border-border">
+                      {(grindKind === 'details'
+                        ? groupGrindingTasksByMaterial(document.tasks, normalizeCatalogNameKey)
+                        : document.tasks.map((task) => ({ key: task.id, qty: task.qty, tasks: [task] }))
+                      ).map((group) => (
                         <div
-                          key={task.id}
-                          className="grid gap-2 border-t border-border px-3 py-2 first:border-t-0 md:grid-cols-[minmax(0,1fr)_120px]"
+                          key={group.key}
+                            className="grid gap-2 border-t border-border px-3 py-2 first:border-t-0 md:grid-cols-[minmax(0,1fr)_120px_auto] md:items-center"
                         >
                           <div className="min-w-0">
                             <p className="break-words text-sm font-semibold text-title">
-                              {task.materialName}
+                              {group.tasks[0].materialName}
                             </p>
+                            {grindKind === 'details' && grindIdentifiersByName.get(normalizeCatalogNameKey(group.tasks[0].materialName))?.map((identifiers) => (
+                              <p key={`${identifiers.indexCode2 ?? ''}|${identifiers.code ?? ''}`} className="mt-1 break-all text-xs text-dim">
+                                {identifiers.indexCode2 && <>Indeks 2: <span className="font-semibold text-title">{identifiers.indexCode2}</span></>}
+                                {identifiers.indexCode2 && identifiers.code && ' · '}
+                                {identifiers.code && <>Kod: <span className="font-semibold text-title">{identifiers.code}</span></>}
+                              </p>
+                            ))}
                             <p className="text-xs text-dim">
-                              Dodal: {task.createdBy}
+                              Dodał: {[...new Set(group.tasks.map((task) => task.createdBy))].join(', ')}
                             </p>
+                            {grindKind === 'details' && <p className="mt-1 text-xs font-semibold text-brand">{grindTaskMassLabel({ ...group.tasks[0], qty: group.qty })}</p>}
                           </div>
                           <p className="font-black text-brand md:text-right">
-                            {formatQty(task.qty)} {task.unit}
+                            {formatQty(group.qty)} {grindKind === 'details' ? 'szt.' : group.tasks[0].unit}
                           </p>
+                          {grindKind === 'details' && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => removeGrindTaskMutation.mutate(group.tasks.map((task) => task.id))}
+                              disabled={readOnly || removeGrindTaskMutation.isPending}
+                              className="w-full md:w-auto"
+                              aria-label={`Usuń ${formatQty(group.qty)} szt. ${group.tasks[0].materialName} z koszyka`}
+                            >
+                              <Trash2 className="mr-1 h-4 w-4" aria-hidden="true" /> Usuń {formatQty(group.qty)} szt.
+                            </Button>
+                          )}
                         </div>
                       ))}
-                    </div>
+                    </div>}
                   </div>
                 ))}
               </div>
@@ -4683,7 +5077,11 @@ export default function SpisRzeczywisty() {
                   >
                     <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_170px_170px] md:items-center">
                       <div>
-                        <p className="font-black text-success">{document.targetMaterialName}</p>
+                        <p className="font-black text-success">
+                          {grindKind === 'details' && !isMissingDetailGrindTarget(document.tasks[0])
+                            ? `Przemiał: ${document.targetMaterialName}`
+                            : document.targetMaterialName}
+                        </p>
                         <p className="text-xs text-dim">
                           Zmielone:{' '}
                           {document.completedAt
@@ -4693,7 +5091,10 @@ export default function SpisRzeczywisty() {
                         </p>
                       </div>
                       <p className="font-black text-success md:text-right">
-                        {formatQty(document.totalQty)} kg
+                        {formatQty(document.totalQty)} {grindKind === 'details' ? 'szt.' : 'kg'}
+                        {grindKind === 'details' && !isGrindingTechnologyLoading && !isGrindingTechnologyError && grindDocumentEstimatedKg(document.tasks) !== null && (
+                          <span className="block text-xs">około {formatGrindKg(grindDocumentEstimatedKg(document.tasks)!)} kg</span>
+                        )}
                       </p>
                       <Button
                         variant="outline"
@@ -4707,14 +5108,27 @@ export default function SpisRzeczywisty() {
                       </Button>
                     </div>
                     <div className="mt-3 space-y-1 border-t border-[rgba(34,197,94,0.18)] pt-3">
-                      {document.tasks.map((task) => (
+                      {(grindKind === 'details'
+                        ? groupGrindingTasksByMaterial(document.tasks, normalizeCatalogNameKey)
+                        : document.tasks.map((task) => ({ key: task.id, qty: task.qty, tasks: [task] }))
+                      ).map((group) => (
                         <div
-                          key={task.id}
+                          key={group.key}
                           className="grid gap-1 text-xs md:grid-cols-[minmax(0,1fr)_100px]"
                         >
-                          <span className="break-words text-title">{task.materialName}</span>
+                          <span className="break-words text-title">
+                            {group.tasks[0].materialName}
+                            {grindKind === 'details' && grindIdentifiersByName.get(normalizeCatalogNameKey(group.tasks[0].materialName))?.map((identifiers) => (
+                              <span key={`${identifiers.indexCode2 ?? ''}|${identifiers.code ?? ''}`} className="mt-1 block break-all text-[10px] text-dim">
+                                {identifiers.indexCode2 && <>Indeks 2: {identifiers.indexCode2}</>}
+                                {identifiers.indexCode2 && identifiers.code && ' · '}
+                                {identifiers.code && <>Kod: {identifiers.code}</>}
+                              </span>
+                            ))}
+                          </span>
                           <span className="font-semibold text-success md:text-right">
-                            {formatQty(task.qty)} {task.unit}
+                            {formatQty(group.qty)} {grindKind === 'details' ? 'szt.' : group.tasks[0].unit}
+                            {grindKind === 'details' && <span className="block text-[10px] text-dim">{grindTaskMassLabel({ ...group.tasks[0], qty: group.qty })}</span>}
                           </span>
                         </div>
                       ))}
@@ -4730,7 +5144,7 @@ export default function SpisRzeczywisty() {
       {!isReportFullscreenActive && grindDialogMaterial && (
         <div className="fixed inset-0 z-50">
           <div className="absolute inset-0 bg-[var(--scrim)]" onClick={closeGrindDialog} />
-          <div className="fixed left-1/2 top-[84dvh] z-10 w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[rgba(255,122,26,0.35)] bg-[var(--surface-1)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55),inset_0_1px_0_var(--inner-highlight)]">
+          <div className="fixed left-1/2 top-1/2 z-10 max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-[rgba(255,122,26,0.35)] bg-[var(--surface-1)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55),inset_0_1px_0_var(--inner-highlight)]">
             <button
               type="button"
               onClick={closeGrindDialog}
@@ -4750,12 +5164,12 @@ export default function SpisRzeczywisty() {
               </div>
               <div>
                 <label className="text-xs uppercase tracking-wide text-dim">
-                  Ile kg do wpisania
+                  Ile {isPieceGrindingUnit(grindDialogMaterial.unit) ? 'sztuk' : 'kg'} do wpisania
                 </label>
                 <Input
                   value={grindQty}
                   onChange={(event) => setGrindQty(event.target.value)}
-                  inputMode="decimal"
+                  inputMode={isPieceGrindingUnit(grindDialogMaterial.unit) ? 'numeric' : 'decimal'}
                   placeholder="np. 20"
                   className="mt-1 min-h-[54px] text-xl font-black"
                   aria-invalid={Boolean(grindQtyLimitMessage)}
@@ -4799,9 +5213,25 @@ export default function SpisRzeczywisty() {
                   </span>
                 </Button>
               </div>
+              {isGrindDialogDetail && (
+                <div className="rounded-xl border border-[rgba(255,122,26,0.35)] bg-[rgba(255,122,26,0.07)] p-3 text-sm">
+                  <p className="font-bold text-brand">Szacowana masa przemiału</p>
+                  {isGrindingTechnologyLoading ? <p className="mt-1 text-dim">Wczytywanie technologii...</p>
+                    : isGrindingTechnologyError ? <p className="mt-1 text-danger">Nie udało się wczytać biblioteki technologii.</p>
+                    : grindDialogMass?.status === 'ready' ? (
+                      <p className="mt-1 font-semibold text-title">
+                        {formatGrindKg(grindDialogMass.kgPerPiece * 1000)} g/szt.
+                        {parsedGrindQty !== null && Number.isSafeInteger(parsedGrindQty) && parsedGrindQty > 0
+                          ? ` × ${formatQty(parsedGrindQty)} szt. = około ${formatGrindKg(grindDialogMass.kgPerPiece * parsedGrindQty)} kg`
+                          : ''}
+                      </p>
+                    ) : <p className="mt-1 text-dim">{grindingMassUnavailableLabel(grindDialogMass ?? { status: 'not-found' })}</p>}
+                  <p className="mt-1 text-xs text-dim">Szacunek z receptury tworzywa i barwnika, nie pomiar uzysku z młyna.</p>
+                </div>
+              )}
               <div>
                 <label className="text-xs uppercase tracking-wide text-dim">
-                  Na jaka kartoteke zmielic
+                  {isGrindDialogDetail ? 'Na jaki przemiał zmielić detal' : 'Na jaką kartotekę zmielić'}
                 </label>
                 <div className="relative mt-1">
                   <Input
@@ -4814,7 +5244,7 @@ export default function SpisRzeczywisty() {
                     onBlur={() => {
                       setTimeout(() => setShowGrindTargetSuggestions(false), 120);
                     }}
-                    placeholder="np. PRZEMIAL PP MIX"
+                    placeholder="np. PRZEMIAŁ PP MIX"
                     className="min-h-[54px] font-semibold"
                   />
                   {showGrindTargetSuggestions && grindTargetSuggestions.length > 0 && (

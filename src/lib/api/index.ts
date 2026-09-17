@@ -665,6 +665,17 @@ export const addOriginalInventoryGrindTask = async (payload: {
   sourceReportDate?: string;
 }): Promise<OriginalInventoryGrindTask> => appRequest('addOriginalInventoryGrindTask', payload);
 
+export const removeOriginalInventoryGrindTask = async (id: string): Promise<string> =>
+  appRequest('removeOriginalInventoryGrindTask', { id });
+
+export const removeOriginalInventoryGrindTasks = async (ids: string[]): Promise<string[]> =>
+  appRequest('removeOriginalInventoryGrindTasks', { ids });
+
+export const updateOriginalInventoryGrindTaskTargets = async (payload: {
+  ids: string[];
+  targetMaterialName: string;
+}): Promise<OriginalInventoryGrindTask[]> => appRequest('updateOriginalInventoryGrindTaskTargets', payload);
+
 export const completeOriginalInventoryGrindTask = async (
   id: string
 ): Promise<OriginalInventoryGrindTask> =>
