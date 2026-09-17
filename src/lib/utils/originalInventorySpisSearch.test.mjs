@@ -74,6 +74,24 @@ test('spis search still matches names and normalized index 2 formatting', () => 
   assert.equal(matchesOriginalInventorySpisSearch('m-1-tw', 'TARNOFORM 300', '5032-00'), false);
 });
 
+test('spis suggestions exclude FW forms without losing material matches by index 2', () => {
+  const suggestions = [
+    { name: 'FW - ABS STAREX', indexCode: 'FW-8178', indexCode2: '8178' },
+    { name: 'FORMA STAREX', indexCode: 'M-1-FW-8178', indexCode2: '8178' },
+    { name: 'FORMA W MAGAZYNIE FW', warehouseCode: 'FW', indexCode2: '8178' },
+    { name: 'ABS STAREX AS 0151', indexCode: 'M-1-TW-RSHWR-8178', indexCode2: '8178' }
+  ];
+
+  assert.deepEqual(
+    searchOriginalInventorySpisSuggestions(suggestions, '8178', [], 8).map((item) => item.name),
+    ['ABS STAREX AS 0151']
+  );
+  assert.deepEqual(
+    searchOriginalInventorySpisSuggestions(suggestions, 'starex', [], 8).map((item) => item.name),
+    ['ABS STAREX AS 0151']
+  );
+});
+
 test('only a real space combines independent search fragments', () => {
   assert.equal(
     matchesOriginalInventorySpisSearch('rozm.6', 'KARTON 600X400X300 Z NADR. ROZM.6', '758-001'),
@@ -163,7 +181,7 @@ test('server-sized spis suggestions keep matching, priorities and the result lim
   );
 });
 
-test('choosing a spis suggestion commits its full name before quantity focus blurs the search field', () => {
+test('spis suggestions commit the full name on selection and allow touch scrolling', () => {
   const pageFile = fileURLToPath(new URL('../../components/planowanie-zapotrzebowania/SpisRzeczywisty.tsx', import.meta.url));
   const page = readFileSync(pageFile, 'utf8');
   const search = page.slice(
@@ -174,5 +192,9 @@ test('choosing a spis suggestion commits its full name before quantity focus blu
   assert.match(search, /const queryRef = useRef\(value\)/);
   assert.match(search, /const chooseSuggestion = [\s\S]*?queryRef\.current = suggestion\.name;[\s\S]*?onSelect\(suggestion\)/);
   assert.match(search, /onBlur=\{\(\) => \{\s*onCommit\(queryRef\.current\)/);
-  assert.match(search, /onPointerDown=\{\(event\) => \{\s*event\.preventDefault\(\);\s*chooseSuggestion\(suggestion\)/);
+  const suggestionRow = search.slice(search.indexOf('suggestions.map((suggestion)'), search.indexOf('{remoteResultsPending && ('));
+  assert.match(search, /max-h-64[^"\n]*touch-pan-y[^"\n]*overflow-y-auto/);
+  assert.match(suggestionRow, /onMouseDown=\{\(event\) => \{\s*event\.preventDefault\(\);\s*chooseSuggestion\(suggestion\)/);
+  assert.match(suggestionRow, /onClick=\{\(\) => chooseSuggestion\(suggestion\)\}/);
+  assert.doesNotMatch(suggestionRow, /onPointerDown/);
 });

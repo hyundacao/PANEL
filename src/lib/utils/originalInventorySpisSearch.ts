@@ -41,6 +41,11 @@ type OriginalInventorySpisSuggestion = {
   indexCode2?: string | null;
 };
 
+const isFormSuggestion = (item: OriginalInventorySpisSuggestion) =>
+  [item.name, item.warehouseCode, item.indexCode, item.indexCode2].some((value) =>
+    /(^|[\s(/_-])fwp?(?=$|[\s/_-]|\d)/i.test(String(value ?? ''))
+  );
+
 const getOriginalInventorySpisIdentityKey = (item: OriginalInventorySpisSuggestion) =>
   `${normalizeSearchText(item.name)}|${String(item.warehouseCode ?? '').trim().toUpperCase()}`;
 
@@ -106,7 +111,7 @@ export const searchOriginalInventorySpisSuggestions = <T extends OriginalInvento
   const safeLimit = Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 8));
   const matches = dedupeOriginalInventorySpisSuggestions(
     suggestions.filter((item) =>
-      matchesOriginalInventorySpisSearch(query, item.name, item.indexCode2)
+      !isFormSuggestion(item) && matchesOriginalInventorySpisSearch(query, item.name, item.indexCode2)
     )
   );
   const namesWithWarehouseVariant = new Set(

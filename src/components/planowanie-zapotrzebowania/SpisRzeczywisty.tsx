@@ -701,12 +701,12 @@ const OriginalInventoryNameSearch = ({
       )}
 
       {showSuggestions && (suggestions.length > 0 || remoteResultsPending) && (
-        <div className="absolute z-20 mt-2 w-full rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+        <div className="absolute z-20 mt-2 max-h-64 w-full touch-pan-y overflow-y-auto overscroll-contain rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
           {suggestions.map((suggestion) => (
             <button
               key={`${suggestion.name}|${suggestion.warehouseCode ?? ''}|${suggestion.indexCode2 ?? ''}`}
               type="button"
-              onPointerDown={(event) => {
+              onMouseDown={(event) => {
                 event.preventDefault();
                 chooseSuggestion(suggestion);
               }}
