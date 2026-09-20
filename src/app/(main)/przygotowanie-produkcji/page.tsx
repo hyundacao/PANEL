@@ -16,7 +16,6 @@ import { PersonalTasksPanel } from '@/components/production-preparation/Personal
 import { RecurringTasksSettings } from '@/components/production-preparation/RecurringTasksSettings';
 import { TeamCommentsSettings } from '@/components/production-preparation/TeamCommentsSettings';
 import type { PreparationMaterialAccess } from '@/lib/api/types';
-import { isHeadAdmin } from '@/lib/auth/access';
 import { useUiStore } from '@/lib/store/ui';
 import { defaultTeamComments, normalizeTeamComments, productionMetricsForTask, teamCommentForTask, type ProductionTeam, type TeamComment, type TeamComments } from '@/lib/utils/productionTeamComments';
 import { cn } from '@/lib/utils/cn';
@@ -2269,7 +2268,6 @@ export default function PrzygotowanieProdukcjiPage() {
                 <section className="rounded-lg border border-[rgba(47,181,240,0.35)] bg-[rgba(47,181,240,0.07)] p-4"><p className="font-semibold text-title">Wykonawca</p><p className="mt-1 text-sm text-dim">Ma podgląd własnych sekcji i może wyłącznie oznaczyć przypisane zadanie jako wykonane albo cofnąć potwierdzenie.</p></section>
               </div>
               <section className="border-t border-border pt-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Dostępne sekcje</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{teamOptions.map((team) => <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-bg px-3 py-2.5" key={team.id}><span className="text-sm font-semibold" style={{ color: team.color }}>{team.label}</span></div>)}</div></section>
-              {isHeadAdmin(currentUser) ? <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between"><p className="text-sm text-dim">Konta i przypisania sekcji edytujesz w centralnym panelu użytkowników.</p><Button className="min-h-10 shrink-0 px-4" onClick={() => router.push('/admin')} type="button" variant="outline"><ShieldCheck className="mr-2 h-4 w-4" />Otwórz zarządzanie kontami</Button></div> : <p className="border-t border-border pt-4 text-sm text-dim">Zmianę kont i przypisanych sekcji wykonuje Head admin w centralnym panelu użytkowników.</p>}
             </div>
           </ManagementSection>
         </TabsContent>

@@ -64,7 +64,9 @@ import {
   type PlanQuantityStatus,
   type PlanSourceFields
 } from '@/lib/planowanie-zapotrzebowania/planImport';
-import { isHeadAdmin, isReadOnly } from '@/lib/auth/access';
+import { isHeadAdmin, isReadOnly, isWarehouseAdmin } from '@/lib/auth/access';
+import { normalizePalletSets, type PalletSet } from '@/lib/planowanie-zapotrzebowania/palletSets';
+import PalletSetSettings from '@/components/planowanie-zapotrzebowania/PalletSetSettings';
 import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
 import type {
@@ -113,7 +115,7 @@ type View =
   | 'obliczenia'
   | 'instrukcja';
 
-type SettingsSection = 'devices' | 'areas';
+type SettingsSection = 'devices' | 'areas' | 'pallets';
 
 type MaterialCategory =
   | 'Tworzywo'
@@ -367,6 +369,7 @@ type AppState = {
   areas: Area[];
   stationMappings: StationMapping[];
   fixedDevices: FixedInventoryDevice[];
+  palletSets: PalletSet[];
   selectedPlanDate: string;
   activePlanVersionId: string;
   technologies: Technology[];
@@ -964,6 +967,7 @@ const demoState = (): AppState => {
       { station: 'LAKIERNIA', areaId: 'lakiernia' }
     ],
     fixedDevices: [],
+    palletSets: [],
     technologies: [
       {
         id: baseTechId,
@@ -1255,6 +1259,7 @@ const parseStoredState = (value: unknown): AppState | null => {
     areas: mergeAreas(storedAreas),
     stationMappings,
     fixedDevices: normalizeFixedInventoryDevices(record.fixedDevices),
+    palletSets: normalizePalletSets(record.palletSets),
     technologies,
     selectedPlanDate,
     activePlanVersionId: latestPlanVersion(planVersions, selectedPlanDate)?.id ?? '',
@@ -1834,7 +1839,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   const view: View = requestedView && ['plan', 'technologie', 'spis', 'dokument', 'zwroty', 'ustawienia'].includes(requestedView)
     ? requestedView as View
     : 'plan';
-  const settingsSection: SettingsSection | null = requestedSettingsSection === 'devices' || requestedSettingsSection === 'areas'
+  const settingsSection: SettingsSection | null = requestedSettingsSection === 'devices' || requestedSettingsSection === 'areas' || requestedSettingsSection === 'pallets'
     ? requestedSettingsSection
     : null;
   const {
@@ -5215,7 +5220,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   );
 
   const renderSettingsOverview = () => <div className="space-y-5">
-    {renderHeader('Ustawienia modułu', 'Konfiguracja stałych urządzeń hali oraz przypisań stanowisk do obszarów produkcyjnych.')}
+    {renderHeader('Ustawienia modułu', 'Urządzenia, zestawy paletowe i obszary produkcyjne.')}
     <div className="grid gap-4 md:grid-cols-2">
       <button
         type="button"
@@ -5261,6 +5266,11 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             </span>
           </span>
         </span>
+      </button>
+      <button type="button" aria-label="Otwórz ustawienia zestawów paletowych" onClick={() => openSettingsSection('pallets')}
+        className="planning-settings-card group flex min-h-[164px] flex-col justify-between gap-6 rounded-lg border border-border bg-surface p-5 text-left transition hover:border-brand">
+        <span className="flex w-full items-center justify-between"><PackageCheck className="h-6 w-6 text-brand" /><ChevronRight className="h-5 w-5 text-muted" /></span>
+        <span><span className="block text-lg font-black text-title">Zestawy paletowe</span><span className="mt-3 block text-xs font-bold uppercase text-muted">Zestawy: {state.palletSets.length} · Aktywne: {state.palletSets.filter((set) => set.active).length}</span></span>
       </button>
     </div>
   </div>;
@@ -5422,6 +5432,12 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   };
 
   const renderSettings = () => {
+    if (settingsSection === 'pallets') return <div className="space-y-5">
+      {renderSettingsBack()}
+      {renderHeader('Zestawy paletowe', '')}
+      <PalletSetSettings sets={state.palletSets} readOnly={readOnly || !isWarehouseAdmin(user, 'PLANOWANIE_ZAPOTRZEBOWANIA')}
+        onChange={(palletSets) => updateState((current) => ({ ...current, palletSets }))} />
+    </div>;
     if (settingsSection === 'devices') return renderDeviceSettings();
     if (settingsSection === 'areas') return renderAreaSettings();
     return renderSettingsOverview();

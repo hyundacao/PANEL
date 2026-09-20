@@ -25,8 +25,6 @@ import { SearchInput } from '@/components/ui/SearchInput';
 import {
   canSeeTab,
   getAccessibleWarehouses,
-  getAdminWarehouses,
-  hasAnyAdminAccess,
   isHeadAdmin
 } from '@/lib/auth/access';
 import type { WarehouseKey, WarehouseTab } from '@/lib/api/types';
@@ -254,8 +252,7 @@ export default function WarehousesPage() {
     if (!item.requiredTabs || item.requiredTabs.length === 0) return true;
     return item.requiredTabs.some((tab) => canSeeTab(user, item.key, tab));
   });
-  const adminWarehouses = getAdminWarehouses(user);
-  const adminVisible = hasAnyAdminAccess(user);
+  const adminVisible = isHeadAdmin(user);
   const needle = normalize(search);
 
   const filteredModules = !needle
@@ -282,11 +279,8 @@ export default function WarehousesPage() {
   };
 
   const openAdmin = () => {
-    if (isHeadAdmin(user)) {
-      clearActiveWarehouse();
-    } else if (adminWarehouses.length > 0) {
-      setActiveWarehouse(adminWarehouses[0]);
-    }
+    if (!isHeadAdmin(user)) return;
+    clearActiveWarehouse();
     if (typeof window !== 'undefined') {
       window.sessionStorage.setItem('apka-nav-from-magazyny', '/admin');
     }

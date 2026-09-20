@@ -12,7 +12,6 @@ import {
   canAccessWarehouse,
   canSeeTab,
   canViewProductionPreparationMaterials,
-  getAdminWarehouses,
   getProductionPreparationTeams,
   getWarehouseLabel,
   isHeadAdmin,
@@ -24,6 +23,7 @@ import Link from 'next/link';
 import { getCurrentSessionUser } from '@/lib/api';
 
 const getTitle = (pathname: string) => {
+  if (pathname.startsWith('/przemialy/zarzadzanie') || pathname.startsWith('/czesci/zarzadzanie')) return 'Zarządzanie modułem';
   if (pathname.startsWith('/dashboard')) return 'Pulpit';
   if (pathname.startsWith('/rozliczanie-farb-rozcienczalnikow')) return 'Rozliczanie farb i rozcieńczalników';
   if (pathname.startsWith('/spis-farb-tasm/zarzadzanie')) return 'Zarządzanie spisem';
@@ -103,7 +103,8 @@ const navItemsPrzemialy: MobileNavItem[] = [
   { label: 'Raporty', href: '/raporty', tab: 'raporty' },
   { label: 'Stany magazynowe', href: '/kartoteka', tab: 'kartoteka' },
   { label: 'Suszarki', href: '/suszarki', tab: 'suszarki' },
-  { label: 'Wymieszane tworzywa', href: '/wymieszane', tab: 'wymieszane' }
+  { label: 'Wymieszane tworzywa', href: '/wymieszane', tab: 'wymieszane' },
+  { label: 'Zarządzanie modułem', href: '/przemialy/zarzadzanie', requiresAdmin: true }
 ];
 
 const texturedMobilePrzemialyTabs = new Set<WarehouseTab>([
@@ -133,7 +134,8 @@ const mobileNavLinkClass =
 const navItemsCzesci: MobileNavItem[] = [
   { label: 'Start', href: '/czesci' },
   { label: 'Stany magazynowe', href: '/czesci/stany', tab: 'stany' },
-  { label: 'Historia', href: '/czesci/historia', tab: 'historia' }
+  { label: 'Historia', href: '/czesci/historia', tab: 'historia' },
+  { label: 'Zarządzanie modułem', href: '/czesci/zarzadzanie', requiresAdmin: true }
 ];
 
 const navItemsRaport: MobileNavItem[] = [
@@ -234,7 +236,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     if (!hydrated) return;
     if (previousPath.current && previousPath.current !== pathname) {
       const prev = previousPath.current;
-      if (prev.startsWith('/admin')) {
+      if (prev.startsWith('/przemialy/zarzadzanie')) {
         window.localStorage.removeItem('admin-przemialy-tab');
       }
       if (prev.startsWith('/raporty')) {
@@ -303,22 +305,16 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
       return;
     }
     if (pathname.startsWith('/admin')) {
-      if (isHeadAdmin(user)) return;
-      const adminWarehouses = getAdminWarehouses(user);
-      if (adminWarehouses.length === 0) {
-        router.replace('/magazyny');
-        return;
-      }
-      if (!activeWarehouse || !isWarehouseAdmin(user, activeWarehouse)) {
-        setActiveWarehouse(adminWarehouses[0]);
-      }
+      if (!isHeadAdmin(user)) router.replace('/magazyny');
       return;
     }
     if (!warehouseFromPath) {
       router.replace('/magazyny');
       return;
     }
-    if (!canAccessWarehouse(user, warehouseFromPath)) {
+    if (!canAccessWarehouse(user, warehouseFromPath) ||
+        ((pathname.startsWith('/przemialy/zarzadzanie') || pathname.startsWith('/czesci/zarzadzanie')) &&
+          !isWarehouseAdmin(user, warehouseFromPath))) {
       router.replace('/magazyny');
       return;
     }
@@ -391,15 +387,14 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     return <div className="min-h-screen bg-bg" />;
   }
 
+  if (pathname.startsWith('/admin') && !isHeadAdmin(user)) {
+    return <div className="min-h-screen bg-bg" />;
+  }
+
   const breadcrumb = pathname.startsWith('/admin')
-    ? activeWarehouse === 'PRZEMIALY'
-      ? 'Panel magazynu przemiałów'
-      : 'Panel administratora'
+    ? 'Panel administratora'
     : getWarehouseLabel(activeWarehouse ?? warehouseFromPath);
-  const title =
-    pathname.startsWith('/admin') && activeWarehouse === 'PRZEMIALY'
-      ? 'Zarządzanie modułem'
-      : baseTitle;
+  const title = baseTitle;
   const showMobileNav =
     !pathname.startsWith('/admin') &&
     Boolean(activeWarehouse && warehouseFromPath);

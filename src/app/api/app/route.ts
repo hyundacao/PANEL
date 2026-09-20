@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { randomUUID } from 'crypto';
+import { PALLET_SET_SOURCE_TYPE, normalizePalletSets } from '@/lib/planowanie-zapotrzebowania/palletSets';
+import { addPalletInventory, updatePalletInventory, removePalletInventory } from '@/lib/planowanie-zapotrzebowania/palletInventoryServer';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { formatDate } from '@/lib/utils/format';
@@ -1098,6 +1100,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       return;
     case 'getOriginalInventoryCatalog':
     case 'searchOriginalInventoryCatalog':
+    case 'getOriginalInventoryPalletSets':
     case 'getOriginalInventorySilosConfig':
     case 'getOriginalInventorySiloEntries':
     case 'getOriginalInventoryGrindTasks':
@@ -1129,6 +1132,9 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requireOriginalInventoryOrPaintTapeReadAccess(user);
       return;
     case 'addOriginalInventory':
+    case 'addOriginalInventoryPalletSet':
+    case 'updateOriginalInventoryPalletSet':
+    case 'removeOriginalInventoryPalletSet':
     case 'saveOriginalInventorySiloEntry':
     case 'saveOriginalInventoryFixedDeviceEntry':
     case 'addOriginalInventoryGrindTask':
@@ -1309,6 +1315,9 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'removeDryer',
   'setDryerMaterial',
   'addOriginalInventory',
+  'addOriginalInventoryPalletSet',
+  'updateOriginalInventoryPalletSet',
+  'removeOriginalInventoryPalletSet',
   'saveOriginalInventorySiloEntry',
   'saveOriginalInventoryFixedDeviceEntry',
   'addOriginalInventoryCatalog',
@@ -1447,6 +1456,9 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   transferMixedMaterial: 'Wymieszane: transfer',
   setDryerMaterial: 'Suszarki: przypisanie tworzywa',
   addOriginalInventory: 'Spis oryginalow: dodanie wpisu',
+  addOriginalInventoryPalletSet: 'Spis rzeczywisty: dodanie zestawu paletowego',
+  updateOriginalInventoryPalletSet: 'Spis rzeczywisty: zmiana zestawu paletowego',
+  removeOriginalInventoryPalletSet: 'Spis rzeczywisty: usuniecie zestawu paletowego',
   saveOriginalInventorySiloEntry: 'Spis oryginalow: zapis silosa',
   saveOriginalInventoryFixedDeviceEntry: 'Spis oryginalow: zapis suszarki lub bufora CS',
   updateOriginalInventory: 'Spis oryginalow: aktualizacja wpisu',
@@ -7839,7 +7851,20 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const snapshotDates = Array.isArray(payload?.snapshotDates) ? payload.snapshotDates : [];
       return fetchOriginalInventoryErpSnapshotsByDates(snapshotDates);
     }
+    case 'getOriginalInventoryPalletSets': {
+      const { data, error } = await supabaseAdmin.from('material_planning_state')
+        .select('pallet_sets:state->palletSets').eq('id', 'main').maybeSingle();
+      if (error) throw error;
+      return normalizePalletSets(data?.pallet_sets);
+    }
+    case 'addOriginalInventoryPalletSet':
+      return (await addPalletInventory(supabaseAdmin, payload ?? {}, getActorName(currentUser))).map(mapOriginalInventoryEntry);
+    case 'updateOriginalInventoryPalletSet':
+      return (await updatePalletInventory(supabaseAdmin, payload ?? {}, getActorName(currentUser))).map(mapOriginalInventoryEntry);
+    case 'removeOriginalInventoryPalletSet':
+      return removePalletInventory(supabaseAdmin, String(payload?.batchId ?? ''));
     case 'addOriginalInventory': {
+      if (String(payload?.sourceType ?? '').toUpperCase() === PALLET_SET_SOURCE_TYPE) throw new Error('PALLET_GROUP_REQUIRED');
       const warehouseId = String(payload?.warehouseId ?? '').trim();
       const name = String(payload?.name ?? '').trim();
       const unit = String(payload?.unit ?? '').trim() || 'kg';
@@ -8200,6 +8225,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const warehouseId = String(payload?.warehouseId ?? '').trim();
       const qty = toNumber(payload?.qty);
       if (!id) throw new Error('ENTRY_MISSING');
+      const existing = await supabaseAdmin.from('original_inventory_entries').select('source_type').eq('id', id).maybeSingle();
+      if (existing.error) throw existing.error;
+      if (existing.data?.source_type === PALLET_SET_SOURCE_TYPE) throw new Error('PALLET_GROUP_REQUIRED');
       if (!warehouseId) throw new Error('WAREHOUSE_REQUIRED');
       if (!Number.isFinite(qty) || qty <= 0) throw new Error('QTY_REQUIRED');
       const { data, error } = await supabaseAdmin
@@ -8215,6 +8243,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'removeOriginalInventory': {
       const id = String(payload?.entryId ?? payload ?? '');
       if (!id) throw new Error('ENTRY_MISSING');
+      const existing = await supabaseAdmin.from('original_inventory_entries').select('source_type').eq('id', id).maybeSingle();
+      if (existing.error) throw existing.error;
+      if (existing.data?.source_type === PALLET_SET_SOURCE_TYPE) throw new Error('PALLET_GROUP_REQUIRED');
       const { error, data } = await supabaseAdmin
         .from('original_inventory_entries')
         .delete()

@@ -1,4 +1,7 @@
 'use client';
+import PalletInventoryEditor from '@/components/planowanie-zapotrzebowania/PalletInventoryEditor';
+import { getOriginalInventoryPalletSets, addOriginalInventoryPalletSet } from '@/lib/api';
+import { isPalletCount, palletSetError, palletSetFingerprint, palletSetTotals, palletInventoryError, parsePalletSource } from '@/lib/planowanie-zapotrzebowania/palletSets';
 
 import { type RefObject, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -582,6 +585,7 @@ const parseCatalogImportFile = async (
 };
 
 type OriginalInventoryNameSuggestion = {
+  catalogId?: string;
   name: string;
   unit: string;
   warehouseCode: string | null;
@@ -595,6 +599,7 @@ const SPIS_SEARCH_MIN_LENGTH = 2;
 const SPIS_SEARCH_SERVER_LIMIT = 24;
 
 const toOriginalInventoryNameSuggestion = (item: {
+  id?: string;
   name: string;
   unit: string;
   warehouseCode?: string | null;
@@ -604,6 +609,7 @@ const toOriginalInventoryNameSuggestion = (item: {
   const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
   const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
   return {
+    catalogId: item.id,
     name: item.name,
     unit: item.unit,
     warehouseCode,
@@ -630,6 +636,9 @@ const OriginalInventoryNameSearch = ({
 }) => {
   const [query, setQuery] = useState(value);
   const queryRef = useRef(value);
+  const closeSuggestionsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelSuggestionsClose = () => { if (closeSuggestionsTimer.current) clearTimeout(closeSuggestionsTimer.current); };
+  useEffect(() => () => { if (closeSuggestionsTimer.current) clearTimeout(closeSuggestionsTimer.current); }, []);
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const normalizedQuery = normalizeCatalogNameKey(query);
@@ -682,6 +691,7 @@ const OriginalInventoryNameSearch = ({
     normalizedDebouncedQuery !== normalizedQuery || isFetching
   );
   const chooseSuggestion = (suggestion: OriginalInventoryNameSuggestion) => {
+    cancelSuggestionsClose();
     queryRef.current = suggestion.name;
     setQuery(suggestion.name);
     setShowSuggestions(false);
@@ -694,13 +704,14 @@ const OriginalInventoryNameSearch = ({
         ref={inputRef}
         value={query}
         onChange={(event) => {
+          cancelSuggestionsClose();
           queryRef.current = event.target.value;
           setQuery(event.target.value);
           setShowSuggestions(true);
         }}
         placeholder="Nazwa lub indeks 2, np. STAREX 8178"
         className={query ? 'min-h-[46px] pr-10' : 'min-h-[46px]'}
-        onFocus={() => setShowSuggestions(true)}
+        onFocus={() => { cancelSuggestionsClose(); setShowSuggestions(true); }}
         onKeyDown={(event) => {
           if (event.key !== 'Enter') return;
           event.preventDefault();
@@ -712,7 +723,8 @@ const OriginalInventoryNameSearch = ({
         }}
         onBlur={() => {
           onCommit(queryRef.current);
-          window.setTimeout(() => setShowSuggestions(false), 120);
+          cancelSuggestionsClose();
+          closeSuggestionsTimer.current = setTimeout(() => setShowSuggestions(false), 120);
         }}
       />
       {query && (
@@ -876,6 +888,21 @@ export default function SpisRzeczywisty() {
     qty: '',
     unit: 'kg'
   });
+  const [inventoryMode, setInventoryMode] = useState<'pieces' | 'pallets'>('pieces');
+  const [selectedCatalogId, setSelectedCatalogId] = useState('');
+  const selectedCatalogRef = useRef({ id: '', name: '' });
+  const [selectedPalletSetId, setSelectedPalletSetId] = useState('');
+  const [editingPalletBatchId, setEditingPalletBatchId] = useState<string | null>(null);
+  const palletRequestRef = useRef<{ key: string; batchId: string } | null>(null);
+  const palletSavingRef = useRef(false);
+  const { data: palletSets = [] } = useQuery({
+    queryKey: ['original-inventory-pallet-sets'], queryFn: getOriginalInventoryPalletSets,
+    enabled: activeTab === 'spis', staleTime: 15_000, refetchOnMount: 'always', retry: false
+  });
+  const matchingPalletSets = useMemo(() => palletSets.filter((set) => set.active &&
+    set.primaryCatalogId === selectedCatalogId && !palletSetError(set)), [palletSets, selectedCatalogId]);
+  const selectedPalletSet = matchingPalletSets.find((set) => set.id === selectedPalletSetId) ?? matchingPalletSets[0];
+  const palletPreview = selectedPalletSet ? palletSetTotals(selectedPalletSet, Number(form.qty)) : [];
 
   const { data: warehouses = [] } = useQuery({
     queryKey: ['warehouses'],
@@ -1222,11 +1249,30 @@ export default function SpisRzeczywisty() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isReportFullscreenFallback]);
 
+  const addPalletMutation = useMutation({
+    mutationFn: addOriginalInventoryPalletSet,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] });
+      setForm((prev) => ({ ...prev, name: '', qty: '' }));
+      selectedCatalogRef.current = { id: '', name: '' };
+      setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryMode('pieces');
+      palletRequestRef.current = null;
+      toast({ title: 'Dodano wszystkie składniki zestawu do spisu', tone: 'success' });
+      nameInputRef.current?.focus({ preventScroll: true });
+    },
+    onError: (err: Error) => {
+      if (err.message === 'PALLET_SET_CHANGED' || err.message === 'PALLET_SET_NOT_FOUND') queryClient.invalidateQueries({ queryKey: ['original-inventory-pallet-sets'] });
+      toast({ title: palletInventoryError(err.message), tone: 'error' });
+    },
+    onSettled: () => { palletSavingRef.current = false; }
+  });
   const addMutation = useMutation({
     mutationFn: addOriginalInventory,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] });
       setForm((prev) => ({ ...prev, name: '', qty: '' }));
+      selectedCatalogRef.current = { id: '', name: '' };
+      setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryMode('pieces');
       toast({ title: 'Dodano wpis do spisu', tone: 'success' });
     },
     onError: (err: Error) => {
@@ -1574,6 +1620,19 @@ export default function SpisRzeczywisty() {
     }
     if (qtyValue === null || qtyValue <= 0) {
       toast({ title: 'Wpisz poprawną ilość.', tone: 'error' });
+      return;
+    }
+    if (inventoryMode === 'pallets') {
+      if (readOnly || palletSavingRef.current) return;
+      if (!selectedPalletSet || !isPalletCount(qtyValue)) {
+        toast({ title: palletInventoryError(!selectedPalletSet ? 'PALLET_SET_NOT_FOUND' : 'PALLET_COUNT_REQUIRED'), tone: 'error' });
+        return;
+      }
+      const request = { setId: selectedPalletSet.id, fingerprint: palletSetFingerprint(selectedPalletSet), count: qtyValue, dateKey: spisDate, warehouseId: effectiveSelectedWarehouseId };
+      const key = JSON.stringify(request);
+      if (palletRequestRef.current?.key !== key) palletRequestRef.current = { key, batchId: crypto.randomUUID() };
+      palletSavingRef.current = true;
+      addPalletMutation.mutate({ ...request, batchId: palletRequestRef.current.batchId });
       return;
     }
     entryFormViewportTopRef.current = entryFormRef.current?.getBoundingClientRect().top ?? null;
@@ -1950,15 +2009,18 @@ export default function SpisRzeczywisty() {
   }, [erpSnapshotMap, form.name]);
   const existingNameSuggestions = useMemo<OriginalInventoryNameSuggestion[]>(
     () =>
-      existingList.map((item) => ({
+      [...palletSets.filter((set) => set.active && !palletSetError(set)).flatMap((set) => {
+        const part = set.components.find((item) => item.catalogId === set.primaryCatalogId);
+        return part ? [toOriginalInventoryNameSuggestion({ ...part, id: part.catalogId })] : [];
+      }), ...existingList.map((item) => ({
         name: item.name,
         unit: item.unit,
         warehouseCode: null,
         indexCode: null,
         indexCode2: null,
         isMag55: false
-      })),
-    [existingList]
+      }))],
+    [existingList, palletSets]
   );
   const inventoriedNameKeys = useMemo(() => [...existingByName.keys()], [existingByName]);
   const filteredCatalog = useMemo(() => {
@@ -1993,9 +2055,16 @@ export default function SpisRzeczywisty() {
   );
   const hasMoreCatalogRows = catalogVisibleCount < filteredCatalog.length;
   const applyNameToForm = (rawName: string) => {
+    if (selectedCatalogRef.current.name !== rawName) {
+      selectedCatalogRef.current = { id: '', name: '' };
+      setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryMode('pieces');
+    }
     setForm((prev) => ({ ...prev, name: rawName }));
   };
   const applyNameSuggestionToForm = (suggestion: OriginalInventoryNameSuggestion) => {
+    selectedCatalogRef.current = { id: suggestion.catalogId ?? '', name: suggestion.name };
+    setSelectedCatalogId(suggestion.catalogId ?? '');
+    setSelectedPalletSetId(''); setInventoryMode('pieces');
     setForm((prev) => ({
       ...prev,
       name: suggestion.name,
@@ -3466,6 +3535,17 @@ export default function SpisRzeczywisty() {
                   onCommit={applyNameToForm}
                   onSelect={applyNameSuggestionToForm}
                 />
+                {(matchingPalletSets.length > 0 || inventoryMode === 'pallets') && <div className="mt-2 space-y-2">
+                  <div className="inline-flex max-w-full rounded-md border border-border p-1" role="group" aria-label="Sposób spisu">
+                    {(['pieces', 'pallets'] as const).map((mode) => <button key={mode} type="button" aria-pressed={inventoryMode === mode} disabled={addPalletMutation.isPending}
+                      className={cn('min-h-10 rounded px-3 py-2 text-sm font-semibold', inventoryMode === mode ? 'bg-[var(--brand)] text-black' : 'text-muted')}
+                      onClick={() => { setInventoryMode(mode); setForm((prev) => ({ ...prev, qty: '' })); }}>{mode === 'pieces' ? 'Sztuki' : 'Zestawy paletowe'}</button>)}
+                  </div>
+                  {inventoryMode === 'pallets' && matchingPalletSets.length > 1 && <SelectField aria-label="Wariant zestawu paletowego" value={selectedPalletSet?.id ?? ''} onChange={(event) => setSelectedPalletSetId(event.target.value)}>
+                    {matchingPalletSets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}
+                  </SelectField>}
+                  {inventoryMode === 'pallets' && !selectedPalletSet && <p className="text-sm text-danger" role="alert">Zestaw jest niedostępny. Wybierz indeks ponownie.</p>}
+                </div>}
                 {matchedExisting && (
                   <p className="mt-1 text-xs text-dim">
                     Aktualnie spisane: {matchedExisting.total} {matchedExisting.unit}
@@ -3480,33 +3560,37 @@ export default function SpisRzeczywisty() {
                 )}
               </div>
               <div>
-                <label className="text-xs uppercase tracking-wide text-dim">Ilosc</label>
+                <label className="text-xs uppercase tracking-wide text-dim">{inventoryMode === 'pallets' ? 'Liczba pełnych zestawów' : 'Ilosc'}</label>
                 <Input
                   ref={qtyInputRef}
                   value={form.qty}
                   onChange={(event) => setForm((prev) => ({ ...prev, qty: event.target.value }))}
                   placeholder="0"
-                  inputMode="decimal"
+                  inputMode={inventoryMode === 'pallets' ? 'numeric' : 'decimal'}
                   className="min-h-[46px]"
                 />
               </div>
               <div>
                 <label className="text-xs uppercase tracking-wide text-dim">Jednostka</label>
-                <Input
+                {inventoryMode === 'pallets' ? <div className="flex min-h-[46px] items-center text-sm font-semibold">zestaw paletowy</div> : <Input
                   value={form.unit}
                   onChange={(event) => setForm((prev) => ({ ...prev, unit: event.target.value }))}
                   placeholder="kg"
                   className="min-h-[46px]"
-                />
+                />}
               </div>
+              {inventoryMode === 'pallets' && selectedPalletSet && <div className="divide-y divide-border border-y border-border lg:col-span-6 md:col-span-2" aria-label="Zawartość zestawu">
+                <p className="py-2 text-xs font-semibold text-muted">{palletPreview.length ? `DO SPISU: ${form.qty} ZESTAWÓW` : 'SKŁAD JEDNEGO ZESTAWU'}</p>
+                {(palletPreview.length ? palletPreview : selectedPalletSet.components.map((item) => ({ ...item, total: item.qty }))).map((part) => <div key={part.catalogId} className="flex items-start justify-between gap-3 py-2 text-sm"><span className="min-w-0 break-words">{part.indexCode2 || part.indexCode} · {part.name}</span><strong className="shrink-0 text-title">{part.total} {part.unit}</strong></div>)}
+              </div>}
               <div className="flex items-end justify-end lg:col-span-6">
                 <Button
                   variant="secondary"
                   type="submit"
-                  disabled={addMutation.isPending}
+                  disabled={readOnly || addMutation.isPending || addPalletMutation.isPending || (inventoryMode === 'pallets' && !selectedPalletSet)}
                   className="w-full"
                 >
-                  {matchedExisting ? 'Dodaj ilosc' : 'Dodaj wpis'}
+                  {addPalletMutation.isPending ? 'Zapisywanie zestawu...' : inventoryMode === 'pallets' ? 'Dodaj zestawy do spisu' : matchedExisting ? 'Dodaj ilosc' : 'Dodaj wpis'}
                 </Button>
               </div>
               </>
@@ -3845,9 +3929,10 @@ export default function SpisRzeczywisty() {
                             warehouseId: entry.warehouseId
                           };
                           const isFixedDeviceEntry = String(entry.sourceType ?? '').toUpperCase() === FIXED_INVENTORY_DEVICE_SOURCE_TYPE;
+                          const palletSource = parsePalletSource(entry.sourceId);
                           return [
                             new Date(entry.at).toLocaleString('pl-PL'),
-                            isFixedDeviceEntry ? <span key={`${entry.id}-qty-fixed`} className="font-black text-title">{entry.qty}</span> : <Input
+                            isFixedDeviceEntry || palletSource ? <span key={`${entry.id}-qty-fixed`} className="font-black text-title">{entry.qty}{palletSource && <span className="mt-1 block text-xs font-normal text-muted">{entry.qty / palletSource.qtyPerSet} zest. paletowych</span>}</span> : <Input
                               key={`${entry.id}-qty`}
                               value={draft.qty}
                               onChange={(event) =>
@@ -3857,7 +3942,7 @@ export default function SpisRzeczywisty() {
                               className="min-h-[40px] w-28"
                             />,
                             entry.unit,
-                            isFixedDeviceEntry ? <span key={`${entry.id}-warehouse-fixed`} className="text-sm font-semibold text-title">{warehouseNameMap.get(entry.warehouseId) ?? entry.warehouseId}</span> : <SelectField
+                            isFixedDeviceEntry || palletSource ? <span key={`${entry.id}-warehouse-fixed`} className="text-sm font-semibold text-title">{warehouseNameMap.get(entry.warehouseId) ?? entry.warehouseId}</span> : <SelectField
                               key={`${entry.id}-warehouse`}
                               value={draft.warehouseId}
                               onChange={(event) =>
@@ -3871,7 +3956,7 @@ export default function SpisRzeczywisty() {
                               ))}
                             </SelectField>,
                             entry.user,
-                            isFixedDeviceEntry ? <span key={`${entry.id}-actions-fixed`} className="rounded-full border border-border px-2.5 py-1 text-xs font-semibold text-muted">Edytuj w kaflu urządzenia</span> : <div key={`${entry.id}-actions`} className="flex items-center gap-2">
+                            palletSource ? <Button key={`${entry.id}-pallet`} variant="outline" onClick={() => setEditingPalletBatchId(palletSource.batchId)}>{readOnly ? 'Pokaż zestaw' : 'Edytuj zestaw'}</Button> : isFixedDeviceEntry ? <span key={`${entry.id}-actions-fixed`} className="rounded-full border border-border px-2.5 py-1 text-xs font-semibold text-muted">Edytuj w kaflu urządzenia</span> : <div key={`${entry.id}-actions`} className="flex items-center gap-2">
                               <Button
                                 variant="secondary"
                                 onClick={() => handleEditSave(entry.id)}
@@ -3897,6 +3982,8 @@ export default function SpisRzeczywisty() {
               />
             </Card>
           )}
+          {editingPalletBatchId && <PalletInventoryEditor key={editingPalletBatchId} batchId={editingPalletBatchId} entries={entries} warehouses={visibleWarehouses} readOnly={readOnly}
+            onClose={() => setEditingPalletBatchId(null)} onSaved={() => { queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] }); toast({ title: 'Zaktualizowano cały wpis zestawu', tone: 'success' }); }} />}
         </TabsContent>
 
         <TabsContent value="kartoteki" className="hidden">

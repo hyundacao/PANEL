@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { canSeeTab, isReadOnly } from '@/lib/auth/access';
+import { canSeeTab, isReadOnly, isWarehouseAdmin } from '@/lib/auth/access';
+import { validPalletSetsState } from '@/lib/planowanie-zapotrzebowania/palletSets';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import {
@@ -368,6 +369,14 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ code: 'INVALID_SHARED_FIELDS' }, { status: 400 });
   }
   const expectedSharedRevision = Number(payload.expectedSharedRevision);
+  if (changedFields.includes('palletSets')) {
+    if (!isWarehouseAdmin(access.user, 'PLANOWANIE_ZAPOTRZEBOWANIA')) {
+      return NextResponse.json({ code: 'FORBIDDEN' }, { status: 403 });
+    }
+    if (!validPalletSetsState((state as Record<string, unknown>).palletSets)) {
+      return NextResponse.json({ code: 'INVALID_PALLET_SETS' }, { status: 400 });
+    }
+  }
   if (changedFields.length && (!Number.isSafeInteger(expectedSharedRevision) || expectedSharedRevision < 0)) {
     return NextResponse.json({ code: 'INVALID_SHARED_REVISION' }, { status: 400 });
   }

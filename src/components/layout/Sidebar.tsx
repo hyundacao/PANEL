@@ -64,7 +64,7 @@ const navItemsPrzemialy: NavItem[] = [
   { label: 'Wymieszane tworzywa', href: '/wymieszane', icon: Shuffle, tab: 'wymieszane' },
   {
     label: 'Zarządzanie Modułem',
-    href: '/admin?tab=warehouses',
+    href: '/przemialy/zarzadzanie',
     icon: Shield,
     requiresAdmin: true
   }
@@ -73,7 +73,8 @@ const navItemsPrzemialy: NavItem[] = [
 const navItemsCzesci: NavItem[] = [
   { label: 'Start', href: '/czesci', icon: LayoutGrid },
   { label: 'Stany magazynowe', href: '/czesci/stany', icon: Layers, tab: 'stany' },
-  { label: 'Historia', href: '/czesci/historia', icon: History, tab: 'historia' }
+  { label: 'Historia', href: '/czesci/historia', icon: History, tab: 'historia' },
+  { label: 'Zarządzanie modułem', href: '/czesci/zarzadzanie', icon: Shield, requiresAdmin: true }
 ];
 
 const navItemsRaport: NavItem[] = [
@@ -133,8 +134,8 @@ export const Sidebar = () => {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { sidebarCollapsed, setSidebarCollapsed, user, logout, activeWarehouse, clearActiveWarehouse, theme, toggleTheme } = useUiStore();
-  const warehouse = activeWarehouse as WarehouseKey | null;
   const isAdminRoute = pathname.startsWith('/admin');
+  const warehouse = isAdminRoute ? null : activeWarehouse as WarehouseKey | null;
   const warehouseAdmin = warehouse ? isWarehouseAdmin(user, warehouse) : false;
   const preparationTeamIds = user?.access?.warehouses?.PRZYGOTOWANIE_PRODUKCJI?.preparationTeams ?? [];
   const roleLabel = getRoleLabel(user, warehouse);
@@ -171,7 +172,6 @@ export const Sidebar = () => {
   });
   const canSwitchModule = getAccessibleWarehouses(user).length > 1;
   const warehouseLabel = getWarehouseLabel(warehouse);
-  const isPrzemialyModuleManagementRoute = isAdminRoute && warehouse === 'PRZEMIALY';
   const isActivePath = (href: string) => {
     if (href.startsWith('/planowanie-zapotrzebowania')) {
       const [, query = ''] = href.split('?');
@@ -203,7 +203,6 @@ export const Sidebar = () => {
     if (href === '/przygotowanie-produkcji?view=management') {
       return pathname === '/przygotowanie-produkcji' && searchParams.get('view') === 'management';
     }
-    if (href.startsWith('/admin')) return isAdminRoute;
     if (href === '/czesci') return pathname === '/czesci';
     if (href === '/spis') return pathname === '/spis' || pathname.startsWith('/spis/');
     if (href === '/spis-oryginalow') {
@@ -223,7 +222,7 @@ export const Sidebar = () => {
     }
     return pathname.startsWith(href);
   };
-  const panelLabel = isAdminRoute && !isPrzemialyModuleManagementRoute
+  const panelLabel = isAdminRoute
     ? 'PANEL ADMINISTRATORA'
     : warehouse === 'CZESCI'
       ? 'PANEL MAGAZYNU CZĘŚCI ZAMIENNYCH'
@@ -244,9 +243,9 @@ export const Sidebar = () => {
                 : warehouse === 'PRZESUNIECIA_ERP'
                   ? 'PANEL PRZESUNIĘĆ ERP'
                   : 'PANEL MODUŁU';
-  const headerLabel = isAdminRoute && !isPrzemialyModuleManagementRoute ? 'MODUŁY' : warehouseLabel;
+  const headerLabel = isAdminRoute ? 'MODUŁY' : warehouseLabel;
   const showHeaderLabel =
-    (isAdminRoute && !isPrzemialyModuleManagementRoute) ||
+    isAdminRoute ||
     (warehouse !== 'CZESCI' && warehouse !== 'PRZEMIALY' && warehouse !== 'FARBY_TASMY');
   const closeOnMobile = () => {
     if (typeof window === 'undefined') return;
@@ -392,4 +391,3 @@ export const Sidebar = () => {
     </aside>
   );
 };
-

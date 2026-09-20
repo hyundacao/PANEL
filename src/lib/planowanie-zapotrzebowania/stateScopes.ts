@@ -14,6 +14,7 @@ export const SHARED_PLANNING_FIELDS = [
   'areas',
   'stationMappings',
   'fixedDevices',
+  'palletSets',
   'documents',
   'returnStatuses',
   'returnExclusions'
@@ -129,10 +130,10 @@ export const rebaseSharedPlanningChanges = (
 ): Record<string, unknown> | null => {
   const merged = sharedPlanningState(remote);
   for (const field of changedSharedPlanningFields(baseline, local)) {
-    if (field === 'technologies') {
-      const technologies = mergeTechnologyChanges(baseline.technologies, local.technologies, remote.technologies);
-      if (!technologies) return null;
-      merged.technologies = technologies;
+    if (field === 'technologies' || field === 'palletSets') {
+      const items = mergeTechnologyChanges(baseline[field], local[field], remote[field]);
+      if (!items) return null;
+      merged[field] = items;
     } else if (field === 'documents') {
       const changedAreas = changedDocumentAreas(baseline.documents, local.documents);
       const previous = areaDocuments(baseline.documents);

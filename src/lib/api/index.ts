@@ -606,6 +606,20 @@ export const getSpareParts = async (): Promise<SparePart[]> => appRequest('getSp
 export const getSparePartHistory = async (): Promise<SparePartHistory[]> =>
   appRequest('getSparePartHistory');
 
+export const getOriginalInventoryPalletSets = async (): Promise<import('@/lib/planowanie-zapotrzebowania/palletSets').PalletSet[]> =>
+  appRequest('getOriginalInventoryPalletSets');
+
+export const addOriginalInventoryPalletSet = async (payload: {
+  batchId: string; setId: string; fingerprint: string; count: number; dateKey: string; warehouseId: string;
+}): Promise<OriginalInventoryEntry[]> => appRequest('addOriginalInventoryPalletSet', payload);
+
+export const updateOriginalInventoryPalletSet = async (payload: {
+  batchId: string; count: number; warehouseId: string;
+}): Promise<OriginalInventoryEntry[]> => appRequest('updateOriginalInventoryPalletSet', payload);
+
+export const removeOriginalInventoryPalletSet = async (batchId: string): Promise<void> =>
+  appRequest('removeOriginalInventoryPalletSet', { batchId });
+
 export const getOriginalInventory = async (dateKey?: string): Promise<OriginalInventoryEntry[]> =>
   appRequest('getOriginalInventory', dateKey ? { dateKey } : undefined);
 
