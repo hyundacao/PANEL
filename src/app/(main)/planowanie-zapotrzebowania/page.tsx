@@ -82,6 +82,7 @@ import {
 } from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
 
 import {
+  calculateContinuationBufferedQuantity,
   calculateIssueBalance,
   calculateScopedQuantity,
   coalesceQuantityCorrection,
@@ -365,6 +366,7 @@ type AppState = {
   inventorySyncedAt: string;
   horizonShifts: number;
   calculationMode: 'horizon' | 'all';
+  continuationBufferPercent: number;
   selectedAreaId: string;
   areas: Area[];
   stationMappings: StationMapping[];
@@ -958,6 +960,7 @@ const demoState = (): AppState => {
     inventorySyncedAt: '',
     horizonShifts: 3.5,
     calculationMode: 'horizon',
+    continuationBufferPercent: 0,
     selectedAreaId: 'hala-1',
     areas: baseAreas,
     stationMappings: [
@@ -1256,6 +1259,7 @@ const parseStoredState = (value: unknown): AppState | null => {
     ...emptyState(),
     ...record,
     calculationMode: record.calculationMode === 'all' ? 'all' : 'horizon',
+    continuationBufferPercent: Number(record.continuationBufferPercent) === 20 ? 20 : 0,
     areas: mergeAreas(storedAreas),
     stationMappings,
     fixedDevices: normalizeFixedInventoryDevices(record.fixedDevices),
@@ -2359,7 +2363,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       ? Math.max(0, numberValue(technology.shiftNorm))
       : planNorm;
   };
-  const plannedItemProductionQty = (item: PlanItem) => {
+  const scopedItemProductionQty = (item: PlanItem) => {
     const technology = technologyForItem(item);
     const norm = shiftNormForItem(item);
     if (technology?.productionMode === 'continuous') {
@@ -2370,6 +2374,17 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     }
     const remaining = knownRemainingQuantity(item);
     return calculateScopedQuantity(remaining, norm, scopeForItem(item));
+  };
+  const plannedItemProductionQty = (item: PlanItem) => {
+    const scopedQuantity = scopedItemProductionQty(item);
+    if (Number(state.continuationBufferPercent) !== 20 || scopedQuantity <= 0) return scopedQuantity;
+    const technology = technologyForItem(item);
+    if (technology?.productionMode === 'continuous') return Math.ceil(scopedQuantity * 1.2);
+    return calculateContinuationBufferedQuantity(
+      scopedQuantity,
+      knownRemainingQuantity(item),
+      state.continuationBufferPercent
+    );
   };
 
   const technologyLinksForItem = (item: PlanItem) => technologyForItem(item)?.linkedProducts ?? [];
@@ -3462,7 +3477,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             : <PlanningSaveStatus info={saveInfo} />}
         </div>
       </div>
-      <div className="grid items-start gap-3 border-t border-border p-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,0.8fr)_minmax(260px,1fr)_minmax(320px,1.2fr)]">
+      <div className="grid items-start gap-3 border-t border-border p-3 md:grid-cols-2 xl:grid-cols-[minmax(210px,0.75fr)_minmax(230px,0.85fr)_minmax(230px,0.8fr)_minmax(300px,1.1fr)]">
         <div className="min-w-0">
           <p className="mb-1.5 h-4 text-xs font-semibold leading-4 text-dim">Dzień produkcji</p>
             <SelectField aria-label="Dzień produkcji" className="h-[52px] max-h-[52px] min-h-[52px] rounded-xl shadow-none" value={showDatePicker ? 'custom' : state.selectedPlanDate} onChange={(event) => {
@@ -3494,6 +3509,33 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
               <option value="custom">Inną liczbę zmian...</option>
             </SelectField>
           {customRangeVisible ? <div className="mt-2"><PlanAmountField label="Liczba zmian" min={0.5} value={state.horizonShifts} disabled={readOnly} onChange={(value) => updateState((current) => ({ ...current, calculationMode: 'horizon', horizonShifts: value }))} /></div> : null}
+        </div>
+        <div className="min-w-0">
+          <p className="mb-1.5 h-4 text-xs font-semibold leading-4 text-dim">Przelicznik</p>
+          <button
+            type="button"
+            role="switch"
+            aria-label="Bufor dla zleceń kontynuowanych"
+            aria-checked={Number(state.continuationBufferPercent) === 20}
+            disabled={readOnly}
+            title="Dodaje 20% wybranego zakresu tylko wtedy, gdy zlecenie będzie kontynuowane"
+            onClick={() => updateState((current) => ({
+              ...current,
+              continuationBufferPercent: Number(current.continuationBufferPercent) === 20 ? 0 : 20
+            }))}
+            className={cn(
+              'flex h-[52px] w-full items-center justify-between gap-3 rounded-xl border px-4 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60',
+              Number(state.continuationBufferPercent) === 20
+                ? 'border-brand bg-brandSoft text-title shadow-[inset_0_0_0_1px_rgba(255,122,26,0.18)]'
+                : 'border-border bg-[var(--surface-soft)] text-muted'
+            )}
+          >
+            <span className={Number(state.continuationBufferPercent) === 20 ? 'text-muted' : 'text-title'}>Zwykłe</span>
+            <span className={cn('relative h-6 w-11 shrink-0 rounded-full border transition', Number(state.continuationBufferPercent) === 20 ? 'border-brand bg-brand' : 'border-borderStrong bg-[var(--surface-2)]')} aria-hidden="true">
+              <span className={cn('absolute left-0.5 top-0.5 h-[18px] w-[18px] rounded-full bg-white shadow transition-transform', Number(state.continuationBufferPercent) === 20 && 'translate-x-5')} />
+            </span>
+            <span className={Number(state.continuationBufferPercent) === 20 ? 'text-brand' : 'text-muted'}>+20%</span>
+          </button>
         </div>
         <div className="min-w-0">
           <p className="mb-1.5 h-4 text-xs font-semibold leading-4 text-dim">{showAllPlanAreas ? 'Dokument' : `Dokument · ${areaName(state.selectedAreaId)}`}</p>
@@ -4278,7 +4320,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       <div className="space-y-5">
         {renderHeader('Obliczanie zapotrzebowania', 'Rozwiń wybraną pozycję, aby zasymulować zakres i zmienić jej technologię roboczą.')}
         <PlanQuantityWarnings items={scopeItems} resolvedItemIds={quantityResolvedPlanItemIds} calculations />
-        <Card className="grid gap-3 md:grid-cols-2">
+        <Card className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           <Field label="Strefa">
             <SelectField value={state.selectedAreaId} onChange={(event) => selectPlanningArea(event.target.value)}>
               {state.areas.filter((area) => !area.shared).map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
@@ -4286,6 +4328,29 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           </Field>
           <Field label="Liczba zmian">
             <Input type="number" min="0.5" step="0.5" value={state.horizonShifts} onChange={(event) => updateState((current) => ({ ...current, horizonShifts: Math.max(0.5, numberValue(event.target.value)) }))} />
+          </Field>
+          <Field label="Przelicznik">
+            <button
+              type="button"
+              role="switch"
+              aria-label="Bufor dla zleceń kontynuowanych w obliczeniach"
+              aria-checked={Number(state.continuationBufferPercent) === 20}
+              disabled={readOnly}
+              onClick={() => updateState((current) => ({
+                ...current,
+                continuationBufferPercent: Number(current.continuationBufferPercent) === 20 ? 0 : 20
+              }))}
+              className={cn(
+                'flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border px-4 text-sm font-bold normal-case tracking-normal transition disabled:cursor-not-allowed disabled:opacity-60',
+                Number(state.continuationBufferPercent) === 20 ? 'border-brand bg-brandSoft text-title' : 'border-border bg-[var(--surface-soft)] text-muted'
+              )}
+            >
+              <span>Zwykłe</span>
+              <span className={cn('relative h-6 w-11 rounded-full border transition', Number(state.continuationBufferPercent) === 20 ? 'border-brand bg-brand' : 'border-borderStrong bg-[var(--surface-2)]')} aria-hidden="true">
+                <span className={cn('absolute left-0.5 top-0.5 h-[18px] w-[18px] rounded-full bg-white shadow transition-transform', Number(state.continuationBufferPercent) === 20 && 'translate-x-5')} />
+              </span>
+              <span className={Number(state.continuationBufferPercent) === 20 ? 'text-brand' : undefined}>+20%</span>
+            </button>
           </Field>
         </Card>
 
@@ -4441,9 +4506,12 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         (document.status === 'draft' || document.status === 'outdated')
       );
       const activeVersion = latestPlanVersion(current.planVersions, current.selectedPlanDate);
-      const scopeLabel = current.calculationMode === 'all'
+      const baseScopeLabel = current.calculationMode === 'all'
         ? 'Cały pozostały plan'
         : `${fmt(current.horizonShifts)} zmiany`;
+      const scopeLabel = Number(current.continuationBufferPercent) === 20 && current.calculationMode !== 'all'
+        ? `${baseScopeLabel} · +20% dla kontynuowanych`
+        : baseScopeLabel;
       if (editable) {
         const previousRows = new Map(editable.rows.map((row) => [row.key, row]));
         return {

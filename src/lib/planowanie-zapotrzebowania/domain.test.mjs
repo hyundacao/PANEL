@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   allocateAmountByDemand,
+  calculateContinuationBufferedQuantity,
   calculateIssueBalance,
   calculateScopedQuantity,
   coalesceQuantityCorrection,
@@ -105,6 +106,14 @@ test('ręczne +200, -200 i wartość dokładna nie schodzą poniżej zera', () =
   assert.equal(correctedQuantity(3000, 'decrease', 200), 2800);
   assert.equal(correctedQuantity(100, 'decrease', 200), 0);
   assert.equal(correctedQuantity(100, 'exact', 7000), 7000);
+});
+
+test('bufor kontynuacji zwiększa tylko niezakończony zakres i nie przekracza zlecenia', () => {
+  assert.equal(calculateContinuationBufferedQuantity(3500, 30000, 0), 3500);
+  assert.equal(calculateContinuationBufferedQuantity(3500, 30000, 20), 4200);
+  assert.equal(calculateContinuationBufferedQuantity(3200, 3200, 20), 3200);
+  assert.equal(calculateContinuationBufferedQuantity(3500, 3800, 20), 3800);
+  assert.equal(calculateContinuationBufferedQuantity(3594, 30000, 20), 4313);
 });
 
 test('bieżąca wersja wynika z numeru i dnia, a nie dawnego ręcznego statusu', () => {

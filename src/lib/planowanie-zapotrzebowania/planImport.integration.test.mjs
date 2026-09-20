@@ -15,7 +15,7 @@ const source = readFileSync(pageFile,'utf8');
 const ast = ts.createSourceFile('page.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const directQuantityEditing = source.includes('const updatePlanQuantity =');
 const names = ['uid','numberValue','normalize','CATEGORIES','normalizeReturnExclusions','productIdentityMatches','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','inferPickingWarehouseCode','pickingWarehouseCode','sortPickingDocumentRows','PACKAGING_CATEGORIES','splitProductFields','stationKey','applyStationMappings','materialKey','materialMatches','materialIdentityMatches','isPackagingMaterial','technologyMaterialsForMode','migrateLegacyEmergencyTechnologies','normalizedMaterialUnit','isKilogramUnit','isGramUnit','isThousandPiecesUnit','technologyResultUnit','technologyResultQuantity','roundTechnologyMaterialQuantity','canonicalProductIndex','linkedProductKey','linkedProductMatchesPlanItem','linkedSourceSelectionForItem','linkedMachineProductQuantity','linkedWarehouseProductQuantity','linkedSurplusQuantity','normalizeLinkedSources','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
-  'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','shiftNormForItem','plannedItemProductionQty','itemProductionQty','planQuantityNeedsReview','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','updatePickingDocumentWarehouse','deriveReturnsForDate','syncOriginalInventory'];
+  'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','shiftNormForItem','scopedItemProductionQty','plannedItemProductionQty','itemProductionQty','planQuantityNeedsReview','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','updatePickingDocumentWarehouse','deriveReturnsForDate','syncOriginalInventory'];
 if (directQuantityEditing) names.push('updatePlanNorm');
 const definitions = new Map();
 const areaCalculationNames = ['technologyForItem','materialsForItem','technologyLinksForItem','linkedProducerCandidates','linkedProducerFor','linkedAllocationByProducer','selectedLinkedAllocationByProducer','fullLinkedAllocationByProducer','materialDemandContributionsForItem','demandByArea','sharedAreaIds','materialSupply','requirementsForArea'];
@@ -36,7 +36,7 @@ const rows=[['Lp.','','Ilość','ST.','Norma','','Uwagi'],['1','LEFT + RIGHT (A1
 function setup() {
   const messages=[];
   const ctx=vm.createContext({exports:{},...imports,...fixedDevices,...domain.exports,shouldInvalidatePlanDocument,
-    state:{plan:[],technologies:[],archive:[],planVersions:[],documents:[],quantityCorrections:[],stationMappings:[],selectedPlanDate:'2026-08-31',selectedAreaId:'hala-2',dailyPlans:{},returnStatuses:{},returnExclusions:[],inventory:[],areas:[],calculationMode:'all',horizonShifts:3.5},
+    state:{plan:[],technologies:[],archive:[],planVersions:[],documents:[],quantityCorrections:[],stationMappings:[],selectedPlanDate:'2026-08-31',selectedAreaId:'hala-2',dailyPlans:{},returnStatuses:{},returnExclusions:[],inventory:[],areas:[],calculationMode:'all',horizonShifts:3.5,continuationBufferPercent:0},
     pending:{fileName:'test.xlsx',purpose:'plan',workbook:{SheetNames:['Plan'],Sheets:{Plan:{rows}}}},sheetName:'Plan',currentUserName:'Test',quantityInputs:{},readOnly:false,
     calculationEditorOpen:false,closeCalculationEditorIfAllowed:()=>true,inventorySyncRequestRef:{current:0},headAdmin:false,
     technologyById:{get:(id)=>ctx?.state?.technologies?.find((technology)=>technology.id===id)},
@@ -155,6 +155,23 @@ test('discrete technology materials round up while mass remains exact',()=>{
   assert.equal(h.roundTechnologyMaterialQuantity(7.000000000000001,'opak'),7);
   assert.equal(h.roundTechnologyMaterialQuantity(0.0492,'1000szt.'),0.05);
   assert.equal(h.technologyResultQuantity(h.roundTechnologyMaterialQuantity(0.0492,'1000szt.'),'1000szt.'),50);
+});
+
+test('20 percent mode expands only production that continues beyond the selected range',()=>{
+  const h=setup();
+  h.ctx.state.calculationMode='horizon';
+  h.ctx.state.horizonShifts=3.5;
+  const item={
+    id:'long-run',index:'LONG',name:'Long production',technologyId:'',shiftNorm:1000,
+    totalQty:30000,remainingQty:30000,scopeMode:'global',included:true
+  };
+
+  assert.equal(h.itemProductionQty(item),3500,'ordinary mode uses the selected 3.5 shifts');
+  h.ctx.state.continuationBufferPercent=20;
+  assert.equal(h.itemProductionQty(item),4200,'a continuing order receives the 20 percent buffer');
+  assert.equal(h.itemProductionQty({...item,totalQty:3200,remainingQty:3200}),3200,'an order completed inside the range receives no buffer');
+  assert.equal(h.itemProductionQty({...item,totalQty:3800,remainingQty:3800}),3800,'the buffer never exceeds the remaining order');
+  assert.equal(h.itemProductionQty({...item,scopeMode:'all'}),30000,'the complete-production scope is not inflated');
 });
 
 test('plan import preserves a yellow Excel marker on the calculation row',()=>{

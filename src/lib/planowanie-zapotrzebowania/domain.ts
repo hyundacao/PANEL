@@ -81,6 +81,19 @@ export const calculateScopedQuantity = (
   return Math.min(remaining, Math.max(0, shiftNorm) * Math.max(0, scope.shifts));
 };
 
+export const calculateContinuationBufferedQuantity = (
+  scopedQty: number,
+  remainingQty: number,
+  bufferPercent: number
+) => {
+  const scoped = Math.max(0, Number.isFinite(scopedQty) ? scopedQty : 0);
+  const remaining = Math.max(0, Number.isFinite(remainingQty) ? remainingQty : 0);
+  const selected = Math.min(scoped, remaining);
+  const percent = Math.max(0, Number.isFinite(bufferPercent) ? bufferPercent : 0);
+  if (percent <= 0 || selected <= 0 || selected >= remaining) return selected;
+  return Math.min(remaining, Math.ceil(selected * (1 + percent / 100)));
+};
+
 export const nextPlanVersionNumber = (
   versions: Array<{ planDate: string; versionNo: number }>,
   planDate: string

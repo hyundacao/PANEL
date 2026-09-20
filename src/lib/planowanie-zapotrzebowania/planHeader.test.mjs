@@ -385,6 +385,18 @@ test('range presets, entire production and a custom 9.5 shifts preserve individu
   assert.equal(h.ctx.state.plan[0].scopeQuantity, 12);
 });
 
+test('plan header switches between ordinary calculations and the 20 percent continuation buffer', () => {
+  const h = createHeaderFixture();
+  let toggle = control(h, 'Bufor dla zleceń kontynuowanych');
+  assert.equal(toggle.props['aria-checked'], false);
+  toggle.props.onClick();
+  assert.equal(h.ctx.state.continuationBufferPercent, 20);
+  toggle = control(h, 'Bufor dla zleceń kontynuowanych');
+  assert.equal(toggle.props['aria-checked'], true);
+  toggle.props.onClick();
+  assert.equal(h.ctx.state.continuationBufferPercent, 0);
+});
+
 test('saved custom ranges stay visible without plan-version difference labels', () => {
   const h = createHeaderFixture({ state: { horizonShifts: 9.5 } });
   assert.equal(control(h, 'Zapotrzebowanie na').props.value, 'custom');
@@ -396,6 +408,7 @@ test('saved custom ranges stay visible without plan-version difference labels', 
 test('read-only users can choose a day but cannot import or change range', () => {
   const h = createHeaderFixture({ readOnly: true });
   assert.equal(control(h, 'Zapotrzebowanie na').props.disabled, true);
+  assert.equal(control(h, 'Bufor dla zleceń kontynuowanych').props.disabled, true);
   assert.equal(control(h, 'Status wersji'), undefined);
   assert.ok(!control(h, 'Dzień produkcji').props.disabled);
   assert.equal(control(h, 'Karta / arkusz Excela'), undefined);
