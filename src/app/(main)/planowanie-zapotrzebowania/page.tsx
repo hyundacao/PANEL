@@ -67,6 +67,7 @@ import {
 import { isHeadAdmin, isReadOnly, isWarehouseAdmin } from '@/lib/auth/access';
 import { normalizePalletSets, type PalletSet } from '@/lib/planowanie-zapotrzebowania/palletSets';
 import PalletSetSettings from '@/components/planowanie-zapotrzebowania/PalletSetSettings';
+import { TechnologyLibraryExportButton } from '@/components/planowanie-zapotrzebowania/TechnologyLibraryExportButton';
 import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
 import type {
@@ -4090,6 +4091,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           </Card>
         </TabsContent>
       </Tabs>
+      <TechnologyLibraryExportButton technologies={state.technologies} editorDirty={technologyEditorDirty} onMessage={flash} />
     </div>;
   };
 

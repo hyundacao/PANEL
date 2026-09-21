@@ -4,6 +4,8 @@ import { Check, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { TaskHallSelect } from '@/components/production-preparation/TaskHallSelect';
+import { isProductionHallSelection, isProductionTaskReferenceTeam, productionHallLabel } from '@/lib/utils/productionTaskReference';
 import { cn } from '@/lib/utils/cn';
 import { RECURRING_TASK_WEEKDAYS, type RecurringTaskDefinition } from '@/lib/utils/productionRecurringTasks';
 import type { ProductionTeam } from '@/lib/utils/productionTeamComments';
@@ -67,6 +69,7 @@ export function RecurringTasksSettings({
             </button>
           </div>
 
+          {task.teams.some(isProductionTaskReferenceTeam) && <TaskHallSelect value={task.hall ?? ''} onChange={value => onUpdate(task.id, { hall: isProductionHallSelection(value) ? value : undefined })} />}
           <div className="grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
             <fieldset>
               <legend className="mb-2 text-[11px] font-bold uppercase text-dim">Dni tygodnia</legend>
@@ -112,7 +115,7 @@ export function RecurringTasksSettings({
             <p className="break-words font-semibold text-title">{task.title}</p>
             {!task.active && <Badge>Wyłączone</Badge>}
           </div>
-          <p className="mt-1 text-xs font-semibold text-[var(--brand)]">{daySummary(task)}</p>
+          <p className="mt-1 text-xs font-semibold text-[var(--brand)]">{daySummary(task)}{task.teams.some(isProductionTaskReferenceTeam) && ` · ${productionHallLabel(task.hall)}`}</p>
         </div>
         <p className="text-xs text-body">{task.teams.map((team) => teams.find((option) => option.id === team)?.label ?? team).join(', ')}</p>
         <span className={cn('w-fit rounded-full px-2.5 py-1 text-[11px] font-semibold', task.active ? 'bg-emerald-500/12 text-emerald-300' : 'bg-slate-500/12 text-slate-300')}>{task.active ? 'Aktywne' : 'Wstrzymane'}</span>

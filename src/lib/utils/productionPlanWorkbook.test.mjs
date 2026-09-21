@@ -4,6 +4,7 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { readProductionPlanSheet, readProductionPlanWorkbook } from './productionPlanWorkbook.ts';
 import { isToolroomReturnTask, withToolroomReturnTasks } from './productionToolroomTasks.ts';
 
@@ -73,7 +74,7 @@ const collect = (node) => {
 collect(page);
 assert.equal(declarations.size, handlerNames.length);
 const handlerCode = ts.transpileModule(
-  [...declarations.values()].join('\n') + '\nexports.handlers = { preparePlanImport, cancelPlanImport, importSelectedSheet, parseTasks };',
+  [...declarations.values()].join('\n') + '\nexports.handlers = { preparePlanImport, cancelPlanImport, importSelectedSheet, parseTasks, mergeImportedTasks };',
   { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }
 ).outputText;
 
@@ -82,6 +83,7 @@ const createHarness = () => {
   const cached = [];
   const context = {
     XLSX, Error, readProductionPlanWorkbook, readProductionPlanSheet, isToolroomReturnTask, withToolroomReturnTasks, exports: {},
+    RECURRING_TASK_STATION: 'ZADANIE CYKLICZNE',
     loadProductionPlanWorkbookTools: async () => ({ productionPlanXlsx: XLSX, readProductionPlanWorkbook, readProductionPlanSheet }),
     workbookSource: null, selectedSheetName: '', readingWorkbook: false,
     loadingSavedPlan: false, saveState: 'saved', importing: false, importError: null,
@@ -105,6 +107,126 @@ const createHarness = () => {
 
 const fileFor = (name = 'new.xlsx', buffer = makeWorkbook()) => ({
   name, arrayBuffer: async () => buffer
+});
+
+const coloredWorkbook = async () => {
+  const workbook = new ExcelJS.Workbook();
+  for (const name of ['Yellow', 'Clear']) {
+    const sheet = workbook.addWorksheet(name);
+    sheet.addRows([
+      ['', 'FIRST DETAIL', 300, 'WTR 41', 460],
+      ['', 'PACE SEAT STRUCTURE COOL GREY (Z11111846)', 384, 'WTR 41', 400],
+      ['', 'INHERITED STATION DETAIL', 200, '', 400],
+      ['', 'GREEN DETAIL', 100, 'WTR 42', 300]
+    ]);
+    if (name === 'Yellow') sheet.getCell('B2').fill = {
+      type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' }
+    };
+    sheet.getCell('B4').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00FF00' } };
+  }
+  return readProductionPlanWorkbook(await workbook.xlsx.writeBuffer(), 'colors.xlsx');
+};
+
+test('adjacent details on the same or inherited station stay clear without yellow Excel fill', () => {
+  const h = createHarness();
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ['', 'FIRST DETAIL', 300, 'WTR 41', 460],
+    ['', 'SECOND DETAIL', 384, 'WTR 41', 400],
+    ['', 'THIRD DETAIL', 200, '', 400]
+  ]), 'Clear');
+  const tasks = h.parseTasks(workbook, 'Clear');
+  assert.deepEqual(Array.from(tasks, task => task.station), ['WTR 41', 'WTR 41', 'WTR 41']);
+  assert.deepEqual(Array.from(tasks, task => task.highlighted), [false, false, false]);
+});
+
+test('only yellow fill from the selected worksheet is imported, never another sheet or green fill', async () => {
+  const h = createHarness();
+  const source = await coloredWorkbook();
+  const yellow = h.parseTasks(readProductionPlanSheet(source, 'Yellow'), 'Yellow');
+  const clear = h.parseTasks(readProductionPlanSheet(source, 'Clear'), 'Clear');
+  assert.deepEqual(Array.from(yellow, task => task.highlighted), [false, true, false, false]);
+  assert.deepEqual(Array.from(clear, task => task.highlighted), [false, false, false, false]);
+});
+
+test('reimport replaces saved highlighting in both directions without losing assigned work', async () => {
+  const h = createHarness();
+  const source = await coloredWorkbook();
+  const previous = h.parseTasks(readProductionPlanSheet(source, 'Yellow'), 'Yellow');
+  const assigned = previous[1];
+  assigned.kinds = ['zmiana-formy'];
+  assigned.teams = ['mechanics'];
+  assigned.notes = { mechanics: 'Keep this comment' };
+  assigned.teamProgress = { mechanics: { done: true, completedBy: 'Operator' } };
+  assigned.done = true;
+  assigned.material = 'ABS';
+  h.context.tasks = previous;
+  for (const [sheetName, highlighted] of [['Clear', false], ['Yellow', true], ['Clear', false]]) {
+    h.context.workbookSource = source;
+    h.context.setSelectedSheetName(sheetName);
+    await h.importSelectedSheet();
+    const current = h.context.tasks[1];
+    assert.equal(current.id, assigned.id);
+    assert.equal(current.highlighted, highlighted);
+    assert.deepEqual(current.kinds, assigned.kinds);
+    assert.deepEqual(current.teams, assigned.teams);
+    assert.deepEqual(current.notes, assigned.notes);
+    assert.deepEqual(current.teamProgress, assigned.teamProgress);
+    assert.equal(current.done, true);
+    assert.equal(current.material, 'ABS');
+    assert.equal(h.saves.at(-1)[0][1].highlighted, highlighted);
+    assert.equal(h.saves.at(-1)[2], sheetName);
+    // Restoring the stored payload needs no workbook read and preserves its color.
+    const reopened = createHarness();
+    reopened.context.tasks = JSON.parse(JSON.stringify(h.saves.at(-1)[0]));
+    assert.equal(reopened.context.tasks[1].highlighted, highlighted);
+    assert.equal(reopened.saves.length, 0);
+  }
+});
+
+test('reimport still cancels missing assigned work and restores it when the detail returns', async () => {
+  const h = createHarness();
+  await h.preparePlanImport(fileFor());
+  const source = h.context.workbookSource;
+  const missing = h.parseTasks(readProductionPlanSheet(source, 'Monday'), 'Monday')[0];
+  missing.kinds = ['zmiana-formy'];
+  missing.teams = ['mechanics'];
+  missing.notes = { mechanics: 'Keep missing work' };
+  missing.teamProgress = { mechanics: { done: true } };
+  h.context.tasks = [missing];
+  h.context.setSelectedSheetName('Tuesday');
+  await h.importSelectedSheet();
+  const cancelled = h.context.tasks.find(task => task.id === missing.id);
+  assert.equal(cancelled.isCurrentPlan, false);
+  assert.ok(cancelled.kinds.includes('anulowane'));
+  assert.deepEqual(cancelled.notes, missing.notes);
+  assert.deepEqual(cancelled.teams, missing.teams);
+  assert.deepEqual(cancelled.teamProgress, missing.teamProgress);
+  h.context.workbookSource = source;
+  h.context.setSelectedSheetName('Monday');
+  await h.importSelectedSheet();
+  const restored = h.context.tasks.find(task => task.id === missing.id);
+  assert.equal(restored.isCurrentPlan, true);
+  assert.ok(!restored.kinds.includes('anulowane'));
+  assert.deepEqual(restored.notes, missing.notes);
+  assert.deepEqual(restored.teams, missing.teams);
+});
+
+test('reimport still protects manual, recurring and planned work from automatic cancellation', () => {
+  const h = createHarness();
+  const current = h.parseTasks(readProductionPlanSheet(readProductionPlanWorkbook(makeWorkbook(), 'plan.xlsx'), 'Tuesday'), 'Tuesday')[0];
+  const retained = [
+    { ...current, id: 'manual', station: 'ZADANIE DODATKOWE' },
+    { ...current, id: 'recurring', station: 'ZADANIE CYKLICZNE' },
+    { ...current, id: 'planned', planGroup: 'planned' }
+  ].map(task => ({ ...task, kinds: ['inne'], teams: ['mechanics'], notes: { mechanics: 'Keep' } }));
+  const merged = h.mergeImportedTasks([], retained);
+  assert.equal(merged.length, 3);
+  for (const task of merged) {
+    assert.equal(task.isCurrentPlan, false);
+    assert.ok(!task.kinds.includes('anulowane'));
+    assert.equal(task.notes.mechanics, 'Keep');
+  }
 });
 
 test('choosing a file or a sheet never changes or saves the current plan', async () => {

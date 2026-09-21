@@ -34,6 +34,26 @@ type GrindingTask = {
   completedAt?: string | null;
 };
 
+export const grindingMaterialKey = (name: string, unit: string, normalizeName: (name: string) => string) =>
+  `${normalizeName(name)}|${isPieceGrindingUnit(unit) ? 'szt' : isKilogramGrindingUnit(unit) ? 'kg' : unit.trim().toLowerCase()}`;
+
+/** Report highlights follow unfinished work, independently of subsequent ERP imports. */
+export const getPendingGrindingQuantities = (
+  tasks: readonly GrindingTask[],
+  reportDate: string,
+  normalizeName: (name: string) => string
+): Map<string, number> => {
+  const quantities = new Map<string, number>();
+  for (const task of tasks) {
+    if (task.status !== 'PENDING' || !Number.isFinite(task.qty) || task.qty <= 0) continue;
+    if (task.sourceReportDate && task.sourceReportDate > reportDate) continue;
+    if (!normalizeName(task.materialName) || (!isPieceGrindingUnit(task.unit) && !isKilogramGrindingUnit(task.unit))) continue;
+    const key = grindingMaterialKey(task.materialName, task.unit, normalizeName);
+    quantities.set(key, (quantities.get(key) ?? 0) + task.qty);
+  }
+  return quantities;
+};
+
 type SnapshotEntry = {
   name: string;
   unit: string;

@@ -9,6 +9,7 @@ import * as workPlan from './productionWorkPlan.ts';
 import * as workProgress from './productionWorkProgress.ts';
 import * as workComments from './productionWorkComments.ts';
 import * as toolroom from './productionToolroomTasks.ts';
+import * as taskReference from './productionTaskReference.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -17,6 +18,7 @@ const recurringFile = fileURLToPath(new URL('./productionRecurringTasks.ts', imp
 const recurringModule = new Module(recurringFile);
 recurringModule.require = (id) => {
   if (id === './productionTeamComments') return comments;
+  if (id === './productionTaskReference') return taskReference;
   return require(id);
 };
 recurringModule._compile(ts.transpileModule(readFileSync(recurringFile, 'utf8'), {
@@ -205,7 +207,8 @@ test('work-plan task actions remain touch-friendly and inside each card on phone
   assert.match(mobileCss,/\.production-queues \.production-task-actions button \{[\s\S]*?height: 2\.75rem !important;[\s\S]*?flex: 1 1 0%;/);
   assert.match(mobileCss,/\.production-queues select \{[\s\S]*?font-size: 1rem;/);
   assert.doesNotMatch(page,/\.production-queues \.flex\.justify-end/);
-  assert.match(page,/md:hidden">\{mobileLabel\}<\/span>/);
+  assert.match(page,/!recurring && 'md:hidden'\)\}>\{mobileLabel\}<\/span>/);
+  assert.match(page,/recurring \? 'Zrobione' : 'Gotowe'/);
   assert.match(page,/md:hidden">\{editing \? 'Zamknij' : 'Edytuj'\}<\/span>/);
   assert.match(page,/md:hidden">Usuń<\/span>/);
   const queueStart=page.indexOf('const columnCopyId = `column-${team.id}`');
@@ -413,6 +416,7 @@ function testApi() {
     '@/lib/supabase/admin':{supabaseAdmin:{from:table=>new Query(table)}},
     '@/lib/utils/productionPlanDate':planDates,
     '@/lib/utils/productionRecurringTasks':recurring,
+    '@/lib/utils/productionTaskReference':taskReference,
     '@/lib/utils/productionTeamComments':comments,
     '@/lib/utils/productionWorkComments':workComments,
     '@/lib/utils/productionWorkProgress':workProgress,
@@ -810,6 +814,164 @@ test('API stores dispatcher stages independently and protects process readiness'
   saved=(await changed.json()).task;
   assert.equal(saved.teamProgress.distributionStation,undefined);
   assert.equal(saved.teamProgress.distributionMaterials,undefined);
+});
+
+test('only the requester can assign a task hall and reloading preserves it', async () => {
+  const api=testApi();
+  const task={...toolroomSource(),id:'hall-assignment',kinds:['inne'],teams:['distribution'],notes:{},teamProgress:{},done:false};
+  assert.equal((await api.post({action:'savePlan',tasks:[task]})).status,200);
+  const mutation={setNotes:{productionHall:'hala-2'}};
+  api.state.isAdmin=false;api.state.preparationTeams=['distribution'];
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation})).status,403);
+  api.state.isAdmin=true;
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation})).status,200);
+  const reloaded=await (await api.get()).json();
+  assert.equal(reloaded.tasks.find(t=>t.id===task.id).notes.productionHall,'hala-2');
+  assert.equal(reloaded.tasks.find(t=>t.id===task.id).done,false);
+  assert.equal((await api.post({action:'mutateTask',taskId:task.id,mutation:{clearWork:true}})).status,200);
+  const cleared=await (await api.get()).json();
+  assert.equal(cleared.tasks.find(t=>t.id===task.id).notes.productionHall,'hala-2');
+});
+
+test('recurring hall is retained on later days and changing the template updates it', async (context) => {
+  const api=testApi();
+  const planDate=planDates.getWarsawProductionPlanDate();
+  const definition={id:'hall-clean',title:'Clean filter',weekdays:[1,2,3,4,5,6,7],teams:['distribution'],active:true,hall:'hala-2'};
+  assert.equal((await api.post({action:'saveRecurringTasks',planDate,recurringTasks:[definition]})).status,200);
+  const first=await (await api.get(`?date=${planDate}`)).json();
+  assert.equal(first.tasks.find(t=>t.id===recurring.recurringTaskInstanceId(definition.id,planDate)).notes.productionHall,'hala-2');
+  const next=new Date(`${planDate}T12:00:00Z`);next.setUTCDate(next.getUTCDate()+1);
+  const tomorrow=next.toISOString().slice(0,10);
+  context.mock.timers.enable({apis:['Date'],now:next.getTime()});
+  const second=await (await api.get(`?date=${tomorrow}`)).json();
+  assert.equal(second.tasks.find(t=>t.id===recurring.recurringTaskInstanceId(definition.id,tomorrow)).notes.productionHall,'hala-2');
+  context.mock.timers.setTime(Date.parse(`${planDate}T12:00:00Z`));
+  assert.equal((await api.post({action:'saveRecurringTasks',planDate,recurringTasks:[{...definition,hall:'hala-1'}]})).status,200);
+  const updated=await (await api.get(`?date=${planDate}`)).json();
+  assert.equal(updated.tasks.find(t=>t.id===recurring.recurringTaskInstanceId(definition.id,planDate)).notes.productionHall,'hala-1');
+  assert.ok(recurring.validateRecurringTasks([{...definition,hall:'hala-3'}]));
+});
+
+test('shared-hall task has one completion and one record for each assigned team', async () => {
+  for (const team of ['distribution', 'technician']) {
+    const api = testApi();
+    const task = {...toolroomSource(), id:`both-${team}`, kinds:['inne'], teams:[team], notes:{}, teamProgress:{}, done:false};
+    assert.equal((await api.post({action:'savePlan', tasks:[task]})).status, 200);
+    assert.equal((await api.post({action:'mutateTask', taskId:task.id, mutation:{setNotes:{productionHall:'both'}}})).status, 200);
+    api.state.isAdmin = false;
+    api.state.preparationTeams = [team];
+    assert.equal((await api.post({action:'mutateTask', taskId:task.id, mutation:{setTeamDone:{team,done:true}}})).status, 200);
+    let data = await (await api.get()).json();
+    for (const hall of ['hala-1', 'hala-2', 'all']) {
+      const visible = data.tasks.filter(t => taskReference.productionHallMatchesFilter(taskReference.productionTaskHall(t, []), hall));
+      assert.equal(visible.length, 1);
+      assert.equal(visible[0].id, task.id);
+      assert.equal(visible[0].done, true);
+      assert.equal(workProgress.isProductionTeamDone(visible[0], team), true);
+    }
+    assert.equal(api.db.przygotowanie_produkcji_tasks.length, 1);
+    assert.equal((await api.post({action:'mutateTask', taskId:task.id, mutation:{setTeamDone:{team,done:false}}})).status, 200);
+    data = await (await api.get()).json();
+    assert.equal(data.tasks[0].done, false);
+    assert.equal(data.tasks[0].notes.productionHall, 'both');
+    api.state.isAdmin = true;
+    assert.equal((await api.post({action:'mutateTask', taskId:task.id, mutation:{clearWork:true}})).status, 200);
+    data = await (await api.get()).json();
+    assert.equal(data.tasks[0].notes.productionHall, 'both');
+  }
+});
+
+test('recurring task assigned to both halls stays single and resets only on the next day', async (context) => {
+  const api = testApi();
+  const date = planDates.getWarsawProductionPlanDate();
+  const definition = {id:'shared-cycle',title:'Shared work',weekdays:[1,2,3,4,5,6,7],teams:['distribution'],active:true,hall:'hala-1'};
+  assert.equal((await api.post({action:'saveRecurringTasks',planDate:date,recurringTasks:[definition]})).status, 200);
+  const id = recurring.recurringTaskInstanceId(definition.id, date);
+  assert.equal((await api.post({action:'mutateTask',planDate:date,taskId:id,mutation:{setTeamDone:{team:'distribution',done:true}}})).status, 200);
+  const shared = {...definition,hall:'both'};
+  assert.equal(recurring.validateRecurringTasks([shared]), null);
+  assert.deepEqual(recurring.normalizeRecurringTasks([shared]), [shared]);
+  assert.equal((await api.post({action:'saveRecurringTasks',planDate:date,recurringTasks:[shared]})).status, 200);
+  let data = await (await api.get(`?date=${date}`)).json();
+  assert.equal(data.tasks.length, 1);
+  assert.equal(data.tasks[0].id, id);
+  assert.equal(data.tasks[0].notes.productionHall, 'both');
+  assert.equal(data.tasks[0].done, true);
+  assert.equal(data.recurringTasks[0].hall, 'both');
+  const next = new Date(`${date}T12:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  context.mock.timers.enable({apis:['Date'],now:next.getTime()});
+  const tomorrow = next.toISOString().slice(0, 10);
+  data = await (await api.get(`?date=${tomorrow}`)).json();
+  assert.equal(data.tasks.length, 1);
+  assert.equal(data.tasks[0].id, recurring.recurringTaskInstanceId(definition.id, tomorrow));
+  assert.equal(data.tasks[0].notes.productionHall, 'both');
+  assert.equal(data.tasks[0].done, false);
+});
+
+test('dispatcher closes and reopens a recurring task with one action, including legacy partial stages', async () => {
+  for (const previousStages of [[], ['materials'], ['station'], ['materials', 'station']]) {
+    const api = testApi();
+    const date = planDates.getWarsawProductionPlanDate();
+    const definition = {id:'single-check',title:'Clean the station',weekdays:[1,2,3,4,5,6,7],teams:['distribution'],active:true,hall:'both'};
+    assert.equal((await api.post({action:'saveRecurringTasks',planDate:date,recurringTasks:[definition]})).status, 200);
+    const id = recurring.recurringTaskInstanceId(definition.id, date);
+    for (const stage of previousStages) {
+      assert.equal((await api.post({action:'mutateTask',taskId:id,mutation:{setDistributionStageDone:{stage,done:true}}})).status, 200);
+    }
+    api.state.isAdmin = false;
+    api.state.preparationTeams = ['distribution'];
+    const close = await api.post({action:'mutateTask',taskId:id,mutation:{setTeamDone:{team:'distribution',done:true}}});
+    assert.equal(close.status, 200);
+    assert.equal((await close.json()).task.done, true);
+    let saved = (await (await api.get()).json()).tasks.find(t => t.id === id);
+    assert.equal(workProgress.isProductionTeamDone(saved, 'distribution'), true);
+    assert.equal(saved.notes.productionHall, 'both');
+    assert.equal(api.db.przygotowanie_produkcji_tasks.filter(row => row.task_key === id).length, 1);
+    const reopen = await api.post({action:'mutateTask',taskId:id,mutation:{setTeamDone:{team:'distribution',done:false}}});
+    assert.equal(reopen.status, 200);
+    saved = (await (await api.get()).json()).tasks.find(t => t.id === id);
+    assert.equal(saved.done, false);
+    assert.equal(workProgress.isProductionTeamDone(saved, 'distribution'), false);
+    assert.equal(workProgress.isProductionDistributionStageDone(saved, 'materials'), false);
+    assert.equal(workProgress.isProductionDistributionStageDone(saved, 'station'), false);
+    assert.equal(saved.notes.productionHall, 'both');
+  }
+});
+
+test('technology reference requires preparation access and only returns the matched product', async () => {
+  let user=null,allowed=false;
+  const reads=[];
+  const routeFile=fileURLToPath(new URL('../../app/api/przygotowanie-produkcji/reference/route.ts',import.meta.url));
+  const mod=new Module(routeFile);
+  const stubs={
+    'next/server':{NextResponse:{json:(data,options)=>new Response(JSON.stringify(data),{status:options?.status??200,headers:{'Content-Type':'application/json'}})}},
+    '@/lib/auth/access':{canSeeTab:()=>allowed},
+    '@/lib/auth/session':{getAuthenticatedUser:async()=>({user,code:'UNAUTHORIZED'})},
+    '@/lib/utils/productionTaskReference':taskReference,
+    '@/lib/supabase/admin':{supabaseAdmin:{from:()=>({select:field=>{reads.push(field);return {
+      eq:()=>({maybeSingle:async()=>({data:{value:field.includes('stationMappings')?[{station:'WTR 1',areaId:'hala-1'}]:[{id:'a',productIndex:'A1000',productName:'Product',variant:'base',materials:[]},{id:'b',productIndex:'B2000',productName:'Other',variant:'base',materials:[]}]},error:null})}),
+      like:()=>({order:()=>({range:async()=>({data:[{id:'workspace:planner',version:1,preview:[{index:'A1000',name:'Product',station:'WTR 1',areaId:'hala-1',technologyId:'a',changedAt:'2026-09-21T08:00:00.000Z'}]}],error:null})})})
+    };}})}}
+  };
+  mod.require=id=>{assert.ok(id in stubs,id);return stubs[id];};
+  mod._compile(ts.transpileModule(readFileSync(routeFile,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,routeFile);
+  const get=query=>mod.exports.GET({nextUrl:new URL(`http://test/api/przygotowanie-produkcji/reference${query}`)});
+  assert.equal((await get('')).status,401);
+  user={id:'worker'};
+  assert.equal((await get('')).status,403);
+  assert.equal(reads.length,0);
+  allowed=true;
+  assert.deepEqual((await (await get('')).json()).stationMappings,[{station:'WTR 1',areaId:'hala-1'}]);
+  assert.equal(reads.length,1);
+  assert.equal((await get('?detail=Product%20(A1000)')).status,400);
+  const query='?detail=Product%20(A1000)&station=WTR%201&date=2026-09-21&area=hala-1';
+  const result=await (await get(query)).json();
+  assert.deepEqual(result.items.map(item=>item.id),['a']);
+  await Promise.all(Array.from({length:25},()=>get(query)));
+  assert.equal(reads.length,3);
+  allowed=false;
+  assert.equal((await get('?detail=Product%20(A1000)')).status,403);
 });
 
 test('recurring task definitions validate days, groups and matching dates', () => {

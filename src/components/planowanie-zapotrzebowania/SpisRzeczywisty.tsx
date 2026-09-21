@@ -47,6 +47,8 @@ import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { parseQtyInput } from '@/lib/utils/format';
 import {
   applyPieceGrindingReservations,
+  getPendingGrindingQuantities,
+  grindingMaterialKey,
   groupGrindingTasksByMaterial,
   isKilogramGrindingUnit,
   isPieceGrindingUnit
@@ -390,9 +392,6 @@ const normalizeCatalogNameKey = (value: unknown) =>
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
-
-const grindingMaterialKey = (name: string, unit: string) =>
-  `${normalizeCatalogNameKey(name)}|${isPieceGrindingUnit(unit) ? 'szt' : isKilogramGrindingUnit(unit) ? 'kg' : unit.trim().toLowerCase()}`;
 
 const isMissingDetailGrindTarget = (task: Pick<OriginalInventoryGrindTask, 'unit' | 'materialName' | 'targetMaterialName'>) =>
   isPieceGrindingUnit(task.unit) && (
@@ -2604,16 +2603,10 @@ export default function SpisRzeczywisty() {
     if (!selectedReportMaterialKey) return [];
     return reportRows.filter((row) => row.key === selectedReportMaterialKey);
   }, [reportRows, selectedReportMaterialKey]);
-  const pendingGrindQtyByMaterial = useMemo(() => {
-    const map = new Map<string, number>();
-    grindTasks.forEach((task) => {
-      if (task.status === 'DONE' || task.sourceReportDate !== spisDate) return;
-      if (!normalizeCatalogNameKey(task.materialName)) return;
-      const key = grindingMaterialKey(task.materialName, task.unit);
-      map.set(key, (map.get(key) ?? 0) + task.qty);
-    });
-    return map;
-  }, [grindTasks, spisDate]);
+  const pendingGrindQtyByMaterial = useMemo(
+    () => getPendingGrindingQuantities(grindTasks, spisDate, normalizeCatalogNameKey),
+    [grindTasks, spisDate]
+  );
   const reportSuggestions = useMemo(() => {
     if (!normalizeCatalogNameKey(reportQuery)) return [];
     return reportOptions
@@ -3098,7 +3091,7 @@ export default function SpisRzeczywisty() {
     'Jedn.'
   ];
   const renderReportMaterialCell = (row: (typeof reportRows)[number]) => {
-    const grindQty = pendingGrindQtyByMaterial.get(grindingMaterialKey(row.name, row.unit)) ?? 0;
+    const grindQty = pendingGrindQtyByMaterial.get(grindingMaterialKey(row.name, row.unit, normalizeCatalogNameKey)) ?? 0;
     const materialName = showReportIndex2 ? (
       <span className="flex min-w-0 items-baseline gap-3">
         <span className="w-[100px] shrink-0 break-all text-xs font-semibold text-dim" title="Indeks 2">
@@ -3111,16 +3104,20 @@ export default function SpisRzeczywisty() {
     return (
       <div className="min-w-0 space-y-1">
         <div className="break-words">{materialName}</div>
-        <div className="text-xs font-semibold text-violet-200">
-          − {formatQty(grindQty)} {isPieceGrindingUnit(row.unit) ? 'szt.' : row.unit} do mielenia
+        <div className={cn('text-xs font-semibold', isPieceGrindingUnit(row.unit)
+          ? 'text-[color:color-mix(in_srgb,#a855f7_75%,var(--t-title))]'
+          : 'text-[color:color-mix(in_srgb,#3b82f6_75%,var(--t-title))]')}>
+          Do mielenia: {formatQty(grindQty)} {isPieceGrindingUnit(row.unit) ? 'szt.' : 'kg'}
         </div>
       </div>
     );
   };
-  const getReportRowClassName = (row: (typeof reportRows)[number]) =>
-    (pendingGrindQtyByMaterial.get(grindingMaterialKey(row.name, row.unit)) ?? 0) > 0
-      ? 'border-[rgba(168,85,247,0.36)] bg-[linear-gradient(90deg,rgba(168,85,247,0.18),rgba(88,28,135,0.08))] hover:bg-[rgba(168,85,247,0.16)]'
-      : '';
+  const getReportRowClassName = (row: Pick<(typeof reportRows)[number], 'name' | 'unit'>) => {
+    if ((pendingGrindQtyByMaterial.get(grindingMaterialKey(row.name, row.unit, normalizeCatalogNameKey)) ?? 0) <= 0) return '';
+    return isPieceGrindingUnit(row.unit)
+      ? 'text-[var(--t-title)] border-[rgba(168,85,247,0.42)] bg-[linear-gradient(90deg,rgba(168,85,247,0.22),rgba(88,28,135,0.10))] !shadow-[inset_3px_0_0_#a855f7] hover:bg-[rgba(168,85,247,0.16)]'
+      : 'text-[var(--t-title)] border-[rgba(59,130,246,0.42)] bg-[linear-gradient(90deg,rgba(59,130,246,0.22),rgba(29,78,216,0.10))] !shadow-[inset_3px_0_0_#3b82f6] hover:bg-[rgba(59,130,246,0.16)]';
+  };
   const reportActionButtonBaseClassName =
     'report-action-button rounded-xl px-4 transition active:translate-y-px disabled:translate-y-0';
   const reportExportButtonClassName = cn(
@@ -4591,17 +4588,18 @@ export default function SpisRzeczywisty() {
                                 grindDialogMaterial.availableQty === null ||
                                 grindDialogMaterial.availableQty <= 0
                               }
-                              className="mt-3 flex min-h-[54px] w-full items-center justify-between gap-3 rounded-xl border border-[rgba(255,122,26,0.58)] bg-[linear-gradient(135deg,rgba(255,122,26,0.22),rgba(255,122,26,0.06)_48%,rgba(0,0,0,0.24))] px-4 text-left shadow-[0_0_24px_rgba(255,122,26,0.12),inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-[rgba(255,122,26,0.88)] hover:bg-[linear-gradient(135deg,rgba(255,122,26,0.30),rgba(255,122,26,0.08)_48%,rgba(0,0,0,0.24))] disabled:opacity-45"
+                              variant="outline"
+                              className="grinding-quick-fill mt-3 flex min-h-[60px] w-full items-center justify-between gap-3 rounded-lg px-3 text-left"
                             >
-                              <span>
-                                <span className="block text-[10px] font-black uppercase tracking-wide text-brand">
+                              <span className="min-w-0">
+                                <span className="grinding-quick-fill-caption block text-[10px] font-bold uppercase">
                                   Szybkie uzupelnienie
                                 </span>
-                                <span className="block text-sm font-black text-title">
+                                <span className="block text-sm font-bold">
                                   Dodaj caly stan do dyspozycji
                                 </span>
                               </span>
-                              <span className="shrink-0 rounded-lg border border-[rgba(255,122,26,0.45)] bg-[rgba(255,122,26,0.16)] px-3 py-2 text-base font-black text-brand">
+                              <span className="grinding-quick-fill-quantity shrink-0 whitespace-nowrap rounded-md border px-3 py-2 text-base font-bold">
                                 {grindDialogMaterial.availableQty !== null
                                   ? `${formatQty(grindDialogMaterial.availableQty)} ${grindDialogMaterial.unit}`
                                   : '-'}
@@ -4701,6 +4699,7 @@ export default function SpisRzeczywisty() {
                   <DataTable
                     columns={dailyComparisonColumns}
                     rows={dailyComparisonRows}
+                    getRowClassName={(rowIndex) => getReportRowClassName(dailyComparison[rowIndex])}
                     stickyHeader
                     desktopMaxHeightClassName="max-h-[82vh]"
                   />
@@ -5283,17 +5282,18 @@ export default function SpisRzeczywisty() {
                     grindDialogMaterial.availableQty === null ||
                     grindDialogMaterial.availableQty <= 0
                   }
-                  className="mt-3 flex min-h-[54px] w-full items-center justify-between gap-3 rounded-xl border border-[rgba(255,122,26,0.58)] bg-[linear-gradient(135deg,rgba(255,122,26,0.22),rgba(255,122,26,0.06)_48%,rgba(0,0,0,0.24))] px-4 text-left shadow-[0_0_24px_rgba(255,122,26,0.12),inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-[rgba(255,122,26,0.88)] hover:bg-[linear-gradient(135deg,rgba(255,122,26,0.30),rgba(255,122,26,0.08)_48%,rgba(0,0,0,0.24))] disabled:opacity-45"
+                  variant="outline"
+                  className="grinding-quick-fill mt-3 flex min-h-[60px] w-full items-center justify-between gap-3 rounded-lg px-3 text-left"
                 >
-                  <span>
-                    <span className="block text-[10px] font-black uppercase tracking-wide text-brand">
+                  <span className="min-w-0">
+                    <span className="grinding-quick-fill-caption block text-[10px] font-bold uppercase">
                       Szybkie uzupelnienie
                     </span>
-                    <span className="block text-sm font-black text-title">
+                    <span className="block text-sm font-bold">
                       Dodaj caly stan do dyspozycji
                     </span>
                   </span>
-                  <span className="shrink-0 rounded-lg border border-[rgba(255,122,26,0.45)] bg-[rgba(255,122,26,0.16)] px-3 py-2 text-base font-black text-brand">
+                  <span className="grinding-quick-fill-quantity shrink-0 whitespace-nowrap rounded-md border px-3 py-2 text-base font-bold">
                     {grindDialogMaterial.availableQty !== null
                       ? `${formatQty(grindDialogMaterial.availableQty)} ${grindDialogMaterial.unit}`
                       : '-'}

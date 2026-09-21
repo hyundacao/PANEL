@@ -1,4 +1,5 @@
 import { isProductionTeam, type ProductionTeam } from './productionTeamComments';
+import { isProductionHallSelection, type ProductionHallSelection } from './productionTaskReference';
 
 export const RECURRING_TASK_SETTINGS_KEY = '__recurring_tasks__';
 export const RECURRING_TASK_STATION = 'ZADANIE CYKLICZNE';
@@ -20,6 +21,7 @@ export type RecurringTaskDefinition = {
   weekdays: number[];
   teams: ProductionTeam[];
   active: boolean;
+  hall?: ProductionHallSelection;
 };
 
 const MAX_RECURRING_TASKS = 100;
@@ -44,7 +46,7 @@ export const normalizeRecurringTasks = (value: unknown): RecurringTaskDefinition
     const teams = Array.isArray(record.teams)
       ? [...new Set(record.teams.filter(isProductionTeam))]
       : [];
-    result.push({ id, title, weekdays, teams, active: record.active !== false });
+    result.push({ id, title, weekdays, teams, active: record.active !== false, ...(isProductionHallSelection(record.hall) ? { hall: record.hall } : {}) });
     if (result.length >= MAX_RECURRING_TASKS) break;
   }
 
@@ -72,6 +74,7 @@ export const validateRecurringTasks = (value: unknown): string | null => {
       return `Wybierz co najmniej jedną grupę dla zadania „${title}”.`;
     }
     if (typeof record.active !== 'boolean') return 'Nieprawidłowy status zadania cyklicznego.';
+    if (record.hall !== undefined && !isProductionHallSelection(record.hall)) return 'Wybierz Halę 1, Halę 2, obie hale albo pozostaw zadanie nieprzypisane.';
   }
   return null;
 };

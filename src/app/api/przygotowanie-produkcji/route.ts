@@ -27,6 +27,7 @@ import {
 import { isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, toolroomReturnId, withToolroomReturnTasks } from '@/lib/utils/productionToolroomTasks';
 import { PRODUCTION_TEAMS, TEAM_COMMENT_KEY_PREFIX, defaultTeamComments, isProductionTeam, normalizeTeamComment, validateTeamComment } from '@/lib/utils/productionTeamComments';
 import { productionWorkCommentNoteKey, validateProductionWorkCommentText, withProductionWorkComment } from '@/lib/utils/productionWorkComments';
+import { PRODUCTION_HALL_NOTE, normalizeProductionHallAssignment } from '@/lib/utils/productionTaskReference';
 import {
   PRODUCTION_TEAM_PROGRESS_NOTE_KEY,
   PRODUCTION_STARTUP_TEAMS,
@@ -527,7 +528,7 @@ const validWorkKinds = new Set([
   'zmiana-grafiki', 'regulacja', 'proby', 'przeglad-a', 'anulowane', 'inne'
 ]);
 const validTeams = new Set(['mechanics', 'process', 'distribution', 'graphics', 'technician', 'additional']);
-const validNoteKeys = new Set([...validTeams, 'processAssignee']);
+const validNoteKeys = new Set([...validTeams, 'processAssignee', PRODUCTION_HALL_NOTE]);
 
 const applyTaskMutation = (
   task: StoredTask,
@@ -552,7 +553,10 @@ const applyTaskMutation = (
     temperature: fields.temperature === undefined ? task.temperature : String(fields.temperature),
     kinds: mutation.clearWork ? [] : [...task.kinds],
     teams: mutation.clearWork ? [] : [...task.teams],
-    notes: mutation.clearWork ? toolroomLinkNotes(task) : { ...task.notes },
+    notes: mutation.clearWork ? {
+      ...toolroomLinkNotes(task),
+      ...(normalizeProductionHallAssignment(task.notes[PRODUCTION_HALL_NOTE]) ? { [PRODUCTION_HALL_NOTE]: task.notes[PRODUCTION_HALL_NOTE] } : {})
+    } : { ...task.notes },
     teamProgress: mutation.clearWork ? {} : productionTeamProgressForTask(task)
   };
 
@@ -586,6 +590,7 @@ const applyTaskMutation = (
   });
   Object.entries(mutation.setNotes ?? {}).forEach(([key, value]) => {
     if (!validNoteKeys.has(key)) return;
+    if (key === PRODUCTION_HALL_NOTE && value && !normalizeProductionHallAssignment(value)) return;
     if (value === null || value === '') delete next.notes[key];
     else next.notes[key] = String(value);
   });
@@ -731,14 +736,16 @@ const ensureRecurringTaskInstances = async (
       const currentTeams = new Set<string>(current.teams);
       const removedTeams = current.teams.filter((team) => !definitionTeams.has(team));
       const addedTeams = definition.teams.filter((team) => !currentTeams.has(team));
-      if (current.detail === definition.title && removedTeams.length === 0 && addedTeams.length === 0) continue;
+      const hallChanged = (current.notes[PRODUCTION_HALL_NOTE] ?? '') !== (definition.hall ?? '');
+      if (current.detail === definition.title && removedTeams.length === 0 && addedTeams.length === 0 && !hallChanged) continue;
       const next = applyTaskMutation(current, {
         fields: current.detail === definition.title ? undefined : { detail: definition.title },
         removeTeams: removedTeams,
         addTeams: addedTeams,
-        setNotes: removedTeams.length > 0
-          ? Object.fromEntries(removedTeams.map((team) => [team, null]))
-          : undefined
+        setNotes: {
+          ...Object.fromEntries(removedTeams.map((team) => [team, null])),
+          [PRODUCTION_HALL_NOTE]: definition.hall ?? null
+        }
       }, { completedAt: '', completedBy: '' });
       const row = toDbTask(next, sessionId, Number(existingRow.position_no ?? 100000 + index), userName);
       const updates = omitFields(row, ['session_id', 'task_key', 'position_no'] as const);
@@ -761,7 +768,7 @@ const ensureRecurringTaskInstances = async (
       highlighted: false,
       kinds: ['inne'],
       teams: definition.teams,
-      notes: {},
+      notes: definition.hall ? { [PRODUCTION_HALL_NOTE]: definition.hall } : {},
       teamProgress: {},
       done: false,
       material: '',

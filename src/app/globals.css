@@ -514,6 +514,46 @@ body > * {
   outline-offset: 2px;
 }
 
+.grinding-quick-fill {
+  --quick-fill-bg: #202127;
+  --quick-fill-hover: #2b2c33;
+  --quick-fill-border: #b96f32;
+  --quick-fill-accent: #ffb979;
+  --quick-fill-quantity-bg: #3b291d;
+  border-color: var(--quick-fill-border);
+  background: var(--quick-fill-bg);
+  color: var(--t-title);
+  box-shadow: none;
+  text-shadow: none;
+}
+
+html.light .grinding-quick-fill {
+  --quick-fill-bg: #ffffff;
+  --quick-fill-hover: #fff8f1;
+  --quick-fill-border: #bd773a;
+  --quick-fill-accent: #974100;
+  --quick-fill-quantity-bg: #fff0e1;
+}
+
+.grinding-quick-fill:hover:not(:disabled) {
+  background: var(--quick-fill-hover);
+}
+
+.grinding-quick-fill:focus-visible {
+  outline: 2px solid var(--quick-fill-accent);
+  outline-offset: 3px;
+}
+
+.grinding-quick-fill-caption,
+.grinding-quick-fill-quantity {
+  color: var(--quick-fill-accent);
+}
+
+.grinding-quick-fill-quantity {
+  border-color: var(--quick-fill-border);
+  background: var(--quick-fill-quantity-bg);
+}
+
 .original-inventory-tab {
   position: relative;
   isolation: isolate;

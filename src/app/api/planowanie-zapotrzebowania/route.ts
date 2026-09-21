@@ -3,6 +3,7 @@ import { canSeeTab, isReadOnly, isWarehouseAdmin } from '@/lib/auth/access';
 import { validPalletSetsState } from '@/lib/planowanie-zapotrzebowania/palletSets';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { buildTechnologyPreviewProjection, TECHNOLOGY_PREVIEW_FIELD } from '@/lib/utils/productionTaskReference';
 import {
   searchProductCatalog,
   type ProductCatalogItem,
@@ -30,6 +31,11 @@ const PLANNING_STATE_CACHE_MS = 30 * 1000;
 let productCatalogCache: { items: ProductCatalogItem[]; expiresAt: number } | null = null;
 let productCatalogLoadPromise: Promise<ProductCatalogItem[]> | null = null;
 let planningStateCache: (PlanningRecord & { expiresAt: number }) | null = null;
+const workspacePreviewCache = new Map<string, { revision: number; projection: unknown }>();
+const rememberWorkspacePreview = (id: string, revision: number, projection: unknown) => {
+  if (workspacePreviewCache.size >= 32) workspacePreviewCache.delete(workspacePreviewCache.keys().next().value!);
+  workspacePreviewCache.set(id, { revision, projection });
+};
 
 const cachedPlanningState = () => (
   planningStateCache && planningStateCache.expiresAt > Date.now() ? planningStateCache : null
@@ -47,8 +53,14 @@ const readPlanningRecord = async (id: string): Promise<PlanningRecord> => {
     .eq('id', id)
     .maybeSingle();
   if (error) throw error;
+  // Internal preview metadata must not participate in client autosave equality
+  // or conflict recovery. It is rebuilt by the server in the same atomic save.
+  const state = data?.state && typeof data.state === 'object' ? { ...data.state } : null;
+  if (id.startsWith('workspace:')) rememberWorkspacePreview(id, Number(data?.revision ?? 0),
+    state?.[TECHNOLOGY_PREVIEW_FIELD] ?? buildTechnologyPreviewProjection(state ?? {}, null, ''));
+  if (state) delete state[TECHNOLOGY_PREVIEW_FIELD];
   return {
-    state: data?.state ?? null,
+    state,
     updatedAt: data?.updated_at ?? null,
     updatedBy: data?.updated_by ?? null,
     revision: Number(data?.revision ?? 0)
@@ -56,14 +68,39 @@ const readPlanningRecord = async (id: string): Promise<PlanningRecord> => {
 };
 
 const savePlanningRecord = async (id: string, state: Record<string, unknown>, revision: number, updatedBy: string) => {
+  let storedState = state;
+  if (id.startsWith('workspace:')) {
+    const cached = workspacePreviewCache.get(id);
+    let projection: unknown = cached?.revision === revision ? cached.projection : null;
+    if (!projection) {
+      const previous = await supabaseAdmin.from('material_planning_state')
+        .select(`preview:state->${TECHNOLOGY_PREVIEW_FIELD}`).eq('id', id).maybeSingle();
+      if (previous.error) throw previous.error;
+      projection = previous.data?.preview;
+    }
+    if (!projection) {
+      // One-time compatibility read for plans saved before preview publication.
+      // An unchanged old choice has no priority over a newer explicit change.
+      const legacy = await supabaseAdmin.from('material_planning_state')
+        .select('plan:state->plan,dailyPlans:state->dailyPlans,selectedPlanDate:state->selectedPlanDate')
+        .eq('id', id).maybeSingle();
+      if (legacy.error) throw legacy.error;
+      projection = buildTechnologyPreviewProjection(legacy.data ?? {}, null, '');
+    }
+    storedState = { ...state, [TECHNOLOGY_PREVIEW_FIELD]: buildTechnologyPreviewProjection(state, projection, new Date().toISOString()) };
+  }
   const { data, error } = await supabaseAdmin.rpc('save_material_planning_state', {
     p_module_id: id,
-    p_state: state,
+    p_state: storedState,
     p_expected_revision: revision,
     p_updated_by: updatedBy
   });
   if (error) throw error;
   const result = Array.isArray(data) ? data[0] as { new_revision?: number; has_conflict?: boolean } | undefined : undefined;
+  if (id.startsWith('workspace:')) {
+    if (result?.has_conflict) workspacePreviewCache.delete(id);
+    else if (result?.new_revision) rememberWorkspacePreview(id, result.new_revision, storedState[TECHNOLOGY_PREVIEW_FIELD]);
+  }
   return { revision: Number(result?.new_revision ?? revision), conflict: result?.has_conflict === true };
 };
 
