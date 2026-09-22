@@ -122,9 +122,9 @@ export const ErpSidebar = () => {
                     active && 'bg-brand'
                   )}
                 />
-                <Icon className="h-4 w-4" style={{ color: active ? 'var(--brand)' : 'var(--sidebar-item-color)' }} />
+                <Icon className="h-4 w-4" style={{ color: active ? 'var(--sidebar-active-text, var(--brand))' : 'var(--sidebar-item-color)' }} />
                 {!sidebarCollapsed && (
-                  <span style={{ color: active ? 'var(--brand)' : 'var(--sidebar-item-color)' }}>{item.label}</span>
+                  <span style={{ color: active ? 'var(--sidebar-active-text, var(--brand))' : 'var(--sidebar-item-color)' }}>{item.label}</span>
                 )}
               </button>
             );
@@ -133,8 +133,8 @@ export const ErpSidebar = () => {
             type="button"
             onClick={toggleTheme}
             className="flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition hover:bg-[var(--sidebar-item-hover)]"
-            aria-label={theme === 'dark' ? 'Włącz jasny motyw' : 'Włącz ciemny motyw'}
-            title={theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'}
+            aria-label={theme === 'dark' ? 'Włącz motyw pośredni' : 'Włącz ciemny motyw'}
+            title={theme === 'dark' ? 'Motyw pośredni' : 'Ciemny motyw'}
             aria-pressed={theme === 'light'}
           >
             <span className="h-8 w-[2px] rounded-full bg-transparent" />
@@ -145,7 +145,7 @@ export const ErpSidebar = () => {
             )}
             {!sidebarCollapsed && (
               <span style={{ color: 'var(--sidebar-item-color)' }}>
-                {theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'}
+                {theme === 'dark' ? 'Motyw pośredni' : 'Ciemny motyw'}
               </span>
             )}
           </button>

@@ -191,6 +191,7 @@ export type LocationDetailItem = {
 };
 
 export type OriginalInventoryEntry = {
+  canModify?: boolean;
   id: string;
   at: string;
   warehouseId: string;
@@ -228,6 +229,7 @@ export type OriginalInventorySiloConfig = {
 };
 
 export type OriginalInventorySiloEntry = {
+  canModify?: boolean;
   id: string;
   configId: string;
   dateKey: string;

@@ -44,6 +44,7 @@ import { Toggle } from '@/components/ui/Toggle';
 import { useToastStore } from '@/components/ui/Toast';
 import { useUiStore } from '@/lib/store/ui';
 import { canSeeTab, isReadOnly } from '@/lib/auth/access';
+import { INVENTORY_OWNER_MESSAGE } from '@/lib/utils/originalInventoryOwnership';
 import { parseQtyInput } from '@/lib/utils/format';
 import {
   applyPieceGrindingReservations,
@@ -634,6 +635,11 @@ const OriginalInventoryNameSearch = ({
   onSelect: (suggestion: OriginalInventoryNameSuggestion) => void;
 }) => {
   const [query, setQuery] = useState(value);
+  const [previousValue, setPreviousValue] = useState(value);
+  if (previousValue !== value) {
+    setPreviousValue(value);
+    setQuery(value);
+  }
   const queryRef = useRef(value);
   const closeSuggestionsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelSuggestionsClose = () => { if (closeSuggestionsTimer.current) clearTimeout(closeSuggestionsTimer.current); };
@@ -645,17 +651,12 @@ const OriginalInventoryNameSearch = ({
 
   useEffect(() => {
     queryRef.current = value;
-    setQuery(value);
   }, [value]);
 
   useEffect(() => {
-    if (!remoteSearchEnabled) {
-      setDebouncedQuery('');
-      return;
-    }
     const timeoutId = window.setTimeout(() => setDebouncedQuery(query), SPIS_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timeoutId);
-  }, [query, remoteSearchEnabled]);
+  }, [query]);
 
   const normalizedDebouncedQuery = normalizeCatalogNameKey(debouncedQuery);
   const { data: remoteCatalogSuggestions = [], isFetching } = useQuery({
@@ -665,7 +666,7 @@ const OriginalInventoryNameSearch = ({
       SPIS_SEARCH_SERVER_LIMIT,
       signal
     ),
-    enabled: normalizedDebouncedQuery.replace(/\s/g, '').length >= SPIS_SEARCH_MIN_LENGTH,
+    enabled: remoteSearchEnabled && normalizedDebouncedQuery.replace(/\s/g, '').length >= SPIS_SEARCH_MIN_LENGTH,
     staleTime: 5 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false,
@@ -1292,6 +1293,7 @@ export default function SpisRzeczywisty() {
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
+        INVENTORY_NOT_OWNER: INVENTORY_OWNER_MESSAGE,
         ENTRY_MISSING: 'Nie znaleziono wpisu.',
         WAREHOUSE_REQUIRED: 'Wybierz hale.',
         QTY_REQUIRED: 'Wpisz poprawna ilosc.'
@@ -1307,6 +1309,7 @@ export default function SpisRzeczywisty() {
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
+        INVENTORY_NOT_OWNER: INVENTORY_OWNER_MESSAGE,
         ENTRY_MISSING: 'Nie znaleziono wpisu.'
       };
       toast({ title: messageMap[err.message] ?? 'Nie usunieto wpisu.', tone: 'error' });
@@ -1346,6 +1349,7 @@ export default function SpisRzeczywisty() {
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
+        INVENTORY_NOT_OWNER: INVENTORY_OWNER_MESSAGE,
         PERCENT_REQUIRED: 'Wpisz procent od 0 do 100.',
         NOT_FOUND: 'Nie znaleziono konfiguracji silosa.',
         DATE_REQUIRED: 'Wybierz dzien spisu.'
@@ -1696,6 +1700,11 @@ export default function SpisRzeczywisty() {
     }));
   };
   const handleSaveSilo = (configId: string) => {
+    const persisted = siloEntryMap.get(configId);
+    if (persisted && persisted.canModify !== true) {
+      toast({ title: INVENTORY_OWNER_MESSAGE, tone: 'error' });
+      return;
+    }
     if (readOnly) {
       toast({ title: 'Brak uprawnien do zapisu spisu.', tone: 'error' });
       return;
@@ -1718,6 +1727,11 @@ export default function SpisRzeczywisty() {
     qty: number | null,
     source: 'full' | 'manual'
   ) => {
+    const persisted = fixedDeviceEntryById.get(device.id);
+    if (persisted && persisted.canModify !== true) {
+      toast({ title: INVENTORY_OWNER_MESSAGE, tone: 'error' });
+      return;
+    }
     if (readOnly) {
       toast({ title: 'Brak uprawnień do zapisu spisu.', tone: 'error' });
       return;
@@ -1794,6 +1808,7 @@ export default function SpisRzeczywisty() {
           const err = error instanceof Error ? error : new Error('UNKNOWN');
           const messageMap: Record<string, string> = {
             QTY_REQUIRED: 'Wpisz poprawną ilość.',
+            INVENTORY_NOT_OWNER: INVENTORY_OWNER_MESSAGE,
             QTY_EXCEEDS_CAPACITY: 'Ilość nie może przekraczać pojemności urządzenia.',
             NOT_FOUND: 'Urządzenie nie jest już aktywne. Sprawdź ustawienia.',
             DATE_REQUIRED: 'Wybierz dzień spisu.',
@@ -1842,6 +1857,7 @@ export default function SpisRzeczywisty() {
   };
 
   const handleEditSave = (entryId: string) => {
+    if (readOnly || !entries.some(entry => entry.id === entryId && entry.canModify === true)) return;
     const draft = editDrafts[entryId];
     if (!draft) return;
     const qtyValue = parseQtyInput(draft.qty);
@@ -1862,6 +1878,7 @@ export default function SpisRzeczywisty() {
     }));
   };
   const handleRemoveEntry = (entryId: string, entryName: string) => {
+    if (readOnly || !entries.some(entry => entry.id === entryId && entry.canModify === true)) return;
     removeEntryMutation.mutate(entryId, {
       onSuccess: () => {
         if (expandedMaterialKey === normalizeCatalogNameKey(entryName) && selectedEntries.length === 1) {
@@ -3623,6 +3640,7 @@ export default function SpisRzeczywisty() {
                       const isFull = Boolean(entry) && Math.abs(entry!.qty - device.fullQty) <= 0.000001;
                       const isManual = Boolean(entry) && !isEmpty && !isFull;
                       const persistedEntry = fixedDeviceEntryById.get(device.id);
+                      const deviceReadOnly = readOnly || Boolean(persistedEntry && persistedEntry.canModify !== true);
                       const isRemoving = removeEntryMutation.isPending && removeEntryMutation.variables === persistedEntry?.id;
                       const isSaving = (entry?.saving ?? false) || isRemoving;
                       const isEditing = editingFixedDeviceId === device.id;
@@ -3649,7 +3667,8 @@ export default function SpisRzeczywisty() {
                           {isManual ? <p className="mt-2 text-xs font-semibold text-muted">Pełna pojemność: {formatQty(device.fullQty)} {device.unit}</p> : null}
                         </div>
                         <div className="grid grid-cols-2 gap-2">
-                          <Button type="button" variant={isFull ? 'secondary' : 'outline'} className="min-h-[44px] px-2" aria-pressed={isFull} disabled={readOnly || isSaving} onClick={() => {
+                          <Button type="button" variant={isFull ? 'secondary' : 'outline'} className="min-h-[44px] px-2" aria-pressed={isFull} disabled={deviceReadOnly || isSaving} onClick={() => {
+                            if (deviceReadOnly) return;
                             if (!isFull) {
                               handleSaveFixedDevice(device, device.fullQty, 'full');
                               return;
@@ -3664,14 +3683,14 @@ export default function SpisRzeczywisty() {
                               }
                             });
                           }}>Pełny</Button>
-                          <Button type="button" variant={isManual || isEditing ? 'secondary' : 'outline'} className="min-h-[44px] px-2" title="Wpisz dokładną ilość" aria-label={`Wpisz dokładną ilość dla ${device.name}`} aria-pressed={isManual || isEditing} disabled={readOnly || isSaving} onClick={() => {
+                          <Button type="button" variant={isManual || isEditing ? 'secondary' : 'outline'} className="min-h-[44px] px-2" title="Wpisz dokładną ilość" aria-label={`Wpisz dokładną ilość dla ${device.name}`} aria-pressed={isManual || isEditing} disabled={deviceReadOnly || isSaving} onClick={() => {
                             setEditingFixedDeviceId(isEditing ? null : device.id);
                             setFixedDeviceQtyDrafts((current) => ({ ...current, [device.id]: current[device.id] ?? String(entry?.qty ?? '') }));
                           }}><PencilLine className="h-4 w-4" /><span className="sr-only">Ilość</span></Button>
                         </div>
                         {isEditing ? <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-t border-border pt-3">
                           <Input value={fixedDeviceQtyDrafts[device.id] ?? ''} inputMode="decimal" placeholder={`Powyżej 0 do ${device.fullQty} kg`} autoFocus onChange={(event) => setFixedDeviceQtyDrafts((current) => ({ ...current, [device.id]: event.target.value }))} />
-                          <Button type="button" disabled={readOnly || isSaving} onClick={() => handleSaveFixedDevice(device, parseQtyInput(fixedDeviceQtyDrafts[device.id] ?? ''), 'manual')}>Zapisz</Button>
+                          <Button type="button" disabled={deviceReadOnly || isSaving} onClick={() => handleSaveFixedDevice(device, parseQtyInput(fixedDeviceQtyDrafts[device.id] ?? ''), 'manual')}>Zapisz</Button>
                         </div> : null}
                       </div>;
                     })}
@@ -3692,6 +3711,7 @@ export default function SpisRzeczywisty() {
             ) : (
               <div className="grid gap-3 lg:grid-cols-2">
                 {activeSiloConfigs.map((config) => {
+                  const siloReadOnly = readOnly || Boolean(siloEntryMap.get(config.id) && siloEntryMap.get(config.id)?.canModify !== true);
                   const draft = getSiloDraft(config.id);
                   const percent = parseQtyInput(draft.percent);
                   const calculatedQty =
@@ -3750,7 +3770,7 @@ export default function SpisRzeczywisty() {
                             placeholder="np. 80"
                             inputMode="decimal"
                             max={100}
-                            disabled={readOnly}
+                            disabled={siloReadOnly}
                             className="min-h-[42px]"
                           />
                         </div>
@@ -3766,6 +3786,7 @@ export default function SpisRzeczywisty() {
                           <button
                             type="button"
                             onClick={() => updateSiloDraft(config.id, { hopperPresent: !draft.hopperPresent })}
+                            disabled={siloReadOnly}
                             className="flex min-h-[44px] min-w-0 items-center justify-center gap-1 rounded-lg border border-border bg-[rgba(255,255,255,0.025)] px-1 text-[11px] font-semibold text-body min-[380px]:gap-1.5 min-[380px]:text-xs"
                           >
                             <span
@@ -3785,7 +3806,7 @@ export default function SpisRzeczywisty() {
                           </button>
                           <Button
                             onClick={() => handleSaveSilo(config.id)}
-                            disabled={readOnly || saveSiloMutation.isPending}
+                            disabled={siloReadOnly || saveSiloMutation.isPending}
                             className="min-h-[44px] w-full min-w-0 px-1.5 text-sm min-[380px]:px-2"
                           >
                             Zapisz
@@ -3921,6 +3942,7 @@ export default function SpisRzeczywisty() {
                       <DataTable
                         columns={['Data', 'Ilosc', 'Jedn.', 'Hala', 'Kto', 'Akcje']}
                         rows={selectedEntries.map((entry) => {
+                          const canModifyEntry = !readOnly && entry.canModify === true;
                           const draft = editDrafts[entry.id] ?? {
                             qty: String(entry.qty),
                             warehouseId: entry.warehouseId
@@ -3929,7 +3951,7 @@ export default function SpisRzeczywisty() {
                           const palletSource = parsePalletSource(entry.sourceId);
                           return [
                             new Date(entry.at).toLocaleString('pl-PL'),
-                            isFixedDeviceEntry || palletSource ? <span key={`${entry.id}-qty-fixed`} className="font-black text-title">{entry.qty}{palletSource && <span className="mt-1 block text-xs font-normal text-muted">{entry.qty / palletSource.qtyPerSet} zest. paletowych</span>}</span> : <Input
+                            isFixedDeviceEntry || palletSource || !canModifyEntry ? <span key={`${entry.id}-qty-fixed`} className="font-black text-title">{entry.qty}{palletSource && <span className="mt-1 block text-xs font-normal text-muted">{entry.qty / palletSource.qtyPerSet} zest. paletowych</span>}</span> : <Input
                               key={`${entry.id}-qty`}
                               value={draft.qty}
                               onChange={(event) =>
@@ -3939,7 +3961,7 @@ export default function SpisRzeczywisty() {
                               className="min-h-[40px] w-28"
                             />,
                             entry.unit,
-                            isFixedDeviceEntry || palletSource ? <span key={`${entry.id}-warehouse-fixed`} className="text-sm font-semibold text-title">{warehouseNameMap.get(entry.warehouseId) ?? entry.warehouseId}</span> : <SelectField
+                            isFixedDeviceEntry || palletSource || !canModifyEntry ? <span key={`${entry.id}-warehouse-fixed`} className="text-sm font-semibold text-title">{warehouseNameMap.get(entry.warehouseId) ?? entry.warehouseId}</span> : <SelectField
                               key={`${entry.id}-warehouse`}
                               value={draft.warehouseId}
                               onChange={(event) =>
@@ -3953,7 +3975,7 @@ export default function SpisRzeczywisty() {
                               ))}
                             </SelectField>,
                             entry.user,
-                            palletSource ? <Button key={`${entry.id}-pallet`} variant="outline" onClick={() => setEditingPalletBatchId(palletSource.batchId)}>{readOnly ? 'Pokaż zestaw' : 'Edytuj zestaw'}</Button> : isFixedDeviceEntry ? <span key={`${entry.id}-actions-fixed`} className="rounded-full border border-border px-2.5 py-1 text-xs font-semibold text-muted">Edytuj w kaflu urządzenia</span> : <div key={`${entry.id}-actions`} className="flex items-center gap-2">
+                            palletSource ? <Button key={`${entry.id}-pallet`} variant="outline" onClick={() => setEditingPalletBatchId(palletSource.batchId)}>{canModifyEntry ? 'Edytuj zestaw' : 'Pokaż zestaw'}</Button> : !canModifyEntry ? <span key={`${entry.id}-owner`} className="text-xs text-muted">Tylko autor może zmienić wpis</span> : isFixedDeviceEntry ? <span key={`${entry.id}-actions-fixed`} className="rounded-full border border-border px-2.5 py-1 text-xs font-semibold text-muted">Edytuj w kaflu urządzenia</span> : <div key={`${entry.id}-actions`} className="flex items-center gap-2">
                               <Button
                                 variant="secondary"
                                 onClick={() => handleEditSave(entry.id)}
@@ -3979,7 +4001,7 @@ export default function SpisRzeczywisty() {
               />
             </Card>
           )}
-          {editingPalletBatchId && <PalletInventoryEditor key={editingPalletBatchId} batchId={editingPalletBatchId} entries={entries} warehouses={visibleWarehouses} readOnly={readOnly}
+          {editingPalletBatchId && <PalletInventoryEditor key={editingPalletBatchId} batchId={editingPalletBatchId} entries={entries} warehouses={visibleWarehouses} readOnly={readOnly || entries.filter(entry => parsePalletSource(entry.sourceId)?.batchId === editingPalletBatchId).some(entry => entry.canModify !== true)}
             onClose={() => setEditingPalletBatchId(null)} onSaved={() => { queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] }); toast({ title: 'Zaktualizowano cały wpis zestawu', tone: 'success' }); }} />}
         </TabsContent>
 

@@ -157,7 +157,7 @@ const navItemsFarbyTasmy: MobileNavItem[] = [
 ];
 
 const navItemsPrzygotowanieProdukcji: MobileNavItem[] = [
-  { label: 'Plan zmian', href: '/przygotowanie-produkcji', requiresAdmin: true },
+  { label: 'Plan zmian', href: '/przygotowanie-produkcji', preparationTeams: ['mechanics'] },
   { label: 'Moje zadania', href: '/przygotowanie-produkcji?view=personal' },
   { label: 'Plan pracy — technologia', mobileLabel: 'Praca: technologia', href: '/przygotowanie-produkcji?view=work-plan-technology', preparationTeams: ['mechanics', 'process', 'graphics'] },
   { label: 'Plan pracy — przygotowanie produkcji', mobileLabel: 'Praca: przygotowanie', href: '/przygotowanie-produkcji?view=work-plan-preparation', preparationTeams: ['distribution', 'technician', 'additional'] },
@@ -408,7 +408,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
       return pathname === '/planowanie-zapotrzebowania' && searchParams.get('view') === requestedView;
     }
     if (href === '/przygotowanie-produkcji') {
-      return pathname === href && !searchParams.get('view');
+      return pathname === href && (!searchParams.get('view') || searchParams.get('view') === 'plan');
     }
     if (href === '/przygotowanie-produkcji?view=work-plan-technology') {
       const view = searchParams.get('view');

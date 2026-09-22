@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { InventoryOwnership } from '@/lib/utils/originalInventoryOwnership';
 import { isProductionPlanDate } from '@/lib/utils/productionPlanDate';
 import {
   PALLET_SET_SOURCE_TYPE, isPalletCount, normalizePalletSets, palletBatchPrefix,
@@ -30,7 +31,8 @@ const entryId = (sourceId: string) => {
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 };
 
-export async function addPalletInventory(db: SupabaseClient, payload: Record<string, unknown>, actor: string) {
+export async function addPalletInventory(db: SupabaseClient, payload: Record<string, unknown>, owner: InventoryOwnership) {
+  owner.assert({ user_name: owner.actor });
   const batchId = String(payload.batchId ?? '');
   palletBatchPrefix(batchId);
   const count = payload.count;
@@ -39,6 +41,7 @@ export async function addPalletInventory(db: SupabaseClient, payload: Record<str
   if (!isPalletCount(count)) throw new Error('PALLET_COUNT_REQUIRED');
   if (!isProductionPlanDate(dateKey)) throw new Error('DATE_REQUIRED');
   const reusedBatch = (rows: InventoryRow[]) => {
+    rows.forEach(row => owner.assert(row));
     if (!rows.every((row) => row.warehouse_id === warehouseId && row.at.slice(0, 10) === dateKey &&
       row.qty === (parsePalletSource(row.source_id)?.qtyPerSet ?? 0) * count)) throw new Error('PALLET_BATCH_CONFLICT');
     return rows;
@@ -63,7 +66,7 @@ export async function addPalletInventory(db: SupabaseClient, payload: Record<str
     const sourceId = palletSourceId({ batchId, catalogId: part.catalogId, qtyPerSet: part.qty });
     return { id: entryId(sourceId), at, warehouse_id: warehouseId, name: part.name, qty: part.qty * count,
       unit: part.unit, location: null, note: `Zestaw paletowy: ${set.name}`, source_type: PALLET_SET_SOURCE_TYPE,
-      source_id: sourceId, user_name: actor };
+      source_id: sourceId, user_name: owner.actor };
   });
   // One INSERT is atomic. Stable IDs also make retries safe after a lost response.
   const inserted = await db.from('original_inventory_entries').insert(rows).select('*');
@@ -77,7 +80,7 @@ export async function addPalletInventory(db: SupabaseClient, payload: Record<str
   return inserted.data ?? [];
 }
 
-export async function updatePalletInventory(db: SupabaseClient, payload: Record<string, unknown>, actor: string) {
+export async function updatePalletInventory(db: SupabaseClient, payload: Record<string, unknown>, owner: InventoryOwnership) {
   const batchId = String(payload.batchId ?? '');
   const count = payload.count;
   if (!isPalletCount(count)) throw new Error('PALLET_COUNT_REQUIRED');
@@ -85,18 +88,23 @@ export async function updatePalletInventory(db: SupabaseClient, payload: Record<
   await validateWarehouse(db, warehouseId);
   const rows = await batchRows(db, batchId);
   if (!rows.length) throw new Error('ENTRY_MISSING');
+  rows.forEach(row => owner.assert(row));
   const updated = rows.map((row) => {
     const source = parsePalletSource(row.source_id);
     if (!source) throw new Error('PALLET_GROUP_REQUIRED');
-    return { ...row, qty: source.qtyPerSet * count, warehouse_id: warehouseId, user_name: actor };
+    return { ...row, qty: source.qtyPerSet * count, warehouse_id: warehouseId };
   });
   const { data, error } = await db.from('original_inventory_entries').upsert(updated, { onConflict: 'id' }).select('*');
   if (error) throw error;
   return data ?? [];
 }
 
-export async function removePalletInventory(db: SupabaseClient, batchId: string) {
+export async function removePalletInventory(db: SupabaseClient, batchId: string, owner: InventoryOwnership) {
+  const rows = await batchRows(db, batchId);
+  if (!rows.length) throw new Error('ENTRY_MISSING');
+  rows.forEach(row => owner.assert(row));
   const { error } = await db.from('original_inventory_entries').delete()
+    .in('id', rows.map(row => row.id)).in('user_name', [...new Set(rows.map(row => row.user_name))])
     .eq('source_type', PALLET_SET_SOURCE_TYPE).like('source_id', palletBatchPrefix(batchId) + '%');
   if (error) throw error;
 }

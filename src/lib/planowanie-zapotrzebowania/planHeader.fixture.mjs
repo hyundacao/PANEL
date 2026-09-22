@@ -31,6 +31,7 @@ const sourceFile = path.join(root, 'src/app/(main)/planowanie-zapotrzebowania/pa
 const source = readFileSync(sourceFile, 'utf8');
 const ast = ts.createSourceFile('page.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const names = [
+  'WORKING_TECHNOLOGY_SELECT_PREFIX', 'technologySelectValue', 'workingTechnologySelectLabel',
   'uid', 'numberValue', 'normalize', 'CATEGORIES', 'materialKey', 'normalizeReturnExclusions', 'planCalculationDoneKey', 'isPlanCalculationDone', 'normalizeLinkedSources', 'clonePlanItems', 'cloneMaterials', 'cleanImportedTechnologyDescription', 'productIdentityMatches', 'applyDefaultTechnologyAssignments', 'technologyMatchesProduct', 'technologyLabel', 'technologySelectLabel', 'normalizedMaterialUnit', 'isKilogramUnit', 'isGramUnit', 'isThousandPiecesUnit', 'technologyResultUnit', 'technologyResultQuantity', 'roundTechnologyMaterialQuantity', 'linkedSourceSelectionForItem', 'linkedMachineProductQuantity', 'linkedWarehouseProductQuantity', 'linkedSurplusQuantity', 'sameTechnologyMaterials', 'sameLinkedProducts', 'createAlternativeTechnologyFromWorkingCopy', 'selectPlanDate', 'currentPlanVersion',
   'tomorrow', 'historyCutoffDate', 'savedPlanDates', 'customRangeVisible', 'globalRangeChoice', 'Field', 'PlanAmountField', 'Stat',
   'pendingPlanWorkbook', 'planImportWorkbook', 'planImportSheet',
@@ -38,6 +39,7 @@ const names = [
   'renderPlanTable', 'renderPlan', 'renderCalculationDetails', 'openAlternativeDraft', 'closeAlternativeDraft', 'saveWorkingAsAlternativeTechnology', 'SectionTitle', 'renderHeader', 'excludeReturnRow', 'restoreReturnExclusion', 'renderReturnsV2', 'ProductCatalogField',
   'emptyTechnologyDraft', 'selectedTechnologyForEditor', 'cloneTechnologyForEditor', 'sameTechnologyEditorValue'
 ];
+names.push('canonicalProductIndex', 'linkedProductKey');
 const definitions = new Map();
 const visit = (node) => {
   if (ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) {
@@ -77,6 +79,7 @@ export const createHeaderFixture = (overrides = {}) => {
     ...load('@/components/ui/Button'), ...load('@/components/ui/Badge'),
     ...load('@/components/ui/WarningTriangle'),
     ...load('@/components/ui/Card'), ...load('@/lib/planowanie-zapotrzebowania/domain'),
+    ...load('@/lib/planowanie-zapotrzebowania/stateScopes'),
     ...load('@/lib/planowanie-zapotrzebowania/historyRetention'),
     ...load('@/components/ui/EmptyState'), ...load('@/components/ui/Select'),
     ...load('@/components/planowanie-zapotrzebowania/PlanningSaveStatus'),

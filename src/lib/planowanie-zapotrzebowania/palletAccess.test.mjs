@@ -12,6 +12,7 @@ let writes = 0;
 const mocks = {
   '@/lib/auth/session': { getAuthenticatedUser: async () => ({ user, code: user ? null : 'UNAUTHORIZED' }), clearSessionCookie() {} },
   '@/lib/supabase/admin': { supabaseAdmin: { from: (table) => {
+    if (table === 'app_users') return { select: () => ({ order: () => ({ range: async () => ({ data: [user], error: null }) }) }) };
     assert.equal(table, 'audit_logs');
     return { insert: async () => ({ error: null }) };
   } } },

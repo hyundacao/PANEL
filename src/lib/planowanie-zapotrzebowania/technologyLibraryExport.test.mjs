@@ -56,7 +56,7 @@ test('unselected source is never silently changed to warehouse or machine', () =
     tech('FINAL', [], { linkedProducts: [link('PART', undefined)] }), tech('PART', [material('RESIN', .02, 'Tworzywo', 'kg')])
   ]);
   const rows = data.tree.filter((row) => row.root.technology.productIndex === 'FINAL');
-  assert.match(rows[1].source, /Wybór w planie/);
+  assert.equal(rows[1].source, 'Wybór w planie: magazyn / maszyna + zabezpieczenie');
   assert.match(rows[2].stage, /zależny od wyboru źródła/);
   assert.ok(data.issues.some((issue) => issue.message.includes('Źródło ustalane')));
 });

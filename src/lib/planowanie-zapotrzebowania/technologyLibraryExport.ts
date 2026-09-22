@@ -90,7 +90,7 @@ const canonicalIndex = (value: string) => indexKey(normalize(value).replace(/^m\
 const sourceLabels: Record<Source, string> = {
   warehouse: 'Z magazynu',
   production: 'Bezpośrednio z maszyny',
-  select: 'Wybór w planie: magazyn / maszyna / mieszane'
+  select: 'Wybór w planie: magazyn / maszyna + zabezpieczenie'
 };
 
 export const exportTechnologyLabel = (technology: ExportTechnology) => technology.variant === 'base'

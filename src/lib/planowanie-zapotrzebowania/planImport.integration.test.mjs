@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import * as imports from './planImport.ts';
 import * as fixedDevices from './fixedInventoryDevices.ts';
+import * as palletSets from './palletSets.ts';
 import { shouldInvalidatePlanDocument } from './stateScopes.ts';
 
 const pageFile = process.env.PLANNING_TEST_PAGE_PATH || fileURLToPath(new URL('../../app/(main)/planowanie-zapotrzebowania/page.tsx', import.meta.url));
@@ -18,7 +19,7 @@ const names = ['uid','numberValue','normalize','CATEGORIES','normalizeReturnExcl
   'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','shiftNormForItem','scopedItemProductionQty','plannedItemProductionQty','itemProductionQty','planQuantityNeedsReview','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','updatePickingDocumentWarehouse','deriveReturnsForDate','syncOriginalInventory'];
 if (directQuantityEditing) names.push('updatePlanNorm');
 const definitions = new Map();
-const areaCalculationNames = ['technologyForItem','materialsForItem','technologyLinksForItem','linkedProducerCandidates','linkedProducerFor','linkedAllocationByProducer','selectedLinkedAllocationByProducer','fullLinkedAllocationByProducer','materialDemandContributionsForItem','demandByArea','sharedAreaIds','materialSupply','requirementsForArea'];
+const areaCalculationNames = ['technologyForItem','materialsForItem','technologyLinksForItem','linkedProducerCandidates','linkedProducerFor','linkedAllocationByProducer','selectedLinkedAllocationByProducer','fullLinkedAllocationByProducer','materialDemandContributionsForItem','demandByArea','sharedAreaIds','materialSupply','requirementsForArea','linkedSourceIssuesForArea'];
 const areaCalculationDefinitions = new Map();
 function visit(node) {
   if(ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) definitions.set(node.name.getText(ast),`const ${node.getText(ast)};`);
@@ -35,7 +36,7 @@ const rows=[['Lp.','','Ilość','ST.','Norma','','Uwagi'],['1','LEFT + RIGHT (A1
 
 function setup() {
   const messages=[];
-  const ctx=vm.createContext({exports:{},...imports,...fixedDevices,...domain.exports,shouldInvalidatePlanDocument,
+  const ctx=vm.createContext({exports:{},...imports,...fixedDevices,...palletSets,...domain.exports,shouldInvalidatePlanDocument,
     state:{plan:[],technologies:[],archive:[],planVersions:[],documents:[],quantityCorrections:[],stationMappings:[],selectedPlanDate:'2026-08-31',selectedAreaId:'hala-2',dailyPlans:{},returnStatuses:{},returnExclusions:[],inventory:[],areas:[],calculationMode:'all',horizonShifts:3.5,continuationBufferPercent:0},
     pending:{fileName:'test.xlsx',purpose:'plan',workbook:{SheetNames:['Plan'],Sheets:{Plan:{rows}}}},sheetName:'Plan',currentUserName:'Test',quantityInputs:{},readOnly:false,
     calculationEditorOpen:false,closeCalculationEditorIfAllowed:()=>true,inventorySyncRequestRef:{current:0},headAdmin:false,
@@ -209,6 +210,194 @@ test('requirements round every discrete product source before aggregation',()=>{
   assert.equal(requirement.toIssue,4);
 });
 
+function mixedSourceScenario({ remaining = 30000, usage = 1, mode = 'mixed', buffer = 0 } = {}) {
+  const h = setup();
+  h.importSelectedSheet();
+  h.ctx.state.calculationMode = 'horizon';
+  h.ctx.state.horizonShifts = 3.5;
+  h.ctx.state.continuationBufferPercent = buffer;
+  const panel = {
+    ...h.ctx.state.plan[0], id: 'panel', index: '8001128772', name: 'MAX BO',
+    quantityStatus: 'parsed', technologyId: 'panel-tech', totalQty: remaining, remainingQty: remaining,
+    shiftNorm: 700, scopeMode: 'global', included: true, areaId: 'hala-2', workingMaterials: null,
+    linkedSources: { '8001128941': { mode, producerPlanItemId: 'tray', productionQuantity: 0 } }
+  };
+  const tray = {
+    ...panel, id: 'tray', index: 'M-10-8001128941', name: 'TRAY HANDLE',
+    technologyId: 'tray-tech', totalQty: 0, remainingQty: 0, shiftNorm: 1600,
+    quantityStatus: 'missing', sourceQuantity: '', linkedSources: {}
+  };
+  const material = (code, category, amount, unit = 'szt.') => ({ id: code, code, name: code, category, usage: amount, unit, logisticQty: 1 });
+  h.ctx.state.plan = [panel, tray];
+  h.ctx.state.areas = [{ id: 'hala-2', name: 'Hala 2' }, { id: 'shared', name: 'Wspólne', shared: true }];
+  h.ctx.state.technologies = [
+    { id: 'panel-tech', productIndex: panel.index, productName: panel.name,
+      materials: [material('INSERT', 'Półwyrób', 1)],
+      linkedProducts: [{ id: 'tray-link', productIndex: tray.index, productName: tray.name, usage, unit: 'szt.' }] },
+    { id: 'tray-tech', productIndex: tray.index, productName: tray.name, productionMode: 'continuous', shiftNorm: 1600,
+      materials: [material('ABS', 'Tworzywo', 0.1, 'kg')], surplusMaterials: [material('BOX', 'Karton', 0.01)] }
+  ];
+  h.ctx.needsMaterialBalances = true;
+  h.ctx.CATEGORY_ORDER = new Map();
+  h.ctx.fmt = String;
+  // Exercise the real quantity/allocation closure and document ledger, not stubbed totals.
+  const ledgerCode = source.slice(source.indexOf('  const documentLedger ='), source.indexOf('  const demandByArea ='));
+  assert.match(ledgerCode, /documentLedger\.set/);
+  const engineCode = [
+    ...['scopeForItem', 'shiftNormForItem', 'scopedItemProductionQty', 'plannedItemProductionQty', 'itemProductionQty', 'planQuantityNeedsReview'].map((name) => definitions.get(name)),
+    ledgerCode, ...areaCalculationDefinitions.values()
+  ].join('\n');
+  const code = ts.transpileModule('(()=>{' + engineCode + ';return {requirementsForArea,linkedSourceIssuesForArea,itemProductionQty,planQuantityNeedsReview,selectedLinkedAllocationByProducer};})()', {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }
+  }).outputText;
+  const calculate = () => {
+    const engine = vm.runInContext(code, h.ctx);
+    Object.assign(h.ctx, engine);
+    return { ...engine, rows: new Map(engine.requirementsForArea('hala-2').map((row) => [row.code, row])) };
+  };
+  return { h, panel, tray, calculate };
+}
+
+test('mixed source covers full machine and warehouse scope, ignoring legacy split quantities', () => {
+  const h = setup();
+  for (const productionQuantity of [0, 1, 700, 2450, 99999]) {
+    const selection = { mode: 'mixed', producerPlanItemId: 'tray', productionQuantity };
+    assert.equal(h.linkedMachineProductQuantity(2450, selection), 2450);
+    assert.equal(h.linkedWarehouseProductQuantity(2450, selection), 2450);
+  }
+  for (const [mode, machine, warehouse] of [['unselected', 0, 0], ['production', 2450, 0], ['warehouse', 0, 2450]]) {
+    const selection = { mode, productionQuantity: 0 };
+    assert.equal(h.linkedMachineProductQuantity(2450, selection), machine);
+    assert.equal(h.linkedWarehouseProductQuantity(2450, selection), warehouse);
+  }
+  for (const value of [0, -1, NaN, Infinity]) {
+    assert.equal(h.linkedMachineProductQuantity(value, { mode: 'mixed' }), 0);
+    assert.equal(h.linkedWarehouseProductQuantity(value, { mode: 'mixed' }), 0);
+  }
+});
+
+for (const [label, options, expected] of [
+  ['3.5 shifts', {}, 2450],
+  ['remaining order cap', { remaining: 1200 }, 1200],
+  ['two components per product', { usage: 2 }, 4900],
+  ['continuation buffer', { buffer: 20 }, 2940],
+  ['buffer capped at remaining order', { remaining: 2600, buffer: 20 }, 2600]
+]) test('mixed standby demand follows ' + label, () => {
+  const { panel, tray, calculate } = mixedSourceScenario(options);
+  const result = calculate();
+  assert.equal(result.rows.get(tray.index).demand, expected);
+  assert.equal(result.rows.get(tray.index).toIssue, expected);
+  assert.equal(result.selectedLinkedAllocationByProducer.get(tray.id), expected);
+  assert.equal(result.rows.get('INSERT').demand, expected / (options.usage ?? 1));
+  assert.equal(result.itemProductionQty(panel), expected / (options.usage ?? 1), 'backup must not double finished production');
+  assert.equal(result.linkedSourceIssuesForArea('hala-2').length, 0, 'no manual split is required');
+});
+
+test('mixed standby follows per-item quantity and changes with the selected shift range', () => {
+  const { h, panel, tray, calculate } = mixedSourceScenario();
+  panel.scopeMode = 'quantity'; panel.scopeQuantity = 800;
+  assert.equal(calculate().rows.get(tray.index).demand, 800);
+  panel.scopeMode = 'global'; h.ctx.state.horizonShifts = 2;
+  assert.equal(calculate().rows.get(tray.index).demand, 1400);
+  h.ctx.state.calculationMode = 'all';
+  assert.equal(calculate().rows.get(tray.index).demand, 30000);
+});
+
+test('mixed source keeps machine raw materials and surplus packaging unchanged', () => {
+  const { h, panel, tray, calculate } = mixedSourceScenario();
+  const backup = calculate();
+  panel.linkedSources['8001128941'].mode = 'production';
+  h.ctx.state.technologies[0].linkedProducts[0].sourcePolicy = 'production';
+  const machine = calculate();
+  for (const code of ['ABS', 'BOX', 'INSERT']) assert.equal(backup.rows.get(code).demand, machine.rows.get(code).demand);
+  assert.equal(backup.rows.get('ABS').demand, 560);
+  assert.equal(backup.rows.get('BOX').demand, 32, 'packaging covers 3150 excess trays, not the standby package');
+  assert.equal(machine.rows.has(tray.index), false);
+  assert.equal(backup.rows.get(tray.index).demand, 2450);
+});
+
+test('mixed standby uses normal floor-stock and previously-written-package balances', () => {
+  const { h, tray, calculate } = mixedSourceScenario();
+  h.ctx.state.inventory = [{ code: tray.index, name: tray.name, qty: 400, unit: 'szt.', areaId: 'hala-2' }];
+  let result = calculate();
+  const key = result.rows.get(tray.index).key;
+  assert.equal(result.rows.get(tray.index).toIssue, 2050);
+  h.ctx.state.documents = [{ id: 'prepared', planDate: h.ctx.state.selectedPlanDate, areaId: 'hala-2', status: 'draft',
+    rows: [{ key, toIssue: 500, confirmed: true }] }];
+  result = calculate();
+  assert.equal(result.rows.get(tray.index).pending, 500);
+  assert.equal(result.rows.get(tray.index).toIssue, 1550);
+  h.ctx.state.documents[0].status = 'issued';
+  assert.equal(calculate().rows.get(tray.index).toIssue, 1550);
+  h.ctx.state.documents[0].status = 'cancelled';
+  assert.equal(calculate().rows.get(tray.index).toIssue, 2050);
+  h.ctx.state.inventory[0].qty = 2500;
+  assert.ok(calculate().rows.get(tray.index).toIssue === 0);
+});
+
+test('mixed source creates an ordinary picking package without increasing physical stock or altering production', () => {
+  const { h, tray, calculate } = mixedSourceScenario();
+  h.ctx.state.inventory = [{ code: tray.index, name: tray.name, qty: 400, unit: 'szt.', areaId: 'hala-2' }];
+  calculate();
+  const beforePlan = JSON.stringify(h.ctx.state.plan);
+  const beforeInventory = JSON.stringify(h.ctx.state.inventory);
+  assert.equal(h.createOrRefreshPickingDocument(), true);
+  const doc = h.ctx.state.documents[0];
+  const row = doc.rows.find((row) => row.code === tray.index);
+  assert.equal(doc.kind, 'base');
+  assert.equal(doc.status, 'draft');
+  assert.equal(row.demand, 2450);
+  assert.equal(row.toIssue, 2050);
+  assert.equal(row.confirmed, false);
+  assert.equal(JSON.stringify(h.ctx.state.plan), beforePlan);
+  assert.equal(JSON.stringify(h.ctx.state.inventory), beforeInventory);
+  calculate();
+  assert.equal(h.createOrRefreshPickingDocument(), true);
+  assert.equal(h.ctx.state.documents.length, 1, 'refreshes the same package rather than duplicating it');
+  assert.equal(h.ctx.state.documents[0].rows.find((row) => row.code === tray.index).toIssue, 2050);
+});
+
+test('mixed source still validates an included producer and its sufficient output', () => {
+  const { h, tray, calculate } = mixedSourceScenario();
+  tray.included = false;
+  assert.match(calculate().linkedSourceIssuesForArea('hala-2')[0], /nie znaleziono jednoznacznej pozycji/);
+  tray.included = true;
+  h.ctx.state.technologies[1].productionMode = 'planned';
+  tray.quantityStatus = 'parsed'; tray.remainingQty = 1000; tray.totalQty = 1000;
+  assert.match(calculate().linkedSourceIssuesForArea('hala-2')[0], /przypisano 2450.*1000/);
+});
+
+test('legacy manual machine choices now include standby, without modifying saved state or historical documents', () => {
+  const { h, tray, calculate } = mixedSourceScenario({ mode: 'production' });
+  h.ctx.state.documents = [{ id: 'past', planDate: '2026-08-30', areaId: 'hala-2', status: 'issued', rows: [{ key: 'old', toIssue: 100 }] }];
+  const before = JSON.stringify(h.ctx.state);
+  const result = calculate();
+  assert.equal(result.rows.get(tray.index).demand, 2450);
+  assert.equal(result.rows.get(tray.index).toIssue, 2450);
+  assert.equal(result.selectedLinkedAllocationByProducer.get(tray.id), 2450);
+  assert.equal(JSON.stringify(h.ctx.state), before);
+});
+
+test('fixed technology sources override both current and legacy manual choices', () => {
+  const h = setup();
+  const link = { id: 'link', productIndex: 'TRAY', productName: 'Tray', usage: 1, unit: 'szt.' };
+  for (const mode of ['unselected', 'production', 'mixed', 'warehouse']) {
+    const item = { linkedSources: { tray: { mode, producerPlanItemId: 'producer', productionQuantity: 700 } } };
+    const before = JSON.stringify(item);
+    const free = h.linkedSourceSelectionForItem(item, link);
+    assert.equal(free.mode, mode === 'production' ? 'mixed' : mode);
+    const direct = h.linkedSourceSelectionForItem(item, { ...link, sourcePolicy: 'production' });
+    assert.equal(direct.mode, 'production');
+    assert.equal(h.linkedMachineProductQuantity(2450, direct), 2450);
+    assert.equal(h.linkedWarehouseProductQuantity(2450, direct), 0);
+    const warehouse = h.linkedSourceSelectionForItem(item, { ...link, sourcePolicy: 'warehouse' });
+    assert.equal(warehouse.mode, 'warehouse');
+    assert.equal(h.linkedMachineProductQuantity(2450, warehouse), 0);
+    assert.equal(h.linkedWarehouseProductQuantity(2450, warehouse), 2450);
+    assert.equal(JSON.stringify(item), before);
+  }
+});
+
 test('linked tray production uses full resin output and packages only the warehouse surplus',()=>{
   const h=setup(); h.importSelectedSheet();
   h.ctx.state.calculationMode='horizon';
@@ -227,7 +416,7 @@ test('linked tray production uses full resin output and packages only the wareho
   h.ctx.state.areas=[{id:'hala-2',name:'Hala 2'}];
   h.ctx.state.inventory=[];
   h.ctx.state.technologies=[
-    {id:'panel-tech',productIndex:'8001128772',productName:panel.name,materials:[material('insert','M-10-8001103471','INSERT','Półwyrób',1)],linkedProducts:[{id:'tray-link',productIndex:'M-10-8001128941',productName:tray.name,usage:1,unit:'szt.'}]},
+    {id:'panel-tech',productIndex:'8001128772',productName:panel.name,materials:[material('insert','M-10-8001103471','INSERT','Półwyrób',1)],linkedProducts:[{id:'tray-link',productIndex:'M-10-8001128941',productName:tray.name,usage:1,unit:'szt.',sourcePolicy:'production'}]},
     {id:'tray-tech',productIndex:'M-10-8001128941',productName:tray.name,productionMode:'continuous',shiftNorm:1600,materials:[material('resin','ABS-ELIX','ABS ELIX','Tworzywo',0.1092,'kg')],surplusMaterials:[material('carton','CARTON','Karton','Karton',0.0333),material('separator','SEP','Przekładka','Przekładka',10/60)]}
   ];
   assert.equal(h.planQuantityNeedsReview(tray),false,'missing final quantity is valid for continuous production');

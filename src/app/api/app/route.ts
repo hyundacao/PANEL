@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { randomUUID } from 'crypto';
+import { loadInventoryOwnership, INVENTORY_OWNER_ERROR } from '@/lib/utils/originalInventoryOwnership';
 import { PALLET_SET_SOURCE_TYPE, normalizePalletSets } from '@/lib/planowanie-zapotrzebowania/palletSets';
 import { addPalletInventory, updatePalletInventory, removePalletInventory } from '@/lib/planowanie-zapotrzebowania/palletInventoryServer';
 import { NextRequest, NextResponse } from 'next/server';
@@ -824,7 +825,7 @@ const mergeEntryBuckets = (
 
 const statusCodeFromError = (code: string) => {
   if (code === 'UNAUTHORIZED' || code === 'SESSION_EXPIRED') return 401;
-  if (code === 'FORBIDDEN') return 403;
+  if (code === 'FORBIDDEN' || code === INVENTORY_OWNER_ERROR) return 403;
   if (code === 'ERP_ORIGINALS_PROXY_NOT_CONFIGURED') return 503;
   if (code === 'ERP_ORIGINALS_PROXY_UNAUTHORIZED') return 403;
   if (code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS') return 503;
@@ -3394,6 +3395,8 @@ const upsertTransferEntry = async (
 };
 
 const handleAction = async (action: string, payload: any, currentUser: AppUser) => {
+  let ownership: ReturnType<typeof loadInventoryOwnership> | undefined;
+  const inventoryOwner = () => ownership ??= loadInventoryOwnership(supabaseAdmin, currentUser);
   switch (action) {
     case 'getDashboard': {
       await ensureWarehouseInventoryStructure();
@@ -6755,7 +6758,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         }
       }
 
-      return rows.map(mapOriginalInventoryEntry);
+      const owner = await inventoryOwner();
+      return rows.map(row => ({ ...mapOriginalInventoryEntry(row), canModify: owner.owns(row) }));
     }
     case 'getOriginalInventoryCatalog': {
       const catalog = await loadOriginalCatalog();
@@ -6864,7 +6868,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         if (isMissingOriginalInventorySilosTableError(error)) return [];
         throw error;
       }
-      return (data ?? []).map(mapOriginalInventorySiloEntry);
+      const owner = await inventoryOwner();
+      return (data ?? []).map(row => ({ ...mapOriginalInventorySiloEntry(row), canModify: owner.owns(row) }));
     }
     case 'getOriginalInventoryGrindTasks': {
       const { data, error } = await supabaseAdmin
@@ -7857,12 +7862,16 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (error) throw error;
       return normalizePalletSets(data?.pallet_sets);
     }
-    case 'addOriginalInventoryPalletSet':
-      return (await addPalletInventory(supabaseAdmin, payload ?? {}, getActorName(currentUser))).map(mapOriginalInventoryEntry);
-    case 'updateOriginalInventoryPalletSet':
-      return (await updatePalletInventory(supabaseAdmin, payload ?? {}, getActorName(currentUser))).map(mapOriginalInventoryEntry);
+    case 'addOriginalInventoryPalletSet': {
+      const owner = await inventoryOwner();
+      return (await addPalletInventory(supabaseAdmin, payload ?? {}, owner)).map(row => ({ ...mapOriginalInventoryEntry(row), canModify: owner.owns(row) }));
+    }
+    case 'updateOriginalInventoryPalletSet': {
+      const owner = await inventoryOwner();
+      return (await updatePalletInventory(supabaseAdmin, payload ?? {}, owner)).map(row => ({ ...mapOriginalInventoryEntry(row), canModify: owner.owns(row) }));
+    }
     case 'removeOriginalInventoryPalletSet':
-      return removePalletInventory(supabaseAdmin, String(payload?.batchId ?? ''));
+      return removePalletInventory(supabaseAdmin, String(payload?.batchId ?? ''), await inventoryOwner());
     case 'addOriginalInventory': {
       if (String(payload?.sourceType ?? '').toUpperCase() === PALLET_SET_SOURCE_TYPE) throw new Error('PALLET_GROUP_REQUIRED');
       const warehouseId = String(payload?.warehouseId ?? '').trim();
@@ -7900,6 +7909,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           }
         }
       }
+      const owner = await inventoryOwner();
+      owner.assert({ user_name: owner.actor });
       const { data, error } = await supabaseAdmin
         .from('original_inventory_entries')
         .insert({
@@ -7913,12 +7924,12 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           note: payload?.note ? String(payload.note).trim() || null : null,
           source_type: payload?.sourceType ? String(payload.sourceType).trim() || null : null,
           source_id: payload?.sourceId ? String(payload.sourceId).trim() || null : null,
-          user_name: getActorName(currentUser)
+          user_name: owner.actor
         })
         .select('*')
         .maybeSingle();
       if (error) throw error;
-      return mapOriginalInventoryEntry(data);
+      return { ...mapOriginalInventoryEntry(data), canModify: owner.owns(data) };
     }
     case 'saveOriginalInventorySiloEntry': {
       const configId = String(payload?.configId ?? '').trim();
@@ -7938,14 +7949,36 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const config = mapOriginalInventorySiloConfig(configRow);
       const calculatedQty = Math.round((percent * config.percentKg + (hopperPresent ? config.hopperKg : 0)) * 1000) / 1000;
       const sourceId = `silo:${configId}:${dateKey}`;
+      const owner = await inventoryOwner();
+      const previousSilo = await supabaseAdmin.from('original_inventory_silo_entries').select('*')
+        .eq('config_id', configId).eq('date_key', dateKey).maybeSingle();
+      if (previousSilo.error) throw previousSilo.error;
+      if (previousSilo.data) owner.assert(previousSilo.data);
       let generatedEntryId: string | null = null;
       const { data: existingEntry, error: existingError } = await supabaseAdmin
         .from('original_inventory_entries')
-        .select('id')
+        .select('id,user_name')
         .eq('source_type', 'SILO')
         .eq('source_id', sourceId)
         .maybeSingle();
       if (existingError) throw existingError;
+      if (existingEntry) owner.assert(existingEntry);
+      // INSERT claims the chamber for this counter, including a zero reading.
+      // Concurrent first saves must never overwrite another person's author.
+      let siloRow = previousSilo.data;
+      if (!siloRow) {
+        const author = existingEntry?.user_name ?? owner.actor;
+        owner.assert({ user_name: author });
+        const claim = await supabaseAdmin.from('original_inventory_silo_entries').insert({
+          id: randomUUID(), config_id: configId, date_key: dateKey, percent: 0,
+          hopper_present: false, calculated_qty: 0, generated_entry_id: existingEntry?.id ?? null,
+          user_name: author, updated_at: new Date().toISOString()
+        }).select('*').maybeSingle();
+        if (claim.error?.code === '23505') throw new Error(INVENTORY_OWNER_ERROR);
+        if (claim.error) throw claim.error;
+        if (!claim.data) throw new Error('NOT_FOUND');
+        siloRow = claim.data;
+      }
       if (calculatedQty > 0) {
         const [year, month, day] = dateKey.split('-').map(Number);
         const now = new Date();
@@ -7964,60 +7997,48 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           note: `Silos: ${percent}% | lejek: ${hopperPresent ? 'tak' : 'nie'}`,
           source_type: 'SILO',
           source_id: sourceId,
-          user_name: getActorName(currentUser)
+          user_name: existingEntry?.user_name ?? siloRow.user_name
         };
-        let { data: generated, error: generatedError } = await supabaseAdmin
-          .from('original_inventory_entries')
-          .upsert(originalInventoryPayload, { onConflict: 'id' })
-          .select('id')
-          .maybeSingle();
+        const writeGeneratedEntry = (row: typeof originalInventoryPayload) => {
+          const query = supabaseAdmin.from('original_inventory_entries');
+          return (existingEntry ? query.update(row).eq('id', existingEntry.id).eq('user_name', existingEntry.user_name)
+            : query.insert(row)).select('id').maybeSingle();
+        };
+        let { data: generated, error: generatedError } = await writeGeneratedEntry(originalInventoryPayload);
         if (generatedError && isWarehouseIdNotNullError(generatedError)) {
           const fallbackWarehouseId = await getOriginalInventoryFallbackWarehouseId();
           if (!fallbackWarehouseId) throw generatedError;
-          const retry = await supabaseAdmin
-            .from('original_inventory_entries')
-            .upsert(
-              {
-                ...originalInventoryPayload,
-                warehouse_id: fallbackWarehouseId
-              },
-              { onConflict: 'id' }
-            )
-            .select('id')
-            .maybeSingle();
+          const retry = await writeGeneratedEntry({ ...originalInventoryPayload, warehouse_id: fallbackWarehouseId });
           generated = retry.data;
           generatedError = retry.error;
         }
         if (generatedError) throw generatedError;
+        if (!generated) throw new Error('ENTRY_MISSING');
         generatedEntryId = generated?.id ?? originalInventoryPayload.id;
       } else if (existingEntry?.id) {
         const { error: deleteError } = await supabaseAdmin
           .from('original_inventory_entries')
           .delete()
-          .eq('id', existingEntry.id);
+          .eq('id', existingEntry.id).eq('user_name', existingEntry.user_name);
         if (deleteError) throw deleteError;
       }
       const { data, error } = await supabaseAdmin
         .from('original_inventory_silo_entries')
-        .upsert(
+        .update(
           {
-            id: randomUUID(),
-            config_id: configId,
-            date_key: dateKey,
             percent,
             hopper_present: hopperPresent,
             calculated_qty: calculatedQty,
             generated_entry_id: generatedEntryId,
-            user_name: getActorName(currentUser),
             updated_at: new Date().toISOString()
-          },
-          { onConflict: 'config_id,date_key' }
+          }
         )
+        .eq('id', siloRow.id).eq('user_name', siloRow.user_name)
         .select('*')
         .maybeSingle();
       if (error) throw error;
       if (!data) throw new Error('NOT_FOUND');
-      return mapOriginalInventorySiloEntry(data);
+      return { ...mapOriginalInventorySiloEntry(data), canModify: owner.owns(data) };
     }
     case 'saveOriginalInventoryFixedDeviceEntry': {
       const deviceId = String(payload?.deviceId ?? '').trim();
@@ -8057,13 +8078,16 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!warehouse?.id) throw new Error('WAREHOUSE_REQUIRED');
 
       const sourceId = fixedInventoryDeviceSourceId(device.id, dateKey);
+      const owner = await inventoryOwner();
       const { data: existingEntry, error: existingError } = await supabaseAdmin
         .from('original_inventory_entries')
-        .select('id')
+        .select('id,user_name')
         .eq('source_type', FIXED_INVENTORY_DEVICE_SOURCE_TYPE)
         .eq('source_id', sourceId)
         .maybeSingle();
       if (existingError) throw existingError;
+      if (existingEntry) owner.assert(existingEntry);
+      else owner.assert({ user_name: owner.actor });
 
       const [year, month, day] = dateKey.split('-').map(Number);
       const now = new Date();
@@ -8093,16 +8117,16 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         note: `${stateLabel}; pojemność: ${device.fullQty} ${device.unit || 'kg'}`,
         source_type: FIXED_INVENTORY_DEVICE_SOURCE_TYPE,
         source_id: sourceId,
-        user_name: getActorName(currentUser)
+        user_name: existingEntry?.user_name ?? owner.actor
       };
-      const { data, error } = await supabaseAdmin
-        .from('original_inventory_entries')
-        .upsert(row, { onConflict: 'id' })
-        .select('*')
-        .maybeSingle();
+      const query = supabaseAdmin.from('original_inventory_entries');
+      const { data, error } = await (existingEntry
+        ? query.update(row).eq('id', existingEntry.id).eq('user_name', existingEntry.user_name)
+        : query.insert(row)).select('*').maybeSingle();
+      if (error?.code === '23505') throw new Error(INVENTORY_OWNER_ERROR);
       if (error) throw error;
       if (!data) throw new Error('NOT_FOUND');
-      return mapOriginalInventoryEntry(data);
+      return { ...mapOriginalInventoryEntry(data), canModify: owner.owns(data) };
     }
     case 'addOriginalInventoryCatalog': {
       const name = String(payload?.name ?? '').trim();
@@ -8225,8 +8249,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const warehouseId = String(payload?.warehouseId ?? '').trim();
       const qty = toNumber(payload?.qty);
       if (!id) throw new Error('ENTRY_MISSING');
-      const existing = await supabaseAdmin.from('original_inventory_entries').select('source_type').eq('id', id).maybeSingle();
+      const existing = await supabaseAdmin.from('original_inventory_entries').select('source_type,user_name').eq('id', id).maybeSingle();
       if (existing.error) throw existing.error;
+      if (!existing.data) throw new Error('ENTRY_MISSING');
+      const owner = await inventoryOwner();
+      owner.assert(existing.data);
       if (existing.data?.source_type === PALLET_SET_SOURCE_TYPE) throw new Error('PALLET_GROUP_REQUIRED');
       if (!warehouseId) throw new Error('WAREHOUSE_REQUIRED');
       if (!Number.isFinite(qty) || qty <= 0) throw new Error('QTY_REQUIRED');
@@ -8234,22 +8261,26 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .from('original_inventory_entries')
         .update({ warehouse_id: warehouseId, qty })
         .eq('id', id)
+        .eq('user_name', existing.data.user_name)
         .select('*')
         .maybeSingle();
       if (error) throw error;
       if (!data) throw new Error('ENTRY_MISSING');
-      return mapOriginalInventoryEntry(data);
+      return { ...mapOriginalInventoryEntry(data), canModify: owner.owns(data) };
     }
     case 'removeOriginalInventory': {
       const id = String(payload?.entryId ?? payload ?? '');
       if (!id) throw new Error('ENTRY_MISSING');
-      const existing = await supabaseAdmin.from('original_inventory_entries').select('source_type').eq('id', id).maybeSingle();
+      const existing = await supabaseAdmin.from('original_inventory_entries').select('source_type,user_name').eq('id', id).maybeSingle();
       if (existing.error) throw existing.error;
+      if (!existing.data) throw new Error('ENTRY_MISSING');
+      (await inventoryOwner()).assert(existing.data);
       if (existing.data?.source_type === PALLET_SET_SOURCE_TYPE) throw new Error('PALLET_GROUP_REQUIRED');
       const { error, data } = await supabaseAdmin
         .from('original_inventory_entries')
         .delete()
         .eq('id', id)
+        .eq('user_name', existing.data.user_name)
         .select('id')
         .maybeSingle();
       if (error) throw error;

@@ -464,8 +464,8 @@ export const Topbar = ({
           variant="ghost"
           onClick={toggleTheme}
           className="h-10 min-h-10 w-10 px-0 py-0 md:hidden"
-          aria-label={theme === 'dark' ? 'Włącz jasny motyw' : 'Włącz ciemny motyw'}
-          title={theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'}
+          aria-label={theme === 'dark' ? 'Włącz motyw pośredni' : 'Włącz ciemny motyw'}
+          title={theme === 'dark' ? 'Motyw pośredni' : 'Ciemny motyw'}
           aria-pressed={theme === 'light'}
         >
           {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}

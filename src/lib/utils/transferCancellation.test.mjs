@@ -56,9 +56,11 @@ test('full setup includes the same cancellation schema and functions', async () 
   assert.equal(/original_inventory|daily_entry_measurements/i.test(migration), false);
 });
 
-// Optional SQL integration tests use a disposable in-memory PostgreSQL instance.
-test('SQL cancellation transaction', { skip: !process.env.PGLITE_MODULE_PATH }, async (t) => {
-  const { PGlite } = await import(pathToFileURL(process.env.PGLITE_MODULE_PATH).href);
+// SQL integration tests never connect to the application's database.
+test('SQL cancellation transaction', async (t) => {
+  const { PGlite } = await import(process.env.PGLITE_MODULE_PATH
+    ? pathToFileURL(process.env.PGLITE_MODULE_PATH).href
+    : '@electric-sql/pglite');
   const db = new PGlite();
   try {
     await db.exec(`

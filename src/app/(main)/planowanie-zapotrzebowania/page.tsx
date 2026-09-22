@@ -43,6 +43,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Input as BaseInput } from '@/components/ui/Input';
 import { SelectField } from '@/components/ui/Select';
 import { WarningTriangle } from '@/components/ui/WarningTriangle';
+import { WarehouseCodeInput } from '@/components/planowanie-zapotrzebowania/WarehouseCodeInput';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { PlanningSaveNotice, PlanningSaveStatus } from '@/components/planowanie-zapotrzebowania/PlanningSaveStatus';
 import { usePlanningAutosave } from '@/lib/planowanie-zapotrzebowania/usePlanningAutosave';
@@ -153,6 +154,7 @@ type LinkedSourceMode = 'unselected' | 'warehouse' | 'production' | 'mixed';
 type LinkedSourceSelection = {
   mode: LinkedSourceMode;
   producerPlanItemId: string;
+  // Legacy manual split, retained for stored-plan compatibility; mixed now covers the full scope.
   productionQuantity: number;
 };
 
@@ -448,8 +450,8 @@ const TECHNOLOGY_PRODUCTION_MODE_HELP: Array<{
     mode: 'linked',
     label: 'Pod powiązanie',
     when: 'Wybierz ten tryb, gdy jedna wtryskarka produkuje półwyrób potrzebny innej pozycji z planu, na przykład koło montowane później w gotowym wózku.',
-    calculation: 'Aplikacja odczytuje potrzebną ilość z powiązanego produktu. Opcja „Maszyna” dodaje tę ilość do produkcji półwyrobu. Opcja „Magazyn” pokazuje ją do pobrania. Opcja „Mieszane” dzieli zapotrzebowanie między maszynę i magazyn.',
-    example: 'WTR 20 ma zrobić 1 000 wózków, a każdy wózek potrzebuje 2 kół. Koła produkuje WTR 18. Gdy wybierzesz „Maszyna”, aplikacja wyliczy dla WTR 18 produkcję 2 000 kół. Gdy wybierzesz „Magazyn”, pokaże 2 000 kół do pobrania zamiast dodawać je do produkcji WTR 18.'
+    calculation: 'Aplikacja odczytuje potrzebną ilość z powiązanego produktu. W planie wybierasz „Magazyn” albo „Maszyna + zabezpieczenie”. Pierwsza opcja pobiera gotowy półwyrób. Druga zachowuje zasilanie z maszyny i zabezpiecza cały wybrany zakres półwyrobem z magazynu. Po uwzględnieniu stanu hali i wcześniej wypisanych paczek zabezpieczenie trafia do zwykłej listy „Do wypisania”; pobierasz je dopiero w razie potrzeby. Wyjątek bez zabezpieczenia można ustawić w technologii jako „Zawsze maszyna”.',
+    example: 'WTR 20 ma zrobić 1 000 wózków, a każdy wózek potrzebuje 2 kół. Koła produkuje WTR 18. „Maszyna + zabezpieczenie” przypisze 2 000 kół do produkcji WTR 18 i zabezpieczy 2 000 gotowych kół z magazynu na wypadek awarii. „Magazyn” uwzględni tylko pobranie gotowych kół. Liczba wózków do wykonania w obu przypadkach pozostaje taka sama.'
   }
 ];
 const MATERIAL_WAREHOUSE_PRIORITY = ['M-1', 'M-4', 'M-10', 'M-11', 'M-51'] as const;
@@ -711,19 +713,20 @@ const linkedProductMatchesPlanItem = (
 );
 const linkedSourceSelectionForItem = (item: Pick<PlanItem, 'linkedSources'>, link: LinkedProduct): LinkedSourceSelection => {
   const selection = item.linkedSources?.[linkedProductKey(link)] ?? { mode: 'unselected', producerPlanItemId: '', productionQuantity: 0 };
-  return link.sourcePolicy === 'warehouse' || link.sourcePolicy === 'production'
-    ? { ...selection, mode: link.sourcePolicy, productionQuantity: 0 }
-    : selection;
+  if (link.sourcePolicy === 'warehouse' || link.sourcePolicy === 'production') {
+    return { ...selection, mode: link.sourcePolicy, productionQuantity: 0 };
+  }
+  // Existing manual machine choices use the replacement option; the technology can still force machine-only.
+  return selection.mode === 'production' ? { ...selection, mode: 'mixed', productionQuantity: 0 } : selection;
 };
 const linkedMachineProductQuantity = (consumerQuantity: number, selection: LinkedSourceSelection) => {
   const safeQuantity = Math.max(0, Number.isFinite(consumerQuantity) ? consumerQuantity : 0);
-  if (selection.mode === 'production') return safeQuantity;
-  if (selection.mode !== 'mixed') return 0;
-  return Math.min(safeQuantity, Math.max(0, Number.isFinite(selection.productionQuantity) ? selection.productionQuantity : 0));
+  return selection.mode === 'production' || selection.mode === 'mixed' ? safeQuantity : 0;
 };
 const linkedWarehouseProductQuantity = (consumerQuantity: number, selection: LinkedSourceSelection) => {
-  if (selection.mode === 'unselected') return 0;
-  return Math.max(0, consumerQuantity - linkedMachineProductQuantity(consumerQuantity, selection));
+  const safeQuantity = Math.max(0, Number.isFinite(consumerQuantity) ? consumerQuantity : 0);
+  // A mixed source is a standby warehouse package, not a split or extra finished production.
+  return selection.mode === 'warehouse' || selection.mode === 'mixed' ? safeQuantity : 0;
 };
 const linkedSurplusQuantity = (producerQuantity: number, allocatedQuantity: number) =>
   Math.max(0, producerQuantity - allocatedQuantity);
@@ -2559,16 +2562,12 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       if (technology?.productionMode === 'continuous' && itemProductionQty(item) <= 0) {
         issues.push(`${item.index}: uzupełnij wydajność produkcji ciągłej na zmianę.`);
       }
-      const consumerQuantity = itemProductionQty(item);
       technologyLinksForItem(item).forEach((link) => {
         const selection = linkedSourceSelectionForItem(item, link);
         const label = link.productIndex || link.productName;
         if (selection.mode === 'unselected') {
           issues.push(`${item.index}: wybierz źródło półwyrobu ${label}.`);
           return;
-        }
-        if (selection.mode === 'mixed' && (selection.productionQuantity <= 0 || selection.productionQuantity >= consumerQuantity)) {
-          issues.push(`${item.index}: dla źródła mieszanego podaj ilość z maszyny większą od 0 i mniejszą od ${fmt(consumerQuantity)}.`);
         }
         if ((selection.mode === 'production' || selection.mode === 'mixed') && !linkedProducerFor(item, link)) {
           issues.push(`${item.index}: nie znaleziono jednoznacznej pozycji produkcyjnej ${label} w planie.`);
@@ -4199,7 +4198,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             producerPlanItemId: mode === 'warehouse'
               ? selection.producerPlanItemId
               : selection.producerPlanItemId || (candidates.length === 1 ? candidates[0].id : ''),
-            productionQuantity: mode === 'mixed' ? Math.min(selectedQty, selection.productionQuantity) : selection.productionQuantity
+            productionQuantity: 0
           });
           return <div key={link.id} className="space-y-3 border-y border-border bg-[var(--surface-faint)] px-3 py-3">
             <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -4207,16 +4206,15 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
               <span className="catalog-label min-w-0 break-words text-xs font-bold">{link.productName}</span>
               <span className="text-xs text-muted">{fmt(link.usage)} {link.unit || 'szt.'}/produkt</span>
             </div>
-            <div className="grid gap-3 xl:grid-cols-[minmax(330px,0.8fr)_minmax(300px,1fr)_180px] xl:items-end">
+            <div className="grid gap-3 xl:grid-cols-[minmax(330px,0.8fr)_minmax(300px,1fr)] xl:items-end">
               <div className="space-y-1.5">
                 <p className="text-xs font-semibold uppercase text-dim">Skąd pobieramy półwyrób</p>
                 {sourceFixedByTechnology ? <div className="flex h-11 items-center gap-2 rounded-lg border border-brand bg-brandSoft px-3 text-xs font-bold text-title">
                   {selection.mode === 'warehouse' ? <Warehouse className="h-4 w-4 text-brand" /> : <Factory className="h-4 w-4 text-brand" />}
                   {selection.mode === 'warehouse' ? 'Zawsze z magazynu' : 'Bezpośrednio z maszyny'}
-                </div> : <div role="group" aria-label={`Źródło półwyrobu ${link.productIndex}`} className="grid h-11 grid-cols-3 gap-1 rounded-lg border border-border bg-[var(--segmented-bg)] p-1">
-                  <button type="button" disabled={editorLocked} aria-pressed={selection.mode === 'warehouse'} onClick={() => setMode('warehouse')} className={cn('flex min-w-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-bold transition', selection.mode === 'warehouse' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[var(--row-hover)]')}><Warehouse className="h-3.5 w-3.5 shrink-0" />Magazyn</button>
-                  <button type="button" disabled={editorLocked} aria-pressed={selection.mode === 'production'} onClick={() => setMode('production')} className={cn('flex min-w-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-bold transition', selection.mode === 'production' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[var(--row-hover)]')}><Factory className="h-3.5 w-3.5 shrink-0" />Maszyna</button>
-                  <button type="button" disabled={editorLocked} aria-pressed={selection.mode === 'mixed'} onClick={() => setMode('mixed')} className={cn('flex min-w-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-bold transition', selection.mode === 'mixed' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[var(--row-hover)]')}><GitMerge className="h-3.5 w-3.5 shrink-0" />Mieszane</button>
+                </div> : <div role="group" aria-label={`Źródło półwyrobu ${link.productIndex}`} className="grid min-h-11 grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)] gap-1 rounded-lg border border-border bg-[var(--segmented-bg)] p-1">
+                  <button type="button" disabled={editorLocked} aria-pressed={selection.mode === 'warehouse'} onClick={() => setMode('warehouse')} className={cn('flex min-w-0 items-center justify-center gap-1 rounded-md px-2 py-2 text-xs font-bold transition', selection.mode === 'warehouse' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[var(--row-hover)]')}><Warehouse className="h-3.5 w-3.5 shrink-0" />Magazyn</button>
+                  <button type="button" disabled={editorLocked} aria-pressed={selection.mode === 'mixed'} onClick={() => setMode('mixed')} className={cn('flex min-w-0 items-center justify-center gap-1 rounded-md px-2 py-2 text-xs font-bold transition', selection.mode === 'mixed' ? 'bg-brandSoft text-title ring-1 ring-brand' : 'text-muted hover:bg-[var(--row-hover)]')}><GitMerge className="h-3.5 w-3.5 shrink-0" />Maszyna + zabezpieczenie</button>
                 </div>}
               </div>
               {selection.mode === 'production' || selection.mode === 'mixed' ? <Field label="Powiązana pozycja produkująca półwyrób">
@@ -4225,10 +4223,12 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
                   {candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.index} · {candidate.station || 'brak stanowiska'} · {fmt(itemProductionQty(candidate))} szt.</option>)}
                 </SelectField>
               </Field> : <div className="hidden xl:block" />}
-              {selection.mode === 'mixed' ? <PlanAmountField label="Z maszyny (szt.)" min={0} value={selection.productionQuantity} disabled={editorLocked} onChange={(value) => updateLinkedSourceSelection(item.id, link, { productionQuantity: Math.min(selectedQty, value) })} /> : <div className="hidden xl:block" />}
             </div>
+            {selection.mode === 'mixed' ? <p className="border-l-2 border-brand bg-brandSoft px-3 py-2 text-xs font-semibold text-title">
+              Maszyna zasila produkcję normalnie. Magazyn zabezpiecza cały wybrany zakres na wypadek awarii. Po uwzględnieniu stanu hali i wcześniej wypisanych paczek zabezpieczenie trafia do zwykłej listy „Do wypisania”. Paczkę pobierasz dopiero, gdy jest potrzebna — nie zwiększa to liczby wyrobów do produkcji.
+            </p> : null}
             {selection.mode === 'unselected' ? <p className="text-sm font-semibold text-warning">Wybierz źródło. Bez tego dokument materiałowy nie zostanie utworzony.</p> : <div className="grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
-              <div className="border-l-2 border-borderStrong pl-2"><p className="text-dim">Półwyrób z magazynu</p><p className="mt-1 font-black text-title">{fmt(technologyResultQuantity(warehouseComponents, link.unit))} {technologyResultUnit(link.unit)}</p></div>
+              <div className="border-l-2 border-borderStrong pl-2"><p className="text-dim">{selection.mode === 'mixed' ? 'Zabezpieczenie z magazynu' : 'Półwyrób z magazynu'}</p><p className="mt-1 font-black text-title">{fmt(technologyResultQuantity(warehouseComponents, link.unit))} {technologyResultUnit(link.unit)}</p></div>
               <div className="border-l-2 border-brand pl-2"><p className="text-dim">Bezpośrednio z maszyny</p><p className="mt-1 font-black text-title">{fmt(technologyResultQuantity(machineComponents, link.unit))} {technologyResultUnit(link.unit)}</p></div>
               <div className="border-l-2 border-borderStrong pl-2"><p className="text-dim">Produkcja powiązanej pozycji</p><p className="mt-1 font-black text-title">{producer ? `${fmt(producerOutput)} szt.` : '—'}</p></div>
               <div className="border-l-2 border-warning pl-2"><p className="text-dim">Nadwyżka półwyrobu na magazyn</p><p className="mt-1 font-black text-warning">{producer ? `${fmt(producerSurplus)} szt.` : '—'}</p></div>
@@ -4940,7 +4940,6 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
                 <div className="min-w-[210px]"><p className="mb-1 text-xs font-semibold text-dim">Sortowanie</p><SelectField className="min-h-10 rounded-lg" aria-label="Sortowanie dokumentu" value={documentSort} onChange={(event) => setDocumentSort(event.target.value as PickingDocumentSort)}><option value="warehouse">Magazyn</option><option value="material">Nazwa materiału</option><option value="code">Kod materiału</option></SelectField></div>
               </div>
             </div>
-            <datalist id={`picking-warehouses-${document.id}`}>{warehouseOptions.map((warehouseCode) => <option key={warehouseCode} value={warehouseCode} />)}</datalist>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1120px] text-sm">
                 <thead className="sticky top-0 z-10 text-left text-sm font-black uppercase tracking-[0.055em] text-title shadow-[inset_0_3px_0_var(--brand),inset_0_-1px_0_var(--brand-border)]" style={{ background: 'linear-gradient(90deg, color-mix(in srgb, var(--brand) 22%, var(--surface-2)), color-mix(in srgb, var(--brand) 8%, var(--surface-2)) 60%, var(--surface-2))' }}><tr className="divide-x divide-[var(--brand-border-soft)]"><th className="w-24 p-3 text-center">Wypisane</th><th className="w-14 p-3"><span className="sr-only">Źródła</span></th><th className="p-3">Materiał</th><th className="w-40 p-3">Magazyn</th><th className="p-3 text-right">Zapotrzebowanie</th><th className="p-3 text-right">Stan rzeczywisty MAG 40</th><th className="p-3 text-right">Ilość do wypisania</th><th className="p-3">J.m.</th></tr></thead>
@@ -4958,7 +4957,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
                       <td className="p-3"><button type="button" aria-label={row.confirmed ? `Odznacz jako wypisane: ${row.name}` : `Zaznacz jako wypisane: ${row.name}`} aria-pressed={row.confirmed} title={row.confirmed ? 'Pozycja wypisana — kliknij, aby cofnąć' : 'Zaznacz pozycję jako wypisaną'} disabled={readOnly || locked || document.status !== 'draft'} onClick={() => togglePickingConfirmation(document.id, row.key)} className={cn('mx-auto flex h-11 w-11 items-center justify-center rounded-lg border', row.confirmed ? 'border-success bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-success' : activeDraftRow ? 'border-warning bg-[color:color-mix(in_srgb,var(--warning)_12%,transparent)] text-warning' : 'border-border text-muted', (readOnly || locked || document.status !== 'draft') && 'cursor-default opacity-80')}>{row.confirmed ? <Check className="h-4 w-4" /> : activeDraftRow ? <WarningTriangle className="h-8 w-8" /> : null}</button></td>
                       <td className="p-3"><button type="button" title={sourcesExpanded ? 'Ukryj źródła zapotrzebowania' : 'Pokaż indeksy źródłowe'} className="flex h-11 w-11 items-center justify-center rounded-lg border border-border text-muted" onClick={() => setExpandedMaterial(sourcesExpanded ? '' : sourceKey)}>{sourcesExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button></td>
                       <td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label break-words font-semibold">{row.name}</p></td>
-                      <td className="p-3"><div className="relative"><BaseInput className={cn('h-10 min-h-10 rounded-lg uppercase', activeDraftRow && !warehouseCode && 'border-warning pr-12')} aria-label={`Magazyn dla ${row.name}`} aria-invalid={activeDraftRow && !warehouseCode ? true : undefined} title={readOnly ? 'Brak uprawnień do edycji' : 'Wpisz lub wybierz magazyn'} list={`picking-warehouses-${document.id}`} placeholder="Np. M-1" value={warehouseCode} disabled={readOnly} onChange={(event) => updatePickingDocumentWarehouse(document.id, row.key, event.target.value)} />{activeDraftRow && !warehouseCode ? <WarningTriangle label={`Brak przypisanego magazynu dla ${row.name}`} className="pointer-events-none absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2" /> : null}</div></td>
+                      <td className="p-3"><div className="relative"><WarehouseCodeInput className={cn(activeDraftRow && !warehouseCode && 'border-warning pr-20')} label={`Magazyn dla ${row.name}`} invalid={activeDraftRow && !warehouseCode} value={warehouseCode} options={warehouseOptions} disabled={readOnly} onChange={(value) => updatePickingDocumentWarehouse(document.id, row.key, value)} />{activeDraftRow && !warehouseCode ? <WarningTriangle label={`Brak przypisanego magazynu dla ${row.name}`} className="pointer-events-none absolute right-9 top-1/2 h-8 w-8 -translate-y-1/2" /> : null}</div></td>
                       <td className="p-3 text-right">{fmt(technologyResultQuantity(row.demand, row.unit))}</td><td className="p-3 text-right">{fmt(technologyResultQuantity(row.areaStock, row.unit))}</td><td className="p-3 text-right text-lg font-black text-title">{fmt(technologyResultQuantity(row.toIssue, row.unit))}</td><td className="p-3">{technologyResultUnit(row.unit)}</td>
                     </tr>
                     {sourcesExpanded ? <tr className="border-t border-border bg-[var(--surface-faint)]"><td colSpan={8} className="px-5 py-4"><p className="text-xs font-bold uppercase text-dim">Źródła zapotrzebowania</p><div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{row.sources.map((source) => <div key={`${source.planItemId}-${source.index}`} className="border-l-2 border-brand pl-3"><p className="font-bold text-title">{source.index}</p><p className="catalog-label break-words text-sm font-semibold">{source.name}</p><p className="mt-1 text-xs text-dim">{fmt(technologyResultQuantity(source.demand, row.unit))} {technologyResultUnit(row.unit)}</p></div>)}</div></td></tr> : null}

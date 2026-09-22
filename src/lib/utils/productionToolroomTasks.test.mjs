@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isToolroomReturnTask, toolroomReturnId, toolroomLinkNotes, withToolroomReturnTasks } from './productionToolroomTasks.ts';
+import { canSelectToolroomWork, createToolroomReturnTask, isToolroomWorkKind, isToolroomReturnTask, toolroomReturnId, toolroomLinkNotes, toolroomWorkMutation, withToolroomReturnTasks } from './productionToolroomTasks.ts';
 
 const parent = (id='plan-1', overrides={}) => ({
   id, station:'WTR 49', detail:'MANETA BOSCH (9001434742)', quantity:'1980', norm:'1120',
@@ -15,7 +15,7 @@ test('creates one return directly below the matching index and station',()=>{
   assert.deepEqual(result.map(task=>task.id),[source.id,toolroomReturnId(source.id),next.id]);
   const child=result[1];
   assert.equal(child.station,source.station);assert.equal(child.detail,source.detail);
-  assert.deepEqual(child.teams,['mechanics']);assert.deepEqual(child.kinds,['powrot-formy-narzedziownia']);
+  assert.deepEqual(child.teams,['mechanics','process']);assert.deepEqual(child.kinds,['powrot-formy-narzedziownia']);
   assert.deepEqual(child.teamProgress,{});
   assert.equal(child.notes.mechanics,undefined);assert.equal(child.notes.processAssignee,undefined);
   assert.equal(child.isCurrentPlan,false);assert.equal(child.material,'');assert.equal(child.done,false);
@@ -66,7 +66,7 @@ test('parent process stays blocked until the separate return is completed',()=>{
 test('removing the sending assignment or the whole source does not remove an existing return',()=>{
   const [source,child]=withToolroomReturnTasks([parent()]);
   let result=withToolroomReturnTasks([{...source,teams:['process'],kinds:[]},child]);
-  assert.equal(result[1].id,child.id);assert.deepEqual(result[1].teams,['mechanics']);
+  assert.equal(result[1].id,child.id);assert.deepEqual(result[1].teams,['mechanics','process']);
   result=withToolroomReturnTasks([child]);assert.equal(result.length,1);assert.equal(result[0].id,child.id);
 });
 
@@ -91,4 +91,41 @@ test('no new returns for unrelated, cancelled, manual or unassigned jobs; old hi
     assert.equal(withToolroomReturnTasks([parent('a',overrides)]).length,1);
   }
   assert.equal(withToolroomReturnTasks([parent()],false).length,1);
+});
+
+test('directly selected return is separate from production and blocks startup until completion', () => {
+  const source = parent('direct', { kinds: ['rozruch'], teams: ['process'] });
+  const child = createToolroomReturnTask(source);
+  const tasks = withToolroomReturnTasks([source, child]);
+  assert.equal(tasks.length, 2);
+  assert.equal(tasks[0].toolroomReturnDone, false);
+  assert.equal(tasks[1].isCurrentPlan, false);
+  assert.deepEqual(tasks[0].kinds, ['rozruch']);
+  assert.equal(withToolroomReturnTasks(tasks).length, 2);
+  assert.equal(canSelectToolroomWork(child, 'powrot-formy-narzedziownia'), true);
+  assert.equal(canSelectToolroomWork(child, 'forma-narzedziownia'), false);
+  assert.equal(canSelectToolroomWork(source, 'powrot-formy-narzedziownia'), false);
+  assert.equal(canSelectToolroomWork({ ...source, isCurrentPlan: false }, 'forma-narzedziownia'), false);
+  assert.equal(canSelectToolroomWork({ ...source, kinds: ['anulowane'] }, 'forma-narzedziownia'), false);
+});
+
+test('toolroom selection generates only scoped changes and repeated selection preserves completion', () => {
+  for (const kind of ['forma-narzedziownia', 'powrot-formy-narzedziownia']) assert.equal(isToolroomWorkKind(kind), true);
+  for (const kind of ['rozruch', 'anulowane', null, {}]) assert.equal(isToolroomWorkKind(kind), false);
+  const selection = toolroomWorkMutation(parent('new', { kinds: [] }), { kind: 'forma-narzedziownia', enabled: true });
+  assert.deepEqual(selection.addTeams, ['mechanics', 'process']);
+  assert.deepEqual(selection.setTeamDone, { team: 'mechanics', done: false });
+  assert.equal(toolroomWorkMutation(parent(), { kind: 'forma-narzedziownia', enabled: true }).setTeamDone, undefined);
+  const remove = toolroomWorkMutation(createToolroomReturnTask(parent()), { kind: 'powrot-formy-narzedziownia', enabled: false });
+  assert.deepEqual(remove.removeKinds, ['powrot-formy-narzedziownia']);
+  assert.deepEqual(remove.removeTeams, ['mechanics', 'process']);
+});
+
+test('selecting a return assigns both teams, including an existing mechanic-only return', () => {
+  const child = { ...createToolroomReturnTask(parent()), teams: ['mechanics'], done: true };
+  const selection = toolroomWorkMutation(child, { kind: 'powrot-formy-narzedziownia', enabled: true });
+  assert.deepEqual(selection.addTeams, ['mechanics', 'process']);
+  assert.deepEqual(selection.removeTeams, []);
+  assert.equal(selection.setTeamDone, undefined);
+  assert.deepEqual(child.teams, ['mechanics']);
 });

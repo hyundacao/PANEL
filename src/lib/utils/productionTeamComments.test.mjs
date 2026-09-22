@@ -699,6 +699,99 @@ test('all actual copy paths use the same saved quantity switch', async () => {
 
 const toolroomSource = () => ({id:'source-1',station:'WTR 49',detail:'MANETA BOSCH (9001434742)',quantity:'1980',norm:'1120',isCurrentPlan:true,planGroup:'standard',highlighted:false,kinds:['forma-narzedziownia'],teams:['mechanics','process'],notes:{mechanics:'Zdjąć formę'},done:false,material:'PP',materialType:'',source:'',dryer:'',temperature:''});
 
+test('mechanic can select sending a form without editing other plan fields', async () => {
+  const api = testApi();
+  const source = { ...toolroomSource(), kinds: ['rozruch'], teams: ['process'], notes: { process: 'Keep this note' } };
+  assert.equal((await api.post({ action: 'savePlan', tasks: [source] })).status, 200);
+  api.state.isAdmin = false;
+  api.state.preparationTeams = ['mechanics'];
+  const response = await api.post({ action: 'mutateTask', taskId: source.id, mutation: { setToolroomWork: { kind: 'forma-narzedziownia', enabled: true } } });
+  assert.equal(response.status, 200, await response.clone().text());
+  const result = await (await api.get()).json();
+  const saved = result.tasks.find(task => task.id === source.id);
+  assert.deepEqual(saved.kinds, ['rozruch', 'forma-narzedziownia']);
+  assert.deepEqual(saved.teams, ['process', 'mechanics']);
+  assert.equal(saved.notes.process, 'Keep this note');
+  assert.equal(saved.detail, source.detail);
+  assert.equal(saved.done, false);
+  assert.equal(result.tasks.filter(toolroom.isToolroomReturnTask).length, 1);
+});
+
+test('direct return selection persists once, remains unfinished, and gates process completion', async () => {
+  const api = testApi();
+  const source = { ...toolroomSource(), kinds: ['rozruch'], teams: ['process'], notes: {} };
+  await api.post({ action: 'savePlan', tasks: [source] });
+  api.state.isAdmin = false;
+  api.state.preparationTeams = ['mechanics'];
+  const returnId = toolroom.toolroomReturnId(source.id);
+  const select = enabled => api.post({ action: 'mutateTask', taskId: returnId, mutation: { setToolroomWork: { kind: 'powrot-formy-narzedziownia', enabled } } });
+  const responses = await Promise.all([select(true), select(true)]);
+  for (const response of responses) assert.equal(response.status, 200, await response.clone().text());
+  let result = await (await api.get()).json();
+  assert.equal(result.tasks.filter(toolroom.isToolroomReturnTask).length, 1);
+  assert.equal(result.tasks.find(task => task.id === returnId).done, false);
+  assert.deepEqual(result.tasks.find(task => task.id === returnId).teams, ['mechanics', 'process']);
+  assert.equal(result.tasks.find(task => task.id === source.id).toolroomReturnDone, false);
+  assert.deepEqual(result.tasks.find(task => task.id === source.id).kinds, ['rozruch']);
+  api.state.preparationTeams = ['process'];
+  assert.equal((await api.post({ action: 'mutateTask', taskId: source.id, mutation: { setTeamDone: { team: 'process', done: true } } })).status, 409);
+  assert.equal((await api.post({ action: 'mutateTask', taskId: returnId, mutation: { setTeamDone: { team: 'process', done: true } } })).status, 409);
+  api.state.preparationTeams = ['mechanics'];
+  assert.equal((await api.post({ action: 'mutateTask', taskId: returnId, mutation: { setTeamDone: { team: 'mechanics', done: true } } })).status, 200);
+  assert.equal((await select(true)).status, 200);
+  result = await (await api.get()).json();
+  assert.ok(result.tasks.find(task => task.id === returnId).teamProgress.mechanics);
+  assert.equal(result.tasks.find(task => task.id === returnId).done, false);
+  api.state.preparationTeams = ['process'];
+  assert.equal((await api.post({ action: 'mutateTask', taskId: returnId, mutation: { setTeamDone: { team: 'process', done: true } } })).status, 200);
+  result = await (await api.get()).json();
+  assert.equal(result.tasks.find(task => task.id === returnId).done, true);
+  assert.equal((await api.post({ action: 'mutateTask', taskId: source.id, mutation: { setTeamDone: { team: 'process', done: true } } })).status, 200);
+  api.state.preparationTeams = ['mechanics'];
+  assert.equal((await select(false)).status, 200);
+  result = await (await api.get()).json();
+  assert.deepEqual(result.tasks.find(task => task.id === returnId).teams, []);
+  assert.equal((await select(true)).status, 200);
+  result = await (await api.get()).json();
+  assert.equal(result.tasks.filter(toolroom.isToolroomReturnTask).length, 1);
+  assert.equal(result.tasks.find(task => task.id === returnId).done, false);
+  assert.equal(result.tasks.find(task => task.id === source.id).done, false);
+});
+
+test('toolroom permission rejects other teams and malformed or broadened mutations without writes', async () => {
+  const api = testApi();
+  api.state.isAdmin = false;
+  const valid = { kind: 'forma-narzedziownia', enabled: true };
+  for (const team of ['distribution', 'process', 'technician', 'graphics', 'additional']) {
+    api.state.preparationTeams = [team];
+    assert.equal((await api.post({ action: 'mutateTask', taskId: 'source-1', mutation: { setToolroomWork: valid } })).status, 403);
+  }
+  api.state.preparationTeams = ['mechanics'];
+  for (const invalid of [null, {}, { ...valid, enabled: 'true' }, { ...valid, kind: 'rozruch' }, { ...valid, teams: ['graphics'] }]) {
+    assert.equal((await api.post({ action: 'mutateTask', taskId: 'source-1', mutation: { setToolroomWork: invalid } })).status, 400);
+  }
+  for (const extra of [{ fields: { detail: 'Replaced' } }, { addTeams: ['graphics'] }, { clearWork: true }, { setTeamDone: { team: 'process', done: true } }]) {
+    assert.equal((await api.post({ action: 'mutateTask', taskId: 'source-1', mutation: { setToolroomWork: valid, ...extra } })).status, 403);
+  }
+  assert.equal(api.state.writeCount, 0);
+});
+
+test('toolroom selections cannot target cancelled, foreign-day or non-production parents', async () => {
+  const api = testApi();
+  const tasks = [
+    { ...toolroomSource(), id: 'cancelled', kinds: ['anulowane'] },
+    { ...toolroomSource(), id: 'manual', kinds: ['inne'], isCurrentPlan: false }
+  ];
+  await api.post({ action: 'savePlan', tasks });
+  api.state.isAdmin = false;
+  api.state.preparationTeams = ['mechanics'];
+  for (const sourceId of ['cancelled', 'manual', 'missing-other-day']) {
+    const response = await api.post({ action: 'mutateTask', taskId: toolroom.toolroomReturnId(sourceId), mutation: { setToolroomWork: { kind: 'powrot-formy-narzedziownia', enabled: true } } });
+    assert.equal(response.status, 403);
+  }
+  assert.equal(api.db.przygotowanie_produkcji_tasks.filter(row => row.task_key.startsWith('toolroom-return:')).length, 0);
+});
+
 test('API loads and edits the selected production day without changing another day', async () => {
   const api=testApi();
   const third={...toolroomSource(),detail:'PLAN 3 WRZEŚNIA',kinds:['rozruch'],teams:['process'],notes:{}};
@@ -1214,7 +1307,7 @@ test('API stores two linked work tasks and snapshots both, with just one product
   assert.deepEqual(data.tasks.map(task=>task.id),[source.id,toolroom.toolroomReturnId(source.id)]);
   assert.equal(data.tasks.filter(task=>task.isCurrentPlan).length,1);
   assert.equal(api.db.przygotowanie_produkcji_history[0].tasks.length,2);
-  assert.deepEqual(data.tasks[1].teams,['mechanics']);
+  assert.deepEqual(data.tasks[1].teams,['mechanics','process']);
 });
 
 test('API unlocks process only after the mould returns and never resurrects a reverted completion', async()=>{
@@ -1261,7 +1354,7 @@ test('API return notes and removal do not modify sending work; old imports do no
   await api.post({action:'mutateTask',taskId:childId,mutation:{removeTeams:['mechanics']}});
   await api.post({action:'savePlan',tasks:[{...source,quantity:'3000'}]});
   data=await(await api.get()).json();
-  assert.equal(data.tasks.length,2);assert.deepEqual(data.tasks[1].teams,[]);
+  assert.equal(data.tasks.length,2);assert.deepEqual(data.tasks[1].teams,['process']);
   assert.equal(data.tasks[1].notes.mechanics,'Zawiesić po naprawie');assert.equal(data.tasks[1].quantity,'3000');
   assert.ok(data.tasks[0].teams.includes('mechanics'));
 });
@@ -1273,7 +1366,7 @@ test('API creates return when toolroom work is selected and retains it if origin
   await api.post({action:'mutateTask',taskId:source.id,mutation:{removeTeams:['mechanics']}});
   const data=await(await api.get()).json();
   assert.equal(data.tasks.length,2);assert.deepEqual(data.tasks[0].teams,['process']);
-  assert.deepEqual(data.tasks[1].teams,['mechanics']);
+  assert.deepEqual(data.tasks[1].teams,['mechanics','process']);
 });
 
 test('API repeated and simultaneous saves create one return record',async()=>{

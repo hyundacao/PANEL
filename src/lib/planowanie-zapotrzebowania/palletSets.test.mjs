@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import * as domain from './palletSets.ts';
 import * as dates from '../utils/productionPlanDate.ts';
+import { inventoryOwnership } from '../utils/originalInventoryOwnership.ts';
 import { sharedPlanningState, privatePlanningState, rebaseSharedPlanningChanges } from './stateScopes.ts';
 
 const require = createRequire(import.meta.url);
@@ -14,6 +15,7 @@ const mod = new Module(serverFile);
 mod.require = (id) => id === './palletSets' ? domain : id === '@/lib/utils/productionPlanDate' ? dates : require(id);
 mod._compile(ts.transpileModule(readFileSync(serverFile, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, serverFile);
 const api = mod.exports;
+const owner = (name) => inventoryOwnership({ id: name, username: name }, [{ id: name, username: name }]);
 const BATCH = 'e3043001-18c5-4ed2-9d89-e24d0c225818';
 const part = (catalogId, qty) => ({ catalogId, name: catalogId, indexCode: catalogId, indexCode2: catalogId, warehouseCode: 'M-4', unit: 'szt.', qty });
 const profile = () => ({ id: 'test-set', name: 'Test only: container set', primaryCatalogId: 'container', active: true,
@@ -89,7 +91,7 @@ test('pallet definitions are shared and independent edits to different definitio
 
 test('one inventory operation atomically inserts all components into the selected hall and day', async () => {
   const { db, state } = database();
-  await api.addPalletInventory(db, request(), 'counter');
+  await api.addPalletInventory(db, request(), owner('counter'));
   assert.equal(state.writes.length, 1);
   assert.equal(state.rows.length, 3);
   assert.deepEqual(state.rows.map((row) => row.qty), [120, 3, 3]);
@@ -98,8 +100,8 @@ test('one inventory operation atomically inserts all components into the selecte
 
 test('lost-response retries and simultaneous duplicate submits do not double stock', async () => {
   const { db, state } = database();
-  await Promise.all([api.addPalletInventory(db, request(), 'a'), api.addPalletInventory(db, request(), 'a')]);
-  await api.addPalletInventory(db, request(), 'a');
+  await Promise.all([api.addPalletInventory(db, request(), owner('a')), api.addPalletInventory(db, request(), owner('a'))]);
+  await api.addPalletInventory(db, request(), owner('a'));
   assert.equal(state.rows.length, 3);
   assert.equal(state.rows.reduce((sum, row) => sum + row.qty, 0), 126);
 });
@@ -107,21 +109,21 @@ test('lost-response retries and simultaneous duplicate submits do not double sto
 test('invalid quantities, inactive/stale definitions and missing catalog rows cannot write stock', async () => {
   for (const overrides of [{ count: 1.5 }, { count: 0 }, { count: '3' }, { dateKey: '2026-02-30' }, { warehouseId: 'unknown' }, { fingerprint: 'old' }]) {
     const { db, state } = database();
-    await assert.rejects(api.addPalletInventory(db, request(profile(), overrides), 'counter'));
+    await assert.rejects(api.addPalletInventory(db, request(profile(), overrides), owner('counter')));
     assert.equal(state.writes.length, 0);
   }
   const { db, state } = database(); state.profile.active = false;
-  await assert.rejects(api.addPalletInventory(db, request(), 'counter'), /PALLET_SET_NOT_FOUND/);
+  await assert.rejects(api.addPalletInventory(db, request(), owner('counter')), /PALLET_SET_NOT_FOUND/);
   state.profile.active = true; state.catalogMissing = true;
-  await assert.rejects(api.addPalletInventory(db, request(), 'counter'), /PALLET_CATALOG_CHANGED/);
+  await assert.rejects(api.addPalletInventory(db, request(), owner('counter')), /PALLET_CATALOG_CHANGED/);
   assert.equal(state.writes.length, 0);
 });
 
 test('reusing a batch key with a different count, hall or day fails without changing stock', async () => {
   const { db, state } = database();
-  await api.addPalletInventory(db, request(), 'counter');
+  await api.addPalletInventory(db, request(), owner('counter'));
   for (const change of [{ count: 4 }, { warehouseId: 'hall-1' }, { dateKey: '2026-09-20' }]) {
-    await assert.rejects(api.addPalletInventory(db, request(profile(), change), 'counter'), /PALLET_BATCH_CONFLICT/);
+    await assert.rejects(api.addPalletInventory(db, request(profile(), change), owner('counter')), /PALLET_BATCH_CONFLICT/);
   }
   assert.deepEqual(state.rows.map((row) => row.qty), [120, 3, 3]);
   assert.equal(state.writes.length, 1);
@@ -129,15 +131,15 @@ test('reusing a batch key with a different count, hall or day fails without chan
 
 test('failure during a batch does not leave partial stock', async () => {
   const { db, state } = database(); state.failInsert = true;
-  await assert.rejects(api.addPalletInventory(db, request(), 'counter'));
+  await assert.rejects(api.addPalletInventory(db, request(), owner('counter')));
   assert.equal(state.rows.length, 0);
 });
 
 test('editing a saved batch uses its snapshot, not a changed or disabled definition', async () => {
   const { db, state } = database();
-  await api.addPalletInventory(db, request(), 'counter');
+  await api.addPalletInventory(db, request(), owner('counter'));
   state.profile.components[0].qty = 200; state.profile.active = false;
-  await api.updatePalletInventory(db, { batchId: BATCH, count: 2, warehouseId: 'hall-1' }, 'editor');
+  await api.updatePalletInventory(db, { batchId: BATCH, count: 2, warehouseId: 'hall-1' }, owner('counter'));
   assert.deepEqual(state.rows.map((row) => row.qty), [80, 2, 2]);
   assert.ok(state.rows.every((row) => row.warehouse_id === 'hall-1' && row.at.startsWith('2026-09-19')));
   assert.equal(state.writes.at(-1).mode, 'upsert');
@@ -146,11 +148,34 @@ test('editing a saved batch uses its snapshot, not a changed or disabled definit
 
 test('deleting a batch removes only its components, preserving other days and halls', async () => {
   const { db, state } = database();
-  await api.addPalletInventory(db, request(), 'counter');
-  await api.addPalletInventory(db, request(profile(), { batchId: 'e3043001-18c5-4ed2-9d89-e24d0c225819', dateKey: '2026-09-20', warehouseId: 'hall-1' }), 'other');
-  await api.removePalletInventory(db, BATCH);
+  await api.addPalletInventory(db, request(), owner('counter'));
+  await api.addPalletInventory(db, request(profile(), { batchId: 'e3043001-18c5-4ed2-9d89-e24d0c225819', dateKey: '2026-09-20', warehouseId: 'hall-1' }), owner('other'));
+  await api.removePalletInventory(db, BATCH, owner('counter'));
   assert.equal(state.rows.length, 3);
   assert.ok(state.rows.every((row) => row.at.startsWith('2026-09-20') && row.warehouse_id === 'hall-1'));
+});
+
+test('another counter cannot edit, remove or reuse an owned pallet batch', async () => {
+  const { db, state } = database();
+  await api.addPalletInventory(db, request(), owner('counter'));
+  const before = JSON.stringify(state.rows);
+  for (const action of [
+    () => api.updatePalletInventory(db, { batchId: BATCH, count: 2, warehouseId: 'hall-1' }, owner('other')),
+    () => api.removePalletInventory(db, BATCH, owner('other')),
+    () => api.addPalletInventory(db, request(), owner('other'))
+  ]) await assert.rejects(action(), /INVENTORY_NOT_OWNER/);
+  assert.equal(JSON.stringify(state.rows), before);
+  assert.equal(state.writes.length, 1);
+});
+
+test('a batch with mixed authors cannot be partially deleted or taken over', async () => {
+  const { db, state } = database();
+  await api.addPalletInventory(db, request(), owner('counter'));
+  state.rows[1].user_name = 'other';
+  const before = JSON.stringify(state.rows);
+  await assert.rejects(api.removePalletInventory(db, BATCH, owner('counter')), /INVENTORY_NOT_OWNER/);
+  await assert.rejects(api.updatePalletInventory(db, { batchId: BATCH, count: 2, warehouseId: 'hall-1' }, owner('counter')), /INVENTORY_NOT_OWNER/);
+  assert.equal(JSON.stringify(state.rows), before);
 });
 
 test('no extra pallet counting panel is added; the existing search exposes set mode', () => {

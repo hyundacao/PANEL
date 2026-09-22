@@ -1,4 +1,9 @@
 export const TOOLROOM_RETURN_KIND = 'powrot-formy-narzedziownia';
+export const TOOLROOM_SEND_KIND = 'forma-narzedziownia';
+export type ToolroomWorkKind = typeof TOOLROOM_SEND_KIND | typeof TOOLROOM_RETURN_KIND;
+export type ToolroomWorkSelection = { kind: ToolroomWorkKind; enabled: boolean };
+export const isToolroomWorkKind = (kind: unknown): kind is ToolroomWorkKind =>
+  kind === TOOLROOM_SEND_KIND || kind === TOOLROOM_RETURN_KIND;
 export const TOOLROOM_RETURN_LABEL = 'Powrót formy z narzędziowni';
 export const TOOLROOM_PARENT_NOTE = 'toolroomParentId';
 const RETURN_ID_PREFIX = 'toolroom-return:';
@@ -40,6 +45,43 @@ export const toolroomLinkNotes = (task: Pick<ToolroomTask, 'id' | 'notes'>): { t
   return parentId ? { toolroomParentId: parentId } : {};
 };
 
+export const createToolroomReturnTask = <T extends ToolroomTask>(parent: T): T => ({
+  ...parent,
+  id: toolroomReturnId(parent.id),
+  isCurrentPlan: false,
+  planGroup: 'standard',
+  highlighted: false,
+  kinds: [TOOLROOM_RETURN_KIND],
+  teams: ['mechanics', 'process'],
+  notes: { toolroomParentId: parent.id },
+  teamProgress: {},
+  toolroomReturnDone: undefined,
+  done: false,
+  material: '', materialType: '', source: '', dryer: '', temperature: ''
+});
+
+export const canSelectToolroomWork = (task: ToolroomTask, kind: ToolroomWorkKind) =>
+  Boolean(task.station) && !task.kinds.includes('anulowane') && (kind === TOOLROOM_RETURN_KIND
+    ? isToolroomReturnTask(task)
+    : task.isCurrentPlan && !isToolroomReturnTask(task));
+
+// The client sends only a kind and a boolean, never arbitrary team/note changes.
+export const toolroomWorkMutation = (task: ToolroomTask, selection: ToolroomWorkSelection) => {
+  const { kind, enabled } = selection;
+  const changed = task.kinds.includes(kind) !== enabled || (enabled && !task.teams.includes('mechanics'));
+  const setNotesIfMissing: Record<string, string> = enabled && kind === TOOLROOM_SEND_KIND
+    ? { process: 'Wznowienie procesu po powrocie z narzędziowni.' }
+    : {};
+  return {
+    addKinds: enabled ? [kind] : [],
+    removeKinds: enabled ? [] : [kind],
+    addTeams: enabled ? ['mechanics' as const, 'process' as const] : [],
+    removeTeams: !enabled && kind === TOOLROOM_RETURN_KIND ? ['mechanics' as const, 'process' as const] : [],
+    setNotesIfMissing,
+    ...(changed ? { setTeamDone: { team: 'mechanics' as const, done: false } } : {})
+  };
+};
+
 // Returns are work instructions, never an additional production/material-plan row.
 // Existing return tasks retain their own assignments, notes, cancellation and completion.
 export const withToolroomReturnTasks = <T extends ToolroomTask>(tasks: T[], createMissing = true): T[] => {
@@ -55,7 +97,8 @@ export const withToolroomReturnTasks = <T extends ToolroomTask>(tasks: T[], crea
   for (const parent of parents) {
     const existing = children.get(parent.id);
     const requiresReturn = parent.station !== 'ZADANIE DODATKOWE'
-      && parent.kinds.includes('forma-narzedziownia')
+      && (parent.kinds.includes(TOOLROOM_SEND_KIND)
+        || Boolean(existing?.kinds.includes(TOOLROOM_RETURN_KIND) && existing.teams.includes('mechanics') && !existing.kinds.includes('anulowane')))
       && !parent.kinds.includes('anulowane');
     const needsReturn = requiresReturn && parent.teams.includes('mechanics');
     const existingReturnDone = Boolean(
@@ -88,20 +131,7 @@ export const withToolroomReturnTasks = <T extends ToolroomTask>(tasks: T[], crea
         notes: { ...existing.notes, toolroomParentId: parent.id }
       });
     } else if (createMissing && needsReturn) {
-      result.push({
-        ...parent,
-        id: toolroomReturnId(parent.id),
-        isCurrentPlan: false,
-        planGroup: 'standard',
-        highlighted: false,
-        kinds: [TOOLROOM_RETURN_KIND],
-        teams: ['mechanics'],
-        notes: { toolroomParentId: parent.id },
-        teamProgress: {},
-        toolroomReturnDone: undefined,
-        done: false,
-        material: '', materialType: '', source: '', dryer: '', temperature: ''
-      } as T);
+      result.push(createToolroomReturnTask(parent));
     }
   }
   // Keep a pending return even when its original production row is no longer present.

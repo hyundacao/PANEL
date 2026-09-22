@@ -146,7 +146,6 @@ export const productionCompletableTeamsForTask = (task: ProgressTask): Productio
 
 export const productionWaitsForToolroomReturn = (task: ProgressTask, team: ProductionTeam): boolean =>
   isProductionStartupTeam(team)
-  && task.kinds?.includes('forma-narzedziownia') === true
   && task.toolroomReturnDone === false;
 
 export const productionTeamProgressForTask = (task: ProgressTask): ProductionTeamProgress => {

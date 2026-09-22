@@ -9,19 +9,82 @@ const nodes = (node) => {
   return [node, ...nodes(node.props?.children)];
 };
 const control = (fixture, label) => nodes(fixture.render()).find((node) => node.props?.['aria-label'] === label);
+const planRows = (fixture) => nodes(fixture.render()).filter((node) => node.props?.['data-plan-item']);
+const productLabels = (row) => nodes(row).filter((node) => node.type === 'p' && typeof node.props?.children === 'string')
+  .map((node) => node.props.children);
+const calculationToggle = (fixture, itemId) => {
+  const row = planRows(fixture).find((node) => node.props['data-plan-item'] === itemId);
+  const toggle = nodes(row).find((node) => node.type === 'button' && node.props.className?.split(/\s+/).includes('planning-calculated-toggle'));
+  assert.ok(toggle, `Missing calculation toggle for ${itemId}`);
+  assert.equal(typeof toggle.props['aria-pressed'], 'boolean');
+  assert.ok(toggle.props['aria-label']);
+  return toggle;
+};
 const button = (fixture, label) => nodes(fixture.render()).find((node) => (
   typeof node.props?.onClick === 'function' && nodes(node).some((child) => (
     Array.isArray(child.props?.children) && child.props.children.includes(label)
   ))
 ));
 
+test('mixed source explains the full-scope standby package and removes the manual split input', () => {
+  const h = createHeaderFixture();
+  const panel = { ...h.ctx.state.plan[0], technologyId: 'panel-tech', totalQty: 30000, remainingQty: 30000,
+    linkedSources: { tray: { mode: 'mixed', producerPlanItemId: 'tray-plan', productionQuantity: 700 } } };
+  const producer = { ...panel, id: 'tray-plan', index: 'TRAY', name: 'TRAY', technologyId: 'tray-tech', linkedSources: {} };
+  const technology = { id: 'panel-tech', productIndex: panel.index, variant: 'base', productionMode: 'planned',
+    materials: [], linkedProducts: [{ id: 'link', productIndex: 'TRAY', productName: 'TRAY', usage: 1, unit: 'szt.' }] };
+  h.ctx.state.plan = [panel];
+  h.ctx.state.technologies = [technology];
+  h.ctx.technologyForItem = () => technology;
+  h.ctx.technologiesFor = () => [technology];
+  h.ctx.itemProductionQty = (item) => item.id === 'tray-plan' ? 5600 : 2450;
+  h.ctx.linkedProducerCandidates = () => [producer];
+  h.ctx.linkedProducerFor = () => producer;
+  h.ctx.selectedLinkedAllocationByProducer = new Map([['tray-plan', 2450]]);
+  h.ctx.expandedPlan = panel.id;
+  const html = h.html();
+  assert.match(html, /Zabezpieczenie z magazynu/);
+  assert.match(html, /Magazyn zabezpiecza cały wybrany zakres na wypadek awarii/);
+  assert.match(html, /zwykłej listy „Do wypisania”/);
+  assert.doesNotMatch(html, /Z maszyny \(szt\.\)/);
+  const fieldValues = nodes(h.render()).filter((node) => node.type === 'div' && typeof node.props?.className === 'string' && node.props.className.includes('border-l-2'));
+  const standby = fieldValues.find((node) => nodes(node).some((child) => child.props?.children === 'Zabezpieczenie z magazynu'));
+  const direct = fieldValues.find((node) => nodes(node).some((child) => child.props?.children === 'Bezpośrednio z maszyny'));
+  assert.ok(nodes(standby).some((node) => Array.isArray(node.props?.children) && node.props.children[0] === '2450'));
+  assert.ok(nodes(direct).some((node) => Array.isArray(node.props?.children) && node.props.children[0] === '2450'));
+  let changed = null;
+  h.ctx.updateLinkedSourceSelection = (itemId, link, patch) => { changed = { itemId, patch }; };
+  const sourceGroup = nodes(h.render()).find((node) => node.props?.['aria-label'] === 'Źródło półwyrobu TRAY');
+  const sourceButtons = nodes(sourceGroup).filter((node) => node.type === 'button');
+  assert.deepEqual(sourceButtons.map((node) => node.props.children.find((child) => typeof child === 'string')), ['Magazyn', 'Maszyna + zabezpieczenie']);
+  const mixedButton = sourceButtons[1];
+  assert.equal(mixedButton.props['aria-pressed'], true);
+  mixedButton.props.onClick();
+  assert.equal(changed.itemId, panel.id);
+  assert.equal(changed.patch.mode, 'mixed');
+  assert.equal(changed.patch.productionQuantity, 0);
+  assert.equal(changed.patch.producerPlanItemId, producer.id);
+  h.ctx.readOnly = true;
+  assert.equal(nodes(h.render()).find((node) => node.type === 'button' && node.props.children?.includes?.('Maszyna + zabezpieczenie')).props.disabled, true);
+  h.ctx.readOnly = false;
+  panel.linkedSources.tray.mode = 'production';
+  assert.equal(nodes(h.render()).find((node) => node.type === 'button' && node.props.children?.includes?.('Maszyna + zabezpieczenie')).props['aria-pressed'], true, 'legacy manual machine choices have a visible replacement');
+  const before = JSON.stringify(panel);
+  technology.linkedProducts[0].sourcePolicy = 'production';
+  assert.match(h.html(), /Bezpośrednio z maszyny/);
+  assert.doesNotMatch(h.html(), /Zabezpieczenie z magazynu/);
+  assert.equal(nodes(h.render()).some((node) => node.props?.['aria-label'] === 'Źródło półwyrobu TRAY'), false, 'technology-fixed source is not an editable plan choice');
+  assert.equal(JSON.stringify(panel), before, 'rendering does not rewrite a stored plan');
+});
+
 test('plan row renders an unresolved identical index and name only once', () => {
   const h = createHeaderFixture();
   const raw = 'UNRESOLVED PRODUCT (R4 600)';
   h.ctx.state.plan = [{ ...h.ctx.state.plan[0], index: raw, name: raw }];
-  assert.equal(h.html().split(raw).length - 1, 1);
+  assert.equal(planRows(h).length, 1);
+  assert.equal(productLabels(planRows(h)[0]).filter((label) => label === raw).length, 1);
   h.ctx.state.plan[0].name = 'unresolved product (r4 600)';
-  assert.equal(h.html().split(raw).length - 1, 1);
+  assert.equal(productLabels(planRows(h)[0]).filter((label) => label === raw).length, 1);
   assert.ok(!h.html().includes('>unresolved product (r4 600)<'));
 });
 
@@ -122,7 +185,7 @@ test('plan emphasizes the product name in bold orange and keeps the index and no
   assert.match(textNode('T27SC1R LID HEX NUPS COMPLETE').props.className, /\bfont-bold\b/);
   assert.match(textNode('T27SC1R LID HEX NUPS COMPLETE').props.className, /\bcatalog-label\b/);
   const css = readFileSync(new URL('../../app/globals.css', import.meta.url), 'utf8');
-  assert.match(css, /\.catalog-label\s*\{\s*color:\s*var\(--brand\)/);
+  assert.match(css, /\.catalog-label\s*\{\s*color:\s*var\(--catalog-accent,\s*var\(--brand\)\)/);
   assert.match(css, /--brand:\s*#ff6a00\s*;/i);
   assert.match(textNode('Uwagi bez zmian').props.className, /\btext-muted\b/);
   assert.doesNotMatch(textNode('Uwagi bez zmian').props.className, /\bfont-bold\b|\bcatalog-label\b/);
@@ -135,10 +198,12 @@ test('plan row keeps a distinct product index above its full qualified name', ()
     ['8001382818', 'DOCKING STATION SET MUH NG (CARRIER PART BASIS STATION)']
   ]) {
     h.ctx.state.plan = [{ ...h.ctx.state.plan[0], index, name }];
-    const html = h.html();
-    assert.equal(html.split(index).length - 1, 1);
-    assert.equal(html.split(name).length - 1, 1);
-    assert.ok(html.indexOf(index) < html.indexOf(name));
+    const rows = planRows(h);
+    assert.equal(rows.length, 1);
+    const labels = productLabels(rows[0]);
+    assert.equal(labels.filter((label) => label === index).length, 1);
+    assert.equal(labels.filter((label) => label === name).length, 1);
+    assert.ok(labels.indexOf(index) < labels.indexOf(name));
   }
 });
 
@@ -241,6 +306,24 @@ test('working recipe becomes the next numbered emergency technology without chan
   assert.equal(result.technology.materials[0].name, 'Karton zastępczy');
   assert.notEqual(result.technology.materials[0].id, materials[0].id);
   assert.equal(technologies.length, 2);
+});
+
+test('working technology selection stays distinct from the saved base in both plan views', () => {
+  const h = createHeaderFixture();
+  const item = h.ctx.state.plan[0];
+  const base = { id: 'base-tech', productIndex: item.index, productName: item.name, variant: 'base',
+    alternativeNo: 0, description: '', materials: [], shiftNorm: 380, archived: false };
+  h.ctx.state.technologies = [base];
+  h.ctx.state.plan = [{ ...item, technologyId: base.id, manualOverride: true, workingMaterials: [] }];
+  h.ctx.technologiesFor = () => [base];
+  h.ctx.technologyForItem = () => base;
+  h.ctx.expandedPlan = item.id;
+  const selects = nodes(h.render()).filter((node) => node.props?.value === '__working__:base-tech');
+  assert.equal(selects.filter((node) => typeof node.props.onChange === 'function').length, 2);
+  assert.equal(selects.filter((node) => node.type === 'option' && node.props.children === 'Robocza · Bazowa').length, 2);
+  const baseOptions = nodes(h.render()).filter((node) => node.type === 'option' && node.props.value === base.id);
+  assert.equal(baseOptions.length, 2);
+  assert.ok(baseOptions.every((node) => node.props.children === 'Bazowa'));
 });
 
 test('redundant emergency material prefix is removed when a variant is created', () => {
@@ -546,8 +629,9 @@ test('all-zone view shows the entire plan once without changing production or do
   assert.equal(allOption.props.children, 'Wszystkie strefy');
   const html = h.html();
   assert.match(html, /7 pozycji/);
+  assert.deepEqual(planRows(h).map((row) => row.props['data-plan-item']), areas.map((_, index) => `all-${index}`));
   for (let index = 0; index < areas.length; index += 1) {
-    assert.equal(html.split(`ALL_ZONE_ROW_${index}`).length - 1, 1);
+    assert.equal(productLabels(planRows(h)[index]).filter((label) => label === `ALL_ZONE_ROW_${index}`).length, 1);
     if (index > 0) assert.ok(html.indexOf(`ALL_ZONE_ROW_${index - 1}`) < html.indexOf(`ALL_ZONE_ROW_${index}`));
   }
   assert.equal(JSON.stringify(h.ctx.state), before, 'all is only a view, never a production/document area');
@@ -672,24 +756,55 @@ test('each product remains individually included or excluded from calculations',
 test('a product can be marked as calculated for the selected day and restored', () => {
   const h = createHeaderFixture();
   const item = h.ctx.state.plan[0];
-  h.ctx.state.documents = [{ id: 'draft-1', planDate: '2026-08-31', status: 'draft', rows: [] }];
-  control(h, `Oznacz jako przeliczone: ${item.index}`).props.onClick();
+  h.ctx.state.documents = [
+    { id: 'draft-1', planDate: '2026-08-31', createdBy: 'Test', status: 'draft', rows: [] },
+    { id: 'other-user', planDate: '2026-08-31', createdBy: 'Other', status: 'draft', rows: [] },
+    { id: 'already-issued', planDate: '2026-08-31', createdBy: 'Test', status: 'issued', rows: [] },
+    { id: 'previous-day', planDate: '2026-08-30', createdBy: 'Test', status: 'draft', rows: [] }
+  ];
+  const protectedDocuments = JSON.stringify(h.ctx.state.documents.slice(1));
+  assert.equal(calculationToggle(h, item.id).props['aria-pressed'], false);
+  calculationToggle(h, item.id).props.onClick();
 
   assert.equal(h.ctx.state.plan[0].included, false);
   assert.equal(h.ctx.state.pickingDone[`2026-08-31|${item.id}`], true);
   assert.equal(h.ctx.state.documents[0].status, 'outdated');
+  assert.equal(JSON.stringify(h.ctx.state.documents.slice(1)), protectedDocuments);
   assert.match(h.html(), /Przeliczone: 1/);
-  assert.ok(control(h, `Przywróć do obliczeń: ${item.index}`));
+  assert.equal(calculationToggle(h, item.id).props['aria-pressed'], true);
 
-  control(h, `Przywróć do obliczeń: ${item.index}`).props.onClick();
+  calculationToggle(h, item.id).props.onClick();
   assert.equal(h.ctx.state.plan[0].included, true);
   assert.equal(h.ctx.state.pickingDone[`2026-08-31|${item.id}`], undefined);
+  assert.equal(calculationToggle(h, item.id).props['aria-pressed'], false);
+});
+
+test('calculated markers remain scoped to the selected production day', () => {
+  const h = createHeaderFixture();
+  const item = h.ctx.state.plan[0];
+  h.ctx.state.dailyPlans['2026-09-01'] = [{ ...item, included: true }];
+  calculationToggle(h, item.id).props.onClick();
+  control(h, 'Dzień produkcji').props.onChange({ target: { value: '2026-09-01' } });
+  assert.equal(calculationToggle(h, item.id).props['aria-pressed'], false);
+  assert.equal(h.ctx.state.plan[0].included, true);
+  control(h, 'Dzień produkcji').props.onChange({ target: { value: '2026-08-31' } });
+  assert.equal(calculationToggle(h, item.id).props['aria-pressed'], true);
+  assert.equal(h.ctx.state.plan[0].included, false);
+});
+
+test('read-only users cannot mark a product calculated even through its handler', () => {
+  const h = createHeaderFixture({ readOnly: true });
+  const before = JSON.stringify(h.ctx.state);
+  const toggle = calculationToggle(h, h.ctx.state.plan[0].id);
+  assert.equal(toggle.props.disabled, true);
+  toggle.props.onClick();
+  assert.equal(JSON.stringify(h.ctx.state), before);
 });
 
 test('including all visible products also restores calculated products', () => {
   const h = createHeaderFixture();
   const item = h.ctx.state.plan[0];
-  control(h, `Oznacz jako przeliczone: ${item.index}`).props.onClick();
+  calculationToggle(h, item.id).props.onClick();
   control(h, 'Zaznacz wszystkie widoczne pozycje').props.onClick();
 
   assert.ok(h.ctx.state.plan.every((entry) => entry.included));
@@ -737,7 +852,9 @@ test('unassigned rows stay in the main list, in source order, exactly once in ev
   for (const areaId of ['hala-1', 'hala-2', 'hala-3', 'bakoma', 'lakiernia', 'narzedziownia']) {
     control(h, 'Strefa planu').props.onChange({ target: { value: areaId } });
     const html = h.html();
-    assert.equal(html.split('VISIBLE_UNASSIGNED').length - 1, 1, areaId);
+    const unassignedRows = planRows(h).filter((row) => row.props['data-plan-item'] === 'unassigned');
+    assert.equal(unassignedRows.length, 1, areaId);
+    assert.equal(productLabels(unassignedRows[0]).filter((label) => label === 'VISIBLE_UNASSIGNED').length, 1, areaId);
     assert.doesNotMatch(html, /Bez przypisanej strefy|Brak pozycji w strefie/);
     for (const details of nodes(h.render()).filter((node) => node.type === 'details')) {
       assert.ok(!nodes(details).some((node) => node.props?.children === 'VISIBLE_UNASSIGNED'), 'unassigned row must not be collapsed');

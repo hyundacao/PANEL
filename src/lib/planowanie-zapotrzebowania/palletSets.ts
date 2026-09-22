@@ -90,6 +90,7 @@ export const parsePalletSource = (sourceId?: string | null): PalletSource | null
 };
 
 export const palletInventoryError = (code: string) => ({
+  INVENTORY_NOT_OWNER: 'Możesz zmieniać i usuwać tylko własne wpisy spisu.',
   PALLET_SET_CHANGED: 'Zestaw został zmieniony w ustawieniach. Wybierz go ponownie.',
   PALLET_SET_NOT_FOUND: 'Zestaw nie istnieje lub jest nieaktywny.',
   PALLET_CATALOG_CHANGED: 'Składnik zestawu zmienił się w katalogu. Popraw zestaw w ustawieniach.',

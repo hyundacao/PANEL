@@ -24,7 +24,7 @@ import {
   validateRecurringTasks,
   type RecurringTaskDefinition
 } from '@/lib/utils/productionRecurringTasks';
-import { isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, toolroomReturnId, withToolroomReturnTasks } from '@/lib/utils/productionToolroomTasks';
+import { canSelectToolroomWork, createToolroomReturnTask, isToolroomWorkKind, isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, toolroomReturnId, toolroomWorkMutation, withToolroomReturnTasks, type ToolroomWorkSelection } from '@/lib/utils/productionToolroomTasks';
 import { PRODUCTION_TEAMS, TEAM_COMMENT_KEY_PREFIX, defaultTeamComments, isProductionTeam, normalizeTeamComment, validateTeamComment } from '@/lib/utils/productionTeamComments';
 import { productionWorkCommentNoteKey, validateProductionWorkCommentText, withProductionWorkComment } from '@/lib/utils/productionWorkComments';
 import { PRODUCTION_HALL_NOTE, normalizeProductionHallAssignment } from '@/lib/utils/productionTaskReference';
@@ -78,6 +78,7 @@ type StoredTask = {
 };
 
 type StoredTaskMutation = {
+  setToolroomWork?: ToolroomWorkSelection;
   fields?: Partial<Pick<StoredTask,
     | 'isCurrentPlan'
     | 'planGroup'
@@ -802,7 +803,7 @@ const requiresToolroomReturn = (task: StoredTask) =>
   && !task.kinds.includes('anulowane');
 
 const withStoredToolroomReturnState = async (sessionId: string, task: StoredTask): Promise<StoredTask> => {
-  if (!requiresToolroomReturn(task)) return task;
+  if (isToolroomReturnTask(task) || task.station === 'ZADANIE DODATKOWE' || task.kinds.includes('anulowane')) return task;
   const { data: returnRow, error } = await supabaseAdmin
     .from('przygotowanie_produkcji_tasks')
     .select('*')
@@ -811,6 +812,8 @@ const withStoredToolroomReturnState = async (sessionId: string, task: StoredTask
     .maybeSingle();
   if (error) throw error;
   const returnTask = returnRow ? fromDbTask(returnRow as Record<string, unknown>) : null;
+  if (!requiresToolroomReturn(task) && !(returnTask?.kinds.includes('powrot-formy-narzedziownia')
+    && returnTask.teams.includes('mechanics') && !returnTask.kinds.includes('anulowane'))) return task;
   const toolroomReturnDone = Boolean(
     returnTask
     && !returnTask.kinds.includes('anulowane')
@@ -1120,6 +1123,10 @@ export async function POST(request: NextRequest) {
             message: 'Nie masz uprawnienia do komentowania pracy tego działu.'
           }, { status: 403 });
         }
+      } else if (hasExactlyKeys(mutation, ['setToolroomWork'])) {
+        if (!canCompleteProductionPreparationTeam(access.user, 'mechanics')) {
+          return NextResponse.json({ code: 'TOOLROOM_WORK_FORBIDDEN', message: 'Tę pracę może przypisać mechanik lub administrator modułu.' }, { status: 403 });
+        }
       } else if (hasExactlyKeys(mutation, ['fields'])) {
         if (!canEditProductionPreparationMaterials(access.user)) {
           return materialEditForbidden();
@@ -1424,6 +1431,16 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.action === 'mutateTask' && body.taskId && body.mutation) {
+      const toolroomSelection = body.mutation.setToolroomWork;
+      if (toolroomSelection !== undefined && (
+        !hasExactlyKeys(body.mutation, ['setToolroomWork'])
+        || !isRecord(toolroomSelection)
+        || !hasExactlyKeys(toolroomSelection, ['kind', 'enabled'])
+        || !isToolroomWorkKind(toolroomSelection.kind)
+        || typeof toolroomSelection.enabled !== 'boolean'
+      )) {
+        return NextResponse.json({ code: 'INVALID_TOOLROOM_WORK', message: 'Nieprawidłowy wybór pracy narzędziowni.' }, { status: 400 });
+      }
       const teamDoneMutation = body.mutation.setTeamDone;
       const distributionStageMutation = body.mutation.setDistributionStageDone;
       const workCommentMutation = body.mutation.setWorkComment;
@@ -1464,12 +1481,34 @@ export async function POST(request: NextRequest) {
           .eq('task_key', body.taskId)
           .maybeSingle();
         if (readError) throw readError;
+        if (!currentRow && toolroomSelection?.kind === 'powrot-formy-narzedziownia' && toolroomSelection.enabled) {
+          const parentId = toolroomParentId({ id: body.taskId, notes: {} });
+          if (!parentId || body.taskId !== toolroomReturnId(parentId)) return NextResponse.json({ code: 'TOOLROOM_TASK_FORBIDDEN' }, { status: 403 });
+          const { data: parentRow, error: parentError } = await supabaseAdmin
+            .from('przygotowanie_produkcji_tasks').select('*')
+            .eq('session_id', session.id).eq('task_key', parentId).maybeSingle();
+          if (parentError) throw parentError;
+          if (!parentRow || !canSelectToolroomWork(fromDbTask(parentRow), 'forma-narzedziownia')) {
+            return NextResponse.json({ code: 'TOOLROOM_TASK_FORBIDDEN' }, { status: 403 });
+          }
+          const child = createToolroomReturnTask(fromDbTask(parentRow));
+          // Deterministic ID makes concurrent selections converge on the same return.
+          const { error: createError } = await supabaseAdmin.from('przygotowanie_produkcji_tasks').insert({
+            id: toolroomRowUuid(session.id, child.id),
+            ...toDbTask({ ...child, kinds: [], teams: [] }, session.id, Number(parentRow.position_no ?? 0), access.user.name)
+          });
+          if (createError && createError.code !== '23505') throw createError;
+          continue;
+        }
         if (!currentRow) return NextResponse.json({ code: 'TASK_NOT_FOUND' }, { status: 404 });
 
         const currentTask = await withStoredToolroomReturnState(
           session.id,
           fromDbTask(currentRow as Record<string, unknown>)
         );
+        if (toolroomSelection && !canSelectToolroomWork(currentTask, toolroomSelection.kind)) {
+          return NextResponse.json({ code: 'TOOLROOM_TASK_FORBIDDEN', message: 'Nie można przypisać tej pracy do wskazanej pozycji.' }, { status: 403 });
+        }
         if (isScopedMaterialEdit && !isMaterialScheduleTask(currentTask)) {
           return materialTaskForbidden();
         }
@@ -1511,7 +1550,7 @@ export async function POST(request: NextRequest) {
             message: 'Ten dział nie jest przypisany do zadania.'
           }, { status: 409 });
         }
-        const nextTask = applyTaskMutation(currentTask, body.mutation, {
+        const nextTask = applyTaskMutation(currentTask, toolroomSelection ? toolroomWorkMutation(currentTask, toolroomSelection) : body.mutation, {
           completedAt: now,
           completedBy: access.user.name
         });
