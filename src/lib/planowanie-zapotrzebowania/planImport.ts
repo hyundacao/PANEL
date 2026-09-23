@@ -57,6 +57,29 @@ const text = (value: unknown) => String(value ?? '');
 const normalized = (value: unknown) => text(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   .replace(/[łŁ]/g, 'l').replace(/\s+/g, ' ').trim().toLowerCase();
 
+// Resolve only real vertical merges in the norm column. Do not fill ordinary
+// blank cells, quantities or names from a preceding production row.
+export const planningRowsWithMergedNorms = (sheet: XLSX.WorkSheet, rows: unknown[][]): unknown[][] => {
+  if (!sheet?.['!ref'] || !sheet['!merges']?.length) return rows;
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  const headerIndex = rows.findIndex((row) => row.some((cell) => /ilosc|qty/.test(normalized(cell)))
+    && row.some((cell) => /norma|wydajnosc/.test(normalized(cell))));
+  if (headerIndex < 0) return rows;
+  const normColumn = rows[headerIndex].findIndex((cell) => /norma|wydajnosc/.test(normalized(cell)));
+  const sheetNormColumn = range.s.c + normColumn;
+  const result = rows.map((row) => [...row]);
+  for (const merge of sheet['!merges']) {
+    if (merge.s.c !== sheetNormColumn || merge.e.c !== sheetNormColumn || merge.s.r === merge.e.r) continue;
+    if (merge.s.r <= range.s.r + headerIndex) continue;
+    const value = sheet[XLSX.utils.encode_cell(merge.s)]?.v ?? '';
+    for (let row = merge.s.r + 1; row <= merge.e.r; row += 1) {
+      const target = result[row - range.s.r];
+      if (target) target[normColumn] = value;
+    }
+  }
+  return result;
+};
+
 // Only accept complete, unambiguous amounts. Never turn partially readable text into a quantity.
 const numericQuantity = (value: string): number | null => {
   const number = value.trim().replace(/\s*szt\.?$/i, '').trim();
@@ -328,7 +351,7 @@ export const readPlanningRows = (
       && (row[0] || (explicitStation && !/^st\s*[12]$/i.test(explicitStation)))) section = 'Plan bieżący';
     const station = explicitStation || currentStation;
     const continuesPanel = !explicitStation && /^st\s*[12]$/i.test(currentStation);
-    const norm = row[normIndex] || (continuesPanel ? currentNorm : '');
+    const norm = text(row[normIndex]).trim() ? row[normIndex] : (continuesPanel ? currentNorm : '');
     if (explicitStation) {
       currentStation = explicitStation;
       currentNorm = row[normIndex];

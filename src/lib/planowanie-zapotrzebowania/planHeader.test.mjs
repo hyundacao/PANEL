@@ -408,6 +408,48 @@ test('document action explains when an active row has no usable quantity', () =>
   assert.equal(button(h, 'Utwórz dokument do wypisania').props.disabled, false);
 });
 
+test('missing norms show their own alert and disable calculation until a valid norm is entered', () => {
+  const h = createHeaderFixture();
+  const item = h.ctx.state.plan[0];
+  item.shiftNorm = 0; item.station = 'WTR 18';
+  const blocked = button(h, 'Uzupełnij normy (1)');
+  assert.ok(blocked);
+  assert.equal(blocked.props.disabled, true);
+  assert.match(blocked.props.title, /uzupełnij normy/);
+  const html = h.html();
+  assert.match(html, /Brak normy: 1/);
+  assert.match(html, /Obliczenia zablokowane/);
+  assert.match(html, /WTR 18/);
+  assert.match(html, new RegExp(item.index));
+  item.shiftNorm = 1000;
+  assert.equal(button(h, 'Utwórz dokument do wypisania').props.disabled, false);
+  assert.doesNotMatch(h.html(), /Brak normy/);
+});
+
+test('quantity and norm alerts coexist without counting the same blocked product twice', () => {
+  const h = createHeaderFixture();
+  h.ctx.state.plan[0].shiftNorm = 0;
+  h.ctx.state.plan[0].quantityStatus = 'missing';
+  h.ctx.state.plan[0].sourceQuantity = '';
+  assert.equal(button(h, 'Uzupełnij ilości i normy (1)').props.disabled, true);
+  assert.match(h.html(), /Brak ilości: 1/);
+  assert.match(h.html(), /Brak normy: 1/);
+  h.ctx.state.plan[0].included = false;
+  assert.equal(button(h, 'Utwórz dokument do wypisania').props.disabled, false);
+  assert.match(h.html(), /Wszystkie są wyłączone z obliczeń/);
+});
+
+test('norm warning is not hidden by the list search and excludes a different production zone', () => {
+  const h = createHeaderFixture();
+  h.ctx.state.plan[0].shiftNorm = 0;
+  h.ctx.planSearch = 'NO MATCHING PRODUCT';
+  assert.equal(button(h, 'Uzupełnij normy (1)').props.disabled, true);
+  assert.match(h.html(), /Brak normy: 1/);
+  h.ctx.state.plan[0].areaId = 'hala-1';
+  assert.equal(button(h, 'Utwórz dokument do wypisania').props.disabled, false);
+  assert.doesNotMatch(h.html(), /Brak normy/);
+});
+
 test('continuous production replaces a missing final quantity with output for the selected shift range', () => {
   const technology = {
     id: 'continuous-tray', productIndex: 'M-10-8001128941', productName: 'TRAY HANDLE BO CLIPPED VG1 VZF07020',

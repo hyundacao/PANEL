@@ -54,13 +54,14 @@ import {
   materialPlanningHistoryCutoffDateKey,
   pruneMaterialPlanningHistory
 } from '@/lib/planowanie-zapotrzebowania/historyRetention';
-import { PlanQuantity, PlanQuantityWarnings } from '@/components/planowanie-zapotrzebowania/PlanQuantity';
+import { PlanNorm, PlanQuantity, PlanQuantityWarnings } from '@/components/planowanie-zapotrzebowania/PlanQuantity';
 import {
   highlightedPlanSourceRows,
   knownRemainingQuantity,
   planningSections,
   quantityNeedsReview,
   readPlanningRows,
+  planningRowsWithMergedNorms,
   splitPlanningRowOutputs,
   type PlanQuantityStatus,
   type PlanSourceFields
@@ -1450,11 +1451,12 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
   </label>
 );
 
-const PlanAmountField = ({ label, value, disabled, min = 0, onChange }: {
+const PlanAmountField = ({ label, value, disabled, min = 0, placeholder = 'Podaj ilość', onChange }: {
   label: string;
   value: number | null;
   disabled: boolean;
   min?: number;
+  placeholder?: string;
   onChange: (value: number, editId: string) => void;
 }) => {
   const [draft, setDraft] = useState<string | null>(null);
@@ -1464,7 +1466,7 @@ const PlanAmountField = ({ label, value, disabled, min = 0, onChange }: {
     <BaseInput
       className="h-11 rounded-lg text-base font-bold tabular-nums text-title"
       type="number" inputMode="decimal" min={min} step="any"
-      aria-label={label} aria-invalid={value === null} placeholder={value === null ? 'Podaj ilość' : undefined}
+      aria-label={label} aria-invalid={value === null} placeholder={value === null ? placeholder : undefined}
       disabled={disabled} value={draft ?? value ?? ''}
       onFocus={() => { editId.current = uid('correction'); }}
       onChange={(event) => {
@@ -2367,6 +2369,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       ? Math.max(0, numberValue(technology.shiftNorm))
       : planNorm;
   };
+  const planNormNeedsReview = (item: PlanItem) => shiftNormForItem(item) <= 0;
   const scopedItemProductionQty = (item: PlanItem) => {
     const technology = technologyForItem(item);
     const norm = shiftNormForItem(item);
@@ -2671,6 +2674,11 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     })
     .map((item) => item.id));
   const unresolvedActiveCount = areaPlan.filter((item) => item.included && planQuantityNeedsReview(item)).length;
+  const normIssuePlanItemIds = new Set(state.plan.filter(planNormNeedsReview).map((item) => item.id));
+  const missingNormActiveCount = areaPlan.filter((item) => item.included && planNormNeedsReview(item)).length;
+  const calculationBlockedCount = areaPlan.filter((item) => item.included && (planQuantityNeedsReview(item) || planNormNeedsReview(item))).length;
+  const calculationBlockLabel = missingNormActiveCount ? unresolvedActiveCount ? 'Uzupełnij ilości i normy' : 'Uzupełnij normy' : 'Uzupełnij ilości';
+  const calculationBlockTitle = missingNormActiveCount ? unresolvedActiveCount ? 'Najpierw uzupełnij ilości i normy aktywnych pozycji' : 'Najpierw uzupełnij normy aktywnych pozycji' : 'Najpierw uzupełnij ilości aktywnych pozycji';
   const documentRows = requirements.filter((row) => row.toIssue > 0);
   const editablePickingDocumentExists = state.documents.some((document) =>
     document.planDate === state.selectedPlanDate &&
@@ -2721,7 +2729,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       return;
     }
     const rowOffset = xlsx.utils.decode_range(sheet['!ref'] || 'A1').s.r;
-    const imported = parsePlanRows(rows, state.stationMappings, rowOffset, highlightedPlanSourceRows(sheet));
+    const imported = parsePlanRows(planningRowsWithMergedNorms(sheet, rows), state.stationMappings, rowOffset, highlightedPlanSourceRows(sheet));
     if (!imported.length) return flash('Nie znaleziono rozpoznawalnych pozycji planu.');
     const importedProductionCount = new Set(imported.map((item) => item.productionGroupId || item.id)).size;
     let importedVersionNo = 1;
@@ -3342,7 +3350,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
                   </p>
                 </div>
                 <div className="p-3 text-right"><PlanQuantity item={item} productionMode={technologyForItem(item)?.productionMode} calculatedQuantity={itemProductionQty(item)} shiftNorm={shiftNormForItem(item)} /></div>
-                <div className="p-3 text-right text-base font-bold text-title">{fmt(shiftNormForItem(item))}</div>
+                <div className="p-3 text-right text-base font-bold text-title"><PlanNorm value={shiftNormForItem(item)} /></div>
                 <div className="self-start p-3">{variants.length ? <SelectField className="min-h-11 rounded-lg shadow-none" value={technologySelectValue(item)} onChange={(event) => selectTechnology(item.id, event.target.value)}><option value="">Wybierz technologię</option>{item.manualOverride ? <option value={technologySelectValue(item)}>{workingTechnologySelectLabel(technologyForItem(item))}</option> : null}{variants.map((technology) => <option key={technology.id} value={technology.id}>{technologySelectLabel(technology)}</option>)}</SelectField> : <Button variant="outline" className="h-11 min-h-11 w-full max-w-[180px] rounded-lg shadow-none" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}><Plus className="mr-2 h-4 w-4" />Dodaj technologię</Button>}{!item.technologyId ? <p className="mt-1.5 flex items-center gap-2 text-xs font-bold text-warning"><WarningTriangle />Brak technologii</p> : item.manualOverride ? <p className="mt-1.5 text-xs font-bold text-warning">Technologia robocza</p> : <p className="mt-1.5 text-xs font-semibold text-success">Gotowa</p>}</div>
                 <div className="flex self-start justify-center p-3">
                   <button
@@ -3539,7 +3547,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         </div>
         <div className="min-w-0">
           <p className="mb-1.5 h-4 text-xs font-semibold leading-4 text-dim">{showAllPlanAreas ? 'Dokument' : `Dokument · ${areaName(state.selectedAreaId)}`}</p>
-          {!readOnly ? <Button className="h-[52px] max-h-[52px] min-h-[52px] w-full rounded-xl py-2.5 shadow-none" disabled={showAllPlanAreas || !state.plan.length || unresolvedActiveCount > 0} title={unresolvedActiveCount > 0 ? 'Najpierw uzupełnij ilości aktywnych pozycji' : undefined} onClick={createPickingDocumentFromPlan}><FilePlus2 className="mr-2 h-4 w-4" />{unresolvedActiveCount > 0 ? `Uzupełnij ilości (${unresolvedActiveCount})` : editablePickingDocumentExists ? 'Przelicz i pokaż dokument' : 'Utwórz dokument do wypisania'}</Button>
+          {!readOnly ? <Button className="h-[52px] max-h-[52px] min-h-[52px] w-full rounded-xl py-2.5 shadow-none" disabled={showAllPlanAreas || !state.plan.length || calculationBlockedCount > 0} title={calculationBlockedCount > 0 ? calculationBlockTitle : undefined} onClick={createPickingDocumentFromPlan}><FilePlus2 className="mr-2 h-4 w-4" />{calculationBlockedCount > 0 ? `${calculationBlockLabel} (${calculationBlockedCount})` : editablePickingDocumentExists ? 'Przelicz i pokaż dokument' : 'Utwórz dokument do wypisania'}</Button>
             : <p className="flex h-[52px] max-h-[52px] min-h-[52px] items-center text-sm font-semibold text-muted">{showAllPlanAreas ? 'Wybierz strefę' : areaName(state.selectedAreaId)}</p>}
         </div>
       </div>
@@ -3583,7 +3591,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     {pending?.purpose === 'inventory' ? renderPendingImport() : null}
     <PlanQuantityWarnings items={areaPlan.filter((item) =>
       !isPlanCalculationDone(state.pickingDone, state.selectedPlanDate, item.id)
-    )} resolvedItemIds={quantityResolvedPlanItemIds} />
+    )} resolvedItemIds={quantityResolvedPlanItemIds} normIssueItemIds={normIssuePlanItemIds} />
 
     {state.plan.length ? <div className="space-y-3">
       <div className="flex flex-col gap-3 border-y border-border bg-[var(--surface-faint)] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
@@ -4112,6 +4120,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     const ownQuantityReview = quantityNeedsReview(item);
     const norm = shiftNormForItem(item);
     const selectedQty = itemProductionQty(item);
+    const normReview = planNormNeedsReview(item);
     const remaining = itemProductionQty(item, true);
     const hasCorrection = state.quantityCorrections.some((correction) => correction.planDate === state.selectedPlanDate && correction.itemId === item.id && !correction.revertedAt);
     const editorLocked = readOnly || calculationEditorSaving;
@@ -4140,7 +4149,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_44px] items-end gap-2 xl:contents">
             {continuousProduction ? <Field label="Tryb produkcji"><div className="flex h-11 items-center gap-2 rounded-lg border border-brand bg-brandSoft px-3 font-bold text-title"><Factory className="h-4 w-4 text-brand" />Ciągła</div></Field>
               : <PlanAmountField key={item.id + '-quantity'} label={linkedProduction ? 'Własny plan (szt.)' : 'Do zrobienia (szt.)'} value={linkedProduction ? (ownQuantityReview ? null : knownRemainingQuantity(item)) : (quantityReview ? null : remaining)} disabled={editorLocked} onChange={(value, editId) => updatePlanQuantity(item.id, value, editId)} />}
-            <PlanAmountField key={item.id + '-norm'} label={continuousProduction ? 'Wydajność / zmianę (szt.)' : linkedProduction ? 'Norma pomocnicza (szt.)' : 'Norma na zmianę (szt.)'} value={norm} disabled={editorLocked} onChange={(value) => updatePlanNorm(item.id, value)} />
+            <PlanAmountField key={item.id + '-norm'} label={continuousProduction ? 'Wydajność / zmianę (szt.)' : 'Norma na zmianę (szt.)'} value={normReview ? null : norm} placeholder="Podaj normę" disabled={editorLocked} onChange={(value) => updatePlanNorm(item.id, value)} />
             {continuousProduction ? <div className="h-11 w-11" aria-hidden="true" /> : <Button title="Cofnij ostatnią zmianę ilości" aria-label="Cofnij ostatnią zmianę ilości" variant="ghost" className="h-11 min-h-11 w-11 rounded-lg p-0" disabled={editorLocked || !hasCorrection} onClick={() => undoLastCorrection(item)}><Undo2 className="h-4 w-4" /></Button>}
           </div>
           <div className="grid gap-2 sm:grid-cols-[minmax(160px,0.75fr)_minmax(210px,1fr)_290px] xl:contents">
@@ -4169,6 +4178,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           </div>
         </div>
         {quantityReview ? <div role="status" className="text-sm text-warning"><PlanQuantity item={item} /></div> : null}
+        {normReview ? <p role="status" className="flex items-center gap-2 text-sm font-bold text-warning"><WarningTriangle />Brak normy — wpisz wartość większą od 0. Obliczenia są zablokowane.</p> : null}
         {item.scopeMode === 'shifts' || item.scopeMode === 'quantity' ? <div className="max-w-[210px]">
           {item.scopeMode === 'shifts'
             ? <PlanAmountField key={item.id + '-shifts'} label="Liczba zmian do obliczeń" min={0.5} value={item.scopeShifts ?? state.horizonShifts} disabled={editorLocked} onChange={(value) => updateScope({ scopeMode: 'shifts', scopeShifts: value, scopeQuantity: item.scopeQuantity })} />
@@ -4321,7 +4331,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     return (
       <div className="space-y-5">
         {renderHeader('Obliczanie zapotrzebowania', 'Rozwiń wybraną pozycję, aby zasymulować zakres i zmienić jej technologię roboczą.')}
-        <PlanQuantityWarnings items={scopeItems} resolvedItemIds={quantityResolvedPlanItemIds} calculations />
+        <PlanQuantityWarnings items={scopeItems} resolvedItemIds={quantityResolvedPlanItemIds} normIssueItemIds={normIssuePlanItemIds} calculations />
         <Card className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           <Field label="Strefa">
             <SelectField value={state.selectedAreaId} onChange={(event) => selectPlanningArea(event.target.value)}>
@@ -4392,10 +4402,10 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
                           ) : <Button variant="outline" onClick={() => addTechnology(item.index, item.name, item.shiftNorm)}>Dodaj technologię</Button>}
                         </td>
                         <td className="min-w-48 p-3 text-right"><PlanQuantity item={item} productionMode={technologyForItem(item)?.productionMode} calculatedQuantity={itemProductionQty(item)} shiftNorm={shiftNormForItem(item)} /></td>
-                        <td className="p-3 text-right font-black text-title">{planQuantityNeedsReview(item) ? 'Do wyjaśnienia' : item.included && item.technologyId ? fmt(itemProductionQty(item)) : '—'}</td>
+                        <td className="p-3 text-right font-black text-title">{planQuantityNeedsReview(item) || planNormNeedsReview(item) ? 'Do wyjaśnienia' : item.included && item.technologyId ? fmt(itemProductionQty(item)) : '—'}</td>
                         <td className="p-3">
                           <div className="flex flex-wrap gap-1.5">
-                            {planQuantityNeedsReview(item) ? <Badge tone="warning">Wyjaśnij ilość</Badge> : !item.areaId ? <Badge tone="warning">Brak strefy</Badge> : !item.technologyId ? <Badge tone="danger">Wybierz technologię</Badge> : !item.included ? <Badge>Nie licz</Badge> : technologyForItem(item)?.productionMode === 'continuous' ? <Badge tone="info">Produkcja ciągła</Badge> : technologyForItem(item)?.productionMode === 'linked' ? <Badge tone="info">Pod powiązanie</Badge> : item.manualOverride ? <Badge tone="warning">Ręczna korekta</Badge> : <Badge tone="success">Gotowa</Badge>}
+                            {planNormNeedsReview(item) ? <Badge tone="warning">Brak normy</Badge> : planQuantityNeedsReview(item) ? <Badge tone="warning">Wyjaśnij ilość</Badge> : !item.areaId ? <Badge tone="warning">Brak strefy</Badge> : !item.technologyId ? <Badge tone="danger">Wybierz technologię</Badge> : !item.included ? <Badge>Nie licz</Badge> : technologyForItem(item)?.productionMode === 'continuous' ? <Badge tone="info">Produkcja ciągła</Badge> : technologyForItem(item)?.productionMode === 'linked' ? <Badge tone="info">Pod powiązanie</Badge> : item.manualOverride ? <Badge tone="warning">Ręczna korekta</Badge> : <Badge tone="success">Gotowa</Badge>}
                           </div>
                         </td>
                         <td className="p-3 text-right">
@@ -4429,7 +4439,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             <div className="flex gap-3"><WarningTriangle className="mt-0.5 h-8 w-8" /><div><p className="font-bold text-title">Wspólne silosy mogą nie wystarczyć dla wszystkich obszarów</p><p className="mt-1 text-sm text-muted">Bilans wspólnego źródła uwzględnia jednocześnie zapotrzebowanie wszystkich hal, a nie tylko aktualnie wybranej strefy.</p></div></div>
           </Card>
         ) : null}
-        <div className="flex justify-end"><Button onClick={createPickingDocumentFromPlan}><PackageCheck className="mr-2 h-4 w-4" />{editablePickingDocumentExists ? 'Przelicz i pokaż dokument' : 'Utwórz dokument do wypisania'}</Button></div>
+        <div className="flex justify-end"><Button disabled={calculationBlockedCount > 0} title={calculationBlockedCount > 0 ? calculationBlockTitle : undefined} onClick={createPickingDocumentFromPlan}><PackageCheck className="mr-2 h-4 w-4" />{calculationBlockedCount > 0 ? `${calculationBlockLabel} (${calculationBlockedCount})` : editablePickingDocumentExists ? 'Przelicz i pokaż dokument' : 'Utwórz dokument do wypisania'}</Button></div>
       </div>
     );
   };
@@ -4443,6 +4453,11 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   };
 
   const createOrRefreshPickingDocument = (): boolean => {
+    const missingNorm = state.plan.filter((item) => item.included && planNormNeedsReview(item) && (item.areaId === state.selectedAreaId || !item.areaId));
+    if (missingNorm.length) {
+      flash(`Brak normy: ${missingNorm.map((item) => `${item.station || 'Brak stanowiska'} — ${item.index || item.name}`).join('; ')}. Uzupełnij normę większą od 0 albo wyłącz te pozycje z obliczeń. Dokument nie został przeliczony.`);
+      return false;
+    }
     const linkedSourceIssue = linkedSourceIssuesForArea(state.selectedAreaId)[0];
     if (linkedSourceIssue) {
       flash(`Nie można utworzyć dokumentu: ${linkedSourceIssue}`);
@@ -4566,6 +4581,9 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     if (readOnly) return;
     const document = state.documents.find((item) => item.id === documentId);
     if (!document) return;
+    if ((nextStatus === 'handed' || nextStatus === 'issued') && state.plan.some((item) => item.included && planNormNeedsReview(item) && (item.areaId === document.areaId || !item.areaId))) {
+      return flash('Brak normy — przed przekazaniem lub wydaniem dokumentu uzupełnij normy większe od 0 albo wyłącz wskazane pozycje z obliczeń.');
+    }
     if ((nextStatus === 'handed' || nextStatus === 'issued') && state.plan.some((item) => item.included && planQuantityNeedsReview(item) && (item.areaId === document.areaId || !item.areaId))) {
       return flash('Przed wydaniem dokumentu wyjaśnij ilości albo wyłącz wskazane pozycje z obliczeń.');
     }
@@ -4877,7 +4895,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt, 'pl'));
     return <div className="space-y-5">
       {renderHeader('Dokument do wypisania', 'Każda strefa otrzymuje osobny dokument. Magazyn przypisujesz przy każdej pozycji, a po oznaczeniu dokumentu jako wydany jego ilości pozostają niezmienne.')}
-      <PlanQuantityWarnings items={state.plan.filter((item) => item.included && (item.areaId === state.selectedAreaId || !item.areaId))} resolvedItemIds={quantityResolvedPlanItemIds} calculations />
+      <PlanQuantityWarnings items={state.plan.filter((item) => item.included && (item.areaId === state.selectedAreaId || !item.areaId))} resolvedItemIds={quantityResolvedPlanItemIds} normIssueItemIds={normIssuePlanItemIds} calculations />
       <Card className="space-y-4">
         <div className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_minmax(260px,1fr)_auto] lg:items-end">
           <Field label="Data planu"><Input className="h-12 min-h-12 rounded-2xl border-[var(--control-border)] bg-[image:var(--control-bg)] px-4 py-2.5 text-sm font-semibold text-title shadow-[var(--control-shadow)] hover:border-[var(--brand-border-hover)] hover:bg-[image:var(--control-bg-hover)] focus:border-[var(--brand-border-strong)]" type="date" min={historyCutoffDate} value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>
@@ -5009,7 +5027,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           : <EmptyState title="Brak materiałów do przesunięcia lub zwrotu" description="Materiały są używane w swoich strefach albo zostały oznaczone jako pozostające na hali." />;
     return <div className="space-y-5">
       {renderHeader('Zwroty i przesunięcia', 'Najpierw pokrywamy niedobory innych hal. Do magazynu wraca dopiero pozostała ilość materiału nieużywanego w swojej strefie.')}
-      <PlanQuantityWarnings items={state.plan.filter((item) => item.included)} resolvedItemIds={quantityResolvedPlanItemIds} calculations />
+      <PlanQuantityWarnings items={state.plan.filter((item) => item.included)} resolvedItemIds={quantityResolvedPlanItemIds} normIssueItemIds={normIssuePlanItemIds} calculations />
       <Card className="space-y-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,300px)_minmax(220px,300px)_1fr_auto] xl:items-end">
           <Field label="Data planu"><Input className="h-12 min-h-12 rounded-2xl border-[var(--control-border)] bg-[image:var(--control-bg)] px-4 py-2.5 text-sm font-semibold text-title shadow-[var(--control-shadow)] hover:border-[var(--brand-border-hover)] hover:bg-[image:var(--control-bg-hover)] focus:border-[var(--brand-border-strong)]" type="date" min={historyCutoffDate} value={state.selectedPlanDate} onChange={(event) => selectPlanDate(event.target.value)} /></Field>

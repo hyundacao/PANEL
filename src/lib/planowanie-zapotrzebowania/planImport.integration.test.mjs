@@ -18,6 +18,7 @@ const directQuantityEditing = source.includes('const updatePlanQuantity =');
 const names = ['uid','numberValue','normalize','CATEGORIES','normalizeReturnExclusions','productIdentityMatches','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','inferPickingWarehouseCode','pickingWarehouseCode','sortPickingDocumentRows','PACKAGING_CATEGORIES','splitProductFields','stationKey','applyStationMappings','materialKey','materialMatches','materialIdentityMatches','isPackagingMaterial','technologyMaterialsForMode','migrateLegacyEmergencyTechnologies','normalizedMaterialUnit','isKilogramUnit','isGramUnit','isThousandPiecesUnit','technologyResultUnit','technologyResultQuantity','roundTechnologyMaterialQuantity','canonicalProductIndex','linkedProductKey','linkedProductMatchesPlanItem','linkedSourceSelectionForItem','linkedMachineProductQuantity','linkedWarehouseProductQuantity','linkedSurplusQuantity','normalizeLinkedSources','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
   'handleWorkbook','importSelectedSheet','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','shiftNormForItem','scopedItemProductionQty','plannedItemProductionQty','itemProductionQty','planQuantityNeedsReview','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','updatePickingDocumentWarehouse','deriveReturnsForDate','syncOriginalInventory'];
 if (directQuantityEditing) names.push('updatePlanNorm');
+names.push('planNormNeedsReview');
 const definitions = new Map();
 const areaCalculationNames = ['technologyForItem','materialsForItem','technologyLinksForItem','linkedProducerCandidates','linkedProducerFor','linkedAllocationByProducer','selectedLinkedAllocationByProducer','fullLinkedAllocationByProducer','materialDemandContributionsForItem','demandByArea','sharedAreaIds','materialSupply','requirementsForArea','linkedSourceIssuesForArea'];
 const areaCalculationDefinitions = new Map();
@@ -881,6 +882,94 @@ test('document warehouses are inferred from material codes and can be sorted wit
   assert.equal(h.pickingWarehouseCode(rows[1]),'M-4');
   assert.equal(h.pickingWarehouseCode(rows[2]),'');
   assert.deepEqual(Array.from(h.sortPickingDocumentRows(rows,'warehouse'),(row)=>row.key),['2','1','3']);
+});
+
+test('actual Excel import carries merged ST 27 norms but leaves WTR 18 missing for validation', () => {
+  const h = setup();
+  const xlsx = require('xlsx');
+  const sheet = xlsx.utils.aoa_to_sheet([
+    ['Lp.', '', 'Ilość', 'ST.', 'Norma'],
+    [1, 'T27SC1R (8001227999)', 660, 'ST 27', 1000],
+    ['', 'POKRYWA (8001312017)', 6000],
+    [2, 'INNY DETAL (OTHER)', 100, 'WTR 18'],
+  ]);
+  sheet['!merges'] = [xlsx.utils.decode_range('D2:D3'), xlsx.utils.decode_range('E2:E3')];
+  h.ctx.XLSX = xlsx;
+  h.ctx.pending.workbook.Sheets.Plan = sheet;
+  h.importSelectedSheet();
+  assert.deepEqual(Array.from(h.ctx.state.plan, item => item.shiftNorm), [1000, 1000, 0]);
+  assert.deepEqual(Array.from(h.ctx.state.plan, item => item.totalQty), [660, 6000, 100]);
+  assert.equal(h.planNormNeedsReview(h.ctx.state.plan[1]), false);
+  assert.equal(h.planNormNeedsReview(h.ctx.state.plan[2]), true);
+  const importedIds = Array.from(h.ctx.state.plan, item => item.id);
+  h.ctx.state.plan[1].shiftNorm = 0; // previously saved by the old importer
+  h.ctx.pending = {fileName:'test.xlsx', purpose:'plan', workbook:{Sheets:{Plan:sheet}}};
+  h.importSelectedSheet();
+  assert.deepEqual(Array.from(h.ctx.state.plan, item => item.id), importedIds);
+  assert.equal(h.ctx.state.plan[1].shiftNorm, 1000);
+  assert.equal(h.ctx.state.plan[1].remainingQty, 6000);
+});
+
+test('missing, zero, negative and invalid norms block document creation in every calculation scope', () => {
+  for (const norm of [undefined, '', 0, -1, NaN, Infinity, 'brak']) {
+    for (const scopeMode of ['all', 'shifts', 'quantity', 'global']) {
+      const h = setup(); h.importSelectedSheet();
+      h.ctx.state.plan = [{...h.ctx.state.plan[0], station:'WTR 18', areaId:'hala-2', technologyId:'known', shiftNorm:norm, scopeMode, scopeQuantity:100}];
+      let calculated = false;
+      h.ctx.requirementsForArea = () => { calculated = true; return []; };
+      const before = h.ctx.state;
+      assert.equal(h.createOrRefreshPickingDocument(), false);
+      assert.match(h.messages.at(-1), /Brak normy.*WTR 18/);
+      assert.equal(calculated, false);
+      assert.equal(h.ctx.state, before);
+    }
+  }
+});
+
+test('a missing norm also blocks refreshing an existing draft and handing off or issuing it', () => {
+  const h = setup(); h.importSelectedSheet();
+  h.ctx.state.plan = [{...h.ctx.state.plan[0], areaId:'hala-2', technologyId:'known', shiftNorm:0}];
+  h.ctx.state.documents = [{id:'doc', planDate:'2026-08-31', areaId:'hala-2', status:'draft', kind:'base', createdBy:'Test', rows:[{key:'MAT', confirmed:true, toIssue:15}]}];
+  const before = JSON.stringify(h.ctx.state.documents);
+  assert.equal(h.createOrRefreshPickingDocument(), false);
+  for (const status of ['handed', 'issued']) {
+    h.changePickingDocumentStatus('doc', status);
+    assert.equal(JSON.stringify(h.ctx.state.documents), before);
+    assert.match(h.messages.at(-1), /Brak normy/);
+  }
+  h.updatePlanNorm(h.ctx.state.plan[0].id, 1000);
+  assert.equal(h.planNormNeedsReview(h.ctx.state.plan[0]), false);
+  assert.equal(h.ctx.state.documents[0].status, 'outdated', 'the old document still requires recalculation after editing its norm');
+  h.ctx.requirementsForArea = () => [{key:'MAT', code:'PP', name:'PP', category:'Tworzywo', unit:'kg', toIssue:15, sources:[]}];
+  assert.equal(h.createOrRefreshPickingDocument(), true);
+  h.ctx.state.documents[0].rows.forEach(row => { row.confirmed = true; });
+  h.changePickingDocumentStatus('doc', 'handed');
+  assert.equal(h.ctx.state.documents[0].status, 'handed');
+});
+
+test('excluded or other-zone rows do not block a valid zone; unassigned missing norms do', () => {
+  for (const patch of [{included:false}, {areaId:'hala-1'}]) {
+    const h = setup(); h.importSelectedSheet();
+    h.ctx.state.plan = [{...h.ctx.state.plan[0], areaId:'hala-2', technologyId:'known', shiftNorm:0, ...patch}];
+    h.ctx.requirementsForArea = () => [{key:'MAT', code:'PP', name:'PP', category:'Tworzywo', unit:'kg', toIssue:10, sources:[]}];
+    assert.equal(h.createOrRefreshPickingDocument(), true);
+  }
+  const h = setup(); h.importSelectedSheet();
+  h.ctx.state.plan = [{...h.ctx.state.plan[0], areaId:'', technologyId:'known', shiftNorm:0}];
+  assert.equal(h.createOrRefreshPickingDocument(), false);
+  assert.match(h.messages.at(-1), /Brak normy/);
+});
+
+test('continuous and linked modes cannot bypass missing norms; valid continuous library capacity is accepted', () => {
+  const h = setup(); h.importSelectedSheet();
+  const item = {...h.ctx.state.plan[0], shiftNorm:0, technologyId:'tech'};
+  for (const productionMode of ['continuous', 'linked', 'planned']) {
+    h.ctx.state.technologies = [{id:'tech', productionMode, shiftNorm:0}];
+    assert.equal(h.planNormNeedsReview(item), true);
+  }
+  h.ctx.state.technologies = [{id:'tech', productionMode:'continuous', shiftNorm:1600}];
+  assert.equal(h.planNormNeedsReview(item), false);
+  assert.equal(h.shiftNormForItem(item), 1600);
 });
 
 test('actual document actions reject unresolved included rows, but allow deliberate exclusion',()=>{

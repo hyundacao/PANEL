@@ -1,9 +1,69 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import * as XLSX from 'xlsx';
+import { planningRowsWithMergedNorms } from './planImport.ts';
 import { highlightedPlanSourceRows, knownRemainingQuantity, parsePlanQuantity, planningSections, quantityNeedsReview, readPlanningRows, splitPlanningRowOutputs } from './planImport.ts';
 
 const header = ['Data / Lp.', '', 'ILOŚĆ:', 'ST.', 'NORMA', 'CZĘŚĆ DNIÓWKI', 'UWAGI:'];
 const detail = 'QUICK LIFT ADJUSTER SIDE LEFT, QUICK LIFT ADJUSTER SIDE RIGHT (A28963702, A28963701 )';
+
+test('ST 27 inherits a norm only inside its actual Excel merge and keeps distinct quantities', () => {
+  const sheet = XLSX.utils.aoa_to_sheet([header,
+    [1, 'T27SC1R (8001227999)', 660, 'ST 27', 1000],
+    ['', 'POKRYWA (8001312017)', 6000],
+    [2, 'INNY DETAL (OTHER)', 100, 'WTR 18'],
+  ]);
+  sheet['!merges'] = [XLSX.utils.decode_range('D2:D3'), XLSX.utils.decode_range('E2:E3')];
+  const before = JSON.stringify(sheet);
+  const rows = XLSX.utils.sheet_to_json(sheet, {header:1,defval:''});
+  const result = readPlanningRows(planningRowsWithMergedNorms(sheet, rows));
+  assert.deepEqual(result.map(item => item.norm), [1000, 1000, '']);
+  assert.deepEqual(result.map(item => item.totalQty), [660, 6000, 100]);
+  assert.deepEqual(result.map(item => item.station), ['ST 27', 'ST 27', 'WTR 18']);
+  assert.equal(result[1].sourceNorm, '1000');
+  assert.equal(rows[2][4], '', 'input arrays are not mutated');
+  assert.equal(JSON.stringify(sheet), before, 'source workbook is not mutated');
+});
+
+test('merged norms respect non-A1 ranges, reordered columns and merges over three detail rows', () => {
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['Nazwa', 'Norma', 'Ilość', 'Stanowisko'],
+    ['A100', 850, 10, 'WTR 18'], ['A200', '', 20], ['A300', '', 30], ['A400', '', 40, 'ST 10'],
+  ], {origin:'B6'});
+  sheet['!ref'] = 'B6:E10';
+  sheet['!merges'] = [XLSX.utils.decode_range('C7:C9')];
+  const rows = XLSX.utils.sheet_to_json(sheet, {header:1,defval:''});
+  const resolved = planningRowsWithMergedNorms(sheet, rows);
+  const result = readPlanningRows(resolved, 5);
+  assert.deepEqual(result.map(item => item.norm), [850, 850, 850, '']);
+  assert.deepEqual(result.map(item => item.totalQty), [10, 20, 30, 40]);
+  assert.deepEqual(result.map(item => item.sourceRow), [7, 8, 9, 10]);
+});
+
+test('norm resolution never duplicates merged amounts, names, horizontal headings or unmerged blanks', () => {
+  const sheet = XLSX.utils.aoa_to_sheet([header, [1, 'A100', 100, 'ST 27', 1000], ['', 'A200', '', '', '']]);
+  sheet['!merges'] = [XLSX.utils.decode_range('B2:B3'), XLSX.utils.decode_range('C2:C3'), XLSX.utils.decode_range('E2:F3')];
+  const rows = XLSX.utils.sheet_to_json(sheet, {header:1,defval:''});
+  assert.deepEqual(planningRowsWithMergedNorms(sheet, rows), rows);
+  const noMerge = {...sheet}; delete noMerge['!merges'];
+  assert.equal(planningRowsWithMergedNorms(noMerge, rows), rows);
+  assert.equal(planningRowsWithMergedNorms({}, rows), rows);
+});
+
+test('an explicit zero norm stays zero in panel continuations and in merged cells', () => {
+  const rows = [header, ['', 'PANELE SE', '', 'ST 1', 380], ['', 'A100', 100, '', 0], ['', 'A200', 100, '', '']];
+  assert.deepEqual(readPlanningRows(rows).map(item => item.norm), [0, 380]);
+  const sheet = XLSX.utils.aoa_to_sheet([header, [1, 'A100', 100, 'ST 27', 0], ['', 'A200', 100]]);
+  sheet['!merges'] = [XLSX.utils.decode_range('E2:E3')];
+  assert.deepEqual(readPlanningRows(planningRowsWithMergedNorms(sheet, XLSX.utils.sheet_to_json(sheet, {header:1,defval:''}))).map(item => item.norm), [0, 0]);
+});
+
+test('an empty merged norm never revives a stale hidden value in a covered cell', () => {
+  const sheet = XLSX.utils.aoa_to_sheet([header, [1, 'A100', 10, 'ST 27', ''], ['', 'A200', 20, '', 900]]);
+  sheet['!merges'] = [XLSX.utils.decode_range('E2:E3')];
+  const result = readPlanningRows(planningRowsWithMergedNorms(sheet, XLSX.utils.sheet_to_json(sheet, {header:1,defval:''})));
+  assert.deepEqual(result.map(item => item.norm), ['', '']);
+});
 
 for (const input of ['L - 3 594                       P - 3 775', 'L - 3 594\nP - 3 775', 'L:3594, P:3775', 'LEFT 3594 / RIGHT 3775', 'L – 3 594; P — 3 775']) {
   test(`recognizes the entire labelled amount: ${input}`, () => {

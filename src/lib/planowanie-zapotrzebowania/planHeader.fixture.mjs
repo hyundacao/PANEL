@@ -40,6 +40,7 @@ const names = [
   'emptyTechnologyDraft', 'selectedTechnologyForEditor', 'cloneTechnologyForEditor', 'sameTechnologyEditorValue'
 ];
 names.push('canonicalProductIndex', 'linkedProductKey');
+names.push('planNormNeedsReview', 'normIssuePlanItemIds', 'missingNormActiveCount', 'calculationBlockedCount', 'calculationBlockLabel', 'calculationBlockTitle');
 const definitions = new Map();
 const visit = (node) => {
   if (ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) {
