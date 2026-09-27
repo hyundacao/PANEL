@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import * as workPlan from './productionWorkPlan.ts';
 import * as toolroom from './productionToolroomTasks.ts';
 import * as progress from './productionWorkProgress.ts';
+import * as lifecycle from './productionTaskLifecycle.ts';
 import { matchesProductionPlanStation } from './productionPlanSearch.ts';
 import { accessFixtureSource, declaration, findNode, makeTask, pageSource, planFixtureSource, sampleTasks } from './productionPlanView.fixture.mjs';
 
@@ -121,7 +122,7 @@ const element = tag => function FixtureElement({ children, ...props }) {
 const icon = () => null;
 const { PlanFixture } = compile(planFixtureSource, {
   React, useState: React.useState, useMemo: React.useMemo,
-  matchesProductionPlanStation, ...toolroom, ...progress,
+  matchesProductionPlanStation, ...toolroom, ...progress, ...lifecycle,
   cn: (...classes) => classes.filter(Boolean).join(' '),
   Button: element('button'), Card: element('div'), Input: element('input'),
   SelectField: element('select'), Search: icon, X: icon, Upload: icon, Trash2: icon, ChevronDown: icon
@@ -205,7 +206,7 @@ test('plan role edits target linked return work without creating duplicate paren
   const tasks = [parent, child];
   const { toggle } = compile(`${['planTaskWorkItems', 'togglePlanTeam'].map(name => declaration(name)).join('\n')}
     export const toggle = togglePlanTeam;`, {
-    ...toolroom, tasks, isPreparationAdmin: true,
+    ...toolroom, ...progress, tasks, isPreparationAdmin: true,
     toggleTeam: (task, team) => requests.push([task.id, team])
   });
   toggle(parent, 'mechanics');
@@ -225,7 +226,7 @@ test('return work remains selected independently of a manually removed mechanic 
   const parent = makeTask('source', 'WTR 34');
   const child = { ...toolroom.createToolroomReturnTask(parent), teams: ['process'] };
   const { selected } = compile(`${declaration('isWorkKindSelected')} export const selected = isWorkKindSelected;`, {
-    ...toolroom, tasks: [parent, child]
+    ...toolroom, ...progress, ...lifecycle, tasks: [parent, child]
   });
   assert.equal(selected(parent, 'powrot-formy-narzedziownia'), true);
 });

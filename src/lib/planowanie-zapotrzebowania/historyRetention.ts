@@ -81,6 +81,14 @@ export const pruneMaterialPlanningHistory = <
   const latestVersion = planVersions
     .filter((version) => version.planDate === selectedPlanDate)
     .sort((left, right) => right.versionNo - left.versionNo)[0];
+  const lastImportedVersion = state.planVersions
+    .filter((version) => version.planDate < selectedPlanDate)
+    .sort((left, right) => right.planDate.localeCompare(left.planDate) || right.versionNo - left.versionNo)[0];
+  const savedSelectedPlan = dailyPlans[selectedPlanDate] ?? latestVersion?.items;
+  const carryLastPlan = selectedDateChanged && !latestVersion && !savedSelectedPlan?.length;
+  const lastPlan = lastImportedVersion
+    ? state.dailyPlans[lastImportedVersion.planDate] ?? lastImportedVersion.items
+    : state.plan;
 
   const changed = selectedDateChanged
     || Object.keys(dailyPlans).length !== Object.keys(state.dailyPlans).length
@@ -95,13 +103,13 @@ export const pruneMaterialPlanningHistory = <
     ...state,
     selectedPlanDate,
     activePlanVersionId: selectedDateChanged ? latestVersion?.id ?? '' : state.activePlanVersionId,
-    planName: selectedDateChanged ? latestVersion?.fileName ?? '' : state.planName,
-    planSheet: selectedDateChanged ? latestVersion?.sheetName ?? '' : state.planSheet,
-    planImportedAt: selectedDateChanged ? latestVersion?.importedAt ?? '' : state.planImportedAt,
+    planName: selectedDateChanged ? latestVersion?.fileName ?? (carryLastPlan ? lastImportedVersion?.fileName ?? state.planName : '') : state.planName,
+    planSheet: selectedDateChanged ? latestVersion?.sheetName ?? (carryLastPlan ? lastImportedVersion?.sheetName ?? state.planSheet : '') : state.planSheet,
+    planImportedAt: selectedDateChanged ? latestVersion?.importedAt ?? (carryLastPlan ? lastImportedVersion?.importedAt ?? state.planImportedAt : '') : state.planImportedAt,
     plan: selectedDateChanged
-      ? dailyPlans[selectedPlanDate] ?? latestVersion?.items ?? []
+      ? carryLastPlan ? lastPlan : savedSelectedPlan ?? []
       : state.plan,
-    dailyPlans,
+    dailyPlans: carryLastPlan ? { ...dailyPlans, [selectedPlanDate]: lastPlan } : dailyPlans,
     planVersions,
     quantityCorrections,
     documents,

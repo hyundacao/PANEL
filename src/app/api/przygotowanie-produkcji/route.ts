@@ -28,6 +28,7 @@ import { canSelectToolroomWork, createToolroomReturnTask, isToolroomWorkKind, is
 import { PRODUCTION_TEAMS, TEAM_COMMENT_KEY_PREFIX, defaultTeamComments, isProductionTeam, normalizeTeamComment, validateTeamComment } from '@/lib/utils/productionTeamComments';
 import { productionWorkCommentNoteKey, validateProductionWorkCommentText, withProductionWorkComment } from '@/lib/utils/productionWorkComments';
 import { PRODUCTION_HALL_NOTE, normalizeProductionHallAssignment } from '@/lib/utils/productionTaskReference';
+import { appendProductionWorkEvent, canRetireProductionSession, PRODUCTION_LEGACY_COMPLETION_DAY_NOTE, productionKindOwner, productionSummaryFromTasks, productionWorkEvents, recentProductionDates, revertProductionWorkEvent, shouldCarryProductionTask, summarizeProductionDay, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
 import {
   PRODUCTION_TEAM_PROGRESS_NOTE_KEY,
   PRODUCTION_STARTUP_TEAMS,
@@ -103,11 +104,13 @@ type StoredTaskMutation = {
   setTeamDone?: { team?: unknown; done?: unknown };
   setDistributionStageDone?: { stage?: unknown; done?: unknown };
   setWorkComment?: { team?: unknown; text?: unknown };
+  requeueKind?: string;
   clearWork?: boolean;
 };
 
 const PROCESS_ENGINEERS_SETTINGS_KEY = '__process_engineers__';
 const PROCESS_ENGINEERS_SETTINGS_DATE = '2000-01-01';
+const MACHINE_STATE_KEY_PREFIX = '__machine_state__:';
 const DEFAULT_PROCESS_ENGINEERS = ['Adam', 'Mirek', 'Zbyszek', 'Paweł', 'Bogdan'];
 const defaultProcessEngineerRoster = (): ProcessEngineerRosterEntry[] =>
   DEFAULT_PROCESS_ENGINEERS.map((name) => ({ name, shift: '1', active: true }));
@@ -127,6 +130,7 @@ const isRecurringTasksSettings = (task: Record<string, unknown>) =>
 const isModuleSettings = (task: Record<string, unknown>) =>
   isProcessEngineersSettings(task)
   || isRecurringTasksSettings(task)
+  || String(task.task_key ?? task.id ?? '').startsWith(MACHINE_STATE_KEY_PREFIX)
   || String(task.task_key ?? task.id ?? '').startsWith('__personal_task__:')
   || String(task.task_key ?? task.id ?? '').startsWith(TEAM_COMMENT_KEY_PREFIX);
 
@@ -237,6 +241,16 @@ const invalidPlanDate = () => NextResponse.json({
   message: 'Nieprawidłowa data planu.'
 }, { status: 400 });
 
+const archivedPlanDateResponse = async (planDate: string) => {
+  if (planDate >= todayKey()) return null;
+  const { data, error } = await supabaseAdmin.from('przygotowanie_produkcji_history')
+    .select('tasks').eq('plan_date', planDate).maybeSingle();
+  if (error) throw error;
+  return productionSummaryFromTasks(data?.tasks)
+    ? NextResponse.json({ code: 'ARCHIVED_PLAN_DATE', message: 'Ten dzień ma już tylko podsumowanie raportowe.' }, { status: 410 })
+    : null;
+};
+
 const unauthorized = (code: string) => NextResponse.json({ code }, { status: 401 });
 
 const omitFields = <T extends object, K extends keyof T>(value: T, fields: readonly K[]): Omit<T, K> => {
@@ -284,6 +298,7 @@ const saveHistorySnapshot = async (
     const existingTasks = Array.isArray(existingHistory?.tasks)
       ? existingHistory.tasks as Array<Record<string, unknown>>
       : [];
+    if (productionSummaryFromTasks(existingTasks)) return;
     const mergedTasks = new Map<string, Record<string, unknown>>();
     existingTasks.forEach((task) => mergedTasks.set(historyTaskKey(task), task));
     assignedTasks.forEach((task) => mergedTasks.set(historyTaskKey(task), task));
@@ -365,6 +380,175 @@ const archivePreviousDays = async () => {
     // History is optional. A missing migration must never block the current plan or delete data.
     console.error('[przygotowanie-produkcji] History archive skipped:', error);
   }
+};
+
+const retireCompactedSession = async (date: string, expectedSummary: ProductionDaySummary) => {
+  if (!expectedSummary.sourceDigest || date >= todayKey()) return;
+  const [historyResult, oldResult, currentResult] = await Promise.all([
+    supabaseAdmin.from('przygotowanie_produkcji_history').select('tasks').eq('plan_date', date).maybeSingle(),
+    supabaseAdmin.from('przygotowanie_produkcji_sessions').select('id, session_date, updated_at').eq('session_date', date).maybeSingle(),
+    supabaseAdmin.from('przygotowanie_produkcji_sessions').select('id, session_date').eq('session_date', todayKey()).maybeSingle()
+  ]);
+  if (historyResult.error) throw historyResult.error;
+  if (oldResult.error) throw oldResult.error;
+  if (currentResult.error) throw currentResult.error;
+  const savedSummary = productionSummaryFromTasks(historyResult.data?.tasks);
+  const oldSession = oldResult.data;
+  const currentSession = currentResult.data;
+  if (!oldSession || !currentSession || !savedSummary
+    || savedSummary.sourceDigest !== expectedSummary.sourceDigest
+    || savedSummary.assignments !== expectedSummary.assignments
+    || savedSummary.completedEvents !== expectedSummary.completedEvents
+    || savedSummary.missedRecurring !== expectedSummary.missedRecurring
+    || Object.keys(savedSummary.kinds ?? {}).length !== Object.keys(expectedSummary.kinds).length
+    || Object.entries(expectedSummary.kinds).some(([kind, count]) =>
+      savedSummary.kinds?.[kind]?.total !== count.total || savedSummary.kinds?.[kind]?.done !== count.done)) return;
+  const [oldTasksResult, currentTasksResult] = await Promise.all([
+    supabaseAdmin.from('przygotowanie_produkcji_tasks').select('*').eq('session_id', oldSession.id),
+    supabaseAdmin.from('przygotowanie_produkcji_tasks').select('*').eq('session_id', currentSession.id)
+  ]);
+  if (oldTasksResult.error) throw oldTasksResult.error;
+  if (currentTasksResult.error) throw currentTasksResult.error;
+  const oldTasks = (oldTasksResult.data ?? []).map(row => fromDbTask(row as Record<string, unknown>));
+  const currentTasks = (currentTasksResult.data ?? []).map(row => fromDbTask(row as Record<string, unknown>));
+  if (!canRetireProductionSession(date, String(currentSession.session_date), savedSummary, oldTasks, currentTasks)) return;
+  const { error: deleteError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_sessions')
+    .delete()
+    .eq('id', oldSession.id)
+    .eq('updated_at', oldSession.updated_at);
+  if (deleteError) throw deleteError;
+};
+
+const compactOldHistorySnapshots = async () => {
+  const { data: dates, error: datesError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_history')
+    .select('plan_date')
+    .lt('plan_date', todayKey())
+    .order('plan_date', { ascending: false });
+  if (datesError) throw datesError;
+  const keep = new Set(recentProductionDates((dates ?? []).map(row => String(row.plan_date)), 6));
+  const staleDates = (dates ?? []).map(row => String(row.plan_date)).filter(date => !keep.has(date));
+  let maintained = 0;
+  for (const date of staleDates) {
+    if (maintained >= 10) break;
+    const { data: history, error: readError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_history')
+      .select('tasks')
+      .eq('plan_date', date)
+      .single();
+    if (readError) throw readError;
+    let summary = productionSummaryFromTasks(history?.tasks);
+    if (!summary) {
+      const tasks = Array.isArray(history?.tasks) ? history.tasks as StoredTask[] : [];
+      summary = {
+        ...summarizeProductionDay(tasks, date),
+        sourceDigest: createHash('sha256').update(JSON.stringify(tasks)).digest('hex')
+      };
+      const { error: summaryError } = await supabaseAdmin
+        .from('przygotowanie_produkcji_history')
+        .update({ tasks: [{ __productionSummary: summary }] })
+        .eq('plan_date', date);
+      if (summaryError) throw summaryError;
+    }
+    if (!summary.sourceDigest) continue;
+    await retireCompactedSession(date, summary);
+    maintained += 1;
+  }
+};
+
+const carryLatestPlanToDate = async (planDate: string, userName: string) => {
+  const { data: previous, error: previousError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_sessions')
+    .select('id, session_date, file_name, plan_sheet')
+    .lt('session_date', planDate)
+    .neq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE)
+    .order('session_date', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (previousError) throw previousError;
+  if (!previous) return null;
+
+  const { data: previousRows, error: previousRowsError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_tasks')
+    .select('*')
+    .eq('session_id', previous.id)
+    .order('position_no');
+  if (previousRowsError) throw previousRowsError;
+  const carried = (previousRows ?? [])
+    .filter((row) => !isModuleSettings(row as Record<string, unknown>)
+      || String(row.task_key ?? '').startsWith(MACHINE_STATE_KEY_PREFIX))
+    .map((row) => fromDbTask(row as Record<string, unknown>))
+    .filter((task) => task.id.startsWith(MACHINE_STATE_KEY_PREFIX) || shouldCarryProductionTask(task))
+    .map((task) => {
+      const hasDatedCompletion = Object.values(task.teamProgress ?? {}).some(value => Boolean(value?.completedAt));
+      return task.done && !hasDatedCompletion && !task.notes[PRODUCTION_LEGACY_COMPLETION_DAY_NOTE]
+        ? { ...task, notes: { ...task.notes, [PRODUCTION_LEGACY_COMPLETION_DAY_NOTE]: String(previous.session_date) } }
+        : task;
+    });
+  const { data: inserted, error: insertError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_sessions')
+    .insert({ session_date: planDate, file_name: previous.file_name, plan_sheet: previous.plan_sheet, created_by: userName })
+    .select('id, session_date, file_name, plan_sheet, updated_at')
+    .single();
+  if (insertError && insertError.code !== '23505') throw insertError;
+  if (!inserted) {
+    const { data: concurrent, error: concurrentError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_sessions')
+      .select('id, session_date, file_name, plan_sheet, updated_at')
+      .eq('session_date', planDate)
+      .single();
+    if (concurrentError) throw concurrentError;
+    return concurrent;
+  }
+  if (carried.length) {
+    const rows = carried.map((task, index) => ({
+      ...toDbTask(task, inserted.id, index, userName),
+      id: stableTaskRowUuid(inserted.id, task.id)
+    }));
+    const { error: carryError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_tasks')
+      .insert(rows);
+    if (carryError) throw carryError;
+  }
+  const carriedAt = new Date(Date.now() + 1).toISOString();
+  const { error: versionError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_sessions')
+    .update({ updated_at: carriedAt })
+    .eq('id', inserted.id);
+  if (versionError) throw versionError;
+  return { ...inserted, updated_at: carriedAt };
+};
+
+const machineStateKey = (station: string) => `${MACHINE_STATE_KEY_PREFIX}${createHash('sha256').update(station.trim().toUpperCase()).digest('hex').slice(0, 24)}`;
+
+const updateMachineState = async (
+  sessionId: string,
+  task: StoredTask,
+  stage: 'mounted' | 'started',
+  userName: string,
+  at: string
+) => {
+  if (!task.station.trim() || !task.detail.trim()) return;
+  const key = machineStateKey(task.station);
+  const id = stableTaskRowUuid(sessionId, key);
+  const { data: existing, error: readError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_tasks')
+    .select('detail')
+    .eq('id', id)
+    .maybeSingle();
+  if (readError) throw readError;
+  if (stage === 'started' && existing?.detail !== task.detail) return;
+  const state: StoredTask = {
+    id: key, isCurrentPlan: false, planGroup: 'standard', station: task.station, detail: task.detail,
+    quantity: '', norm: '', highlighted: false, kinds: [], teams: [],
+    notes: { __machineStage: stage, __machineAt: at, __machineBy: userName },
+    teamProgress: {}, done: false, material: '', materialType: '', source: '', dryer: '', temperature: ''
+  };
+  const { error: writeError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_tasks')
+    .upsert({ id, ...toDbTask(state, sessionId, 0, userName) }, { onConflict: 'id' });
+  if (writeError) throw writeError;
 };
 
 const ensureAccess = async (request: NextRequest) => {
@@ -651,10 +835,20 @@ const applyTaskMutation = (
   }
   const teamDone = mutation.setTeamDone;
   if (teamDone && isProductionCompletableTeam(teamDone.team) && typeof teamDone.done === 'boolean') {
+    const wasDone = isProductionTeamDone(task, teamDone.team);
     next.teamProgress = setProductionTeamCompletion(next.teamProgress, teamDone.team, teamDone.done, completion);
     if (teamDone.done) {
       delete next.notes[productionReopenedNoteKey(teamDone.team)];
       delete next.notes[productionReopenedDetailKey(teamDone.team)];
+      if (!wasDone) next.notes = appendProductionWorkEvent(next.notes, {
+        id: `${task.id}:${teamDone.team}:${completion.completedAt}`,
+        team: teamDone.team,
+        kinds: task.kinds.filter((kind) => kind !== 'anulowane'),
+        completedAt: completion.completedAt,
+        completedBy: completion.completedBy
+      });
+    } else if (wasDone) {
+      next.notes = revertProductionWorkEvent(next.notes, teamDone.team, completion.completedAt);
     }
   }
   const distributionStage = mutation.setDistributionStageDone;
@@ -665,6 +859,26 @@ const applyTaskMutation = (
       distributionStage.done,
       completion
     );
+    if (distributionStage.done && !isProductionTeamDone(task, 'distribution')
+      && isProductionTeamDone({ ...next, teamProgress: next.teamProgress }, 'distribution')) {
+      next.notes = appendProductionWorkEvent(next.notes, {
+        id: `${task.id}:distribution:${completion.completedAt}`,
+        team: 'distribution',
+        kinds: task.kinds.filter((kind) => kind !== 'anulowane'),
+        completedAt: completion.completedAt,
+        completedBy: completion.completedBy
+      });
+    } else if (!distributionStage.done && isProductionTeamDone(task, 'distribution')) {
+      next.notes = revertProductionWorkEvent(next.notes, 'distribution', completion.completedAt);
+    }
+  }
+  if (mutation.requeueKind && validWorkKinds.has(mutation.requeueKind)) {
+    const team = productionKindOwner(mutation.requeueKind);
+    if (isProductionCompletableTeam(team)) {
+      next.kinds = [...new Set([...next.kinds, mutation.requeueKind])];
+      next.teams = [...new Set([...next.teams, team])];
+      next.teamProgress = setProductionTeamCompletion(next.teamProgress, team, false);
+    }
   }
   for (const team of new Set([...reopenedTeams, ...reopenedDetailTeams])) {
     next.teamProgress = setProductionTeamCompletion(next.teamProgress, team, false);
@@ -936,11 +1150,13 @@ export async function GET(request: NextRequest) {
     };
     const syncOnly = request.nextUrl.searchParams.get('sync') === '1';
     const historyOnly = request.nextUrl.searchParams.get('history') === '1';
+    const recentCompletedOnly = request.nextUrl.searchParams.get('recentCompleted') === '1';
     if (historyOnly && !responseAccess.isAdmin) {
       return NextResponse.json({ code: 'FORBIDDEN' }, { status: 403 });
     }
     if (historyOnly) {
       await archivePreviousDays();
+      await compactOldHistorySnapshots();
       const { data: history, error: historyError } = await supabaseAdmin
         .from('przygotowanie_produkcji_history')
         .select('plan_date, file_name, plan_sheet, tasks, archived_at')
@@ -950,9 +1166,47 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ history: [], access: responseAccess });
       }
       return NextResponse.json({
-        history: (history ?? []).filter((entry) => Array.isArray(entry.tasks) && entry.tasks.length > 0),
+        history: (history ?? []).filter((entry) => Array.isArray(entry.tasks) && entry.tasks.length > 0)
+          .map((entry) => ({
+            ...entry,
+            summary: productionSummaryFromTasks(entry.tasks),
+            tasks: productionSummaryFromTasks(entry.tasks) ? [] : entry.tasks
+          })),
         access: responseAccess
       });
+    }
+    if (recentCompletedOnly) {
+      const { data: recentHistory, error: recentError } = await supabaseAdmin
+        .from('przygotowanie_produkcji_history')
+        .select('plan_date, tasks')
+        .order('plan_date', { ascending: false })
+        .limit(6);
+      if (recentError) throw recentError;
+      const completed = new Map<string, ProductionCompletedWork>();
+      for (const day of recentHistory ?? []) {
+        const planDate = String(day.plan_date);
+        for (const rawTask of Array.isArray(day.tasks) ? day.tasks : []) {
+          if (!isRecord(rawTask) || !rawTask.notes || !isRecord(rawTask.notes)) continue;
+          const task = rawTask as unknown as StoredTask;
+          const events = productionWorkEvents(task.notes);
+          const progress = isRecord(task.teamProgress) ? task.teamProgress : {};
+          for (const [team, value] of Object.entries(progress)) {
+            if (!isProductionTeam(team) || !isRecord(value)
+              || typeof value.completedAt !== 'string' || !value.completedAt) continue;
+            const id = `${task.id}:${team}:${value.completedAt}`;
+            if (events.some((event) => event.id === id)) continue;
+            events.push({ id, team, kinds: Array.isArray(task.kinds) ? task.kinds : [], completedAt: value.completedAt, completedBy: String(value.completedBy ?? '') });
+          }
+          for (const event of events) {
+            if (event.revertedAt) continue;
+            if (!responseAccess.isAdmin && !responseAccess.teams.includes(event.team as typeof responseAccess.teams[number])) continue;
+            const completedAt = new Date(event.completedAt);
+            if (Number.isNaN(completedAt.getTime()) || getWarsawProductionPlanDate(completedAt) !== planDate) continue;
+            completed.set(event.id, { ...event, station: String(task.station ?? ''), detail: String(task.detail ?? ''), planDate });
+          }
+        }
+      }
+      return NextResponse.json({ completed: [...completed.values()].sort((left, right) => right.completedAt.localeCompare(left.completedAt)) });
     }
     const planDate = resolveProductionPlanDate(request.nextUrl.searchParams.get('date'));
     if (!planDate || planDate === PROCESS_ENGINEERS_SETTINGS_DATE) return invalidPlanDate();
@@ -971,6 +1225,15 @@ export async function GET(request: NextRequest) {
     let session = sessionResult.data;
     const sessionError = sessionResult.error;
     if (sessionError) throw sessionError;
+    if (!session && !syncOnly && planDate === todayKey()) {
+      session = await carryLatestPlanToDate(planDate, access.user.name);
+      try {
+        await archivePreviousDays();
+        await compactOldHistorySnapshots();
+      } catch (maintenanceError) {
+        console.error('[przygotowanie-produkcji] Daily history maintenance skipped:', maintenanceError);
+      }
+    }
     const requestedVersion = request.nextUrl.searchParams.get('since');
     let syncVersion = session
       ? `${String(session.updated_at ?? '')}|${responseAccess.materialAccess}`
@@ -1040,11 +1303,18 @@ export async function GET(request: NextRequest) {
     const tasks = (taskRows ?? [])
       .filter((row) => !isModuleSettings(row as Record<string, unknown>))
       .map((row) => fromDbTask(row as Record<string, unknown>));
+    const machineForms = Object.fromEntries((taskRows ?? [])
+      .filter((row) => String(row.task_key ?? '').startsWith(MACHINE_STATE_KEY_PREFIX))
+      .map((row) => [String(row.station ?? ''), {
+        detail: String(row.detail ?? ''),
+        stage: String((row.notes as Record<string, unknown> | null)?.__machineStage ?? 'mounted'),
+        at: String((row.notes as Record<string, unknown> | null)?.__machineAt ?? '')
+      }]));
     const tasksWithReturns = withToolroomReturnTasks(tasks);
     const visibleTasks = responseAccess.materialAccess === 'none'
       ? tasksWithReturns.map(maskMaterialFields)
       : tasksWithReturns;
-    return NextResponse.json({ session, tasks: visibleTasks, processEngineers, processEngineerRoster, teamComments, recurringTasks, access: responseAccess, syncVersion });
+    return NextResponse.json({ session, tasks: visibleTasks, machineForms, processEngineers, processEngineerRoster, teamComments, recurringTasks, access: responseAccess, syncVersion });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Nie udało się odczytać planu.';
     return NextResponse.json({ code: 'PREPARATION_READ_FAILED', message }, { status: 400 });
@@ -1348,6 +1618,8 @@ export async function POST(request: NextRequest) {
     if (body.action === 'savePlan') {
       const planDate = resolveProductionPlanDate(body.planDate);
       if (!planDate || planDate === PROCESS_ENGINEERS_SETTINGS_DATE) return invalidPlanDate();
+      const archived = await archivedPlanDateResponse(planDate);
+      if (archived) return archived;
       let tasks = Array.isArray(body.tasks) ? body.tasks : [];
       const { data: session, error: sessionError } = await supabaseAdmin
         .from('przygotowanie_produkcji_sessions')
@@ -1409,6 +1681,8 @@ export async function POST(request: NextRequest) {
     if (body.action === 'updateTask' && body.task) {
       const planDate = resolveProductionPlanDate(body.planDate);
       if (!planDate || planDate === PROCESS_ENGINEERS_SETTINGS_DATE) return invalidPlanDate();
+      const archived = await archivedPlanDateResponse(planDate);
+      if (archived) return archived;
       const { data: session, error: sessionError } = await supabaseAdmin
         .from('przygotowanie_produkcji_sessions')
         .select('id, session_date, file_name, plan_sheet, created_by, updated_at')
@@ -1431,6 +1705,9 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.action === 'mutateTask' && body.taskId && body.mutation) {
+      if (body.mutation.requeueKind !== undefined && !validWorkKinds.has(body.mutation.requeueKind)) {
+        return NextResponse.json({ code: 'INVALID_WORK_KIND' }, { status: 400 });
+      }
       const toolroomSelection = body.mutation.setToolroomWork;
       if (toolroomSelection !== undefined && (
         !hasExactlyKeys(body.mutation, ['setToolroomWork'])
@@ -1463,6 +1740,8 @@ export async function POST(request: NextRequest) {
       }
       const planDate = resolveProductionPlanDate(body.planDate);
       if (!planDate || planDate === PROCESS_ENGINEERS_SETTINGS_DATE) return invalidPlanDate();
+      const archived = await archivedPlanDateResponse(planDate);
+      if (archived) return archived;
       const { data: session, error: sessionError } = await supabaseAdmin
         .from('przygotowanie_produkcji_sessions')
         .select('id, session_date, file_name, plan_sheet, created_by, updated_at')
@@ -1574,6 +1853,22 @@ export async function POST(request: NextRequest) {
         if (updateError) throw updateError;
         if (!updatedRow) continue;
 
+        let machineStateError: unknown = null;
+        try {
+          if (teamDoneMutation?.done === true && teamDoneMutation.team === 'mechanics'
+            && !isProductionTeamDone(currentTask, 'mechanics')
+            && (nextTask.kinds.includes('zmiana-formy') || nextTask.kinds.includes('powrot-formy-narzedziownia'))) {
+            await updateMachineState(session.id, nextTask, 'mounted', access.user.name, storedTask.updated_at);
+          }
+          if (teamDoneMutation?.done === true && teamDoneMutation.team === 'process'
+            && !isProductionTeamDone(currentTask, 'process')
+            && (nextTask.kinds.includes('rozruch') || nextTask.kinds.includes('wznowienie'))) {
+            await updateMachineState(session.id, nextTask, 'started', access.user.name, storedTask.updated_at);
+          }
+        } catch (error) {
+          machineStateError = error;
+        }
+
         const linkedParentId = toolroomParentId(nextTask);
         const updatedTaskVersion = Date.parse(storedTask.updated_at);
         const cascadeUpdatedAt = linkedParentId
@@ -1602,6 +1897,7 @@ export async function POST(request: NextRequest) {
           .eq('id', session.id);
         if (sessionUpdateError) throw sessionUpdateError;
         await saveHistorySnapshot(session, currentTasks as unknown as Array<Record<string, unknown>>);
+        if (machineStateError) throw machineStateError;
         const responseTask = currentTasks.find((task) => task.id === body.taskId)
           ?? fromDbTask(updatedRow as Record<string, unknown>);
         return NextResponse.json({

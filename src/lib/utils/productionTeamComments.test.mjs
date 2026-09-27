@@ -10,6 +10,7 @@ import * as workProgress from './productionWorkProgress.ts';
 import * as workComments from './productionWorkComments.ts';
 import * as toolroom from './productionToolroomTasks.ts';
 import * as taskReference from './productionTaskReference.ts';
+import * as taskLifecycle from './productionTaskLifecycle.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -372,9 +373,11 @@ function testApi() {
     lt(key,value) {this.filters.push(row=>row[key]<value);return this;}
     in(key,values) {this.filters.push(row=>values.includes(row[key]));return this;}
     order() {return this;}
+    limit() {return this;}
     insert(values) {this.mode='insert';this.values=values;return this;}
     upsert(values,options) {this.mode='upsert';this.values=values;this.options=options;return this;}
     update(values) {this.mode='update';this.values=values;return this;}
+    delete() {this.mode='delete';return this;}
     maybeSingle() {return this.run(true);}
     single() {return this.run(true);}
     then(resolve,reject) {return this.run(false).then(resolve,reject);}
@@ -385,6 +388,12 @@ function testApi() {
       if(state.failWrite&&this.mode!=='select')return {data:null,error:new Error('Testowy błąd zapisu')};
       let result=table.filter(row=>this.filters.every(filter=>filter(row)));
       if(this.mode==='update')result.forEach(row=>Object.assign(row,clone(this.values)));
+      if(this.mode==='delete') {
+        for(const row of result) table.splice(table.indexOf(row),1);
+        if(this.table==='przygotowanie_produkcji_sessions') {
+          db.przygotowanie_produkcji_tasks=db.przygotowanie_produkcji_tasks.filter(row=>!result.some(session=>session.id===row.session_id));
+        }
+      }
       if(this.mode==='insert'||this.mode==='upsert') {
         result=[];
         for(const value of Array.isArray(this.values)?this.values:[this.values]) {
@@ -420,7 +429,8 @@ function testApi() {
     '@/lib/utils/productionTeamComments':comments,
     '@/lib/utils/productionWorkComments':workComments,
     '@/lib/utils/productionWorkProgress':workProgress,
-    '@/lib/utils/productionToolroomTasks':toolroom
+    '@/lib/utils/productionToolroomTasks':toolroom,
+    '@/lib/utils/productionTaskLifecycle':taskLifecycle
   };
   mod.require=(id)=>{assert.ok(id in stubs,`Unmocked route dependency ${id}`);return stubs[id];};
   mod._compile(ts.transpileModule(readFileSync(routeFile,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,routeFile);
@@ -429,6 +439,37 @@ function testApi() {
   const save=(team,comment)=>post({action:'saveTeamComment',team,comment});
   return {db,state,get,post,save};
 }
+
+test('old plan rows are removed only after chart summary and machine state survive', async () => {
+  const api=testApi();
+  const today=planDates.getWarsawProductionPlanDate();
+  const reportTasks=[{id:'work-1',station:'WTR 10',kinds:['zmiana-formy'],teams:['mechanics'],notes:{},done:true}];
+  for(let day=1;day<=8;day++) api.db.przygotowanie_produkcji_history.push({
+    plan_date:`2020-01-${String(day).padStart(2,'0')}`,tasks:structuredClone(reportTasks)
+  });
+  api.db.przygotowanie_produkcji_sessions.push(
+    {id:'old-session',session_date:'2020-01-01',updated_at:'original'},
+    {id:'current-session',session_date:today,updated_at:'original'}
+  );
+  const machine={task_key:'__machine_state__:wtr10',station:'WTR 10',is_current_plan:false,
+    kinds:[],teams:[],notes:{__machineAt:'2020-01-01T10:00:00Z'},done:false};
+  api.db.przygotowanie_produkcji_tasks.push({id:'old-machine',session_id:'old-session',...machine});
+
+  await api.get('?history=1');
+  assert.ok(api.db.przygotowanie_produkcji_sessions.some(session=>session.id==='old-session'));
+  const saved=taskLifecycle.productionSummaryFromTasks(api.db.przygotowanie_produkcji_history[0].tasks);
+  assert.equal(saved.assignments,1);
+  assert.equal(saved.kinds['zmiana-formy'].done,1);
+  assert.match(saved.sourceDigest,/^[a-f0-9]{64}$/);
+
+  api.db.przygotowanie_produkcji_tasks.push({id:'current-machine',session_id:'current-session',
+    ...machine,notes:{__machineAt:'2026-09-27T10:00:00Z'}});
+  await api.get('?history=1');
+  assert.equal(api.db.przygotowanie_produkcji_sessions.some(session=>session.id==='old-session'),false);
+  assert.equal(api.db.przygotowanie_produkcji_tasks.some(task=>task.session_id==='old-session'),false);
+  assert.deepEqual(taskLifecycle.productionSummaryFromTasks(api.db.przygotowanie_produkcji_history[0].tasks),saved);
+  assert.equal((await api.post({action:'savePlan',planDate:'2020-01-01',tasks:[]})).status,410);
+});
 
 test('settings can be saved before any plan exists and are loaded again globally', async () => {
   const api=testApi();
@@ -812,6 +853,33 @@ test('API loads and edits the selected production day without changing another d
   assert.equal(thirdDay.tasks[0].notes.process,'Edycja starego dnia');
   assert.equal(fourthDay.tasks[0].notes.process,undefined);
   assert.deepEqual(api.db.przygotowanie_produkcji_sessions.map(row=>row.session_date).sort(),['2026-09-03','2026-09-04']);
+});
+
+test('tomorrow inherits the plan and mounted form but not a new mechanic completion', async (context) => {
+  const api = testApi();
+  const date = planDates.getWarsawProductionPlanDate();
+  const task = { ...toolroomSource(), id: 'daily-form', kinds: ['zmiana-formy', 'rozruch'], teams: ['mechanics', 'process'], notes: {}, teamProgress: {}, done: false };
+  assert.equal((await api.post({ action: 'savePlan', planDate: date, tasks: [task], fileName: 'plan.xlsx' })).status, 200);
+  assert.equal((await api.post({ action: 'mutateTask', planDate: date, taskId: task.id, mutation: { setTeamDone: { team: 'mechanics', done: true } } })).status, 200);
+  const next = new Date(`${date}T12:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  context.mock.timers.enable({ apis: ['Date'], now: next.getTime() });
+  const tomorrow = next.toISOString().slice(0, 10);
+  const result = await (await api.get(`?date=${tomorrow}`)).json();
+  assert.equal(result.session.session_date, tomorrow);
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].id, task.id);
+  assert.equal(workProgress.isProductionTeamDone(result.tasks[0], 'mechanics'), true);
+  assert.equal(workProgress.isProductionTeamDone(result.tasks[0], 'process'), false);
+  assert.equal(result.machineForms['WTR 49'].stage, 'mounted');
+  assert.equal(result.machineForms['WTR 49'].detail, task.detail);
+  const recent = await (await api.get('?recentCompleted=1')).json();
+  assert.equal(recent.completed.length, 1);
+  assert.equal(recent.completed[0].team, 'mechanics');
+  assert.equal((await api.post({ action: 'mutateTask', planDate: tomorrow, taskId: task.id, mutation: { requeueKind: 'zmiana-formy' } })).status, 200);
+  const requeued = await (await api.get(`?date=${tomorrow}`)).json();
+  assert.equal(workProgress.isProductionTeamDone(requeued.tasks[0], 'mechanics'), false);
+  assert.equal(taskLifecycle.productionWorkEvents(requeued.tasks[0].notes).length, 1);
 });
 
 test('API rejects impossible selected dates before creating a plan', async () => {

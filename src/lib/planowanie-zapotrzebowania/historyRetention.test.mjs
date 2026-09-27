@@ -89,3 +89,23 @@ test('retention leaves an already clean state untouched', () => {
 
   assert.equal(pruneMaterialPlanningHistory(state, '2026-09-11'), state);
 });
+
+test('an active plan survives when its imported version leaves seven-day history', () => {
+  const active = [{ id: 'run-1', technologyId: 'working', remainingQty: 800 }];
+  const state = {
+    selectedPlanDate: '2026-09-01', activePlanVersionId: 'v-old',
+    planName: '01.09.xlsx', planSheet: 'Plan', planImportedAt: '2026-09-01',
+    plan: active, dailyPlans: { '2026-09-01': active, '2026-09-12': [] },
+    planVersions: [{ id: 'v-old', planDate: '2026-09-01', versionNo: 1, importedAt: '2026-09-01',
+      fileName: '01.09.xlsx', sheetName: 'Plan', items: [{ id: 'run-1', technologyId: 'base' }] }],
+    quantityCorrections: [], documents: [], returnStatuses: {}, pickingDone: {}
+  };
+  const result = pruneMaterialPlanningHistory(state, '2026-09-12');
+  assert.equal(result.selectedPlanDate, '2026-09-12');
+  assert.deepEqual(result.plan, active);
+  assert.equal(result.plan[0].technologyId, 'working');
+  assert.equal(result.planName, '01.09.xlsx');
+  assert.deepEqual(result.planVersions, []);
+  assert.deepEqual(Object.keys(result.dailyPlans), ['2026-09-12']);
+  assert.deepEqual(result.dailyPlans['2026-09-12'], active);
+});

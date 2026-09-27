@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import { readProductionPlanSheet, readProductionPlanWorkbook } from './productionPlanWorkbook.ts';
 import { isToolroomReturnTask, withToolroomReturnTasks } from './productionToolroomTasks.ts';
+import { isProductionTaskDone, setProductionTeamCompletion } from './productionWorkProgress.ts';
 
 const makeWorkbook = (bookType = 'xlsx') => {
   const workbook = XLSX.utils.book_new();
@@ -82,7 +83,8 @@ const createHarness = () => {
   const saves = [];
   const cached = [];
   const context = {
-    XLSX, Error, readProductionPlanWorkbook, readProductionPlanSheet, isToolroomReturnTask, withToolroomReturnTasks, exports: {},
+    XLSX, Error, readProductionPlanWorkbook, readProductionPlanSheet, isToolroomReturnTask, withToolroomReturnTasks,
+    isProductionTaskDone, setProductionTeamCompletion, machineForms: {}, exports: {},
     RECURRING_TASK_STATION: 'ZADANIE CYKLICZNE',
     loadProductionPlanWorkbookTools: async () => ({ productionPlanXlsx: XLSX, readProductionPlanWorkbook, readProductionPlanSheet }),
     workbookSource: null, selectedSheetName: '', readingWorkbook: false,
@@ -227,6 +229,22 @@ test('reimport still protects manual, recurring and planned work from automatic 
     assert.ok(!task.kinds.includes('anulowane'));
     assert.equal(task.notes.mechanics, 'Keep');
   }
+});
+
+test('a cancelled index returning after another form was mounted needs a new form change', () => {
+  const h = createHarness();
+  const imported = h.parseTasks(readProductionPlanSheet(readProductionPlanWorkbook(makeWorkbook(), 'plan.xlsx'), 'Tuesday'), 'Tuesday')[0];
+  const completedAt = { completedAt: '2026-09-27T08:00:00.000Z', completedBy: 'Mechanik' };
+  const previous = {
+    ...imported, isCurrentPlan: false, kinds: ['zmiana-formy', 'rozruch', 'anulowane'],
+    teams: ['mechanics', 'process'], teamProgress: { mechanics: completedAt, process: completedAt }, done: true
+  };
+  h.context.machineForms[imported.station] = { detail: 'INNA FORMA', stage: 'mounted', at: completedAt.completedAt };
+  const [returned] = h.mergeImportedTasks([imported], [previous], h.context.machineForms);
+  assert.equal(returned.kinds.includes('anulowane'), false);
+  assert.equal(returned.teamProgress.mechanics, undefined);
+  assert.equal(returned.teamProgress.process, undefined);
+  assert.equal(returned.done, false);
 });
 
 test('choosing a file or a sheet never changes or saves the current plan', async () => {

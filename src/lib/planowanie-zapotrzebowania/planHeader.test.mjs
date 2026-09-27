@@ -472,7 +472,7 @@ test('continuous production replaces a missing final quantity with output for th
   assert.ok(button(h, 'Utwórz dokument do wypisania'));
 });
 
-test('today, tomorrow, saved dates and custom calendar select the matching daily plan', () => {
+test('today, tomorrow, saved dates and custom calendar carry the last plan until an import replaces it', () => {
   const h = createHeaderFixture({
     state: { dailyPlans: { '2026-08-30': [], '2026-08-23': [] } }
   });
@@ -482,7 +482,8 @@ test('today, tomorrow, saved dates and custom calendar select the matching daily
   assert.ok(!nodes(select).some((node) => node.props?.value === '2026-08-23'));
   select.props.onChange({ target: { value: '2026-09-01' } });
   assert.equal(h.ctx.state.selectedPlanDate, '2026-09-01');
-  assert.equal(h.ctx.state.plan.length, 0);
+  assert.equal(h.ctx.state.plan.length, original.length);
+  assert.match(h.html(), /Plan z 31\.08\.2026/);
   assert.equal(h.ctx.state.dailyPlans['2026-08-31'].length, original.length);
   control(h, 'Dzień produkcji').props.onChange({ target: { value: '2026-08-31' } });
   assert.equal(h.ctx.state.plan.length, original.length);

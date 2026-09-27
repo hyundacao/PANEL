@@ -694,10 +694,12 @@ const isThousandPiecesUnit = (unit: unknown) =>
   ['1000szt', '1000sztuk', 'tysszt', 'tyssztuk'].includes(normalizedMaterialUnit(unit).replace(/\s+/g, ''));
 const technologyResultUnit = (unit: unknown) => isThousandPiecesUnit(unit) ? 'szt.' : String(unit ?? '').trim() || 'szt.';
 const technologyResultQuantity = (value: number, unit: unknown) => isThousandPiecesUnit(unit) ? value * 1000 : value;
-const roundTechnologyMaterialQuantity = (value: number, unit: unknown) => {
+const roundTechnologyMaterialQuantity = (value: number, unit: unknown, materialName = '') => {
   const safeValue = Math.max(0, Number.isFinite(value) ? value : 0);
   if (isKilogramUnit(unit) || isGramUnit(unit)) return safeValue;
-  const unitScale = isThousandPiecesUnit(unit) ? 1000 : 1;
+  const bulkLabelSet = normalizedMaterialUnit(unit) === 'kpl'
+    && normalize(materialName).startsWith('etykieta bml na konewke');
+  const unitScale = isThousandPiecesUnit(unit) || bulkLabelSet ? 1000 : 1;
   const scaledValue = safeValue * unitScale;
   const tolerance = Number.EPSILON * Math.max(1, Math.abs(scaledValue)) * 8;
   return Math.ceil(scaledValue - tolerance) / unitScale;
@@ -1070,6 +1072,14 @@ const cloneTechnologyForEditor = (technology: Technology): Technology => ({
   emergencyMaterials: (technology.emergencyMaterials ?? []).map((material) => ({ ...material }))
 });
 
+const latestPriorPlanVersion = (versions: PlanVersion[], planDate: string): PlanVersion | undefined =>
+  versions.reduce<PlanVersion | undefined>((latest, version) => {
+    if (version.planDate >= planDate) return latest;
+    if (!latest || version.planDate > latest.planDate
+      || (version.planDate === latest.planDate && version.versionNo > latest.versionNo)) return version;
+    return latest;
+  }, undefined);
+
 const sameTechnologyMaterials = (left: TechnologyMaterial[], right: TechnologyMaterial[]) =>
   left.length === right.length && left.every((material, index) => {
     const other = right[index];
@@ -1247,7 +1257,7 @@ const parseStoredState = (value: unknown): AppState | null => {
     ...planVersion,
     items: Array.isArray(planVersion.items) ? cleanPlanItems(planVersion.items, true) : [],
     differences: Array.isArray(planVersion.differences) ? planVersion.differences : []
-  })) : (plan.length ? [{
+  })) : (plan.length && (record.activePlanVersionId === undefined || !Array.isArray(record.planVersions)) ? [{
     id: uid('version'),
     planDate: selectedPlanDate,
     versionNo: 1,
@@ -1259,7 +1269,15 @@ const parseStoredState = (value: unknown): AppState | null => {
     items: clonePlanItems(plan),
     differences: []
   }] : []);
-  const selectedPlan = dailyPlans[selectedPlanDate] ?? plan;
+  const selectedVersion = latestPlanVersion(planVersions, selectedPlanDate);
+  const datedPlan = dailyPlans[selectedPlanDate];
+  const savedPlan = datedPlan?.length ? datedPlan : !selectedVersion && plan.length ? plan : datedPlan ?? plan;
+  const previousVersion = !selectedVersion && savedPlan.length === 0
+    ? latestPriorPlanVersion(planVersions, selectedPlanDate)
+    : undefined;
+  const selectedPlan = previousVersion
+    ? clonePlanItems(dailyPlans[previousVersion.planDate] ?? previousVersion.items)
+    : savedPlan;
   return {
     ...emptyState(),
     ...record,
@@ -1271,8 +1289,11 @@ const parseStoredState = (value: unknown): AppState | null => {
     palletSets: normalizePalletSets(record.palletSets),
     technologies,
     selectedPlanDate,
-    activePlanVersionId: latestPlanVersion(planVersions, selectedPlanDate)?.id ?? '',
+    activePlanVersionId: selectedVersion?.id ?? '',
     plan: selectedPlan,
+    planName: previousVersion?.fileName ?? record.planName ?? '',
+    planSheet: previousVersion?.sheetName ?? record.planSheet ?? '',
+    planImportedAt: previousVersion?.importedAt ?? record.planImportedAt ?? '',
     dailyPlans,
     planVersions,
     quantityCorrections: Array.isArray(record.quantityCorrections) ? record.quantityCorrections : [],
@@ -2442,7 +2463,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     const quantity = itemProductionQty(item, fullPlan);
     const contributions = materialsForItem(item).map((material) => ({
       material,
-      demand: roundTechnologyMaterialQuantity(quantity * material.usage, material.unit)
+      demand: roundTechnologyMaterialQuantity(quantity * material.usage, material.unit, material.name)
     }));
     technologyLinksForItem(item).forEach((link) => {
       const selection = linkedSourceSelectionForItem(item, link);
@@ -2469,7 +2490,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     if (surplusQuantity > 0) {
       surplusMaterials.forEach((material) => contributions.push({
         material,
-        demand: roundTechnologyMaterialQuantity(surplusQuantity * material.usage, material.unit)
+        demand: roundTechnologyMaterialQuantity(surplusQuantity * material.usage, material.unit, material.name)
       }));
     }
     return contributions;
@@ -2521,15 +2542,16 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         .reduce((sum, item) => sum + item.qty, 0);
       const ledger = documentLedger.get(`${currentAreaId}|${key}`) ?? { issued: 0, pending: 0 };
       const balance = calculateIssueBalance({ demand, areaStock, sharedCoverage: 0, issued: ledger.issued, pending: ledger.pending });
-      const netNeed = roundTechnologyMaterialQuantity(balance.toIssue, material.unit);
+      const netNeed = roundTechnologyMaterialQuantity(balance.toIssue, material.unit, material.name);
       return { areaId: currentAreaId, demand, areaStock, issued: ledger.issued, pending: ledger.pending, netNeed };
     });
     const globalSharedDemand = areaNeeds.reduce((sum, item) => sum + item.netNeed, 0);
-    const globalSharedShortage = roundTechnologyMaterialQuantity(Math.max(0, globalSharedDemand - sharedStock), material.unit);
+    const globalSharedShortage = roundTechnologyMaterialQuantity(Math.max(0, globalSharedDemand - sharedStock), material.unit, material.name);
     const selected = areaNeeds.find((item) => item.areaId === areaId) ?? { areaId, demand: 0, areaStock: 0, issued: 0, pending: 0, netNeed: 0 };
     const toIssue = roundTechnologyMaterialQuantity(
       globalSharedDemand > 0 ? globalSharedShortage * (selected.netNeed / globalSharedDemand) : 0,
-      material.unit
+      material.unit,
+      material.name
     );
     return { ...selected, sharedStock, globalSharedDemand, globalSharedShortage, toIssue };
   };
@@ -2734,8 +2756,15 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     const importedProductionCount = new Set(imported.map((item) => item.productionGroupId || item.id)).size;
     let importedVersionNo = 1;
     updateState((current) => {
+      const previousImportedVersion = latestPriorPlanVersion(current.planVersions, current.selectedPlanDate);
+      const sameDayPlan = Boolean(latestPlanVersion(current.planVersions, current.selectedPlanDate));
+      const continuityPlan = current.plan.length > 0
+        ? current.plan
+        : !sameDayPlan && previousImportedVersion
+          ? current.dailyPlans[previousImportedVersion.planDate] ?? previousImportedVersion.items
+          : [];
       const activeQueues = new Map<string, PlanItem[]>();
-      current.plan.forEach((item) => {
+      continuityPlan.forEach((item) => {
         const signature = planItemSignature(item);
         activeQueues.set(signature, [...(activeQueues.get(signature) ?? []), item]);
       });
@@ -2750,19 +2779,19 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             ...incoming,
             id: active.id,
             runId: active.runId,
-            included: active.included,
+            included: sameDayPlan ? active.included : incoming.included,
             technologyId: active.technologyId,
             workingMaterials: active.workingMaterials,
             packagingMode: active.packagingMode ?? 'base',
-            linkedSources: normalizeLinkedSources(active.linkedSources),
+            linkedSources: sameDayPlan ? normalizeLinkedSources(active.linkedSources) : {},
             manualOverride: active.manualOverride,
             remainingQty: incoming.totalQty,
-            ...(active.quantityStatus === 'manual' && incoming.sourceQuantity === active.sourceQuantity
+            ...(sameDayPlan && active.quantityStatus === 'manual' && incoming.sourceQuantity === active.sourceQuantity
               ? { quantityStatus: 'manual' as const, totalQty: active.totalQty, remainingQty: active.remainingQty }
               : {}),
-            scopeMode: active.scopeMode ?? 'global',
-            scopeShifts: active.scopeShifts ?? 3.5,
-            scopeQuantity: active.scopeQuantity ?? 0
+            scopeMode: sameDayPlan ? active.scopeMode ?? 'global' : 'global',
+            scopeShifts: sameDayPlan ? active.scopeShifts ?? 3.5 : 3.5,
+            scopeQuantity: sameDayPlan ? active.scopeQuantity ?? 0 : 0
           };
         }
         const candidate = suspended.find((entry) => planItemSignature(entry.planItem) === signature);
@@ -2844,16 +2873,27 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     setState((current) => {
       const dailyPlans = { ...current.dailyPlans, [current.selectedPlanDate]: clonePlanItems(current.plan) };
       const latest = latestPlanVersion(current.planVersions, planDate);
-      const selectedPlan = clonePlanItems(dailyPlans[planDate] ?? latest?.items ?? []);
+      const previousVersion = latestPriorPlanVersion(current.planVersions, planDate);
+      const useCurrentPlan = current.selectedPlanDate < planDate && current.plan.length > 0
+        && (!previousVersion || current.selectedPlanDate >= previousVersion.planDate);
+      const previousPlan = useCurrentPlan
+        ? current.plan
+        : previousVersion ? dailyPlans[previousVersion.planDate] ?? previousVersion.items : [];
+      const savedPlan = dailyPlans[planDate] ?? latest?.items;
+      const carrying = !latest && !savedPlan?.length && previousPlan.length > 0;
+      const selectedPlan = clonePlanItems(carrying ? previousPlan : savedPlan ?? []);
+      const sourceFile = useCurrentPlan ? current.planName : previousVersion?.fileName ?? '';
+      const sourceSheet = useCurrentPlan ? current.planSheet : previousVersion?.sheetName ?? '';
+      const sourceImportedAt = useCurrentPlan ? current.planImportedAt : previousVersion?.importedAt ?? '';
       return {
         ...current,
         selectedPlanDate: planDate,
         activePlanVersionId: latest?.id ?? '',
         plan: applyDefaultTechnologyAssignments(selectedPlan, current.technologies),
         dailyPlans,
-        planName: latest?.fileName ?? '',
-        planSheet: latest?.sheetName ?? '',
-        planImportedAt: latest?.importedAt ?? ''
+        planName: latest?.fileName ?? (carrying ? sourceFile : ''),
+        planSheet: latest?.sheetName ?? (carrying ? sourceSheet : ''),
+        planImportedAt: latest?.importedAt ?? (carrying ? sourceImportedAt : '')
       };
     });
     setExpandedPlan('');
@@ -3256,6 +3296,10 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   ) : null;
 
   const currentPlanVersion = latestPlanVersion(state.planVersions, state.selectedPlanDate);
+  const inheritedPlanVersion = !currentPlanVersion && state.plan.length > 0
+    ? latestPriorPlanVersion(state.planVersions, state.selectedPlanDate)
+    : undefined;
+  const inheritedPlan = !currentPlanVersion && state.plan.length > 0;
   const tomorrow = dateOffsetKey(1);
   const historyCutoffDate = materialPlanningHistoryCutoffDateKey(today);
   const savedPlanDates = [...new Set([
@@ -3553,7 +3597,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       </div>
       <div className={cn('grid gap-3 border-t border-border bg-[image:var(--row-alt)] p-3 md:grid-cols-2 xl:items-end', readOnly ? 'xl:grid-cols-[minmax(240px,1.15fr)_minmax(180px,0.65fr)_minmax(300px,1fr)]' : 'xl:grid-cols-[minmax(240px,1.15fr)_minmax(210px,0.75fr)_minmax(260px,1fr)_auto]')}>
         <div className="min-w-0 border-l-2 border-brand pl-3">
-          <p className="text-xs font-semibold text-dim">{pendingPlanWorkbook ? 'Plik do wczytania' : 'Wgrany plik'}</p>
+          <p className="text-xs font-semibold text-dim">{pendingPlanWorkbook ? 'Plik do wczytania' : inheritedPlan ? 'Ostatni plan' : 'Wgrany plik'}</p>
           <p className="mt-1 min-w-0 break-words text-sm font-semibold text-title">{planImportWorkbook?.fileName || currentPlanVersion?.fileName || state.planName || 'Brak pliku'}</p>
         </div>
         {!readOnly && planImportWorkbook ? <label className="block min-w-0 space-y-1.5 text-xs font-semibold text-dim"><span>Arkusz</span>
@@ -3574,6 +3618,8 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         <div className="min-w-0">
           <p className="text-xs font-semibold text-dim">Ostatni import</p>
           {currentPlanVersion ? <div className="mt-1 flex min-h-10 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted"><Badge tone="info">Wersja {currentPlanVersion.versionNo}</Badge><span>{currentPlanVersion.importedAt} · {currentPlanVersion.importedBy}</span></div>
+            : inheritedPlanVersion ? <div className="mt-1 flex min-h-10 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted"><Badge tone="warning">Plan z {formatPlanDate(inheritedPlanVersion.planDate)}</Badge><span>Ilości z ostatniego importu</span></div>
+            : inheritedPlan ? <div className="mt-1 flex min-h-10 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted"><Badge tone="warning">Plan przeniesiony</Badge><span>Ilości z ostatniego importu</span></div>
             : <p className="mt-1 flex min-h-10 items-center text-sm text-muted">Brak wgranej wersji</p>}
         </div>
         {!readOnly ? <div className="flex flex-wrap justify-start gap-2 xl:justify-end">
@@ -3582,7 +3628,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             <Button className="min-h-10 rounded-lg px-3" disabled={!sheetName} onClick={importSelectedSheet}><Check className="mr-2 h-4 w-4" />Wczytaj arkusz</Button>
           </> : <>
             <Button variant="outline" className="min-h-10 rounded-lg px-3 shadow-none" onClick={() => { if (!closeCalculationEditorIfAllowed()) return; planUploadModeRef.current = 'plan'; fileInputRef.current?.click(); }}><Upload className="mr-2 h-4 w-4" />Wgraj plan</Button>
-            {currentPlanVersion ? <Button variant="outline" className="min-h-10 rounded-lg px-3 shadow-none" onClick={() => { if (!closeCalculationEditorIfAllowed()) return; planUploadModeRef.current = 'update'; fileInputRef.current?.click(); }}><RefreshCw className="mr-2 h-4 w-4" />Wgraj aktualizację</Button> : null}
+            {currentPlanVersion || state.plan.length > 0 ? <Button variant="outline" className="min-h-10 rounded-lg px-3 shadow-none" onClick={() => { if (!closeCalculationEditorIfAllowed()) return; planUploadModeRef.current = 'update'; fileInputRef.current?.click(); }}><RefreshCw className="mr-2 h-4 w-4" />Wgraj aktualizację</Button> : null}
           </>}
         </div> : null}
       </div>
@@ -4271,11 +4317,11 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             </thead>
             <tbody>{materials.map((material) => {
           const key = materialKey(material);
-          const demand = roundTechnologyMaterialQuantity(selectedQty * material.usage, material.unit);
-          const fullDemand = roundTechnologyMaterialQuantity(remaining * material.usage, material.unit);
+          const demand = roundTechnologyMaterialQuantity(selectedQty * material.usage, material.unit, material.name);
+          const fullDemand = roundTechnologyMaterialQuantity(remaining * material.usage, material.unit, material.name);
           const supply = materialSupply(key, material, item.areaId);
           const itemShare = supply.demand > 0 ? Math.min(1, demand / supply.demand) : 0;
-          const toIssue = roundTechnologyMaterialQuantity(supply.toIssue * itemShare, material.unit);
+          const toIssue = roundTechnologyMaterialQuantity(supply.toIssue * itemShare, material.unit, material.name);
           return <tr key={material.id} className="border-t border-border transition hover:bg-[var(--surface-faint)]">
             <td className="border-r border-border p-0"><Input className={cn(compactPlanMaterialInputClass, 'font-semibold text-title')} disabled={editorLocked} list="material-code-suggestions" value={material.code} aria-label="Kod materiału" onCatalogSelect={(catalogItem) => updateWorkingMaterial(item.id, material.id, catalogMaterialPatch(material, catalogItem))} onChange={(event) => updateWorkingMaterial(item.id, material.id, { code: event.target.value })} /></td>
             <td className="border-r border-border p-0"><Input className={cn(compactPlanMaterialInputClass, 'font-semibold')} disabled={editorLocked} list="material-name-suggestions" title={material.name} value={material.name} aria-label="Nazwa materiału" onCatalogSelect={(catalogItem) => updateWorkingMaterial(item.id, material.id, catalogMaterialPatch(material, catalogItem))} onChange={(event) => updateWorkingMaterial(item.id, material.id, { name: event.target.value })} /></td>
@@ -4302,8 +4348,8 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
               <colgroup><col className="w-[210px]" /><col className="w-[390px]" /><col className="w-[130px]" /><col className="w-[120px]" /><col className="w-[120px]" /></colgroup>
               <thead className="bg-[image:var(--table-sticky-header-bg)] text-left text-[10px] uppercase text-dim"><tr><th className="border-r border-border px-2 py-1.5">Kod</th><th className="border-r border-border px-2 py-1.5">Materiał nadwyżki</th><th className="border-r border-border px-2 py-1.5 text-right">Przelicznik / szt.</th><th className="border-r border-border px-2 py-1.5 text-right">Cały plan</th><th className="px-2 py-1.5 text-right">Wybrany zakres</th></tr></thead>
               <tbody>{(technology.surplusMaterials ?? []).map((material) => {
-                const demand = roundTechnologyMaterialQuantity(selectedSurplusQuantity * material.usage, material.unit);
-                const fullDemand = roundTechnologyMaterialQuantity(fullSurplusQuantity * material.usage, material.unit);
+                const demand = roundTechnologyMaterialQuantity(selectedSurplusQuantity * material.usage, material.unit, material.name);
+                const fullDemand = roundTechnologyMaterialQuantity(fullSurplusQuantity * material.usage, material.unit, material.name);
                 return <tr key={material.id} className="border-t border-border"><td className="border-r border-border px-2 py-2 font-semibold text-title">{material.code}</td><td className="catalog-label border-r border-border px-2 py-2 font-semibold">{material.name}</td><td className="border-r border-border px-2 py-2 text-right tabular-nums">{fmt(technologyUsageForEditor(material))} {technologyUsageInputUnit(material)}</td><td className="border-r border-border px-2 py-2 text-right tabular-nums">{quantityReview ? '—' : `${fmt(technologyResultQuantity(fullDemand, material.unit))} ${technologyResultUnit(material.unit)}`}</td><td className="px-2 py-2 text-right font-black tabular-nums text-warning">{quantityReview ? '—' : `${fmt(technologyResultQuantity(demand, material.unit))} ${technologyResultUnit(material.unit)}`}</td></tr>;
               })}</tbody>
             </table>

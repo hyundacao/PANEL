@@ -24,6 +24,7 @@ import { useUiStore } from '@/lib/store/ui';
 import { defaultTeamComments, normalizeTeamComments, productionMetricsForTask, teamCommentForTask, type ProductionTeam, type TeamComment, type TeamComments } from '@/lib/utils/productionTeamComments';
 import { cn } from '@/lib/utils/cn';
 import { getWarsawProductionPlanDate, isProductionPlanDate } from '@/lib/utils/productionPlanDate';
+import { PRODUCTION_TASK_DUE_DATE_NOTE, productionKindOwner, productionTaskDoneOnDate, productionTaskDueDate, productionWorkEvents, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
 import { matchesProductionPlanStation } from '@/lib/utils/productionPlanSearch';
 import { RECURRING_TASK_STATION, normalizeRecurringTasks, validateRecurringTasks, type RecurringTaskDefinition } from '@/lib/utils/productionRecurringTasks';
 import { PRODUCTION_WORK_COMMENT_MAX_LENGTH, normalizeProductionWorkCommentText, productionWorkCommentFromNotes, withProductionWorkComment } from '@/lib/utils/productionWorkComments';
@@ -134,12 +135,14 @@ type TaskMutation = {
   setTeamDone?: { team: Team; done: boolean };
   setDistributionStageDone?: { stage: ProductionDistributionStage; done: boolean };
   setWorkComment?: { team: Team; text: string };
+  requeueKind?: WorkKind;
   clearWork?: boolean;
 };
 
 type StoredPlan = {
   session: { session_date?: string; file_name?: string | null; plan_sheet?: string | null; updated_at?: string | null } | null;
   tasks: Task[];
+  machineForms?: Record<string, { detail: string; stage: string; at: string }>;
   access?: { isAdmin: boolean; teams: Team[]; materialAccess: PreparationMaterialAccess };
   unchanged?: boolean;
   syncVersion?: string;
@@ -168,6 +171,7 @@ type PlanHistory = {
   file_name?: string | null;
   plan_sheet?: string | null;
   tasks: Task[];
+  summary?: ProductionDaySummary | null;
   archived_at: string;
 };
 
@@ -700,7 +704,11 @@ const ensureUniqueTaskIds = (items: Task[]) => {
   });
 };
 
-const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
+const mergeImportedTasks = (
+  importedTasks: Task[],
+  existingTasks: Task[],
+  machineForms: Record<string, { detail: string; stage: string; at: string }>
+) => {
   const remaining = [...existingTasks];
   const currentTasks = importedTasks.map((imported) => {
     const matchesImportedTask = (task: Task) =>
@@ -715,7 +723,14 @@ const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
     }
     if (matchIndex < 0) return imported;
     const previous = remaining.splice(matchIndex, 1)[0];
-    return {
+    let teamProgress = previous.teamProgress;
+    if (!previous.isCurrentPlan) {
+      teamProgress = setProductionTeamCompletion(teamProgress, 'process', false);
+      if (machineForms[imported.station]?.detail !== imported.detail) {
+        teamProgress = setProductionTeamCompletion(teamProgress, 'mechanics', false);
+      }
+    }
+    const next = {
       ...previous,
       ...imported,
       id: previous.id,
@@ -725,8 +740,8 @@ const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
       kinds: previous.isCurrentPlan ? previous.kinds : previous.kinds.filter((kind) => kind !== 'anulowane'),
       teams: previous.teams,
       notes: previous.notes,
-      teamProgress: previous.teamProgress,
-      done: previous.done,
+      teamProgress,
+      done: false,
       material: imported.planGroup === 'planned' || previous.planGroup === 'planned'
         ? imported.material
         : previous.material,
@@ -735,6 +750,7 @@ const mergeImportedTasks = (importedTasks: Task[], existingTasks: Task[]) => {
       dryer: previous.dryer,
       temperature: previous.temperature
     };
+    return { ...next, done: isProductionTaskDone(next) };
   });
   const retainedWork = remaining
     .filter((task) => assignedForTheDay(task) || isToolroomReturnTask(task))
@@ -749,11 +765,12 @@ export default function PrzygotowanieProdukcjiPage() {
   const pathname = usePathname();
   const router = useRouter();
   const currentUser = useUiStore((state) => state.user);
+  const [liveTodayDate, setLiveTodayDate] = useState(getWarsawProductionPlanDate);
   const requestedPlanDate = searchParams.get('date');
   const selectedPlanDate = isProductionPlanDate(requestedPlanDate)
     ? requestedPlanDate
-    : getWarsawProductionPlanDate();
-  const todayPlanDate = getWarsawProductionPlanDate();
+    : liveTodayDate;
+  const todayPlanDate = liveTodayDate;
   const selectedPlanDateLabel = useMemo(
     () => new Date(`${selectedPlanDate}T12:00:00`).toLocaleDateString('pl-PL', {
       weekday: 'long',
@@ -770,6 +787,7 @@ export default function PrzygotowanieProdukcjiPage() {
   const [fileName, setFileName] = useState('');
   const [sheetName, setSheetName] = useState('');
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [machineForms, setMachineForms] = useState<Record<string, { detail: string; stage: string; at: string }>>({});
   const [stationSearch, setStationSearch] = useState('');
   const [history, setHistory] = useState<PlanHistory[]>([]);
   const [selectedHistoryWeek, setSelectedHistoryWeek] = useState<string | null>(null);
@@ -788,8 +806,15 @@ export default function PrzygotowanieProdukcjiPage() {
   const [expandedPlannedTasks, setExpandedPlannedTasks] = useState<string[]>([]);
   const [showManualTaskForm, setShowManualTaskForm] = useState(false);
   const [manualTaskText, setManualTaskText] = useState('');
+  const [manualTaskDueDate, setManualTaskDueDate] = useState('');
+  const [workPlanStatus, setWorkPlanStatus] = useState<'open' | 'done'>('open');
+  const [recentCompleted, setRecentCompleted] = useState<ProductionCompletedWork[]>([]);
   const [manualTaskHall, setManualTaskHall] = useState<ProductionHallAssignment>('');
   const [manualTaskTeams, setManualTaskTeams] = useState<Team[]>([]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setLiveTodayDate(getWarsawProductionPlanDate()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [processEngineerRoster, setProcessEngineerRoster] = useState<ProcessEngineerRosterEntry[]>(defaultProcessEngineerRoster);
   const [processEngineerDrafts, setProcessEngineerDrafts] = useState<ProcessEngineerDraft[]>([]);
   const [editingProcessEngineers, setEditingProcessEngineers] = useState(false);
@@ -823,7 +848,7 @@ export default function PrzygotowanieProdukcjiPage() {
   const requestedView = searchParams.get('view');
   const requestedWorkPlanView = normalizeProductionWorkPlanView(requestedView);
   const isPreparationAdmin = preparationAccess?.isAdmin === true;
-  const grantedTeamIds = preparationAccess?.teams ?? [];
+  const grantedTeamIds = useMemo(() => preparationAccess?.teams ?? [], [preparationAccess?.teams]);
   const canViewPlan = isPreparationAdmin || grantedTeamIds.includes('mechanics');
   const canAssignToolroomWork = isPreparationAdmin || grantedTeamIds.includes('mechanics');
   const materialAccess = isPreparationAdmin ? 'edit' : preparationAccess?.materialAccess ?? 'none';
@@ -861,7 +886,7 @@ export default function PrzygotowanieProdukcjiPage() {
   const visibleWorkPlanTeamIds = teamsForProductionWorkPlan(workPlanView);
   const visibleWorkPlanTeams = teamOptions.filter((team) => visibleWorkPlanTeamIds.includes(team.id) && (isPreparationAdmin || grantedTeamIds.includes(team.id)));
   const selectedManualTaskTeams = manualTaskTeams.filter((team) => visibleWorkPlanTeamIds.includes(team));
-  const showTaskReferences = activeView === 'work-plan' && visibleWorkPlanTeams.some(team => isProductionTaskReferenceTeam(team.id));
+  const showTaskReferences = activeView === 'work-plan' && workPlanStatus === 'open' && visibleWorkPlanTeams.some(team => isProductionTaskReferenceTeam(team.id));
   const canAssignManualTaskHall = selectedManualTaskTeams.some(isProductionTaskReferenceTeam);
   const hallFilter = normalizeProductionHallFilter(searchParams.get('hall'));
   const stationReference = useQuery<{ stationMappings: ProductionStationMapping[] }>({
@@ -980,6 +1005,7 @@ export default function PrzygotowanieProdukcjiPage() {
           setFileName('');
           setSheetName('');
           setTasks([]);
+          setMachineForms({});
           return;
         }
         if (data.session.session_date && data.session.session_date !== selectedPlanDate) return;
@@ -995,6 +1021,7 @@ export default function PrzygotowanieProdukcjiPage() {
               : remoteTask
           ));
         });
+        setMachineForms(data.machineForms ?? {});
       } catch (error) {
         if (active && !initialized) {
           const message = error instanceof Error ? error.message : 'Nie udało się wczytać przygotowania produkcji.';
@@ -1059,6 +1086,16 @@ export default function PrzygotowanieProdukcjiPage() {
       .then((data) => setHistory(data.history ?? []))
       .catch(() => undefined);
   }, [activeView, preparationAccess?.isAdmin]);
+
+  useEffect(() => {
+    if (activeView !== 'work-plan' || workPlanStatus !== 'done') return;
+    let active = true;
+    fetch('/api/przygotowanie-produkcji?recentCompleted=1', { cache: 'no-store' })
+      .then(response => response.ok ? response.json() as Promise<{ completed: ProductionCompletedWork[] }> : Promise.reject())
+      .then(data => { if (active) setRecentCompleted(data.completed ?? []); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [activeView, workPlanStatus]);
 
   useEffect(() => {
     if (!preparationAccess?.isAdmin || loadingSavedPlan) return;
@@ -1191,7 +1228,7 @@ export default function PrzygotowanieProdukcjiPage() {
         setImportError('Wybrany arkusz nie zawiera pozycji planu. Wybierz inną zakładkę.');
         return;
       }
-      const nextTasks = mergeImportedTasks(importedTasks, tasks);
+      const nextTasks = mergeImportedTasks(importedTasks, tasks, machineForms);
       const saved = await savePlan(nextTasks, workbookSource.fileName, selectedSheetName);
       if (!saved) return;
       setExpandedPlannedTasks([]);
@@ -1331,7 +1368,7 @@ export default function PrzygotowanieProdukcjiPage() {
   };
   const addManualTask = () => {
     const detail = manualTaskText.trim();
-    if (!detail || selectedManualTaskTeams.length === 0) return;
+    if (!detail || selectedManualTaskTeams.length === 0 || (manualTaskDueDate && !isProductionPlanDate(manualTaskDueDate))) return;
     const nextTasks = [...tasks, {
       id: `zadanie-reczne-${Date.now()}`,
       isCurrentPlan: false,
@@ -1343,7 +1380,10 @@ export default function PrzygotowanieProdukcjiPage() {
       highlighted: false,
       kinds: ['inne' as WorkKind],
       teams: selectedManualTaskTeams,
-      notes: canAssignManualTaskHall && manualTaskHall ? { [PRODUCTION_HALL_NOTE]: manualTaskHall } : {},
+      notes: {
+        ...(canAssignManualTaskHall && manualTaskHall ? { [PRODUCTION_HALL_NOTE]: manualTaskHall } : {}),
+        ...(manualTaskDueDate ? { [PRODUCTION_TASK_DUE_DATE_NOTE]: manualTaskDueDate } : {})
+      },
       teamProgress: {},
       done: false,
       material: '',
@@ -1354,6 +1394,7 @@ export default function PrzygotowanieProdukcjiPage() {
     }];
     setTasks(nextTasks);
     setManualTaskText('');
+    setManualTaskDueDate('');
     setManualTaskHall('');
     setManualTaskTeams([]);
     setShowManualTaskForm(false);
@@ -1368,10 +1409,21 @@ export default function PrzygotowanieProdukcjiPage() {
     return canAssignToolroomWork && !task.kinds.includes('anulowane') && !target.kinds.includes('anulowane');
   };
   const isWorkKindSelected = (task: Task, kind: WorkKind) => kind === 'powrot-formy-narzedziownia' && !isToolroomReturnTask(task)
-    ? tasks.some(child => toolroomParentId(child) === task.id && child.kinds.includes(kind) && !child.kinds.includes('anulowane'))
-    : task.kinds.includes(kind);
+    ? tasks.some(child => toolroomParentId(child) === task.id && child.kinds.includes(kind) && !child.kinds.includes('anulowane') && !isProductionTeamDone(child, 'mechanics'))
+    : task.kinds.includes(kind) && !isProductionTeamDone(task, productionKindOwner(kind) as Team);
   const toggleKind = (task: Task, kind: WorkKind) => {
     if (!canEditWorkKind(task, kind)) return;
+    if (task.kinds.includes(kind) && !isWorkKindSelected(task, kind)) {
+      mutateTask(task.id, { requeueKind: kind }, (current) => {
+        const team = productionKindOwner(kind) as Team;
+        const nextTask = {
+          ...current,
+          teamProgress: setProductionTeamCompletion(current.teamProgress, team, false)
+        };
+        return { ...nextTask, done: isProductionTaskDone({ ...nextTask, done: false }) };
+      });
+      return;
+    }
     if (isToolroomWorkKind(kind) && (task.isCurrentPlan || isToolroomReturnTask(task))) {
       const targetId = kind === 'powrot-formy-narzedziownia' && !isToolroomReturnTask(task)
         ? tasks.find(child => toolroomParentId(child) === task.id)?.id ?? toolroomReturnId(task.id)
@@ -1451,7 +1503,7 @@ export default function PrzygotowanieProdukcjiPage() {
     const workItems = planTaskWorkItems(task);
     const assignedItems = workItems.filter(item => item.teams.includes(team));
     if (assignedItems.length) {
-      assignedItems.forEach(item => toggleTeam(item, team));
+      assignedItems.forEach(item => isProductionTeamDone(item, team) ? toggleTeamDone(item, team) : toggleTeam(item, team));
     } else {
       const target = task.kinds.length ? task : workItems.find(isToolroomReturnTask) ?? task;
       toggleTeam(target, team);
@@ -1461,6 +1513,21 @@ export default function PrzygotowanieProdukcjiPage() {
     current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
   );
   const activeTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station && task.planGroup !== 'planned' && !isPanelGroupHeader(task)), [tasks]);
+  const visibleCompleted = useMemo(() => {
+    const recentDates = [...new Set([...recentCompleted.map(item => item.planDate), selectedPlanDate])].sort().reverse().slice(0, 6);
+    const local = tasks.flatMap(task => productionWorkEvents(task.notes)
+      .filter(event => {
+        if (event.revertedAt) return false;
+        const date = new Date(event.completedAt);
+        return !Number.isNaN(date.getTime()) && getWarsawProductionPlanDate(date) === selectedPlanDate;
+      })
+      .map(event => ({ ...event, station: task.station, detail: task.detail, planDate: selectedPlanDate })));
+    const unique = new Map([...recentCompleted, ...local].map(item => [item.id, item]));
+    return [...unique.values()]
+      .filter(item => recentDates.includes(item.planDate) && visibleWorkPlanTeamIds.includes(item.team as Team)
+        && (isPreparationAdmin || grantedTeamIds.includes(item.team as Team)))
+      .sort((left, right) => right.completedAt.localeCompare(left.completedAt));
+  }, [recentCompleted, tasks, selectedPlanDate, visibleWorkPlanTeamIds, isPreparationAdmin, grantedTeamIds]);
   const plannedTasks = useMemo(() => tasks.filter((task) => task.isCurrentPlan && task.station && task.planGroup === 'planned'), [tasks]);
   const visibleActiveTasks = useMemo(() => activeTasks.filter(task => matchesProductionPlanStation(task.station, stationSearch)), [activeTasks, stationSearch]);
   const visiblePlannedTasks = useMemo(() => plannedTasks.filter(task => matchesProductionPlanStation(task.station, stationSearch)), [plannedTasks, stationSearch]);
@@ -1469,7 +1536,8 @@ export default function PrzygotowanieProdukcjiPage() {
     ? selectedHistoryWeek
     : historyWeeks[0] ?? null;
   const currentHistoryWeekIndex = currentHistoryWeek ? historyWeeks.indexOf(currentHistoryWeek) : -1;
-  const visibleHistory = useMemo(() => history.filter((entry) => historyWeekStart(entry.plan_date) === currentHistoryWeek), [currentHistoryWeek, history]);
+  const visibleHistory = useMemo(() => history.filter((entry) => historyWeekStart(entry.plan_date) === currentHistoryWeek && !entry.summary), [currentHistoryWeek, history]);
+  const visibleSummaryHistory = useMemo(() => history.filter((entry) => historyWeekStart(entry.plan_date) === currentHistoryWeek && entry.summary), [currentHistoryWeek, history]);
   const historyWeekLabel = useMemo(() => {
     if (!currentHistoryWeek) return '';
     const start = new Date(`${currentHistoryWeek}T12:00:00Z`);
@@ -1483,8 +1551,8 @@ export default function PrzygotowanieProdukcjiPage() {
     const allDays = [
       ...history
         .filter((entry) => entry.plan_date !== selectedPlanDate)
-        .map((entry) => ({ date: entry.plan_date, tasks: entry.tasks })),
-      { date: selectedPlanDate, tasks }
+        .map((entry) => ({ date: entry.plan_date, tasks: entry.tasks, summary: entry.summary })),
+      { date: selectedPlanDate, tasks, summary: null }
     ];
     if (reportPeriod === 'all') return allDays;
     const from = new Date();
@@ -1495,20 +1563,30 @@ export default function PrzygotowanieProdukcjiPage() {
 
   const workReport = useMemo(() => {
     const totals = Object.fromEntries(reportKinds.map((kind) => [kind.id, { total: 0, done: 0 }])) as Record<ReportKind, { total: number; done: number }>;
-    reportDays.flatMap((entry) => entry.tasks).forEach((task) => {
+    reportDays.forEach((entry) => {
+      if (entry.summary) {
+        Object.entries(entry.summary.kinds).forEach(([kind, counts]) => {
+          if (!Object.prototype.hasOwnProperty.call(totals, kind)) return;
+          totals[kind as ReportKind].total += counts.total;
+          totals[kind as ReportKind].done += counts.done;
+        });
+        return;
+      }
+      entry.tasks.forEach((task) => {
       (task.kinds ?? []).forEach((kind) => {
         if (!Object.prototype.hasOwnProperty.call(totals, kind)) return;
         totals[kind as WorkKind].total += 1;
-        if (task.done) totals[kind as WorkKind].done += 1;
+        if (productionTaskDoneOnDate(task, entry.date)) totals[kind as WorkKind].done += 1;
       });
       if (preparesDistributionStation(task)) {
         totals['przygotowanie-stanowiska'].total += 1;
-        if (task.done) totals['przygotowanie-stanowiska'].done += 1;
+        if (productionTaskDoneOnDate(task, entry.date)) totals['przygotowanie-stanowiska'].done += 1;
       }
       if (restartsProcessAfterToolroom(task)) {
         totals['wznowienie-procesu'].total += 1;
-        if (task.done) totals['wznowienie-procesu'].done += 1;
+        if (productionTaskDoneOnDate(task, entry.date)) totals['wznowienie-procesu'].done += 1;
       }
+      });
     });
     return totals;
   }, [reportDays]);
@@ -1517,7 +1595,7 @@ export default function PrzygotowanieProdukcjiPage() {
     .map((entry) => ({
       dateKey: entry.date,
       date: new Date(`${entry.date}T12:00:00`).toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }),
-      prace: entry.tasks.reduce((total, task) => total + (task.kinds?.length ?? 0) + (preparesDistributionStation(task) ? 1 : 0) + (restartsProcessAfterToolroom(task) ? 1 : 0), 0)
+      prace: entry.summary?.assignments ?? entry.tasks.reduce((total, task) => total + (task.kinds?.length ?? 0) + (preparesDistributionStation(task) ? 1 : 0) + (restartsProcessAfterToolroom(task) ? 1 : 0), 0)
     }))
     .sort((left, right) => left.dateKey.localeCompare(right.dateKey)), [reportDays]);
 
@@ -1526,7 +1604,7 @@ export default function PrzygotowanieProdukcjiPage() {
       .map((entry) => ({
         dateKey: entry.date,
         date: new Date(`${entry.date}T12:00:00`).toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }),
-        value: entry.tasks.reduce((total, task) => {
+        value: entry.summary?.kinds[kind.id]?.total ?? entry.tasks.reduce((total, task) => {
           if (kind.id === 'przygotowanie-stanowiska') {
             return total + (preparesDistributionStation(task) ? 1 : 0);
           }
@@ -1541,6 +1619,8 @@ export default function PrzygotowanieProdukcjiPage() {
   const processTasksByEngineer = useMemo(() => {
     const processTasks = tasks.filter(
       (task) => !isPanelGroupHeader(task) && task.teams.includes('process')
+        && !isProductionTeamDone(task, 'process') && !task.kinds.includes('anulowane')
+        && (!productionTaskDueDate(task.notes) || productionTaskDueDate(task.notes) <= selectedPlanDate)
     );
     return new Map(
       processEngineers.map((engineer) => [
@@ -1548,7 +1628,7 @@ export default function PrzygotowanieProdukcjiPage() {
         processTasks.filter((task) => task.notes.processAssignee === engineer)
       ])
     );
-  }, [processEngineers, tasks]);
+  }, [processEngineers, tasks, selectedPlanDate]);
 
   const removeTaskFromTeam = (task: Task, team: Team) => {
     mutateTask(task.id, {
@@ -2255,7 +2335,7 @@ export default function PrzygotowanieProdukcjiPage() {
                 {visibleActiveTasks.map((task, index) => {
                   const startsGroup = index === 0 || visibleActiveTasks[index - 1].planGroup !== task.planGroup;
                   const workItems = planTaskWorkItems(task);
-                  const assignedTeams = new Set(workItems.flatMap(item => item.teams));
+                  const assignedTeams = new Set(workItems.flatMap(item => item.teams.filter(team => !isProductionTeamDone(item, team))));
                   return <div className="space-y-3" key={task.id}>
                   {startsGroup && task.planGroup !== 'standard' && <div className={cn('rounded-lg border px-3 py-2 text-sm font-bold uppercase tracking-wide', task.planGroup === 'emergency' ? 'border-[rgba(239,68,68,0.65)] bg-[rgba(239,68,68,0.12)] text-red-300' : 'border-[rgba(183,122,255,0.65)] bg-[rgba(183,122,255,0.12)] text-[#debaff]')}>{planGroupLabel[task.planGroup]}</div>}
                 <article data-cancelled={task.kinds.includes('anulowane') || undefined} className={cn('rounded-lg border border-border bg-surface2 p-4', task.highlighted && 'border-[rgba(245,197,66,0.65)] bg-[rgba(245,197,66,0.07)]', task.done && 'border-[rgba(34,197,94,0.65)] bg-[rgba(34,197,94,0.07)]')}>
@@ -2265,6 +2345,7 @@ export default function PrzygotowanieProdukcjiPage() {
                       {task.kinds.includes('anulowane') && <p className="cancelled-task-label">ANULOWANE</p>}
                       <p className={cn('text-[10px] font-bold uppercase tracking-wide text-[var(--brand)]', task.highlighted && 'text-zinc-800')}>Indeks</p>
                       <div className={cn('flex min-h-11 w-full items-center justify-center rounded-lg border border-[rgba(255,122,0,0.55)] bg-bg px-3 text-center text-base font-bold text-[var(--brand)]', task.highlighted && 'border-yellow-500 bg-yellow-200 text-zinc-950')}>{task.station}</div>
+                      {machineForms[task.station] && <p className="text-[11px] text-dim">Na maszynie: {machineForms[task.station].detail} · {machineForms[task.station].stage === 'started' ? 'rozruch wykonany' : 'forma zawieszona, rozruch niewykonany'}</p>}
                       <div><textarea className={cn('min-h-14 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm font-semibold text-[var(--brand)] outline-none focus:border-[rgba(255,122,0,0.65)]', task.highlighted && 'border-yellow-500 bg-yellow-100 text-zinc-950 focus:border-yellow-600')} readOnly={!isPreparationAdmin} value={task.detail} onChange={(event) => updateTask(task.id, { detail: event.target.value })} /><p className={cn('mt-1 text-xs text-dim', task.highlighted && 'text-zinc-700')}>Ilość: <strong className={cn('text-title', task.highlighted && 'text-zinc-950')}>{task.quantity || '---'}</strong> &nbsp; Norma: <strong className={cn('text-title', task.highlighted && 'text-zinc-950')}>{task.norm || '---'}</strong></p></div>
                     </section>
                     <section className="technical-texture-panel rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
@@ -2290,7 +2371,7 @@ export default function PrzygotowanieProdukcjiPage() {
               <div className="divide-y divide-[rgba(183,122,255,0.22)]">{visiblePlannedTasks.map((task) => {
                 const expanded = expandedPlannedTasks.includes(task.id);
                 const workItems = planTaskWorkItems(task);
-                const assignedTeams = new Set(workItems.flatMap(item => item.teams));
+                    const assignedTeams = new Set(workItems.flatMap(item => item.teams.filter(team => !isProductionTeamDone(item, team))));
                 const assigned = workItems.some(assignedForTheDay);
                 return <div className={cn(expanded && 'bg-[rgba(183,122,255,0.055)]')} key={task.id}>
                   <button
@@ -2335,18 +2416,36 @@ export default function PrzygotowanieProdukcjiPage() {
               {stationReference.isError && <button className="inline-flex min-h-11 items-center gap-2 text-xs text-[var(--brand)]" onClick={() => void stationReference.refetch()} type="button"><RotateCcw className="h-4 w-4" />Ponów odczyt przypisania stanowisk</button>}
             </div>}
             {activeView === 'work-plan' && isPreparationAdmin && <Card className="border-border bg-surface2 p-3"><div className="flex items-center justify-between gap-3"><div><p className="font-semibold text-title">Zadania dodatkowe</p><p className="mt-0.5 text-xs text-dim">Dodaj pracę niezwiązaną z konkretnym planem lub maszyną.</p></div><Button className="min-h-9 shrink-0 px-3 py-2 text-xs" onClick={() => setShowManualTaskForm((current) => !current)} type="button" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" />Dodaj zadanie</Button></div>{showManualTaskForm && <div className="mt-3 grid gap-2 border-t border-border pt-3 lg:grid-cols-[minmax(0,1fr)_auto]"><textarea className="min-h-20 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm text-title outline-none focus:border-[rgba(255,122,0,0.65)]" onChange={(event) => setManualTaskText(event.target.value)} placeholder="Np. Posprzątać magazyn lub przekazać formę do narzędziowni" value={manualTaskText} /><div className="space-y-2">{canAssignManualTaskHall && <TaskHallSelect value={manualTaskHall} onChange={setManualTaskHall} />}<div className="grid grid-cols-2 gap-1.5">{visibleWorkPlanTeams.map((team) => <label className={cn('flex min-h-9 items-center gap-2 rounded border border-border px-2 text-xs font-semibold text-dim', manualTaskTeams.includes(team.id) && 'border-[rgba(255,122,0,0.85)] bg-[rgba(255,122,0,0.12)] text-title')} key={team.id}><input checked={manualTaskTeams.includes(team.id)} onChange={() => setManualTaskTeams((current) => current.includes(team.id) ? current.filter((item) => item !== team.id) : [...current, team.id])} type="checkbox" />{team.label}</label>)}</div><div className="flex justify-end gap-2"><Button className="min-h-9 px-3 py-2 text-xs" onClick={() => { setShowManualTaskForm(false); setManualTaskText(''); setManualTaskTeams([]); }} type="button" variant="ghost">Anuluj</Button><Button className="min-h-9 px-3 py-2 text-xs" disabled={!manualTaskText.trim() || selectedManualTaskTeams.length === 0} onClick={addManualTask} type="button" variant="primaryEmber">Dodaj</Button></div></div></div>}</Card>}
+            {activeView === 'work-plan' && isPreparationAdmin && showManualTaskForm && <label className="block max-w-xs text-xs font-semibold text-dim">Termin zadania dodatkowego
+              <Input className="mt-1" type="date" min={todayPlanDate} value={manualTaskDueDate} onChange={event => setManualTaskDueDate(event.target.value)} />
+              <span className="mt-1 block font-normal">Puste pole oznacza bieżący dzień.</span>
+            </label>}
+            {activeView === 'work-plan' && <div className="flex items-center gap-2 border-b border-border pb-3" role="group" aria-label="Status prac">
+              <Button type="button" variant={workPlanStatus === 'open' ? 'primaryEmber' : 'outline'} onClick={() => setWorkPlanStatus('open')}>Do zrobienia</Button>
+              <Button type="button" variant={workPlanStatus === 'done' ? 'primaryEmber' : 'outline'} onClick={() => setWorkPlanStatus('done')}>Wykonane</Button>
+            </div>}
+            {activeView === 'work-plan' && workPlanStatus === 'done' && <div className="space-y-2">
+              {visibleCompleted.length === 0 ? <EmptyState title="Brak wykonanych prac" description="Wykonane zadania z ostatnich sześciu dni pojawią się tutaj." /> : visibleCompleted.map(item => <div key={item.id} className="rounded border border-emerald-500/50 bg-emerald-500/10 p-3 text-sm">
+                <p className="font-semibold text-title">{item.station} · {item.detail}</p>
+                <p className="mt-1 text-xs text-dim">{teamLabel(item.team as Team)} · {item.kinds.map(kind => workKinds.find(option => option.id === kind)?.label ?? kind).join(', ')}</p>
+                <p className="mt-1 text-xs font-semibold text-emerald-300">Wykonane {new Date(item.completedAt).toLocaleString('pl-PL')} · {item.completedBy || 'Nieznany użytkownik'}</p>
+              </div>)}
+            </div>}
             {activeView === 'work-plan' && visibleWorkPlanTeams.length === 0 && <EmptyState title="Brak przypisanych sekcji" description="Administrator nie przypisał temu kontu żadnej sekcji przygotowania produkcji." />}
-            {activeView === 'work-plan' && <div className="production-queues grid w-full gap-2 text-[11px] lg:grid-cols-3">{visibleWorkPlanTeams.map((team) => {
+            {activeView === 'work-plan' && workPlanStatus === 'open' && <div className="production-queues grid w-full gap-2 text-[11px] lg:grid-cols-3">{visibleWorkPlanTeams.map((team) => {
               const showTeamReferences = isProductionTaskReferenceTeam(team.id);
               const queue = (showTeamReferences ? hallFilteredTasks : tasks).filter((task) => {
                 if (isPanelGroupHeader(task)) return false;
                 if (!task.teams.includes(team.id)) return false;
+                if (isProductionTeamDone(task, team.id) || task.kinds.includes('anulowane')) return false;
+                const dueDate = productionTaskDueDate(task.notes);
+                if (dueDate && dueDate > selectedPlanDate) return false;
                 return !(task.kinds.length === 1 && task.kinds[0] === 'przeglad-a' && ['mechanics', 'distribution', 'technician'].includes(team.id));
               });
               const columnCopyId = `column-${team.id}`;
               return <Card className="overflow-hidden p-0" key={team.id}><div className="h-[3px]" style={{ backgroundColor: team.color }} /><div className="flex items-center justify-between border-b border-border px-4 py-3"><div className="flex items-center gap-2"><Wrench className="h-4 w-4" style={{ color: team.color }} /><h2 className="font-semibold text-title">{team.label}</h2></div><div className="flex items-center gap-2"><button aria-label={`Kopiuj wszystkie zadania: ${team.label}`} className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-lg border border-border text-dim transition active:scale-[0.98] hover:border-[rgba(255,122,0,0.65)] hover:text-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40 md:h-8 md:w-8 md:rounded" disabled={queue.length === 0} onClick={() => void copyTeamQueue(team.id, queue)} title="Kopiuj całą kolumnę" type="button"><Copy className="h-5 w-5 md:h-4 md:w-4" /></button><Badge>{queue.filter((task) => !isProductionTeamDone(task, team.id)).length}</Badge></div></div>{copiedQueueTask === columnCopyId && <p className="border-b border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-400">Skopiowano całą kolumnę.</p>}<div className={cn('space-y-2 p-3', ['mechanics', 'distribution', 'graphics', 'technician'].includes(team.id) && 'outlined-task-list', team.id === 'distribution' && 'distribution-task-list')}>{queue.length === 0 ? <p className="text-sm text-dim">Brak przypisanych prac.</p> : queue.map((task) => { const copyId = `${team.id}-${task.id}`; const kindLabels = [...new Set(kindsForTeam(task, team.id))].filter((id) => id !== 'anulowane').map((id) => workKinds.find((item) => item.id === id)?.label).filter(Boolean).join(', '); const editing = editingQueueTask === copyId; const teamDone = isProductionTeamDone(task, team.id); const waitingTeams = productionWaitingTeams(task, team.id); const teamReady = isProductionStartupTeam(team.id) && waitingTeams.length === 0 && !teamDone && !task.kinds.includes('anulowane'); return <div className={cn('overflow-hidden rounded-lg border bg-bg transition', teamDone ? 'border-emerald-500/65 bg-emerald-500/[0.08]' : 'border-border', teamReady && 'border-emerald-400/80 bg-emerald-500/[0.07] shadow-[0_0_18px_rgba(34,197,94,0.18)]')} data-cancelled={task.kinds.includes('anulowane') || undefined} data-team-done={teamDone && !task.kinds.includes('anulowane') || undefined} key={task.id}><button aria-label={`Kopiuj zadanie ${task.station}`} className={cn('w-full select-text p-3 text-left hover:bg-surface2', teamDone && 'bg-emerald-500/[0.04]')} onClick={() => void copyQueueTask(task, team.id)} type="button">{task.kinds.includes('anulowane') && <p className="cancelled-task-label">ANULOWANE</p>}<TaskTitle task={task} team={team.id} />{showTeamReferences && <p className="mt-1 text-[11px] font-semibold text-[var(--t-muted)]">{productionHallLabel(hallByTask.get(task.id))}</p>}{taskMetrics(task, team.id) && <p className="mt-1 text-xs text-body">{taskMetrics(task, team.id)}</p>}<TaskWorkSummary kindLabels={kindLabels} task={task} team={team.id} />{team.id === 'process' && <DistributionWorkComment task={task} />}{taskComment(task, team.id) && <p className="mt-1 whitespace-pre-line break-words text-xs text-body">{taskComment(task, team.id)}</p>}{team.id === 'process' && <ProcessMaterialStatus task={task} />}<TeamProgressStatus task={task} team={team.id} />{copiedQueueTask === copyId && <p className="mt-2 text-xs font-semibold text-emerald-400">Skopiowano do schowka.</p>}</button>{isPreparationAdmin && team.id === 'process' && <div className="border-t border-border p-2"><SelectField aria-label={`Przypisz inżyniera do zadania ${task.station}`} className="min-h-9 rounded-lg border-[rgba(47,181,240,0.35)] px-2 py-1.5 text-xs" onChange={(event) => assignProcessEngineer(task, event.target.value)} value={task.notes.processAssignee ?? ''}><option value="">Nieprzypisane</option>{(['1', '2'] as const).map((shift) => { const shiftEngineers = processEngineerRoster.filter((engineer) => engineer.active && engineer.shift === shift); return shiftEngineers.length > 0 ? <optgroup key={shift} label={`Zmiana ${shift}`}>{shiftEngineers.map((engineer) => <option key={engineer.name} value={engineer.name}>{engineer.name}</option>)}</optgroup> : null; })}</SelectField></div>}{team.id === 'distribution' && <DistributionStageControls task={task} canEdit={isPreparationAdmin || grantedTeamIds.includes('distribution')} onToggle={(stage) => toggleDistributionStage(task, stage)} onToggleTask={() => toggleTeamDone(task, 'distribution')} />}{showTeamReferences && !isManualTask(task) && <TaskTechnologyPreview key={`${selectedPlanDate}-${task.station}-${task.detail}`} detail={task.detail} station={task.station} planDate={selectedPlanDate} areaId={hallByTask.get(task.id) === 'hala-1' || hallByTask.get(task.id) === 'hala-2' ? hallByTask.get(task.id) : undefined} />}{team.id === 'distribution' && <div className="distribution-comment-footer border-t border-emerald-500/20 bg-bg px-3 py-3"><DistributionWorkComment footer task={task} />{(isPreparationAdmin || grantedTeamIds.includes('distribution')) && <DistributionWorkCommentEditor draft={editingDistributionCommentTask === task.id ? distributionCommentDraft : ''} editing={editingDistributionCommentTask === task.id} onBegin={() => beginDistributionCommentEditor(task)} onCancel={closeDistributionCommentEditor} onChange={setDistributionCommentDraft} onSave={() => saveDistributionComment(task)} task={task} />}</div>}{(team.id !== 'distribution' || isPreparationAdmin) && <div className="production-task-actions flex justify-end gap-1.5 border-t border-border p-2">{team.id !== 'distribution' && <TeamDoneButton onToggle={() => toggleTeamDone(task, team.id)} task={task} team={team.id} />}{isPreparationAdmin && <><button aria-label={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} className="flex h-11 w-auto min-w-11 touch-manipulation items-center justify-center rounded-lg border border-border px-3 text-dim transition active:scale-[0.98] hover:border-[rgba(255,122,0,0.65)] hover:text-title md:h-8 md:w-8 md:min-w-0 md:rounded md:px-0" onClick={() => editing ? closeQueueTaskEditor() : beginQueueTaskEditor(task, copyId)} title={editing ? 'Zamknij edycję' : 'Edytuj zadanie'} type="button"><Pencil className="h-5 w-5 md:h-4 md:w-4" /><span className="ml-1.5 text-[11px] font-bold md:hidden">{editing ? 'Zamknij' : 'Edytuj'}</span></button><button aria-label="Usuń zadanie z tego działu" className="flex h-11 w-auto min-w-11 touch-manipulation items-center justify-center rounded-lg border border-red-500/45 px-3 text-red-300 transition active:scale-[0.98] hover:bg-red-500/10 md:h-8 md:w-8 md:min-w-0 md:rounded md:px-0" onClick={() => { removeTaskFromTeam(task, team.id); closeQueueTaskEditor(); }} title="Usuń zadanie z tego działu" type="button"><X className="h-5 w-5 md:h-4 md:w-4" /><span className="ml-1.5 text-[11px] font-bold md:hidden">Usuń</span></button></>}</div>}{isPreparationAdmin && editing && <div className="space-y-3 border-t border-border p-3"><div className="space-y-2 border-b border-border pb-3">{showTeamReferences && <TaskHallSelect automatic value={normalizeProductionHallAssignment(task.notes[PRODUCTION_HALL_NOTE])} onChange={hall => assignTaskHall(task, hall)} />}<p className="text-[11px] font-bold uppercase tracking-wide text-title">Dane pozycji</p><label className="block text-xs font-semibold text-dim">Wtryskarka / stanowisko<Input className="mt-1" value={queueTaskDraft?.station ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, station: event.target.value } : current)} /></label><label className="block text-xs font-semibold text-dim">Indeks / nazwa produktu<Input className="mt-1" value={queueTaskDraft?.detail ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, detail: event.target.value } : current)} /></label><div className="grid grid-cols-2 gap-2"><label className="block text-xs font-semibold text-dim">Ilość<Input className="mt-1" inputMode="decimal" value={queueTaskDraft?.quantity ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, quantity: event.target.value } : current)} /></label><label className="block text-xs font-semibold text-dim">Norma<Input className="mt-1" inputMode="decimal" value={queueTaskDraft?.norm ?? ''} onChange={(event) => setQueueTaskDraft((current) => current ? { ...current, norm: event.target.value } : current)} /></label></div><div className="grid grid-cols-2 gap-2"><Button className="min-h-10 px-3 py-2 text-xs" disabled={!queueTaskDraft?.station.trim() || !queueTaskDraft?.detail.trim()} onClick={() => saveQueueTaskDetails(task)} type="button"><Check className="mr-1.5 h-3.5 w-3.5" />Zapisz dane</Button><Button className="min-h-10 px-3 py-2 text-xs" onClick={closeQueueTaskEditor} type="button" variant="outline"><X className="mr-1.5 h-3.5 w-3.5" />Anuluj</Button></div></div><p className="text-[11px] font-bold uppercase tracking-wide text-title">Rodzaj pracy</p><div className="grid grid-cols-2 gap-1.5">{editableWorkKinds(task).map((kind) => <label className={cn('flex min-h-8 items-center gap-2 rounded border border-border px-2 text-[11px] font-semibold text-dim', isWorkKindSelected(task, kind.id) && 'border-[rgba(255,122,0,0.65)] bg-[rgba(255,122,0,0.12)] text-title')} key={kind.id}><input disabled={!canEditWorkKind(task, kind.id)} checked={isWorkKindSelected(task, kind.id)} onChange={() => toggleKind(task, kind.id)} type="checkbox" />{kind.label}</label>)}</div><label className="block text-xs font-semibold text-dim">Uwagi dla: {team.label}<Input readOnly={!isPreparationAdmin} className="mt-1" value={task.notes[team.id] ?? ''} onChange={(event) => updateTaskNote(task.id, team.id, event.target.value)} placeholder="Dodaj ustalenie" /></label><button className="flex w-full items-center justify-center gap-2 rounded border border-red-500/45 px-3 py-2 text-xs font-semibold text-red-300" onClick={() => { clearTaskWork(task); closeQueueTaskEditor(); }} type="button"><Trash2 className="h-3.5 w-3.5" />Usuń całą pracę z kolejek</button></div>}</div>; })}</div></Card>;
             })}</div>}
-            {isPreparationAdmin && workPlanView === 'work-plan-technology' && <section className="overflow-hidden border-y border-[rgba(47,181,240,0.3)] bg-[rgba(8,11,16,0.72)]">
+            {isPreparationAdmin && workPlanStatus === 'open' && workPlanView === 'work-plan-technology' && <section className="overflow-hidden border-y border-[rgba(47,181,240,0.3)] bg-[rgba(8,11,16,0.72)]">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[rgba(47,181,240,0.25)] px-4 py-3">
                 <div className="flex items-center gap-2"><Wrench className="h-4 w-4 text-[#2fb5f0]" /><h2 className="font-semibold text-title">Przydział inżynierów procesu</h2></div>
                 <button className="flex min-h-8 items-center gap-1.5 rounded border border-[rgba(47,181,240,0.35)] px-3 text-xs font-semibold text-[#8bd9f8] transition hover:border-[rgba(47,181,240,0.75)] hover:bg-[rgba(47,181,240,0.08)]" onClick={() => editingProcessEngineers ? setEditingProcessEngineers(false) : beginProcessEngineersEdit()} type="button"><Pencil className="h-3.5 w-3.5" />{editingProcessEngineers ? 'Zamknij edycję' : 'Edytuj skład'}</button>
@@ -2499,7 +2598,9 @@ export default function PrzygotowanieProdukcjiPage() {
               <Button disabled={currentHistoryWeekIndex <= 0} onClick={() => setSelectedHistoryWeek(historyWeeks[currentHistoryWeekIndex - 1])} type="button" variant="outline">Nowszy tydzień<ChevronRight className="ml-2 h-4 w-4" /></Button>
             </div>
           </div>}
-          <WorkHistoryDashboard history={visibleHistory} onDeleteDay={(planDate) => void deleteHistoryDay(planDate)} />
+          {visibleSummaryHistory.length > 0 && <Card className="space-y-2 p-4"><h2 className="font-semibold text-title">Podsumowania archiwalne</h2>{visibleSummaryHistory.map(entry => <div key={entry.plan_date} className="flex flex-wrap items-center justify-between gap-2 border-t border-border py-2 text-sm"><span>{new Date(`${entry.plan_date}T12:00:00`).toLocaleDateString('pl-PL')}</span><span>{entry.summary?.assignments ?? 0} przypisań · {entry.summary?.completedEvents ?? 0} wykonań · {entry.summary?.missedRecurring ?? 0} cyklicznych niewykonanych</span></div>)}</Card>}
+          {visibleHistory.some(entry => entry.plan_date < todayPlanDate && entry.tasks.some(task => task.station === RECURRING_TASK_STATION && !task.done)) && <Card className="space-y-2 p-4"><h2 className="font-semibold text-title">Niewykonane zadania cykliczne</h2>{visibleHistory.flatMap(entry => entry.plan_date < todayPlanDate ? entry.tasks.filter(task => task.station === RECURRING_TASK_STATION && !task.done).map(task => <p className="border-t border-border pt-2 text-sm text-dim" key={`${entry.plan_date}-${task.id}`}>{entry.plan_date} · {task.detail} · Niewykonane</p>) : [])}</Card>}
+          {visibleHistory.length > 0 && <WorkHistoryDashboard history={visibleHistory} onDeleteDay={(planDate) => void deleteHistoryDay(planDate)} />}
           <Card className="overflow-hidden p-0"><div className="border-b border-border px-5 py-4"><p className="font-semibold text-title">Historia planów</p><p className="mt-1 text-sm text-dim">Końcowe przypisania z każdego dnia, gotowe do późniejszych analiz.</p></div>{history.length === 0 ? <div className="px-5 py-8 text-sm text-dim">Brak zapisanych dni. Pierwszy snapshot pojawi się po rozpoczęciu kolejnego dnia.</div> : <div className="divide-y divide-border">{visibleHistory.map((entry) => { const counts = entry.tasks.flatMap((task) => Array.isArray(task.kinds) ? task.kinds : []).reduce<Record<string, number>>((result, kind) => ({ ...result, [kind]: (result[kind] ?? 0) + 1 }), {}); return <div className="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between" key={entry.plan_date}><div><p className="font-semibold text-title">{new Date(`${entry.plan_date}T12:00:00`).toLocaleDateString('pl-PL')}</p><p className="mt-1 text-xs text-dim">{entry.file_name || 'Plan produkcyjny'}{entry.plan_sheet ? ` · arkusz ${entry.plan_sheet}` : ''} · {entry.tasks.length} przypisań</p></div><div className="flex flex-wrap gap-2">{Object.entries(counts).map(([kind, count]) => <Badge key={kind}>{workKinds.find((item) => item.id === kind)?.label ?? kind}: {count}</Badge>)}</div></div>; })}</div>}</Card>
         </TabsContent>
         <TabsContent value="report" className="production-report space-y-4">

@@ -30,6 +30,7 @@ const accessDeclarations = [
 
 export const accessFixtureSource = `
 export function resolveView(preparationAccess, requestedView = null) {
+  const useMemo = (calculate) => calculate();
   ${accessDeclarations}
   return { activeView, isPreparationAdmin, canViewPlan, workPlanView };
 }`;
@@ -52,9 +53,11 @@ export function PlanFixture({ access, requestedView = null, tasks: initialTasks,
   const workbookSource = null;
   const fileName = 'plan-test.xlsx';
   const sheetName = 'Plan';
+  const machineForms = {};
   const importError = null;
   const preparePlanImport = onMutation;
   const clearAllAssignments = onMutation;
+  const toggleTeamDone = onMutation;
   const updateTask = onMutation;
   const saveTaskMutation = (taskId, mutation) => onMutation({ taskId, mutation });
   ${['mutateTask', 'updateTaskNote', 'canEditWorkKind', 'isWorkKindSelected', 'toggleKind', 'toggleTeam', 'planTaskWorkItems', 'togglePlanTeam'].map(name => declaration(name)).join('\n')}
