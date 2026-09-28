@@ -623,15 +623,17 @@ export const removeOriginalInventoryPalletSet = async (batchId: string): Promise
 export const getOriginalInventory = async (dateKey?: string): Promise<OriginalInventoryEntry[]> =>
   appRequest('getOriginalInventory', dateKey ? { dateKey } : undefined);
 
+let originalInventoryCatalogRefreshToken: string | undefined;
+
 export const getOriginalInventoryCatalog = async (): Promise<OriginalInventoryCatalogEntry[]> =>
-  appRequest('getOriginalInventoryCatalog');
+  appRequest('getOriginalInventoryCatalog', { catalogRefreshToken: originalInventoryCatalogRefreshToken });
 
 export const searchOriginalInventoryCatalog = async (
   query: string,
   limit = 24,
   signal?: AbortSignal
 ): Promise<OriginalInventoryCatalogEntry[]> =>
-  appRequest('searchOriginalInventoryCatalog', { query, limit }, signal);
+  appRequest('searchOriginalInventoryCatalog', { query, limit, catalogRefreshToken: originalInventoryCatalogRefreshToken }, signal);
 
 export const getOriginalInventorySilosConfig = async (): Promise<OriginalInventorySiloConfig[]> =>
   appRequest('getOriginalInventorySilosConfig');
@@ -811,7 +813,9 @@ export const importOriginalInventoryErpSnapshotFile = async (
     throw new Error(code);
   }
 
-  return response.json() as Promise<OriginalInventoryErpSnapshotImportResult>;
+  const result = await response.json() as OriginalInventoryErpSnapshotImportResult;
+  originalInventoryCatalogRefreshToken = result.catalogRefreshToken;
+  return result;
 };
 
 export const removeOriginalInventoryErpSnapshot = async (snapshotDate: string): Promise<void> =>

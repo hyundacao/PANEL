@@ -1,5 +1,7 @@
 'use client';
 import PalletInventoryEditor from '@/components/planowanie-zapotrzebowania/PalletInventoryEditor';
+import { SpisErpAvailability } from '@/components/planowanie-zapotrzebowania/SpisErpAvailability';
+import { ErpCatalogImportNotice } from '@/components/planowanie-zapotrzebowania/ErpCatalogImportNotice';
 import { getOriginalInventoryPalletSets, addOriginalInventoryPalletSet } from '@/lib/api';
 import { isPalletCount, palletSetError, palletSetFingerprint, palletSetTotals, palletInventoryError, parsePalletSource } from '@/lib/planowanie-zapotrzebowania/palletSets';
 
@@ -32,7 +34,7 @@ import {
   saveOriginalInventorySiloEntry,
   updateOriginalInventory
 } from '@/lib/api';
-import type { OriginalInventoryEntry, OriginalInventoryErpSnapshotEntry, OriginalInventoryGrindTask } from '@/lib/api/types';
+import type { OriginalInventoryEntry, OriginalInventoryErpSnapshotEntry, OriginalInventoryGrindTask, OriginalInventoryCatalogSyncResult } from '@/lib/api/types';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -883,6 +885,7 @@ export default function SpisRzeczywisty() {
     currentRows: number;
   } | null>(null);
   const [erpSnapshotImportPreparing, setErpSnapshotImportPreparing] = useState(false);
+  const [lastErpCatalogSync, setLastErpCatalogSync] = useState<{ date: string; result: OriginalInventoryCatalogSyncResult } | null>(null);
   const [form, setForm] = useState({
     name: '',
     qty: '',
@@ -970,10 +973,18 @@ export default function SpisRzeczywisty() {
     queryFn: () => getOriginalInventorySiloEntries(spisDate),
     enabled: Boolean(spisDate)
   });
-  const { data: grindTasks = [], isLoading: isGrindTasksLoading, isError: isGrindTasksError } = useQuery({
+  const {
+    data: grindTasks = [],
+    isLoading: isGrindTasksLoading,
+    isPending: isGrindTasksPending,
+    isError: isGrindTasksError,
+    refetch: refetchGrindTasks
+  } = useQuery({
     queryKey: ['original-inventory-grind-tasks'],
     queryFn: getOriginalInventoryGrindTasks,
-    enabled: activeTab === 'do-zmielenia' || activeTab === 'raporty' || activeTab === 'stany-erp' || activeTab === 'alerty'
+    enabled: activeTab === 'spis' || activeTab === 'do-zmielenia' || activeTab === 'raporty' || activeTab === 'stany-erp' || activeTab === 'alerty',
+    staleTime: activeTab === 'spis' ? 60_000 : 0,
+    gcTime: 30 * 60 * 1000
   });
   const { data: grindTargetSourceMaterials = [] } = useQuery({
     queryKey: ['catalog'],
@@ -1003,7 +1014,9 @@ export default function SpisRzeczywisty() {
   const {
     data: erpSnapshotState = { items: [] as OriginalInventoryErpSnapshotEntry[], migrationRequired: false },
     isLoading: isErpSnapshotLoading,
-    isError: isErpSnapshotError
+    isPending: isErpSnapshotPending,
+    isError: isErpSnapshotError,
+    refetch: refetchErpSnapshot
   } = useQuery({
     queryKey: ['spis-oryginalow-erp-snapshot', spisDate],
     queryFn: async () => {
@@ -1022,7 +1035,10 @@ export default function SpisRzeczywisty() {
         throw error;
       }
     },
-    enabled: Boolean(spisDate) && (activeTab === 'stany-erp' || activeTab === 'raporty' || activeTab === 'alerty'),
+    enabled: Boolean(spisDate) && (activeTab === 'spis' || activeTab === 'stany-erp' || activeTab === 'raporty' || activeTab === 'alerty'),
+    // Search text is deliberately not part of this query: reuse the day's stock.
+    staleTime: activeTab === 'spis' ? 5 * 60 * 1000 : 0,
+    gcTime: 30 * 60 * 1000,
     retry: false
   });
   const {
@@ -1528,6 +1544,7 @@ export default function SpisRzeczywisty() {
   };
   const handleErpSnapshotFileChange = async (file: File | null) => {
     resetErpSnapshotImportState();
+    setLastErpCatalogSync(null);
     if (!file) return;
     if (readOnly) {
       toast({ title: 'Brak uprawnien do importu stanow ERP.', tone: 'error' });
@@ -1583,10 +1600,13 @@ export default function SpisRzeczywisty() {
         snapshotDate: spisDate
       });
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-erp-snapshot', spisDate] });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-local'] });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-search'] });
       resetErpSnapshotImportState();
+      setLastErpCatalogSync(result.catalogSync ? { date: result.snapshotDate, result: result.catalogSync } : null);
       toast({
         title: 'Wgrano stany ERP',
-        description: `Pozycji: ${result.inserted}. Nadpisano poprzedni snapshot z dnia: ${result.replaced}.`,
+        description: `Pozycji: ${result.inserted}. Nowe kartoteki: ${result.catalogSync?.added ?? 0}.${result.catalogSync?.warningCount ? ' Uwagi do kartotek są pod importem.' : ''}`,
         tone: 'success'
       });
     } catch (err) {
@@ -3565,13 +3585,21 @@ export default function SpisRzeczywisty() {
                     Aktualnie spisane: {matchedExisting.total} {matchedExisting.unit}
                   </p>
                 )}
-                {matchedErpSnapshot && (
-                  <p className="mt-1 text-xs text-dim">
-                    ERP na dzien {spisDate}: stan rzeczywisty {formatQty(matchedErpSnapshot.realQty)}{' '}
-                    {matchedErpSnapshot.unit}, stan do dyspozycji{' '}
-                    {formatQty(matchedErpSnapshot.availableQty)} {matchedErpSnapshot.unit}
-                  </p>
-                )}
+                <SpisErpAvailability
+                  name={form.name}
+                  date={spisDate}
+                  snapshot={matchedErpSnapshot}
+                  hasSnapshot={erpSnapshotEntries.length > 0}
+                  loading={isErpSnapshotPending}
+                  error={isErpSnapshotError}
+                  migrationRequired={erpSnapshotMigrationRequired}
+                  reservationsLoading={isGrindTasksPending}
+                  reservationsError={isGrindTasksError}
+                  onRetry={() => {
+                    void refetchErpSnapshot();
+                    void refetchGrindTasks();
+                  }}
+                />
               </div>
               <div>
                 <label className="text-xs uppercase tracking-wide text-dim">{inventoryMode === 'pallets' ? 'Liczba pełnych zestawów' : 'Ilosc'}</label>
@@ -4196,6 +4224,7 @@ export default function SpisRzeczywisty() {
             <p className="text-sm text-dim">
               Wgraj dzienny snapshot stanow z ERP. Snapshot jest jeden na wybrany dzien i nadpisuje
               poprzedni import z tego samego dnia.
+              {' '}Nowe kartoteki z poprawnym indeksem są dopisywane na stałe do bazy.
             </p>
             {erpSnapshotMigrationRequired && (
               <p className="text-xs text-danger">
@@ -4221,7 +4250,7 @@ export default function SpisRzeczywisty() {
               <div className="space-y-1">
                 <label className="text-xs uppercase tracking-wide text-dim">
                   Import stanow ERP (kolumna A: nazwa, kolumna B: stan do dyspozycji ERP, kolumna C:
-                  stan rzeczywisty ERP, kolumna D: jednostka - opcjonalnie; PDF: nazwa + stan
+                  stan rzeczywisty ERP, kolumna D: jednostka, kolumna E: indeks — wymagany do dodania kartoteki; PDF: nazwa + stan
                   rzeczywisty + stan do dyspozycji)
                 </label>
                 <Input
@@ -4254,6 +4283,9 @@ export default function SpisRzeczywisty() {
                 )}
                 {importErpSnapshotMutation.isPending && (
                   <p className="text-xs text-dim">Wgrywanie snapshotu ERP...</p>
+                )}
+                {lastErpCatalogSync && (
+                  <ErpCatalogImportNotice result={lastErpCatalogSync.result} date={lastErpCatalogSync.date} />
                 )}
               </div>
               <div className="flex items-end gap-3">

@@ -283,6 +283,16 @@ export type OriginalInventoryErpSnapshotImportResult = {
   inserted: number;
   replaced: number;
   snapshotDate: string;
+  catalogRefreshToken?: string;
+  catalogSync?: OriginalInventoryCatalogSyncResult;
+};
+
+export type OriginalInventoryCatalogSyncResult = {
+  added: number;
+  existing: number;
+  failed: boolean;
+  warningCount: number;
+  warnings: Array<{ name: string; indexCode: string; reason: string }>;
 };
 
 export type PaintTapeSettlementStatus = 'OPEN' | 'DETAILS_REQUIRED' | 'DONE';

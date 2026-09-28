@@ -49,6 +49,13 @@ const isFormSuggestion = (item: OriginalInventorySpisSuggestion) =>
 const getOriginalInventorySpisIdentityKey = (item: OriginalInventorySpisSuggestion) =>
   `${normalizeSearchText(item.name)}|${String(item.warehouseCode ?? '').trim().toUpperCase()}`;
 
+const getOriginalInventorySpisIndexedMaterialKey = (item: OriginalInventorySpisSuggestion) => {
+  const index2 = normalizeSearchText(getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2));
+  if (!index2) return '';
+  const name = normalizeSearchText(item.name).replace(/\s*-\s*/g, '-');
+  return `${name}|${index2}`;
+};
+
 export const dedupeOriginalInventorySpisSuggestions = <T extends OriginalInventorySpisSuggestion>(
   suggestions: readonly T[]
 ) => {
@@ -119,8 +126,17 @@ export const searchOriginalInventorySpisSuggestions = <T extends OriginalInvento
       .filter((item) => Boolean(item.warehouseCode))
       .map((item) => normalizeSearchText(item.name))
   );
+  const indexedMaterialsWithWarehouseVariant = new Set(
+    matches
+      .filter((item) => Boolean(item.warehouseCode))
+      .map(getOriginalInventorySpisIndexedMaterialKey)
+      .filter(Boolean)
+  );
   const uniqueMatches = matches.filter(
-    (item) => Boolean(item.warehouseCode) || !namesWithWarehouseVariant.has(normalizeSearchText(item.name))
+    (item) => Boolean(item.warehouseCode) || (
+      !namesWithWarehouseVariant.has(normalizeSearchText(item.name)) &&
+      !indexedMaterialsWithWarehouseVariant.has(getOriginalInventorySpisIndexedMaterialKey(item))
+    )
   );
   return prioritizeOriginalInventorySpisSuggestions(
     uniqueMatches,

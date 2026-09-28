@@ -1,6 +1,16 @@
 export const PRODUCTION_TASK_DUE_DATE_NOTE = '__dueDate';
 export const PRODUCTION_WORK_EVENTS_NOTE = '__workEvents';
 export const PRODUCTION_LEGACY_COMPLETION_DAY_NOTE = '__legacyCompletionDay';
+export const PRODUCTION_HISTORY_DETAIL_DAYS = 7;
+
+export const productionHistoryCutoffDate = (today: string): string => {
+  const date = new Date(`${today}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - (PRODUCTION_HISTORY_DETAIL_DAYS - 1));
+  return date.toISOString().slice(0, 10);
+};
+
+export const isRecentProductionHistoryDate = (date: string, today: string): boolean =>
+  /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= productionHistoryCutoffDate(today) && date <= today;
 
 export type ProductionWorkEvent = {
   id: string;
@@ -12,10 +22,17 @@ export type ProductionWorkEvent = {
 };
 
 export type ProductionCompletedWork = ProductionWorkEvent & {
+  taskId?: string;
   station: string;
   detail: string;
   planDate: string;
 };
+
+export const mergeProductionCompletedWork = (
+  previous: readonly ProductionCompletedWork[],
+  current: readonly ProductionCompletedWork[]
+): ProductionCompletedWork[] => [...new Map([...previous, ...current].map(item => [item.id, item])).values()]
+  .filter(item => !item.revertedAt);
 
 export type ProductionDaySummary = {
   version: 1;
@@ -58,7 +75,7 @@ export const canRetireProductionSession = (
       if (!current || !current.notes.__machineAt || current.notes.__machineAt < (task.notes.__machineAt ?? '')) return false;
       continue;
     }
-    if (task.station === 'ZADANIE DODATKOWE' && shouldCarryProductionTask(task)
+    if ((task.station === 'ZADANIE DODATKOWE' || task.id.startsWith('restored-work:')) && shouldCarryProductionTask(task)
       && !task.done && !activeById.has(task.id)) return false;
     if (task.id.startsWith('toolroom-return:') && shouldCarryProductionTask(task) && !task.done) {
       let parentId: string;
@@ -73,14 +90,28 @@ export const canRetireProductionSession = (
   return true;
 };
 
+const warsawDateFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Warsaw', year: 'numeric', month: '2-digit', day: '2-digit'
+});
+
 const warsawDateAt = (value: string): string => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/Warsaw', year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(date);
+  const parts = warsawDateFormatter.formatToParts(date);
   const part = (name: string) => parts.find(item => item.type === name)?.value ?? '';
   return `${part('year')}-${part('month')}-${part('day')}`;
+};
+
+export const isProductionCompletionVisibleOnDate = (
+  team: string,
+  completion: { completedAt?: string } | undefined,
+  date: string,
+  legacyCompletionDate?: string
+): boolean => {
+  if ((team !== 'distribution' && team !== 'technician') || !completion) return true;
+  const completedDate = warsawDateAt(completion.completedAt ?? '')
+    || (/^\d{4}-\d{2}-\d{2}$/.test(legacyCompletionDate ?? '') ? legacyCompletionDate : '');
+  return !completedDate || completedDate >= date;
 };
 
 export const productionTaskDoneOnDate = (task: {
@@ -92,6 +123,8 @@ export const productionTaskDoneOnDate = (task: {
   const completions = Object.values(task.teamProgress ?? {}).map(value => value?.completedAt).filter((value): value is string => Boolean(value));
   if (completions.length === 0) return !task.notes?.[PRODUCTION_LEGACY_COMPLETION_DAY_NOTE]
     || task.notes[PRODUCTION_LEGACY_COMPLETION_DAY_NOTE] === date;
+  if (productionWorkEvents(task.notes).some(event => event.revertedAt
+    && task.teamProgress?.[event.team]?.completedAt === event.completedAt)) return false;
   return warsawDateAt(completions.sort().at(-1) ?? '') === date;
 };
 
@@ -162,10 +195,12 @@ export const appendProductionWorkEvent = (
 export const revertProductionWorkEvent = (
   notes: Record<string, string>,
   team: string,
-  revertedAt: string
+  revertedAt: string,
+  eventId?: string
 ): Record<string, string> => {
   const events = productionWorkEvents(notes);
-  const index = events.findLastIndex(event => event.team === team && !event.revertedAt);
+  const index = events.findLastIndex(event => event.team === team && !event.revertedAt
+    && (eventId === undefined || event.id === eventId));
   if (index < 0) return notes;
   events[index] = { ...events[index], revertedAt };
   return { ...notes, [PRODUCTION_WORK_EVENTS_NOTE]: JSON.stringify(events) };
@@ -197,6 +232,7 @@ export const shouldCarryProductionTask = (task: {
   if (task.id.includes('::work-event:')) return false;
   if (task.kinds.includes('anulowane')) return false;
   if (task.id.startsWith('toolroom-return:')) return task.teams.length > 0;
+  if (task.id.startsWith('restored-work:')) return task.teams.length > 0;
   if (task.isCurrentPlan) return true;
   return task.station === 'ZADANIE DODATKOWE' && task.teams.length > 0;
 };

@@ -49,6 +49,7 @@ import { Input } from '@/components/ui/Input';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { useToastStore } from '@/components/ui/Toast';
 import { cn } from '@/lib/utils/cn';
+import { buildPaintTapeInventoryErpLookup, findPaintTapeInventoryErpSnapshot } from '@/lib/utils/paintTapeInventoryErp';
 
 type InventoryView = 'CURRENT' | 'HISTORY';
 type CompletionFilter = 'ALL' | 'PENDING' | 'DONE';
@@ -135,9 +136,6 @@ const normalizeSearch = (value: unknown) =>
     .trim()
     .toLowerCase();
 
-const normalizeIdentifier = (value: unknown) =>
-  normalizeSearch(value).replace(/[^a-z0-9]+/g, '');
-
 const parseQuantity = (value: string) => {
   const parsed = Number(value.trim().replace(',', '.'));
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
@@ -205,38 +203,10 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
     });
     return grouped;
   }, [entries]);
-  const erpSnapshotLookup = useMemo(() => {
-    type SnapshotGroup = { realQty: number; availableQty: number; unit: string };
-    const grouped = new Map<
-      string,
-      SnapshotGroup
-    >();
-    (erpSnapshotQuery.data ?? []).forEach((entry) => {
-      const key = normalizeSearch(entry.name);
-      if (!key) return;
-      const current = grouped.get(key);
-      if (current) {
-        current.realQty += entry.realQty;
-        current.availableQty += entry.availableQty;
-        return;
-      }
-      grouped.set(key, {
-        realQty: entry.realQty,
-        availableQty: entry.availableQty,
-        unit: entry.unit
-      });
-    });
-    const byIndex = new Map<string, SnapshotGroup>();
-    (erpSnapshotQuery.data ?? []).forEach((entry) => {
-      const group = grouped.get(normalizeSearch(entry.name));
-      if (!group) return;
-      [entry.indexCode, entry.warehouseCode].forEach((identifier) => {
-        const key = normalizeIdentifier(identifier);
-        if (key && !byIndex.has(key)) byIndex.set(key, group);
-      });
-    });
-    return { byName: grouped, byIndex };
-  }, [erpSnapshotQuery.data]);
+  const erpSnapshotLookup = useMemo(
+    () => buildPaintTapeInventoryErpLookup(erpSnapshotQuery.data ?? []),
+    [erpSnapshotQuery.data]
+  );
   const checkedItemCount = entriesByItem.size;
   const existingCatalogIndexes = useMemo(
     () => new Set(catalog.map((item) => item.itemIndex.trim().toLowerCase())),
@@ -541,14 +511,11 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
     const isSaving = saveMutation.isPending && saveMutation.variables?.item.id === item.id;
     const expandedKey = `${selectedDate}:${item.id}`;
     const isExpanded = expandedItems.has(expandedKey);
-    const erpSnapshot =
-      erpSnapshotLookup.byIndex.get(normalizeIdentifier(item.itemIndex)) ??
-      erpSnapshotLookup.byIndex.get(normalizeIdentifier(item.itemCode)) ??
-      erpSnapshotLookup.byName.get(normalizeSearch(item.name));
+    const erpSnapshot = findPaintTapeInventoryErpSnapshot(erpSnapshotLookup, item);
     const unitsMatch =
       !erpSnapshot || normalizeUnit(erpSnapshot.unit) === normalizeUnit(item.unit);
-    const difference = hasEntries && unitsMatch && (Boolean(erpSnapshot) || totalQty > 0)
-      ? totalQty - (erpSnapshot?.realQty ?? 0)
+    const difference = hasEntries && unitsMatch && erpSnapshot
+      ? totalQty - erpSnapshot.realQty
       : null;
     const absoluteDifference = difference === null ? null : Math.abs(difference);
     const differenceIsZero = difference !== null && absoluteDifference! < 0.0005;

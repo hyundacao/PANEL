@@ -10,6 +10,7 @@ export type OriginalInventoryErpPdfItem = {
   unit: string;
   indexCode?: string | null;
   warehouseCode?: string | null;
+  catalogIssue?: string;
 };
 
 type PdfObject = {
@@ -397,7 +398,7 @@ const buildPdfSnapshotRows = (segments: PdfTextSegment[]) => {
         .map((segment) => segment.text)
         .join(' ')
     );
-    const unit =
+    const rawUnit =
       normalizeImportCell(
         rowSegments.find(
           (segment) =>
@@ -405,7 +406,8 @@ const buildPdfSnapshotRows = (segments: PdfTextSegment[]) => {
             segment.x < PDF_UNIT_MAX_X &&
             /[a-zA-Z]/.test(segment.text)
         )?.text
-      ) || 'kg';
+      );
+    const unit = rawUnit || 'kg';
     const realQtySegment = numericSegments.find(
       (segment) => segment.x >= PDF_REAL_MIN_X && segment.x < PDF_REAL_MAX_X
     );
@@ -427,6 +429,7 @@ const buildPdfSnapshotRows = (segments: PdfTextSegment[]) => {
       unit,
       indexCode: indexCode || null,
       warehouseCode: extractWarehouseCode(indexCode),
+      catalogIssue: rawUnit ? undefined : 'Brak jednostki w pliku — nie dodano kartoteki.',
       realQty,
       availableQty
     };
@@ -448,6 +451,10 @@ export const parseOriginalInventoryErpSnapshotPdfFile = async (
     if (existing) {
       existing.realQty += row.realQty;
       existing.availableQty += row.availableQty;
+      if (row.catalogIssue) existing.catalogIssue = row.catalogIssue;
+      if (existing.unit && row.unit && existing.unit.toLowerCase().replace(/\.$/, '') !== row.unit.toLowerCase().replace(/\.$/, '')) {
+        existing.catalogIssue = 'Sprzeczne jednostki dla tego samego indeksu w pliku — nie dodano kartoteki.';
+      }
       if (!existing.unit && row.unit) {
         existing.unit = row.unit;
       }
@@ -466,7 +473,8 @@ export const parseOriginalInventoryErpSnapshotPdfFile = async (
       availableQty: row.availableQty,
       unit: row.unit || 'kg',
       indexCode: row.indexCode ?? null,
-      warehouseCode: row.warehouseCode ?? null
+      warehouseCode: row.warehouseCode ?? null,
+      catalogIssue: row.catalogIssue
     });
   });
 

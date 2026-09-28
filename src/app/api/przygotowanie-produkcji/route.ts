@@ -27,8 +27,9 @@ import {
 import { canSelectToolroomWork, createToolroomReturnTask, isToolroomWorkKind, isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, toolroomReturnId, toolroomWorkMutation, withToolroomReturnTasks, type ToolroomWorkSelection } from '@/lib/utils/productionToolroomTasks';
 import { PRODUCTION_TEAMS, TEAM_COMMENT_KEY_PREFIX, defaultTeamComments, isProductionTeam, normalizeTeamComment, validateTeamComment } from '@/lib/utils/productionTeamComments';
 import { productionWorkCommentNoteKey, validateProductionWorkCommentText, withProductionWorkComment } from '@/lib/utils/productionWorkComments';
+import { canRestoreProductionWorkInPlace, productionRestorableEvents, PRODUCTION_RESTORED_EVENT_NOTE, PRODUCTION_RESTORED_WORK_PREFIX, revokeProductionWork } from '@/lib/utils/productionWorkRestore';
 import { PRODUCTION_HALL_NOTE, normalizeProductionHallAssignment } from '@/lib/utils/productionTaskReference';
-import { appendProductionWorkEvent, canRetireProductionSession, PRODUCTION_LEGACY_COMPLETION_DAY_NOTE, productionKindOwner, productionSummaryFromTasks, productionWorkEvents, recentProductionDates, revertProductionWorkEvent, shouldCarryProductionTask, summarizeProductionDay, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
+import { appendProductionWorkEvent, canRetireProductionSession, PRODUCTION_LEGACY_COMPLETION_DAY_NOTE, isRecentProductionHistoryDate, productionHistoryCutoffDate, productionKindOwner, productionSummaryFromTasks, productionWorkEvents, revertProductionWorkEvent, shouldCarryProductionTask, summarizeProductionDay, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
 import {
   PRODUCTION_TEAM_PROGRESS_NOTE_KEY,
   PRODUCTION_STARTUP_TEAMS,
@@ -424,11 +425,12 @@ const compactOldHistorySnapshots = async () => {
   const { data: dates, error: datesError } = await supabaseAdmin
     .from('przygotowanie_produkcji_history')
     .select('plan_date')
-    .lt('plan_date', todayKey())
-    .order('plan_date', { ascending: false });
+    .lt('plan_date', productionHistoryCutoffDate(todayKey()))
+    .is('tasks->0->__productionSummary', null)
+    .order('plan_date', { ascending: false })
+    .limit(10);
   if (datesError) throw datesError;
-  const keep = new Set(recentProductionDates((dates ?? []).map(row => String(row.plan_date)), 6));
-  const staleDates = (dates ?? []).map(row => String(row.plan_date)).filter(date => !keep.has(date));
+  const staleDates = (dates ?? []).map(row => String(row.plan_date));
   let maintained = 0;
   for (const date of staleDates) {
     if (maintained >= 10) break;
@@ -454,6 +456,23 @@ const compactOldHistorySnapshots = async () => {
     if (!summary.sourceDigest) continue;
     await retireCompactedSession(date, summary);
     maintained += 1;
+  }
+  if (maintained >= 10) return;
+  const { data: oldSessions, error: sessionsError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_sessions')
+    .select('session_date')
+    .lt('session_date', productionHistoryCutoffDate(todayKey()))
+    .neq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE)
+    .order('session_date', { ascending: true })
+    .limit(10 - maintained);
+  if (sessionsError) throw sessionsError;
+  for (const session of (oldSessions ?? []).slice(0, 10 - maintained)) {
+    const date = String(session.session_date);
+    const { data: history, error: readError } = await supabaseAdmin
+      .from('przygotowanie_produkcji_history').select('tasks').eq('plan_date', date).maybeSingle();
+    if (readError) throw readError;
+    const summary = productionSummaryFromTasks(history?.tasks);
+    if (summary?.sourceDigest) await retireCompactedSession(date, summary);
   }
 };
 
@@ -482,7 +501,8 @@ const carryLatestPlanToDate = async (planDate: string, userName: string) => {
     .filter((task) => task.id.startsWith(MACHINE_STATE_KEY_PREFIX) || shouldCarryProductionTask(task))
     .map((task) => {
       const hasDatedCompletion = Object.values(task.teamProgress ?? {}).some(value => Boolean(value?.completedAt));
-      return task.done && !hasDatedCompletion && !task.notes[PRODUCTION_LEGACY_COMPLETION_DAY_NOTE]
+      const hasUndatedCompletion = Object.values(task.teamProgress ?? {}).some(value => value && !value.completedAt);
+      return (hasUndatedCompletion || (task.done && !hasDatedCompletion)) && !task.notes[PRODUCTION_LEGACY_COMPLETION_DAY_NOTE]
         ? { ...task, notes: { ...task.notes, [PRODUCTION_LEGACY_COMPLETION_DAY_NOTE]: String(previous.session_date) } }
         : task;
     });
@@ -1176,11 +1196,13 @@ export async function GET(request: NextRequest) {
       });
     }
     if (recentCompletedOnly) {
+      const today = todayKey();
       const { data: recentHistory, error: recentError } = await supabaseAdmin
         .from('przygotowanie_produkcji_history')
         .select('plan_date, tasks')
-        .order('plan_date', { ascending: false })
-        .limit(6);
+        .gte('plan_date', productionHistoryCutoffDate(today))
+        .lte('plan_date', today)
+        .order('plan_date', { ascending: false });
       if (recentError) throw recentError;
       const completed = new Map<string, ProductionCompletedWork>();
       for (const day of recentHistory ?? []) {
@@ -1189,7 +1211,10 @@ export async function GET(request: NextRequest) {
           if (!isRecord(rawTask) || !rawTask.notes || !isRecord(rawTask.notes)) continue;
           const task = rawTask as unknown as StoredTask;
           const events = productionWorkEvents(task.notes);
-          const progress = isRecord(task.teamProgress) ? task.teamProgress : {};
+          const progress = isRecord(task.teamProgress) ? {
+            ...task.teamProgress,
+            distribution: productionTeamProgressForTask(task).distribution
+          } : {};
           for (const [team, value] of Object.entries(progress)) {
             if (!isProductionTeam(team) || !isRecord(value)
               || typeof value.completedAt !== 'string' || !value.completedAt) continue;
@@ -1201,8 +1226,9 @@ export async function GET(request: NextRequest) {
             if (event.revertedAt) continue;
             if (!responseAccess.isAdmin && !responseAccess.teams.includes(event.team as typeof responseAccess.teams[number])) continue;
             const completedAt = new Date(event.completedAt);
-            if (Number.isNaN(completedAt.getTime()) || getWarsawProductionPlanDate(completedAt) !== planDate) continue;
-            completed.set(event.id, { ...event, station: String(task.station ?? ''), detail: String(task.detail ?? ''), planDate });
+            if (Number.isNaN(completedAt.getTime()) || getWarsawProductionPlanDate(completedAt) !== planDate
+              || !isRecentProductionHistoryDate(planDate, today)) continue;
+            completed.set(event.id, { ...event, taskId: task.id, station: String(task.station ?? ''), detail: String(task.detail ?? ''), planDate });
           }
         }
       }
@@ -1321,6 +1347,143 @@ export async function GET(request: NextRequest) {
   }
 }
 
+const restoreCompletedProductionWork = async (taskId: string, eventId: string, sourceDate: string, team: string, userName: string) => {
+  const today = todayKey();
+  if (!isRecentProductionHistoryDate(sourceDate, today)) {
+    return NextResponse.json({ message: 'Można przywrócić zadania z ostatnich 7 dni.' }, { status: 400 });
+  }
+  const { data: sourceHistory, error: historyError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_history').select('tasks').eq('plan_date', sourceDate).maybeSingle();
+  if (historyError) throw historyError;
+  const { data: sourceSession, error: sourceError } = await supabaseAdmin
+    .from('przygotowanie_produkcji_sessions').select('id').eq('session_date', sourceDate).maybeSingle();
+  if (sourceError) throw sourceError;
+  const { data: sourceRow, error: rowError } = sourceSession
+    ? await supabaseAdmin.from('przygotowanie_produkcji_tasks').select('*')
+      .eq('session_id', sourceSession.id).eq('task_key', taskId).maybeSingle()
+    : { data: null, error: null };
+  if (rowError) throw rowError;
+  const historyTask = (Array.isArray(sourceHistory?.tasks) ? sourceHistory.tasks : [])
+    .find((task: StoredTask) => task.id === taskId) as StoredTask | undefined;
+  const sourceTask = historyTask ?? (sourceRow ? fromDbTask(sourceRow) : undefined);
+  const event = sourceTask && productionRestorableEvents(sourceTask).find(item => item.id === eventId);
+  if (!sourceTask || !event || event.team !== team || !isProductionCompletableTeam(event.team)
+    || Number.isNaN(new Date(event.completedAt).getTime())
+    || getWarsawProductionPlanDate(new Date(event.completedAt)) !== sourceDate) {
+    return NextResponse.json({ message: 'Nie znaleziono wskazanego wykonania zadania.' }, { status: 404 });
+  }
+  const sessionResult = await supabaseAdmin
+    .from('przygotowanie_produkcji_sessions').select('id, session_date, file_name, plan_sheet, updated_at')
+    .eq('session_date', today).maybeSingle();
+  if (sessionResult.error) throw sessionResult.error;
+  let session = sessionResult.data;
+  if (!session) session = await carryLatestPlanToDate(today, userName);
+  if (!session) return NextResponse.json({ message: 'Najpierw wczytaj bieżący plan produkcji.' }, { status: 409 });
+
+  const touchSession = async (id: string) => {
+    const { data: current, error: readError } = await supabaseAdmin.from('przygotowanie_produkcji_sessions')
+      .select('updated_at').eq('id', id).maybeSingle();
+    if (readError) throw readError;
+    const previous = Date.parse(String(current?.updated_at ?? ''));
+    const { error } = await supabaseAdmin.from('przygotowanie_produkcji_sessions')
+      .update({ updated_at: new Date(Math.max(Date.now() + 1, Number.isFinite(previous) ? previous + 1 : 0)).toISOString() }).eq('id', id);
+    if (error) throw error;
+  };
+  if (event.revertedAt) {
+    await touchSession(session.id);
+    return NextResponse.json({ planDate: today, alreadyRestored: true });
+  }
+  const restorationUpdate = (task: StoredTask, row: Record<string, unknown>) => {
+    const stored = toDbTask(task, String(row.session_id), Number(row.position_no ?? 0), userName);
+    const previous = Date.parse(String(row.updated_at ?? ''));
+    stored.updated_at = new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
+    return omitFields(stored, ['session_id', 'task_key', 'position_no'] as const);
+  };
+
+  const now = new Date().toISOString();
+  let restoredTaskId = '';
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const { data: row, error } = await supabaseAdmin.from('przygotowanie_produkcji_tasks').select('*')
+      .eq('session_id', session.id).eq('task_key', taskId).maybeSingle();
+    if (error) throw error;
+    if (!row) break;
+    const current = fromDbTask(row);
+    if (current.notes[PRODUCTION_RESTORED_EVENT_NOTE] === event.id) {
+      restoredTaskId = current.id;
+      break;
+    }
+    if (current.detail !== sourceTask.detail || !canRestoreProductionWorkInPlace(current, event)) break;
+    const next = revokeProductionWork(current, event, now);
+    next.notes[PRODUCTION_RESTORED_EVENT_NOTE] = event.id;
+    const { data: saved, error: saveError } = await supabaseAdmin.from('przygotowanie_produkcji_tasks')
+      .update(restorationUpdate(next, row))
+      .eq('id', row.id).eq('updated_at', row.updated_at).select('id').maybeSingle();
+    if (saveError) throw saveError;
+    if (saved) { restoredTaskId = current.id; break; }
+    if (attempt === 5) throw new Error('Zadanie właśnie się zmieniło. Spróbuj przywrócić je ponownie.');
+  }
+  if (!restoredTaskId) {
+    // A later job on the same machine must not be replaced by an older one.
+    restoredTaskId = `${PRODUCTION_RESTORED_WORK_PREFIX}${createHash('sha256').update(event.id).digest('hex').slice(0, 32)}`;
+    const pending: StoredTask = {
+      ...sourceTask, id: restoredTaskId, isCurrentPlan: false, planGroup: 'standard', highlighted: false,
+      teams: [event.team], teamProgress: {}, done: false, toolroomReturnDone: undefined,
+      kinds: event.kinds.filter(kind => validWorkKinds.has(kind) && kind !== 'anulowane'
+        && (event.team === 'mechanics' ? productionKindOwner(kind) === 'mechanics'
+          : event.team !== 'process' || kind !== 'zmiana-formy')),
+      notes: {
+        ...Object.fromEntries(Object.entries(sourceTask.notes).filter(([key]) => validNoteKeys.has(key)
+          || key === productionWorkCommentNoteKey(event.team as typeof PRODUCTION_TEAMS[number]))),
+        [PRODUCTION_RESTORED_EVENT_NOTE]: event.id
+      }
+    };
+    const { error: insertError } = await supabaseAdmin.from('przygotowanie_produkcji_tasks').upsert({
+      id: stableTaskRowUuid(session.id, pending.id), ...toDbTask(pending, session.id, 200000, userName)
+    }, { onConflict: 'id', ignoreDuplicates: true });
+    if (insertError) throw insertError;
+  }
+
+  // Keep source rows and the report snapshot consistent; conditional writes preserve parallel edits.
+  const sessionIds = [...new Set([String(session.id), ...(sourceSession ? [String(sourceSession.id)] : [])])];
+  for (const sessionId of sessionIds) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const { data: row, error } = await supabaseAdmin.from('przygotowanie_produkcji_tasks').select('*')
+        .eq('session_id', sessionId).eq('task_key', taskId).maybeSingle();
+      if (error) throw error;
+      if (!row) break;
+      const current = fromDbTask(row);
+      const next = revokeProductionWork(current, event, now);
+      if (JSON.stringify(next) === JSON.stringify(current)) break;
+      const { data: saved, error: saveError } = await supabaseAdmin.from('przygotowanie_produkcji_tasks')
+        .update(restorationUpdate(next, row))
+        .eq('id', row.id).eq('updated_at', row.updated_at).select('id').maybeSingle();
+      if (saveError) throw saveError;
+      if (saved) break;
+      if (attempt === 5) throw new Error('Nie udało się cofnąć wykonania. Spróbuj ponownie.');
+    }
+  }
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const { data: history, error } = await supabaseAdmin.from('przygotowanie_produkcji_history')
+      .select('tasks').eq('plan_date', sourceDate).maybeSingle();
+    if (error) throw error;
+    if (!history || !Array.isArray(history.tasks) || productionSummaryFromTasks(history.tasks)) break;
+    const nextTasks = (history.tasks as StoredTask[]).map(task => task.id === taskId ? revokeProductionWork(task, event, now) : task);
+    if (JSON.stringify(nextTasks) === JSON.stringify(history.tasks)) break;
+    const { data: saved, error: saveError } = await supabaseAdmin.from('przygotowanie_produkcji_history')
+      .update({ tasks: nextTasks }).eq('plan_date', sourceDate).eq('tasks', JSON.stringify(history.tasks))
+      .select('plan_date').maybeSingle();
+    if (saveError) throw saveError;
+    if (saved) break;
+    if (attempt === 5) throw new Error('Historia właśnie się zmieniła. Spróbuj ponownie.');
+  }
+  const rows = await syncToolroomReturns(session.id, userName);
+  await saveHistorySnapshot(session, rows as Array<Record<string, unknown>>);
+  for (const sessionId of sessionIds) {
+    await touchSession(sessionId);
+  }
+  return NextResponse.json({ planDate: today, restoredTaskId });
+};
+
 export async function POST(request: NextRequest) {
   try {
     const access = await ensureAccess(request);
@@ -1331,6 +1494,17 @@ export async function POST(request: NextRequest) {
     const isAdmin = canManageProductionPreparation(access.user);
     const materialAccess = getProductionPreparationMaterialAccess(access.user);
     let isScopedMaterialEdit = false;
+
+    if (body.action === 'restoreCompletedWork') {
+      if (!hasExactlyKeys(bodyRecord, ['action', 'sourceDate', 'taskId', 'eventId', 'team'])
+        || typeof bodyRecord.sourceDate !== 'string' || typeof body.taskId !== 'string' || !body.taskId.trim()
+        || typeof bodyRecord.eventId !== 'string' || !bodyRecord.eventId.trim() || bodyRecord.eventId.length > 500
+        || !isProductionCompletableTeam(body.team)) {
+        return NextResponse.json({ message: 'Nieprawidłowe dane przywracania zadania.' }, { status: 400 });
+      }
+      if (!canCompleteProductionPreparationTeam(access.user, body.team)) return completionOnlyForbidden();
+      return await restoreCompletedProductionWork(body.taskId, bodyRecord.eventId, bodyRecord.sourceDate, body.team, access.user.name);
+    }
 
     if (!isAdmin) {
       const allowedRequestKeys = new Set(['action', 'planDate', 'taskId', 'mutation']);

@@ -15,6 +15,14 @@ import * as taskLifecycle from './productionTaskLifecycle.ts';
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
 
+const restoreFile = fileURLToPath(new URL('./productionWorkRestore.ts', import.meta.url));
+const restoreModule = new Module(restoreFile);
+restoreModule.require = id => id === './productionTaskLifecycle' ? taskLifecycle : workProgress;
+restoreModule._compile(ts.transpileModule(readFileSync(restoreFile, 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, restoreFile);
+const workRestore = restoreModule.exports;
+
 const recurringFile = fileURLToPath(new URL('./productionRecurringTasks.ts', import.meta.url));
 const recurringModule = new Module(recurringFile);
 recurringModule.require = (id) => {
@@ -204,11 +212,15 @@ test('work-plan task actions remain touch-friendly and inside each card on phone
   const mobileEnd=page.indexOf('`}</style>',mobileStart);
   assert.ok(mobileStart>=0&&mobileEnd>mobileStart);
   const mobileCss=page.slice(mobileStart,mobileEnd);
-  assert.match(mobileCss,/\.production-queues \.production-task-actions \{[\s\S]*?position: static !important;/);
-  assert.match(mobileCss,/\.production-queues \.production-task-actions button \{[\s\S]*?height: 2\.75rem !important;[\s\S]*?flex: 1 1 0%;/);
+  const globalCss=page.slice(page.indexOf('<style jsx global>'),page.indexOf('`}</style>',page.indexOf('<style jsx global>')));
+  assert.match(globalCss,/\.production-queues \.production-task-actions \{[\s\S]*?position: static !important;/);
+  assert.match(globalCss,/\.production-queues \.production-task-actions button \{[\s\S]*?height: 2\.75rem !important;[\s\S]*?flex: 1 1 0%;/);
+  assert.match(globalCss,/\.production-task-actions \{[\s\S]*?flex-wrap: wrap;/);
+  assert.match(globalCss,/\.production-task-actions button \{[\s\S]*?min-width: max-content !important;/);
+  assert.match(globalCss,/\.production-task-actions svg \{[\s\S]*?flex-shrink: 0;/);
   assert.match(mobileCss,/\.production-queues select \{[\s\S]*?font-size: 1rem;/);
   assert.doesNotMatch(page,/\.production-queues \.flex\.justify-end/);
-  assert.match(page,/!recurring && 'md:hidden'\)\}>\{mobileLabel\}<\/span>/);
+  assert.match(page,/!recurring && !done && 'md:hidden'\)\}>\{mobileLabel\}<\/span>/);
   assert.match(page,/recurring \? 'Zrobione' : 'Gotowe'/);
   assert.match(page,/md:hidden">\{editing \? 'Zamknij' : 'Edytuj'\}<\/span>/);
   assert.match(page,/md:hidden">Usuń<\/span>/);
@@ -217,6 +229,109 @@ test('work-plan task actions remain touch-friendly and inside each card on phone
   assert.ok(queueStart>=0&&queueEnd>queueStart);
   const queueSource=page.slice(queueStart,queueEnd);
   assert.ok(queueSource.indexOf("team.id === 'process'")<queueSource.indexOf('production-task-actions'));
+});
+
+test('queue cards reserve separate space for actions and wrap into a footer in narrow columns', () => {
+  const pageFile=fileURLToPath(new URL('../../app/(main)/przygotowanie-produkcji/page.tsx',import.meta.url));
+  const page=readFileSync(pageFile,'utf8');
+  assert.match(page,/cn\('production-queue-task overflow-hidden/);
+  assert.match(page,/\.production-queue-task \{[\s\S]*?display: grid;[\s\S]*?grid-template-columns: minmax\(0, 1fr\);/);
+  assert.match(page,/@container production-queue \(min-width: 23rem\)/);
+  assert.match(page,/\.production-queue-task \{\s*grid-template-columns: minmax\(0, 1fr\) auto;/);
+  assert.match(page,/\.production-queue-task > \.production-task-actions \{\s*grid-column: 2;\s*grid-row: 1;/);
+  assert.match(page,/\.production-queue-task > \* \{\s*grid-column: 1 \/ -1;\s*min-width: 0;/);
+  assert.match(page,/\.production-queue-task > button:first-child \{[\s\S]*?overflow-wrap: anywhere;/);
+  assert.match(page,/\.production-task-actions \.production-team-completion-action \{\s*width: auto !important;/);
+  assert.doesNotMatch(page,/position: absolute !important;|padding-right: 6rem|padding: 0\.\d+rem 6rem/);
+});
+
+test('actual completion button shows undo for completed work and keeps its toggle callback', () => {
+  const pageFile=fileURLToPath(new URL('../../app/(main)/przygotowanie-produkcji/page.tsx',import.meta.url));
+  const page=readFileSync(pageFile,'utf8');
+  const source=ts.createSourceFile(pageFile,page,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  const declarations=source.statements.filter(statement => ts.isVariableStatement(statement)
+    && statement.declarationList.declarations.some(item => ['TeamDoneButton','productionWaitingLabels'].includes(item.name.getText(source))));
+  assert.equal(declarations.length,2);
+  const buttonModule=new Module(pageFile);
+  buttonModule.require=id => {
+    if(id==='./productionWorkProgress') return workProgress;
+    if(id==='./productionRecurringTasks') return recurring;
+    if(id==='./productionToolroomTasks') return toolroom;
+    return require(id);
+  };
+  buttonModule._compile(ts.transpileModule(`
+    const { Check, LockKeyhole, RotateCcw } = require('lucide-react');
+    const { isProductionTeamDone, productionWaitingTeams, productionWaitsForToolroomReturn, canProductionTeamStart } = require('./productionWorkProgress');
+    const { RECURRING_TASK_STATION } = require('./productionRecurringTasks');
+    const { TOOLROOM_RETURN_LABEL } = require('./productionToolroomTasks');
+    const cn = (...values) => values.filter(Boolean).join(' ');
+    const teamLabel = team => team;
+    ${declarations.map(declaration => declaration.getText(source)).join('\n')}
+    module.exports = TeamDoneButton;
+  `,{
+    compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX}
+  }).outputText,pageFile);
+  const Button=buttonModule.exports;
+  const { renderToStaticMarkup }=require('react-dom/server');
+  let toggles=0;
+  const onToggle=() => { toggles+=1; };
+  for(const station of ['WTR 22',recurring.RECURRING_TASK_STATION]) {
+    const task={station,teams:['technician'],kinds:['rozruch'],teamProgress:{}};
+    const pending=Button({task,team:'technician',onToggle});
+    assert.match(renderToStaticMarkup(pending),/lucide-check/);
+    assert.doesNotMatch(renderToStaticMarkup(pending),/lucide-rotate-ccw/);
+    const completed={...task,teamProgress:{technician:{completedAt:'2026-09-28T09:00:00Z',completedBy:'Technik'}}};
+    const done=Button({task:completed,team:'technician',onToggle});
+    const markup=renderToStaticMarkup(done);
+    assert.match(markup,/lucide-rotate-ccw/);
+    assert.doesNotMatch(markup,/lucide-check/);
+    assert.match(markup,/>Cofnij<\/span>/);
+    assert.doesNotMatch(markup,/md:hidden/);
+    assert.equal(done.props['aria-pressed'],true);
+    assert.equal(done.props.disabled,false);
+    done.props.onClick();
+  }
+  assert.equal(toggles,2);
+  assert.equal(Button({task:{station:'WTR 22',kinds:['anulowane']},team:'technician',onToggle}),null);
+});
+
+test('task notes are highlighted separately from work labels in regular and compact cards', () => {
+  const pageFile=fileURLToPath(new URL('../../app/(main)/przygotowanie-produkcji/page.tsx',import.meta.url));
+  const page=readFileSync(pageFile,'utf8');
+  const source=ts.createSourceFile(pageFile,page,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  const declaration=source.statements.find(statement => ts.isVariableStatement(statement)
+    && statement.declarationList.declarations.some(item => item.name.getText(source)==='TaskWorkSummary'));
+  assert.ok(declaration);
+  const componentModule=new Module(pageFile);
+  componentModule.require=id => id==='./productionWorkProgress' ? workProgress : require(id);
+  componentModule._compile(ts.transpileModule(`
+    const { RotateCcw } = require('lucide-react');
+    const { productionReopenedNoteDiff } = require('./productionWorkProgress');
+    const cn = (...values) => values.filter(Boolean).join(' ');
+    ${declaration.getText(source)}
+    module.exports = TaskWorkSummary;
+  `,{
+    compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX}
+  }).outputText,pageFile);
+  const Summary=componentModule.exports;
+  const { renderToStaticMarkup }=require('react-dom/server');
+  for(const compact of [false,true]) {
+    const props={team:'technician',kindLabels:'Rozruch',compact};
+    const task={notes:{technician:'Podstawic kartony'}};
+    const markup=renderToStaticMarkup(Summary({...props,task}));
+    assert.match(markup,/Rozruch: <span class="production-task-note">Podstawic kartony<\/span>/);
+    const empty=renderToStaticMarkup(Summary({...props,task:{notes:{}}}));
+    assert.doesNotMatch(empty,/production-task-note/);
+    assert.match(empty,/Rozruch/);
+    const revised={notes:{...task.notes,[workProgress.productionReopenedNoteKey('technician')]:workProgress.encodeProductionReopenedNoteBase('Podstawic')}};
+    const updated=renderToStaticMarkup(Summary({...props,task:revised}));
+    assert.match(updated,/class="production-task-note"><span>Podstawic<\/span>/);
+    assert.doesNotMatch(updated,/text-fuchsia-200/);
+  }
+  assert.match(page,/\.production-preparation \{\s*--production-task-note: #b45aff;/);
+  assert.match(page,/html\.light \.production-preparation \{\s*--production-task-note: #7e22ce;/);
+  assert.match(page,/\[data-team-done='true'\],[\s\S]*?--production-task-note: #bd66ff;/);
+  assert.match(page,/\.production-preparation \.production-task-note \{\s*color: var\(--production-task-note\);/);
 });
 
 test('process engineer cards use red blocked, amber ready and green completed states', () => {
@@ -368,12 +483,20 @@ function testApi() {
   class Query {
     constructor(table) {this.table=table;this.filters=[];this.mode='select';}
     select() {return this;}
-    eq(key,value) {this.filters.push(row=>row[key]===value);return this;}
+    eq(key,value) {this.filters.push(row=>key==='tasks' && typeof value==='string'
+      ? JSON.stringify(row[key])===value : row[key]===value);return this;}
     neq(key,value) {this.filters.push(row=>row[key]!==value);return this;}
     lt(key,value) {this.filters.push(row=>row[key]<value);return this;}
+    gte(key,value) {this.filters.push(row=>row[key]>=value);return this;}
+    lte(key,value) {this.filters.push(row=>row[key]<=value);return this;}
+    is(key,value) {
+      this.filters.push(row=>(key==='tasks->0->__productionSummary'
+        ? row.tasks?.[0]?.__productionSummary ?? null : row[key] ?? null)===value);
+      return this;
+    }
     in(key,values) {this.filters.push(row=>values.includes(row[key]));return this;}
-    order() {return this;}
-    limit() {return this;}
+    order(key, options = {}) {this.ordering ??= [];this.ordering.push({key,ascending:options.ascending!==false});return this;}
+    limit(count) {this.maxRows=count;return this;}
     insert(values) {this.mode='insert';this.values=values;return this;}
     upsert(values,options) {this.mode='upsert';this.values=values;this.options=options;return this;}
     update(values) {this.mode='update';this.values=values;return this;}
@@ -387,6 +510,16 @@ function testApi() {
       if(this.mode!=='select')state.writeCount+=1;
       if(state.failWrite&&this.mode!=='select')return {data:null,error:new Error('Testowy błąd zapisu')};
       let result=table.filter(row=>this.filters.every(filter=>filter(row)));
+      if(this.mode==='select') {
+        result.sort((left,right)=>{
+          for(const {key,ascending} of this.ordering??[]) {
+            const direction=left[key]<right[key]?-1:left[key]>right[key]?1:0;
+            if(direction) return ascending?direction:-direction;
+          }
+          return 0;
+        });
+        if(this.maxRows!==undefined) result=result.slice(0,this.maxRows);
+      }
       if(this.mode==='update')result.forEach(row=>Object.assign(row,clone(this.values)));
       if(this.mode==='delete') {
         for(const row of result) table.splice(table.indexOf(row),1);
@@ -430,7 +563,8 @@ function testApi() {
     '@/lib/utils/productionWorkComments':workComments,
     '@/lib/utils/productionWorkProgress':workProgress,
     '@/lib/utils/productionToolroomTasks':toolroom,
-    '@/lib/utils/productionTaskLifecycle':taskLifecycle
+    '@/lib/utils/productionTaskLifecycle':taskLifecycle,
+    '@/lib/utils/productionWorkRestore':workRestore
   };
   mod.require=(id)=>{assert.ok(id in stubs,`Unmocked route dependency ${id}`);return stubs[id];};
   mod._compile(ts.transpileModule(readFileSync(routeFile,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,routeFile);
@@ -439,6 +573,186 @@ function testApi() {
   const save=(team,comment)=>post({action:'saveTeamComment',team,comment});
   return {db,state,get,post,save};
 }
+
+const restorationTask = (extra = {}) => ({
+  id: 'restore-source', station: 'WTR 10', detail: 'PRODUCT A (1234)', quantity: '1000', norm: '500',
+  isCurrentPlan: true, planGroup: 'standard', highlighted: false, kinds: ['zmiana-formy'], teams: ['mechanics'],
+  notes: { mechanics: 'Można już' }, teamProgress: {}, done: false,
+  material: '', materialType: '', source: '', dryer: '', temperature: '', ...extra
+});
+const completeRestorationTask = async (api, task, date, team = 'mechanics') => {
+  assert.equal((await api.post({ action: 'savePlan', planDate: date, tasks: [task] })).status, 200);
+  assert.equal((await api.post({ action: 'mutateTask', planDate: date, taskId: task.id,
+    mutation: { setTeamDone: { team, done: true } } })).status, 200);
+  const { completed } = await (await api.get('?recentCompleted=1')).json();
+  return completed.find(event => event.taskId === task.id && event.team === team);
+};
+const restorePayload = event => ({ action: 'restoreCompletedWork', sourceDate: event.planDate,
+  taskId: event.taskId, eventId: event.id, team: event.team });
+
+test('restoring current work returns it to pending, preserves other work and counts recompletion once', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-28T08:00:00Z') });
+  const api = testApi();
+  const task = restorationTask({ kinds: ['zmiana-formy', 'inne'], teams: ['mechanics', 'additional'] });
+  const event = await completeRestorationTask(api, task, '2026-09-28');
+  context.mock.timers.setTime(Date.parse('2026-09-28T08:01:00Z'));
+  assert.equal((await api.post({ action: 'mutateTask', planDate: '2026-09-28', taskId: task.id,
+    mutation: { setTeamDone: { team: 'additional', done: true } } })).status, 200);
+  api.state.isAdmin = false;
+  api.state.preparationTeams = ['mechanics'];
+  assert.equal((await api.post(restorePayload(event))).status, 200);
+  let { tasks } = await (await api.get('?date=2026-09-28&sync=1')).json();
+  assert.equal(tasks.length, 1);
+  assert.equal(workProgress.isProductionTeamDone(tasks[0], 'mechanics'), false);
+  assert.equal(workProgress.isProductionTeamDone(tasks[0], 'additional'), true);
+  assert.ok(taskLifecycle.productionWorkEvents(tasks[0].notes).find(item => item.id === event.id).revertedAt);
+  assert.equal((await (await api.get('?recentCompleted=1')).json()).completed.length, 0);
+  assert.equal(taskLifecycle.summarizeProductionDay(api.db.przygotowanie_produkcji_history[0].tasks, '2026-09-28').completedEvents, 1);
+  context.mock.timers.setTime(Date.parse('2026-09-28T09:00:00Z'));
+  assert.equal((await api.post({ action: 'mutateTask', planDate: '2026-09-28', taskId: task.id,
+    mutation: { setTeamDone: { team: 'mechanics', done: true } } })).status, 200);
+  ({ tasks } = await (await api.get('?date=2026-09-28&sync=1')).json());
+  assert.equal(workProgress.isProductionTeamDone(tasks[0], 'mechanics'), true);
+  const summary = taskLifecycle.summarizeProductionDay(api.db.przygotowanie_produkcji_history[0].tasks, '2026-09-28');
+  assert.equal(summary.completedEvents, 2);
+  assert.equal(summary.kinds['zmiana-formy'].done, 1);
+});
+
+test('restoring an older occurrence does not undo a later occurrence and retry never duplicates work', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-25T08:00:00Z') });
+  const api = testApi();
+  const task = restorationTask();
+  const old = await completeRestorationTask(api, task, '2026-09-25');
+  context.mock.timers.setTime(Date.parse('2026-09-28T08:00:00Z'));
+  assert.equal((await api.get('?date=2026-09-28')).status, 200);
+  assert.equal((await api.post({ action: 'mutateTask', planDate: '2026-09-28', taskId: task.id,
+    mutation: { requeueKind: 'zmiana-formy' } })).status, 200);
+  context.mock.timers.setTime(Date.parse('2026-09-28T09:00:00Z'));
+  assert.equal((await api.post({ action: 'mutateTask', planDate: '2026-09-28', taskId: task.id,
+    mutation: { setTeamDone: { team: 'mechanics', done: true } } })).status, 200);
+  const laterAt = '2026-09-28T09:00:00.000Z';
+  const result = await (await api.post(restorePayload(old))).json();
+  assert.ok(result.restoredTaskId.startsWith(workRestore.PRODUCTION_RESTORED_WORK_PREFIX));
+  let { tasks } = await (await api.get('?date=2026-09-28&sync=1')).json();
+  assert.equal(tasks.length, 2);
+  assert.equal(tasks.find(item => item.id === task.id).teamProgress.mechanics.completedAt, laterAt);
+  const pending = tasks.find(item => item.id === result.restoredTaskId);
+  assert.equal(pending.done, false);
+  assert.deepEqual(pending.teams, ['mechanics']);
+  assert.deepEqual(pending.kinds, ['zmiana-formy']);
+  assert.equal((await api.post(restorePayload(old))).status, 200);
+  ({ tasks } = await (await api.get('?date=2026-09-28&sync=1')).json());
+  assert.equal(tasks.length, 2);
+  const originalDay = api.db.przygotowanie_produkcji_history.find(day => day.plan_date === '2026-09-25');
+  assert.equal(taskLifecycle.summarizeProductionDay(originalDay.tasks, '2026-09-25').completedEvents, 0);
+  assert.equal(taskLifecycle.summarizeProductionDay(originalDay.tasks, '2026-09-25').kinds['zmiana-formy'].done, 0);
+  context.mock.timers.setTime(Date.parse('2026-09-28T10:00:00Z'));
+  assert.equal((await api.post({ action: 'mutateTask', planDate: '2026-09-28', taskId: pending.id,
+    mutation: { setTeamDone: { team: 'mechanics', done: true } } })).status, 200);
+  const currentDay = api.db.przygotowanie_produkcji_history.find(day => day.plan_date === '2026-09-28');
+  assert.equal(taskLifecycle.summarizeProductionDay(currentDay.tasks, '2026-09-28').completedEvents, 2);
+});
+
+test('removed production work can be restored beside a different current product and carries into tomorrow', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-25T08:00:00Z') });
+  const api = testApi();
+  const old = await completeRestorationTask(api, restorationTask(), '2026-09-25');
+  context.mock.timers.setTime(Date.parse('2026-09-28T08:00:00Z'));
+  const current = restorationTask({ id: 'new-product', detail: 'PRODUCT B (4321)' });
+  assert.equal((await api.post({ action: 'savePlan', planDate: '2026-09-28', tasks: [current] })).status, 200);
+  const restored = await (await api.post(restorePayload(old))).json();
+  let { tasks } = await (await api.get('?date=2026-09-28&sync=1')).json();
+  assert.equal(tasks.find(task => task.id === current.id).detail, current.detail);
+  assert.equal(tasks.find(task => task.id === restored.restoredTaskId).detail, 'PRODUCT A (1234)');
+  assert.equal((await api.post({ action: 'savePlan', planDate: '2026-09-28', tasks: [current] })).status, 200);
+  context.mock.timers.setTime(Date.parse('2026-09-29T08:00:00Z'));
+  ({ tasks } = await (await api.get('?date=2026-09-29')).json());
+  assert.equal(tasks.find(task => task.id === restored.restoredTaskId).done, false);
+  assert.equal(tasks.find(task => task.id === restored.restoredTaskId).kinds.includes('anulowane'), false);
+});
+
+test('restoring dispatcher completion clears both stages rather than leaving a partially green card', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-28T08:00:00Z') });
+  const api = testApi();
+  const task = restorationTask({ teams: ['distribution'], kinds: ['rozruch'], notes: { distribution: 'Przygotować stanowisko' } });
+  const event = await completeRestorationTask(api, task, '2026-09-28', 'distribution');
+  assert.equal((await api.post(restorePayload(event))).status, 200);
+  const { tasks } = await (await api.get('?date=2026-09-28&sync=1')).json();
+  assert.equal(workProgress.isProductionDistributionStageDone(tasks[0], 'materials'), false);
+  assert.equal(workProgress.isProductionDistributionStageDone(tasks[0], 'station'), false);
+  assert.equal(workProgress.isProductionTeamDone(tasks[0], 'distribution'), false);
+});
+
+test('restoration verifies the actual event team, denies foreign work and rejects old dates before writing', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-28T08:00:00Z') });
+  const api = testApi();
+  const event = await completeRestorationTask(api, restorationTask(), '2026-09-28');
+  api.state.isAdmin = false;
+  api.state.preparationTeams = ['process'];
+  const writes = api.state.writeCount;
+  assert.equal((await api.post(restorePayload(event))).status, 403);
+  assert.equal((await api.post({ ...restorePayload(event), team: 'process' })).status, 404);
+  assert.equal(api.state.writeCount, writes);
+  api.state.isAdmin = true;
+  assert.equal((await api.post({ ...restorePayload(event), sourceDate: '2026-09-21' })).status, 400);
+  assert.equal((await api.post({ ...restorePayload(event), mutation: { clearWork: true } })).status, 400);
+  assert.equal((await api.post({ ...restorePayload(event), eventId: 'missing' })).status, 404);
+  assert.equal(api.state.writeCount, writes);
+});
+
+test('restoring mechanic work after process completion preserves the completed process and queues only the mechanic', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-28T08:00:00Z') });
+  const api = testApi();
+  const task = restorationTask({ kinds: ['zmiana-formy', 'rozruch'], teams: ['mechanics', 'process'] });
+  const event = await completeRestorationTask(api, task, '2026-09-28');
+  context.mock.timers.setTime(Date.parse('2026-09-28T09:00:00Z'));
+  assert.equal((await api.post({ action: 'mutateTask', planDate: '2026-09-28', taskId: task.id,
+    mutation: { setTeamDone: { team: 'process', done: true } } })).status, 200);
+  const restored = await (await api.post(restorePayload(event))).json();
+  const { tasks } = await (await api.get('?date=2026-09-28&sync=1')).json();
+  assert.equal(workProgress.isProductionTeamDone(tasks.find(item => item.id === task.id), 'process'), true);
+  const pending = tasks.find(item => item.id === restored.restoredTaskId);
+  assert.deepEqual(pending.teams, ['mechanics']);
+  assert.equal(pending.done, false);
+  const completed = (await (await api.get('?recentCompleted=1')).json()).completed;
+  assert.equal(completed.filter(item => item.team === 'mechanics').length, 0);
+  assert.equal(completed.filter(item => item.team === 'process').length, 1);
+});
+
+test('parallel restorations create just one pending task and a failed write leaves completion intact', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-28T08:00:00Z') });
+  const api = testApi();
+  const task = restorationTask();
+  const event = await completeRestorationTask(api, task, '2026-09-28');
+  api.state.failWrite = true;
+  const failed = await api.post(restorePayload(event));
+  assert.equal(failed.status, 400);
+  assert.equal((await failed.json()).code, 'PREPARATION_SAVE_FAILED');
+  api.state.failWrite = false;
+  let { tasks } = await (await api.get('?date=2026-09-28&sync=1')).json();
+  assert.equal(tasks.length, 1);
+  assert.equal(workProgress.isProductionTeamDone(tasks[0], 'mechanics'), true);
+  assert.equal(taskLifecycle.productionWorkEvents(tasks[0].notes)[0].revertedAt, undefined);
+  const results = await Promise.all([api.post(restorePayload(event)), api.post(restorePayload(event))]);
+  assert.ok(results.every(result => result.status === 200));
+  ({ tasks } = await (await api.get('?date=2026-09-28&sync=1')).json());
+  assert.equal(tasks.length, 1);
+  assert.equal(workProgress.isProductionTeamDone(tasks[0], 'mechanics'), false);
+});
+
+test('dated legacy completion without a work event can be restored without fabricating another completion', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-28T08:00:00Z') });
+  const api = testApi();
+  const task = restorationTask({ done: true,
+    teamProgress: { mechanics: { completedAt: '2026-09-28T07:00:00Z', completedBy: 'Legacy worker' } } });
+  assert.equal((await api.post({ action: 'savePlan', planDate: '2026-09-28', tasks: [task] })).status, 200);
+  const event = (await (await api.get('?recentCompleted=1')).json()).completed[0];
+  assert.equal(event.completedBy, 'Legacy worker');
+  assert.equal((await api.post(restorePayload(event))).status, 200);
+  const { tasks } = await (await api.get('?date=2026-09-28&sync=1')).json();
+  assert.equal(tasks[0].done, false);
+  assert.equal((await (await api.get('?recentCompleted=1')).json()).completed.length, 0);
+});
 
 test('old plan rows are removed only after chart summary and machine state survive', async () => {
   const api=testApi();
@@ -469,6 +783,73 @@ test('old plan rows are removed only after chart summary and machine state survi
   assert.equal(api.db.przygotowanie_produkcji_tasks.some(task=>task.session_id==='old-session'),false);
   assert.deepEqual(taskLifecycle.productionSummaryFromTasks(api.db.przygotowanie_produkcji_history[0].tasks),saved);
   assert.equal((await api.post({action:'savePlan',planDate:'2020-01-01',tasks:[]})).status,410);
+});
+
+test('recent completions exclude old and future days even when only a few production dates exist', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-28T09:00:00Z') });
+  const api = testApi();
+  for (const day of ['2026-09-01', '2026-09-21', '2026-09-22', '2026-09-28', '2026-09-29']) {
+    const event = { id: `task:${day}:mechanics:${day}T10:00:00Z`, team: 'mechanics', kinds: ['zmiana-formy'],
+      completedAt: `${day}T10:00:00Z`, completedBy: `Worker ${day}` };
+    api.db.przygotowanie_produkcji_history.push({ plan_date: day, tasks: [{
+      id: `task:${day}`, station: 'WTR 10', detail: 'Product', kinds: event.kinds, teams: ['mechanics'],
+      done: true, teamProgress: { mechanics: event }, notes: taskLifecycle.appendProductionWorkEvent({}, event)
+    }] });
+  }
+  const result = await api.get('?recentCompleted=1');
+  assert.equal(result.status, 200);
+  const { completed } = await result.json();
+  assert.deepEqual(completed.map(item => item.planDate), ['2026-09-28', '2026-09-22']);
+  assert.deepEqual(completed.map(item => item.completedBy), ['Worker 2026-09-28', 'Worker 2026-09-22']);
+  assert.equal(completed[1].completedAt, '2026-09-22T10:00:00Z');
+  api.state.isAdmin = false;
+  api.state.preparationTeams = ['process'];
+  assert.equal((await (await api.get('?recentCompleted=1')).json()).completed.length, 0);
+});
+
+test('calendar week cleanup preserves older chart numbers and leaves recent details intact', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-28T09:00:00Z') });
+  const api = testApi();
+  const event = { id: 'completed-old', team: 'mechanics', kinds: ['zmiana-formy'],
+    completedAt: '2026-09-21T10:00:00Z', completedBy: 'Mechanik' };
+  const oldTasks = [{ id: 'old-work', station: 'WTR 10', kinds: event.kinds, teams: ['mechanics'],
+    done: true, teamProgress: { mechanics: event }, notes: taskLifecycle.appendProductionWorkEvent({}, event)
+  }, { id: 'missed', station: 'ZADANIE CYKLICZNE', kinds: ['inne'], teams: ['technician'],
+    notes: {}, done: false }];
+  const expected = taskLifecycle.summarizeProductionDay(oldTasks, '2026-09-21');
+  api.db.przygotowanie_produkcji_history.push(
+    { plan_date: '2026-09-21', tasks: structuredClone(oldTasks) },
+    { plan_date: '2026-09-22', tasks: structuredClone(oldTasks) }
+  );
+  api.db.przygotowanie_produkcji_sessions.push({ id: 'current-session', session_date: '2026-09-28', updated_at: 'initial' });
+  const response = await api.get('?history=1');
+  assert.equal(response.status, 200);
+  const history = (await response.json()).history;
+  const summary = history.find(day => day.plan_date === '2026-09-21').summary;
+  assert.equal(summary.assignments, expected.assignments);
+  assert.equal(summary.completedEvents, expected.completedEvents);
+  assert.equal(summary.missedRecurring, 1);
+  assert.deepEqual(summary.kinds, expected.kinds);
+  assert.deepEqual(history.find(day => day.plan_date === '2026-09-21').tasks, []);
+  assert.deepEqual(api.db.przygotowanie_produkcji_history[1].tasks, oldTasks);
+  const repeated = (await (await api.get('?history=1')).json()).history;
+  assert.deepEqual(repeated.find(day => day.plan_date === '2026-09-21').summary, summary);
+});
+
+test('bounded history cleanup progresses past already compacted days without losing charts', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-28T09:00:00Z') });
+  const api = testApi();
+  const tasks = [{ id: 'work', station: 'WTR 10', kinds: ['zmiana-formy'], teams: ['mechanics'], notes: {}, done: true }];
+  for (let number = 1; number <= 12; number += 1) {
+    api.db.przygotowanie_produkcji_history.push({ plan_date: `2026-09-${String(number).padStart(2, '0')}`, tasks: structuredClone(tasks) });
+  }
+  await api.get('?history=1');
+  const compacted = () => api.db.przygotowanie_produkcji_history
+    .filter(day => taskLifecycle.productionSummaryFromTasks(day.tasks));
+  assert.equal(compacted().length, 10);
+  await api.get('?history=1');
+  assert.equal(compacted().length, 12);
+  assert.equal(compacted().reduce((total, day) => total + taskLifecycle.productionSummaryFromTasks(day.tasks).kinds['zmiana-formy'].done, 0), 12);
 });
 
 test('settings can be saved before any plan exists and are loaded again globally', async () => {
@@ -975,6 +1356,170 @@ test('API stores dispatcher stages independently and protects process readiness'
   saved=(await changed.json()).task;
   assert.equal(saved.teamProgress.distributionStation,undefined);
   assert.equal(saved.teamProgress.distributionMaterials,undefined);
+});
+
+test('all preparation columns retain completed green tasks at the end of their own queue', () => {
+  for (const team of ['distribution', 'technician', 'additional']) {
+    const base = { kinds: ['inne'], teams: [team, 'process'], done: false, teamProgress: {} };
+    const completed = workProgress.setProductionTeamCompletion({}, team, true);
+    const input = [
+      { ...base, id: 'done-1', teamProgress: completed },
+      { ...base, id: 'open-1' },
+      { ...base, id: 'done-2', teamProgress: completed },
+      { ...base, id: 'open-2' },
+      { ...base, id: 'cancelled', kinds: ['anulowane'] },
+      { ...base, id: 'other-team', teams: ['mechanics'] }
+    ];
+    assert.equal(workProgress.keepsProductionCompletedWorkInQueue(team), true);
+    assert.deepEqual(workProgress.productionWorkQueueForTeam(input, team).map(task => task.id), ['open-1', 'open-2', 'done-1', 'done-2']);
+    assert.deepEqual(input.map(task => task.id), ['done-1', 'open-1', 'done-2', 'open-2', 'cancelled', 'other-team']);
+    const reopened = { ...input[0], teamProgress: workProgress.setProductionTeamCompletion(completed, team, false) };
+    assert.deepEqual(workProgress.productionWorkQueueForTeam([reopened, ...input.slice(1)], team).map(task => task.id), ['done-1', 'open-1', 'open-2', 'done-2']);
+  }
+  const partial = { id: 'partial', teams: ['distribution', 'process'], kinds: ['inne'], done: false,
+    teamProgress: workProgress.setProductionDistributionStageCompletion({}, 'materials', true) };
+  assert.deepEqual(workProgress.productionWorkQueueForTeam([partial], 'distribution'), [partial]);
+  assert.equal(workProgress.isProductionTeamDone(partial, 'distribution'), false);
+  assert.equal(workProgress.canProductionTeamStart(partial, 'process'), true);
+});
+
+test('preparation completions disappear next day without losing readiness or work report data', async (context) => {
+  context.mock.timers.enable({apis:['Date'],now:Date.parse('2026-09-28T09:00:00Z')});
+  const api=testApi();
+  const day='2026-09-28';
+  const base={...toolroomSource(),kinds:['rozruch'],notes:{distribution:'Przygotowac stanowisko'},teamProgress:{},done:false};
+  const tasks=[
+    {...base,id:'prepared',teams:['distribution','technician','process']},
+    {...base,id:'partial',teams:['distribution','process']},
+    {...base,id:'finished-tech',teams:['technician']},
+    {...base,id:'pending-tech',teams:['technician']}
+  ];
+  assert.equal((await api.post({action:'savePlan',planDate:day,tasks})).status,200);
+  for (const stage of ['materials','station']) {
+    assert.equal((await api.post({action:'mutateTask',planDate:day,taskId:'prepared',mutation:{setDistributionStageDone:{stage,done:true}}})).status,200);
+  }
+  for (const taskId of ['prepared','finished-tech']) {
+    assert.equal((await api.post({action:'mutateTask',planDate:day,taskId,mutation:{setTeamDone:{team:'technician',done:true}}})).status,200);
+  }
+  assert.equal((await api.post({action:'mutateTask',planDate:day,taskId:'partial',mutation:{setDistributionStageDone:{stage:'materials',done:true}}})).status,200);
+  const before=await (await api.get(`?date=${day}`)).json();
+  const reportBefore=taskLifecycle.summarizeProductionDay(before.tasks,day);
+  assert.equal(reportBefore.completedEvents,3);
+  const visible=(input,team,date)=>workProgress.productionWorkQueueForTeam(input.filter(task=>
+    taskLifecycle.isProductionCompletionVisibleOnDate(team,workProgress.productionTeamCompletion(task,team),date,task.notes[taskLifecycle.PRODUCTION_LEGACY_COMPLETION_DAY_NOTE])),team);
+  assert.deepEqual(visible(before.tasks,'distribution',day).map(task=>task.id),['partial','prepared']);
+  assert.deepEqual(visible(before.tasks,'technician',day).map(task=>task.id),['pending-tech','prepared','finished-tech']);
+  context.mock.timers.setTime(Date.parse('2026-09-28T22:00:00Z'));
+  const nextDay='2026-09-29';
+  const after=await (await api.get(`?date=${nextDay}`)).json();
+  const snapshot=structuredClone(after.tasks);
+  assert.deepEqual(visible(after.tasks,'distribution',nextDay).map(task=>task.id),['partial']);
+  assert.deepEqual(visible(after.tasks,'technician',nextDay).map(task=>task.id),['pending-tech']);
+  assert.deepEqual(after.tasks,snapshot);
+  assert.equal(workProgress.canProductionTeamStart(after.tasks.find(task=>task.id==='prepared'),'process'),true);
+  assert.equal(workProgress.isProductionDistributionStageDone(after.tasks.find(task=>task.id==='partial'),'materials'),true);
+  assert.deepEqual(taskLifecycle.summarizeProductionDay(after.tasks,day),reportBefore);
+  assert.equal(taskLifecycle.summarizeProductionDay(after.tasks,nextDay).completedEvents,0);
+  const history=await (await api.get('?history=1')).json();
+  assert.deepEqual(taskLifecycle.summarizeProductionDay(history.history.find(entry=>entry.plan_date===day).tasks,day),reportBefore);
+  const page=readFileSync(fileURLToPath(new URL('../../app/(main)/przygotowanie-produkcji/page.tsx',import.meta.url)),'utf8');
+  assert.match(page,/isProductionCompletionVisibleOnDate\(\s*team\.id,\s*productionTeamCompletion\(task, team\.id\),\s*todayPlanDate,/);
+});
+
+test('legacy team completions keep their original day even while another team is still pending', async (context) => {
+  context.mock.timers.enable({apis:['Date'],now:Date.parse('2026-09-29T09:00:00Z')});
+  const api=testApi();
+  api.db.przygotowanie_produkcji_sessions.push({id:'previous',session_date:'2026-09-28',updated_at:'original'});
+  api.db.przygotowanie_produkcji_tasks.push({id:'old-task',session_id:'previous',task_key:'legacy-prepared',station:'WTR 10',detail:'Product',is_current_plan:true,
+    kinds:['rozruch'],teams:['distribution','technician','process'],done:false,
+    notes:{[workProgress.PRODUCTION_TEAM_PROGRESS_NOTE_KEY]:{distribution:true,technician:{completedAt:'2026-09-28T08:00:00Z',completedBy:'Test'}}}});
+  const data=await (await api.get('?date=2026-09-29')).json();
+  const task=data.tasks.find(item=>item.id==='legacy-prepared');
+  assert.equal(task.notes[taskLifecycle.PRODUCTION_LEGACY_COMPLETION_DAY_NOTE],'2026-09-28');
+  assert.equal(task.done,false);
+  assert.equal(workProgress.canProductionTeamStart(task,'process'),true);
+  assert.equal(taskLifecycle.isProductionCompletionVisibleOnDate('distribution',workProgress.productionTeamCompletion(task,'distribution'),'2026-09-29',task.notes[taskLifecycle.PRODUCTION_LEGACY_COMPLETION_DAY_NOTE]),false);
+});
+
+test('technology departments still move completed work out of the open queue', () => {
+  for (const team of ['mechanics', 'process', 'graphics']) {
+    const base = { teams: [team], kinds: ['inne'], done: false, teamProgress: {} };
+    const input = [{ ...base, id: 'done', teamProgress: workProgress.setProductionTeamCompletion({}, team, true) }, { ...base, id: 'open' }];
+    assert.equal(workProgress.keepsProductionCompletedWorkInQueue(team), false);
+    assert.deepEqual(workProgress.productionWorkQueueForTeam(input, team).map(task => task.id), ['open']);
+  }
+});
+
+test('the entire preparation view has no separate completed list even for an administrator', () => {
+  const preparationTeams = workPlan.teamsForProductionWorkPlan('work-plan-preparation');
+  assert.deepEqual(preparationTeams, ['distribution', 'technician', 'additional']);
+  assert.equal(preparationTeams.every(workProgress.keepsProductionCompletedWorkInQueue), true);
+  assert.equal(workPlan.teamsForProductionWorkPlan('work-plan-technology').some(workProgress.keepsProductionCompletedWorkInQueue), false);
+  const page = readFileSync(fileURLToPath(new URL('../../app/(main)/przygotowanie-produkcji/page.tsx', import.meta.url)), 'utf8');
+  assert.ok(page.includes("const hasSeparateCompletedView = workPlanView === 'work-plan-technology' && visibleWorkPlanTeams.length > 0;"));
+  assert.ok(page.includes("const showArchivedWork = hasSeparateCompletedView && workPlanStatus === 'done';"));
+  assert.ok(page.includes("activeView === 'work-plan' && hasSeparateCompletedView &&"));
+});
+
+test('dispatcher completion uses the second stage timestamp in either order', () => {
+  const early = { completedAt: '2026-09-28T08:00:00Z', completedBy: 'First' };
+  const late = { completedAt: '2026-09-28T09:00:00Z', completedBy: 'Second' };
+  for (const firstStage of ['materials', 'station']) {
+    const secondStage = firstStage === 'materials' ? 'station' : 'materials';
+    const first = workProgress.setProductionDistributionStageCompletion({}, firstStage, true, early);
+    assert.equal(first.distribution, undefined);
+    const complete = workProgress.setProductionDistributionStageCompletion(first, secondStage, true, late);
+    assert.deepEqual(complete.distribution, late);
+    const normalized = workProgress.productionTeamProgressForTask({ teams: ['distribution'], teamProgress: { ...complete, distribution: early }, done: true });
+    assert.deepEqual(normalized.distribution, late);
+  }
+});
+
+test('completed history does not infer dispatcher completion from a stale aggregate and one stage', async () => {
+  const api = testApi();
+  const completion = { completedAt: new Date().toISOString(), completedBy: 'Test' };
+  api.db.przygotowanie_produkcji_history.push({ plan_date: planDates.getWarsawProductionPlanDate(), tasks: [{ ...toolroomSource(), id: 'partial-history', teams: ['distribution'], notes: {}, done: false, teamProgress: { distribution: completion, distributionMaterials: completion } }] });
+  const result = await api.get('?recentCompleted=1');
+  assert.equal(result.status, 200);
+  assert.deepEqual((await result.json()).completed, []);
+});
+
+test('a single dispatcher stage stays open and never enters completed work after reload', async () => {
+  for (const firstStage of ['materials', 'station']) {
+    const api = testApi();
+    const task = { ...toolroomSource(), id: `dispatcher-only-${firstStage}`, kinds: ['inne'], teams: ['distribution'], notes: {}, teamProgress: {}, done: false };
+    assert.equal((await api.post({ action: 'savePlan', tasks: [task] })).status, 200);
+    api.state.isAdmin = false;
+    api.state.preparationTeams = ['distribution'];
+    const first = await api.post({ action: 'mutateTask', taskId: task.id, mutation: { setDistributionStageDone: { stage: firstStage, done: true } } });
+    assert.equal(first.status, 200);
+    const saved = (await first.json()).task;
+    assert.equal(saved.done, false);
+    assert.equal(workProgress.isProductionTeamDone(saved, 'distribution'), false);
+    assert.equal(workProgress.isProductionDistributionStageDone(saved, firstStage), true);
+    assert.equal(taskLifecycle.productionWorkEvents(saved.notes).filter(event => event.team === 'distribution' && !event.revertedAt).length, 0);
+    const reloaded = (await (await api.get()).json()).tasks.find(item => item.id === task.id);
+    assert.equal(reloaded.done, false);
+    assert.equal(workProgress.isProductionTeamDone(reloaded, 'distribution'), false);
+    const recentAfterFirstStage = await api.get('?recentCompleted=1');
+    assert.equal(recentAfterFirstStage.status, 200);
+    assert.equal((await recentAfterFirstStage.json()).completed.length, 0);
+    const secondStage = firstStage === 'materials' ? 'station' : 'materials';
+    assert.equal(workProgress.isProductionDistributionStageDone(reloaded, secondStage), false);
+    const second = await api.post({ action: 'mutateTask', taskId: task.id, mutation: { setDistributionStageDone: { stage: secondStage, done: true } } });
+    assert.equal(second.status, 200);
+    const completed = (await second.json()).task;
+    assert.equal(completed.done, true);
+    assert.equal(taskLifecycle.productionWorkEvents(completed.notes).filter(event => event.team === 'distribution' && !event.revertedAt).length, 1);
+    const completedHistory = (await (await api.get('?recentCompleted=1')).json()).completed;
+    assert.equal(completedHistory.length, 1);
+    const reopened = await api.post({ action: 'mutateTask', taskId: task.id, mutation: { setDistributionStageDone: { stage: firstStage, done: false } } });
+    assert.equal(reopened.status, 200);
+    const openAgain = (await reopened.json()).task;
+    assert.equal(workProgress.isProductionTeamDone(openAgain, 'distribution'), false);
+    assert.equal(taskLifecycle.productionWorkEvents(openAgain.notes).filter(event => event.team === 'distribution' && !event.revertedAt).length, 0);
+    assert.equal((await (await api.get('?recentCompleted=1')).json()).completed.length, 0);
+  }
 });
 
 test('only the requester can assign a task hall and reloading preserves it', async () => {

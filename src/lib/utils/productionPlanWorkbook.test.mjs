@@ -86,6 +86,7 @@ const createHarness = () => {
     XLSX, Error, readProductionPlanWorkbook, readProductionPlanSheet, isToolroomReturnTask, withToolroomReturnTasks,
     isProductionTaskDone, setProductionTeamCompletion, machineForms: {}, exports: {},
     RECURRING_TASK_STATION: 'ZADANIE CYKLICZNE',
+    PRODUCTION_RESTORED_WORK_PREFIX: 'restored-work:',
     loadProductionPlanWorkbookTools: async () => ({ productionPlanXlsx: XLSX, readProductionPlanWorkbook, readProductionPlanSheet }),
     workbookSource: null, selectedSheetName: '', readingWorkbook: false,
     loadingSavedPlan: false, saveState: 'saved', importing: false, importError: null,
@@ -229,6 +230,20 @@ test('reimport still protects manual, recurring and planned work from automatic 
     assert.ok(!task.kinds.includes('anulowane'));
     assert.equal(task.notes.mechanics, 'Keep');
   }
+});
+
+test('restored historical work remains separate from production imports even on the same machine and product', () => {
+  const h = createHarness();
+  const imported = h.parseTasks(readProductionPlanSheet(readProductionPlanWorkbook(makeWorkbook(), 'plan.xlsx'), 'Tuesday'), 'Tuesday')[0];
+  const restored = { ...imported, id: 'restored-work:abc', isCurrentPlan: false,
+    kinds: ['zmiana-formy'], teams: ['mechanics'], notes: { mechanics: 'Older work' }, done: false };
+  const merged = h.mergeImportedTasks([imported], [restored], h.context.machineForms);
+  assert.equal(merged.length, 2);
+  const retained = merged.find(task => task.id === restored.id);
+  assert.equal(retained.isCurrentPlan, false);
+  assert.equal(retained.done, false);
+  assert.equal(retained.kinds.includes('anulowane'), false);
+  assert.equal(merged.find(task => task.id === imported.id).isCurrentPlan, true);
 });
 
 test('a cancelled index returning after another form was mounted needs a new form change', () => {

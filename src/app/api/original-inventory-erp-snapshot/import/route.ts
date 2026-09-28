@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx';
 import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
 import {
   normalizeOriginalInventoryName,
   normalizeOriginalInventoryNameKey
@@ -117,6 +118,7 @@ const parseSnapshotImportFile = async (file: File) => {
       unit: string;
       indexCode: string | null;
       warehouseCode: string | null;
+      catalogIssue?: string;
     }
   >();
 
@@ -130,6 +132,7 @@ const parseSnapshotImportFile = async (file: File) => {
     const usesNewLayout = fourthCellText.length > 0;
     const realQty = usesNewLayout ? parsedRealQty : parsedRealQty ?? availableQty;
     const unitCell = usesNewLayout ? fourthCellText : thirdCellText;
+    const catalogIssue = /[\p{L}]/u.test(unitCell) ? undefined : 'Brak jednostki w pliku — nie dodano kartoteki.';
 
     if (!name) return;
     if (index === 0 && isSnapshotHeaderRow(name, row?.[1], row?.[2])) return;
@@ -142,6 +145,10 @@ const parseSnapshotImportFile = async (file: File) => {
     if (existing) {
       existing.realQty += realQty;
       existing.availableQty += availableQty;
+      if (catalogIssue) existing.catalogIssue = catalogIssue;
+      if (existing.unit && unitCell && existing.unit.toLowerCase().replace(/\.$/, '') !== unitCell.toLowerCase().replace(/\.$/, '')) {
+        existing.catalogIssue = 'Sprzeczne jednostki dla tego samego indeksu w pliku — nie dodano kartoteki.';
+      }
       if (!existing.unit && unitCell) {
         existing.unit = unitCell;
       }
@@ -159,6 +166,7 @@ const parseSnapshotImportFile = async (file: File) => {
       realQty,
       availableQty,
       unit: unitCell || 'kg',
+      catalogIssue,
       indexCode,
       warehouseCode
     });
@@ -276,11 +284,18 @@ export async function POST(request: Request) {
       inserted += chunk.length;
     }
 
+    // The daily stock is already saved; catalog issues are non-blocking warnings.
+    const catalogSync = await syncOriginalInventoryCatalogFromSnapshot(supabaseAdmin, items).catch(() => ({
+      added: 0, existing: 0, failed: true, warningCount: 1,
+      warnings: [{ name: '', indexCode: '', reason: 'Stany ERP zostały wgrane. Nie udało się zakończyć dopisywania kartotek; ponów import, aby spróbować ponownie.' }]
+    }));
     return NextResponse.json({
       total: items.length,
       inserted,
       replaced,
-      snapshotDate
+      snapshotDate,
+      catalogSync,
+      catalogRefreshToken: randomUUID()
     });
   } catch (error) {
     const code = error instanceof Error && error.message ? error.message : 'UNKNOWN';

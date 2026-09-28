@@ -2278,6 +2278,8 @@ let originalErpCatalogCache: { items: OriginalInventoryCatalogEntry[]; expiresAt
 let originalErpCatalogLoad: Promise<OriginalInventoryCatalogEntry[]> | null = null;
 let originalCatalogCache: { items: OriginalInventoryCatalogEntry[]; expiresAt: number } | null = null;
 let originalCatalogLoad: Promise<OriginalInventoryCatalogEntry[]> | null = null;
+let originalCatalogGeneration = 0;
+const originalCatalogRefreshTokens = new Set<string>();
 let originalCatalogSpisSearchSource: OriginalInventoryCatalogEntry[] | null = null;
 let originalCatalogSpisSearchItems: OriginalInventoryCatalogEntry[] = [];
 const originalCatalogSpisSearchResults = new Map<string, OriginalInventoryCatalogEntry[]>();
@@ -2350,17 +2352,20 @@ const fetchOriginalCatalog = async () => {
     .map(mapOriginalInventoryCatalogEntry);
 };
 
-const loadOriginalCatalog = async () => {
+const loadOriginalCatalog = async (): Promise<OriginalInventoryCatalogEntry[]> => {
   if (originalCatalogCache && originalCatalogCache.expiresAt > Date.now()) {
     return originalCatalogCache.items;
   }
   if (!originalCatalogLoad) originalCatalogLoad = fetchOriginalCatalog();
+  const loading = originalCatalogLoad;
+  const generation = originalCatalogGeneration;
   try {
-    const items = await originalCatalogLoad;
+    const items = await loading;
+    if (generation !== originalCatalogGeneration) return loadOriginalCatalog();
     originalCatalogCache = { items, expiresAt: Date.now() + ORIGINAL_CATALOG_CACHE_MS };
     return items;
   } finally {
-    originalCatalogLoad = null;
+    if (originalCatalogLoad === loading) originalCatalogLoad = null;
   }
 };
 
@@ -2382,10 +2387,10 @@ const searchOriginalCatalogForSpis = async (rawQuery: unknown, rawLimit: unknown
   const requestedLimit = Math.floor(Number(rawLimit));
   const limit = Number.isFinite(requestedLimit) ? Math.min(32, Math.max(1, requestedLimit)) : 24;
   const cacheKey = `${query.toLocaleLowerCase('pl')}|${limit}`;
+  const items = await loadOriginalCatalogSpisSearchItems();
   const cached = originalCatalogSpisSearchResults.get(cacheKey);
   if (cached) return cached;
 
-  const items = await loadOriginalCatalogSpisSearchItems();
   const result = searchOriginalInventorySpisSuggestions(items, query, [], limit);
   if (originalCatalogSpisSearchResults.size >= 100) {
     const oldestKey = originalCatalogSpisSearchResults.keys().next().value;
@@ -2396,10 +2401,22 @@ const searchOriginalCatalogForSpis = async (rawQuery: unknown, rawLimit: unknown
 };
 
 const invalidateOriginalCatalogCache = () => {
+  originalCatalogGeneration++;
+  originalCatalogLoad = null;
   originalCatalogCache = null;
   originalCatalogSpisSearchSource = null;
   originalCatalogSpisSearchItems = [];
   originalCatalogSpisSearchResults.clear();
+};
+
+// A successful import carries this token on subsequent reads. Each server worker
+// refreshes once, so an import handled by another route/instance is visible too.
+const acknowledgeOriginalCatalogRefresh = (value: unknown) => {
+  const token = String(value ?? '');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token) || originalCatalogRefreshTokens.has(token)) return;
+  if (originalCatalogRefreshTokens.size >= 100) originalCatalogRefreshTokens.delete(originalCatalogRefreshTokens.values().next().value!);
+  originalCatalogRefreshTokens.add(token);
+  invalidateOriginalCatalogCache();
 };
 
 const isMissingOriginalInventoryErpSnapshotsTableError = (error: unknown) => {
@@ -6762,10 +6779,12 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return rows.map(row => ({ ...mapOriginalInventoryEntry(row), canModify: owner.owns(row) }));
     }
     case 'getOriginalInventoryCatalog': {
+      acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);
       const catalog = await loadOriginalCatalog();
       return [...catalog].sort((a, b) => a.name.localeCompare(b.name, 'pl', { sensitivity: 'base' }));
     }
     case 'searchOriginalInventoryCatalog': {
+      acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);
       return searchOriginalCatalogForSpis(payload?.query, payload?.limit);
     }
     case 'getOriginalInventorySilosConfig': {

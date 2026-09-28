@@ -68,6 +68,51 @@ test('a long ERP index wins over a short secondary value', () => {
   );
 });
 
+test('spis ignores the unassigned foil duplicate despite spaces around the hyphen', () => {
+  const unassigned = {
+    name: 'FOLIA EXTERIOR GLC73725_05-20MMX305M',
+    indexCode: '10060',
+    indexCode2: '10060',
+    warehouseCode: null
+  };
+  const assigned = {
+    name: 'FOLIA EXTERIOR GLC73725_05 - 20MMX305M',
+    indexCode: 'M-51-FO-PCP-10060',
+    indexCode2: '10060',
+    warehouseCode: 'M-51'
+  };
+
+  for (const query of ['20mmx305', '10060']) {
+    for (const suggestions of [[unassigned, assigned], [assigned, unassigned]]) {
+      assert.deepEqual(searchOriginalInventorySpisSuggestions(suggestions, query, [], 8), [assigned]);
+    }
+  }
+});
+
+test('spis preserves unassigned materials without a matching warehouse catalog entry', () => {
+  const suggestions = [
+    { name: 'FOLIA EXTERIOR GLC73725_05-20MMX305M', indexCode2: '10061', warehouseCode: null },
+    { name: 'FOLIA INNA 20MMX305M', indexCode2: '10060', warehouseCode: null },
+    { name: 'FOLIA EXTERIOR GLC73725_05 - 20MMX305M', indexCode2: '10060', warehouseCode: 'M-51' }
+  ];
+
+  assert.equal(searchOriginalInventorySpisSuggestions(suggestions, '20mmx305', [], 8).length, 3);
+  assert.deepEqual(searchOriginalInventorySpisSuggestions([suggestions[0]], '10061', [], 8), [suggestions[0]]);
+});
+
+test('spis keeps the warehouse catalog variants of the same foil', () => {
+  const suggestions = [
+    { name: 'FOLIA EXTERIOR GLC73725_05-20MMX305M', indexCode2: '10060', warehouseCode: null },
+    { name: 'FOLIA EXTERIOR GLC73725_05 - 20MMX305M', indexCode: 'M-51-FO-PCP-10060', warehouseCode: 'M-51' },
+    { name: 'FOLIA EXTERIOR GLC73725_05 - 20MMX305M', indexCode: 'M-52-FO-PCP-10060', warehouseCode: 'M-52' }
+  ];
+
+  assert.deepEqual(
+    searchOriginalInventorySpisSuggestions(suggestions, '20mmx305', [], 8).map((item) => item.warehouseCode),
+    ['M-51', 'M-52']
+  );
+});
+
 test('spis search still matches names and normalized index 2 formatting', () => {
   assert.equal(matchesOriginalInventorySpisSearch('starex', 'ABS STAREX AS 0151', '8178'), true);
   assert.equal(matchesOriginalInventorySpisSearch('50 32-00', 'TARNOFORM 300', '5032-00'), true);

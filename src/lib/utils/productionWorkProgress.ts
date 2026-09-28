@@ -43,6 +43,17 @@ type DistributionStageKey = typeof distributionStageKeys[ProductionDistributionS
 
 export type ProductionTeamProgress = Partial<Record<ProductionTeam | DistributionStageKey, ProductionTeamCompletion>>;
 
+const latestDistributionCompletion = (
+  materials: ProductionTeamCompletion,
+  station: ProductionTeamCompletion
+): ProductionTeamCompletion => {
+  const materialsAt = Date.parse(materials.completedAt);
+  const stationAt = Date.parse(station.completedAt);
+  return Number.isFinite(materialsAt) && (!Number.isFinite(stationAt) || materialsAt > stationAt)
+    ? materials
+    : station;
+};
+
 type ProgressTask = {
   teams?: readonly unknown[];
   kinds?: readonly unknown[];
@@ -168,7 +179,7 @@ export const productionTeamProgressForTask = (task: ProgressTask): ProductionTea
       filtered.distributionStation = filtered.distribution;
     }
     if (filtered.distributionMaterials && filtered.distributionStation) {
-      filtered.distribution = filtered.distributionStation;
+      filtered.distribution = latestDistributionCompletion(filtered.distributionMaterials, filtered.distributionStation);
     } else {
       delete filtered.distribution;
     }
@@ -193,6 +204,20 @@ export const productionTeamCompletion = (
 
 export const isProductionTeamDone = (task: ProgressTask, team: ProductionTeam): boolean =>
   Boolean(productionTeamCompletion(task, team));
+
+export const keepsProductionCompletedWorkInQueue = (team: ProductionTeam): boolean =>
+  team === 'distribution' || team === 'technician' || team === 'additional';
+
+export const productionWorkQueueForTeam = <T extends ProgressTask>(tasks: readonly T[], team: ProductionTeam): T[] => {
+  const pending: T[] = [];
+  const completed: T[] = [];
+  for (const task of tasks) {
+    if (!task.teams?.includes(team) || task.kinds?.includes('anulowane')) continue;
+    if (!isProductionTeamDone(task, team)) pending.push(task);
+    else if (keepsProductionCompletedWorkInQueue(team)) completed.push(task);
+  }
+  return [...pending, ...completed];
+};
 
 export const productionDistributionStageCompletion = (
   task: ProgressTask,
@@ -274,7 +299,7 @@ export const setProductionDistributionStageCompletion = (
   if (done) next[key] = completion;
   else delete next[key];
   if (next.distributionMaterials && next.distributionStation) {
-    next.distribution = next.distributionStation;
+    next.distribution = latestDistributionCompletion(next.distributionMaterials, next.distributionStation);
   } else {
     delete next.distribution;
   }
