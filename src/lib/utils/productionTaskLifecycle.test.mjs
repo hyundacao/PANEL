@@ -98,6 +98,59 @@ test('completion carried into tomorrow is counted only on the day it happened', 
   assert.equal(productionTaskDoneOnDate(legacy, '2026-09-28'), false);
 });
 
+test('each work kind is counted on its responsible team completion day', () => {
+  const task = {
+    station: 'WTR 10', kinds: ['zmiana-formy', 'rozruch'], teams: ['mechanics', 'process', 'distribution'],
+    notes: {}, done: false,
+    teamProgress: {
+      mechanics: { completedAt: '2026-09-27T10:00:00Z' },
+      process: { completedAt: '2026-09-28T08:00:00Z' }
+    }
+  };
+  const first = summarizeProductionDay([task], '2026-09-27');
+  assert.equal(first.kinds['zmiana-formy'].done, 1);
+  assert.equal(first.kinds.rozruch.done, 0);
+  const second = summarizeProductionDay([task], '2026-09-28');
+  assert.equal(second.kinds['zmiana-formy'].done, 0);
+  assert.equal(second.kinds.rozruch.done, 1);
+});
+
+test('repeated work counts each completion once and ignores other teams and reverted events', () => {
+  const first = { id: 'a:mechanics:1', team: 'mechanics', kinds: ['zmiana-formy', 'rozruch'], completedAt: '2026-09-27T10:00:00Z', completedBy: 'A' };
+  const second = { ...first, id: 'a:mechanics:2', completedAt: '2026-09-27T12:00:00Z' };
+  const third = { ...first, id: 'a:mechanics:3', completedAt: '2026-09-27T14:00:00Z', revertedAt: '2026-09-27T15:00:00Z' };
+  const process = { ...first, id: 'a:process:1', team: 'process' };
+  const distribution = { ...first, id: 'a:distribution:1', team: 'distribution' };
+  const task = {
+    station: 'WTR 10', kinds: ['zmiana-formy', 'rozruch'], teams: ['mechanics', 'process', 'distribution'],
+    notes: { __workEvents: JSON.stringify([first, second, third, process, distribution]) }, done: false
+  };
+  const summary = summarizeProductionDay([task, task], '2026-09-27');
+  assert.equal(summary.kinds['zmiana-formy'].done, 2);
+  assert.equal(summary.kinds.rozruch.done, 1);
+  assert.equal(summary.completedEvents, 4);
+  assert.equal(summarizeProductionDay([task], '2026-09-28').kinds['zmiana-formy'].done, 0);
+  const single = summarizeProductionDay([task], '2026-09-27');
+  assert.equal(single.kinds['zmiana-formy'].total, 2);
+  assert.equal(single.assignments, 3);
+});
+
+test('completed work survives removal from the plan and uses Warsaw midnight', () => {
+  const event = { id: 'a:mechanics:1', team: 'mechanics', kinds: ['zmiana-formy'], completedAt: '2026-09-27T22:00:00Z', completedBy: 'A' };
+  const task = { kinds: [], teams: [], notes: { __workEvents: JSON.stringify([event]) }, done: false };
+  assert.equal(summarizeProductionDay([task], '2026-09-27').kinds['zmiana-formy'], undefined);
+  assert.deepEqual(summarizeProductionDay([task], '2026-09-28').kinds['zmiana-formy'], { total: 1, done: 1 });
+});
+
+test('a reverted team event never falls back to stale completion progress', () => {
+  const event = { id: 'a:mechanics:1', team: 'mechanics', kinds: ['zmiana-formy'], completedAt: '2026-09-27T10:00:00Z', completedBy: 'A', revertedAt: '2026-09-27T11:00:00Z' };
+  const task = { kinds: ['zmiana-formy'], teams: ['mechanics'],
+    notes: { __workEvents: JSON.stringify([event]) }, done: true,
+    teamProgress: { mechanics: { completedAt: event.completedAt } }
+  };
+  assert.equal(summarizeProductionDay([task], '2026-09-27').kinds['zmiana-formy'].done, 0);
+});
+
 test('dispatcher and technician completions expire at Warsaw midnight in summer and winter', () => {
   for (const team of ['distribution', 'technician']) {
     for (const [lastSecond, midnight] of [

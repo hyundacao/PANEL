@@ -1080,6 +1080,34 @@ const latestPriorPlanVersion = (versions: PlanVersion[], planDate: string): Plan
     return latest;
   }, undefined);
 
+const planningStateForDate = (current: AppState, planDate: string): AppState => {
+  if (current.selectedPlanDate === planDate) return current;
+  const dailyPlans = { ...current.dailyPlans, [current.selectedPlanDate]: clonePlanItems(current.plan) };
+  const latest = latestPlanVersion(current.planVersions, planDate);
+  const previousVersion = latestPriorPlanVersion(current.planVersions, planDate);
+  const useCurrentPlan = current.selectedPlanDate < planDate && current.plan.length > 0
+    && (!previousVersion || current.selectedPlanDate >= previousVersion.planDate);
+  const previousPlan = useCurrentPlan
+    ? current.plan
+    : previousVersion ? dailyPlans[previousVersion.planDate] ?? previousVersion.items : [];
+  const savedPlan = dailyPlans[planDate] ?? latest?.items;
+  const carrying = !latest && !savedPlan?.length && previousPlan.length > 0;
+  const selectedPlan = clonePlanItems(carrying ? previousPlan : savedPlan ?? []);
+  const sourceFile = useCurrentPlan ? current.planName : previousVersion?.fileName ?? '';
+  const sourceSheet = useCurrentPlan ? current.planSheet : previousVersion?.sheetName ?? '';
+  const sourceImportedAt = useCurrentPlan ? current.planImportedAt : previousVersion?.importedAt ?? '';
+  return {
+    ...current,
+    selectedPlanDate: planDate,
+    activePlanVersionId: latest?.id ?? '',
+    plan: applyDefaultTechnologyAssignments(selectedPlan, current.technologies),
+    dailyPlans,
+    planName: latest?.fileName ?? (carrying ? sourceFile : ''),
+    planSheet: latest?.sheetName ?? (carrying ? sourceSheet : ''),
+    planImportedAt: latest?.importedAt ?? (carrying ? sourceImportedAt : '')
+  };
+};
+
 const sameTechnologyMaterials = (left: TechnologyMaterial[], right: TechnologyMaterial[]) =>
   left.length === right.length && left.every((material, index) => {
     const other = right[index];
@@ -1909,6 +1937,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   const [alternativeDraftItemId, setAlternativeDraftItemId] = useState('');
   const [alternativeDraftDescription, setAlternativeDraftDescription] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const planViewWasOpenRef = useRef(false);
   const [customHorizon, setCustomHorizon] = useState(false);
   const [today, setToday] = useState(localDateKey);
   const [technologySearch, setTechnologySearch] = useState('');
@@ -2870,34 +2899,21 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       return;
     }
     if (!closeCalculationEditorIfAllowed()) return;
-    setState((current) => {
-      const dailyPlans = { ...current.dailyPlans, [current.selectedPlanDate]: clonePlanItems(current.plan) };
-      const latest = latestPlanVersion(current.planVersions, planDate);
-      const previousVersion = latestPriorPlanVersion(current.planVersions, planDate);
-      const useCurrentPlan = current.selectedPlanDate < planDate && current.plan.length > 0
-        && (!previousVersion || current.selectedPlanDate >= previousVersion.planDate);
-      const previousPlan = useCurrentPlan
-        ? current.plan
-        : previousVersion ? dailyPlans[previousVersion.planDate] ?? previousVersion.items : [];
-      const savedPlan = dailyPlans[planDate] ?? latest?.items;
-      const carrying = !latest && !savedPlan?.length && previousPlan.length > 0;
-      const selectedPlan = clonePlanItems(carrying ? previousPlan : savedPlan ?? []);
-      const sourceFile = useCurrentPlan ? current.planName : previousVersion?.fileName ?? '';
-      const sourceSheet = useCurrentPlan ? current.planSheet : previousVersion?.sheetName ?? '';
-      const sourceImportedAt = useCurrentPlan ? current.planImportedAt : previousVersion?.importedAt ?? '';
-      return {
-        ...current,
-        selectedPlanDate: planDate,
-        activePlanVersionId: latest?.id ?? '',
-        plan: applyDefaultTechnologyAssignments(selectedPlan, current.technologies),
-        dailyPlans,
-        planName: latest?.fileName ?? (carrying ? sourceFile : ''),
-        planSheet: latest?.sheetName ?? (carrying ? sourceSheet : ''),
-        planImportedAt: latest?.importedAt ?? (carrying ? sourceImportedAt : '')
-      };
-    });
+    setState((current) => planningStateForDate(current, planDate));
     setExpandedPlan('');
   };
+
+  useEffect(() => {
+    if (!hydrated || view !== 'plan') {
+      planViewWasOpenRef.current = false;
+      return;
+    }
+    if (planViewWasOpenRef.current) return;
+    planViewWasOpenRef.current = true;
+    setShowDatePicker(false);
+    const currentDate = localDateKey();
+    setState((current) => planningStateForDate(current, currentDate));
+  }, [hydrated, view, setState]);
 
   const updatePlanQuantity = (itemId: string, quantity: number, editId: string) => {
     if (!Number.isFinite(quantity) || quantity < 0) return;

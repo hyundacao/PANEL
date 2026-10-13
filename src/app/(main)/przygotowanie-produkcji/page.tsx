@@ -24,7 +24,7 @@ import { useUiStore } from '@/lib/store/ui';
 import { defaultTeamComments, normalizeTeamComments, productionMetricsForTask, teamCommentForTask, type ProductionTeam, type TeamComment, type TeamComments } from '@/lib/utils/productionTeamComments';
 import { cn } from '@/lib/utils/cn';
 import { getWarsawProductionPlanDate, isProductionPlanDate } from '@/lib/utils/productionPlanDate';
-import { PRODUCTION_LEGACY_COMPLETION_DAY_NOTE, PRODUCTION_TASK_DUE_DATE_NOTE, isProductionCompletionVisibleOnDate, isRecentProductionHistoryDate, mergeProductionCompletedWork, productionKindOwner, productionTaskDoneOnDate, productionTaskDueDate, productionWorkEvents, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
+import { PRODUCTION_LEGACY_COMPLETION_DAY_NOTE, PRODUCTION_TASK_DUE_DATE_NOTE, isProductionCompletionVisibleOnDate, isRecentProductionHistoryDate, mergeProductionCompletedWork, productionKindOwner, productionTaskDoneOnDate, productionTaskDueDate, productionWorkEvents, summarizeProductionDay, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
 import { matchesProductionPlanStation } from '@/lib/utils/productionPlanSearch';
 import { PRODUCTION_RESTORED_WORK_PREFIX } from '@/lib/utils/productionWorkRestore';
 import { RECURRING_TASK_STATION, normalizeRecurringTasks, validateRecurringTasks, type RecurringTaskDefinition } from '@/lib/utils/productionRecurringTasks';
@@ -295,6 +295,21 @@ const TaskTitle = ({ task, team, compact = false }: { task: Task; team: Team; co
   </>;
 };
 
+const MachineConfirmation = ({ state, detail }: {
+  state?: { detail: string; stage: string; at: string };
+  detail: string;
+}) => {
+  if (!state || normalize(state.detail) !== normalize(detail)) return null;
+  const at = new Date(state.at);
+  return <p className="text-[11px] text-dim">
+    Ostatnie potwierdzenie: {state.detail}
+    {!Number.isNaN(at.getTime()) && <> · <time dateTime={state.at}>{at.toLocaleString('pl-PL', {
+      timeZone: 'Europe/Warsaw', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    })}</time></>}
+    {' · '}{state.stage === 'started' ? 'proces potwierdzony' : 'zawieszenie formy potwierdzone'}
+  </p>;
+};
+
 const TaskWorkSummary = ({ task, team, kindLabels, compact = false }: { task: Task; team: Team; kindLabels: string; compact?: boolean }) => {
   const note = task.notes[team] ?? '';
   const revision = productionReopenedNoteDiff(task.notes, team);
@@ -489,7 +504,7 @@ const automaticTeams: Partial<Record<WorkKind, Team[]>> = {
   'zmiana-grafiki': ['process', 'distribution', 'graphics'],
   'zmiana-formy': ['mechanics', 'process', 'distribution', 'technician'],
   'forma-narzedziownia': ['mechanics', 'process'],
-  'powrot-formy-narzedziownia': ['mechanics', 'process'],
+  'powrot-formy-narzedziownia': ['mechanics'],
   regulacja: ['process'],
   proby: ['process'],
   'przeglad-a': ['process']
@@ -499,10 +514,6 @@ const isManualTask = (task: Pick<Task, 'station'>) =>
   task.station === 'ZADANIE DODATKOWE' || task.station === RECURRING_TASK_STATION;
 const isPanelGroupHeader = (task: Pick<Task, 'station' | 'detail'>) =>
   /^ST\s*[12]$/.test(normalize(task.station)) && /^PANELE\s+(SE|BO)$/.test(normalize(task.detail));
-const preparesDistributionStation = (task: Pick<Task, 'teams' | 'notes'>) =>
-  task.teams.includes('distribution') && task.notes.distribution?.trim().toLocaleLowerCase().includes('przygotowa') === true;
-const restartsProcessAfterToolroom = (task: Pick<Task, 'kinds' | 'teams' | 'notes'>) =>
-  task.kinds.includes('forma-narzedziownia') && task.teams.includes('process');
 const kindsForTeam = (task: Pick<Task, 'kinds'>, team: Team) => team === 'mechanics'
   ? task.kinds.filter((kind) => kind === 'zmiana-formy' || kind === 'forma-narzedziownia' || kind === 'powrot-formy-narzedziownia' || kind === 'anulowane')
   : team === 'process'
@@ -578,7 +589,7 @@ const WorkReportDashboard = ({
 }) => {
   const total = Object.values(report).reduce((sum, item) => sum + item.total, 0);
   const done = Object.values(report).reduce((sum, item) => sum + item.done, 0);
-  const breakdown = reportKinds.map((kind) => ({ label: kind.label, value: report[kind.id].total }));
+  const breakdown = reportKinds.map((kind) => ({ label: kind.label, value: report[kind.id].done }));
   const maxValue = Math.max(1, ...breakdown.map((item) => item.value));
   const periodLabel = period === 'week' ? 'Ostatnie 7 dni' : period === 'month' ? 'Ostatnie 30 dni' : 'Cała historia';
 
@@ -586,8 +597,8 @@ const WorkReportDashboard = ({
     <section className="overflow-hidden rounded-xl border border-[rgba(255,122,0,0.3)] bg-[var(--surface-1)]" style={{ backgroundImage: 'var(--report-hero-bg)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
       <div className="flex flex-col gap-4 px-5 py-5 lg:flex-row lg:items-center lg:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-[var(--brand)]">Przygotowanie produkcji</p><h2 className="mt-1 text-2xl font-semibold text-title">Raport prac</h2><p className="mt-1 text-sm text-dim">{periodLabel}</p></div><div className="grid grid-cols-3 gap-2">{([{ id: 'week', label: 'Tydzień' }, { id: 'month', label: 'Miesiąc' }, { id: 'all', label: 'Wszystko' }] as const).map((item) => <Button className={cn('min-h-10 px-3 py-2 text-xs', period === item.id && 'bg-[rgba(255,122,0,0.18)] text-title')} key={item.id} onClick={() => onPeriodChange(item.id)} type="button" variant={period === item.id ? 'secondary' : 'outline'}>{item.label}</Button>)}</div></div>
     </section>
-    <div className="grid gap-3 md:grid-cols-3"><div className="rounded-xl border border-[rgba(255,122,0,0.3)] bg-[linear-gradient(135deg,rgba(255,122,0,0.15),rgba(255,255,255,0.02))] p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Prace w okresie</p><p className="mt-2 text-4xl font-bold text-[var(--brand)]">{total}</p></div><div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Dni z planem</p><p className="mt-2 text-4xl font-bold text-title">{dayCount}</p></div><div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Wykonane</p><p className="mt-2 text-4xl font-bold text-title">{done}</p></div></div>
-    <div className="grid gap-4 xl:grid-cols-[1.1fr_1fr]"><section className="rounded-xl border border-border bg-surface p-5"><div className="mb-5 flex items-center justify-between"><div><p className="font-semibold text-title">Rozkład prac</p><p className="mt-1 text-sm text-dim">Najczęściej planowane działania</p></div><span className="text-sm font-semibold text-[var(--brand)]">{total}</span></div>{breakdown.length === 0 ? <p className="py-10 text-center text-sm text-dim">Brak prac w wybranym okresie.</p> : <div className="space-y-4">{breakdown.map((item) => <div key={item.label}><div className="mb-1.5 flex items-center justify-between text-sm"><span className="font-semibold text-title">{item.label}</span><span className="font-bold text-[var(--brand)]">{item.value}</span></div><div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.07)]"><div className="h-full rounded-full bg-[linear-gradient(90deg,#ff7a00,#ffad4d)]" style={{ width: `${(item.value / maxValue) * 100}%` }} /></div></div>)}</div>}</section><section className="rounded-xl border border-border bg-surface p-5"><p className="font-semibold text-title">Aktywność w czasie</p><p className="mt-1 text-sm text-dim">Liczba prac przypisanych każdego dnia</p>{chart.length < 2 ? <div className="flex h-64 flex-col items-center justify-center text-center"><p className="text-5xl font-bold text-[var(--brand)]">{total}</p><p className="mt-2 text-sm text-dim">Zbieramy kolejne dni, aby pokazać trend.</p></div> : <div className="mt-4 h-60"><ProductionActivityChart data={chart} /></div>}</section></div>
+    <div className="grid gap-3 md:grid-cols-3"><div className="rounded-xl border border-[rgba(255,122,0,0.3)] bg-[linear-gradient(135deg,rgba(255,122,0,0.15),rgba(255,255,255,0.02))] p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Zlecone prace</p><p className="mt-2 text-4xl font-bold text-[var(--brand)]">{total}</p></div><div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Dni z planem</p><p className="mt-2 text-4xl font-bold text-title">{dayCount}</p></div><div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs font-semibold uppercase tracking-wide text-dim">Wykonane</p><p className="mt-2 text-4xl font-bold text-title">{done}</p></div></div>
+    <div className="grid gap-4 xl:grid-cols-[1.1fr_1fr]"><section className="rounded-xl border border-border bg-surface p-5"><div className="mb-5 flex items-center justify-between"><div><p className="font-semibold text-title">Rozkład prac</p><p className="mt-1 text-sm text-dim">Najczęściej wykonane działania</p></div><span className="text-sm font-semibold text-[var(--brand)]">{done}</span></div>{breakdown.length === 0 ? <p className="py-10 text-center text-sm text-dim">Brak prac w wybranym okresie.</p> : <div className="space-y-4">{breakdown.map((item) => <div key={item.label}><div className="mb-1.5 flex items-center justify-between text-sm"><span className="font-semibold text-title">{item.label}</span><span className="font-bold text-[var(--brand)]">{item.value}</span></div><div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.07)]"><div className="h-full rounded-full bg-[linear-gradient(90deg,#ff7a00,#ffad4d)]" style={{ width: `${(item.value / maxValue) * 100}%` }} /></div></div>)}</div>}</section><section className="rounded-xl border border-border bg-surface p-5"><p className="font-semibold text-title">Aktywność w czasie</p><p className="mt-1 text-sm text-dim">Liczba prac wykonanych każdego dnia</p>{chart.length < 2 ? <div className="flex h-64 flex-col items-center justify-center text-center"><p className="text-5xl font-bold text-[var(--brand)]">{done}</p><p className="mt-2 text-sm text-dim">Zbieramy kolejne dni, aby pokazać trend.</p></div> : <div className="mt-4 h-60"><ProductionActivityChart data={chart} /></div>}</section></div>
     <WorkKindTrendCharts series={series} />
   </div>;
 };
@@ -731,7 +742,21 @@ const WorkHistoryDashboard = ({ history, today, onDeleteDay, onRestore, canResto
 
 const hasYellowFill = (cell: CellObject | undefined) => {
   const style = cell?.s as { fill?: { fgColor?: { rgb?: string } }; fgColor?: { rgb?: string } } | undefined;
-  return [style?.fill?.fgColor?.rgb, style?.fgColor?.rgb].some((color) => color?.toUpperCase().endsWith('FFFF00'));
+  return [style?.fill?.fgColor?.rgb, style?.fgColor?.rgb].some((color) => {
+    if (typeof color !== 'string' || !/^(?:[0-9a-f]{2})?[0-9a-f]{6}$/i.test(color)) return false;
+    const rgb = color.slice(-6);
+    const red = parseInt(rgb.slice(0, 2), 16);
+    const green = parseInt(rgb.slice(2, 4), 16);
+    const blue = parseInt(rgb.slice(4, 6), 16);
+    const max = Math.max(red, green, blue);
+    const min = Math.min(red, green, blue);
+    const chroma = max - min;
+    if (red < 180 || green < 150 || chroma < 30) return false;
+    const hue = max === red
+      ? 60 * ((green - blue) / chroma)
+      : max === green ? 60 * (2 + (blue - red) / chroma) : 240;
+    return hue >= 42 && hue <= 70;
+  });
 };
 
 const parseTasks = (workbook: WorkBook, sheetName: string): Task[] => {
@@ -1745,8 +1770,8 @@ export default function PrzygotowanieProdukcjiPage() {
     const allDays = [
       ...history
         .filter((entry) => entry.plan_date !== selectedPlanDate)
-        .map((entry) => ({ date: entry.plan_date, tasks: entry.tasks, summary: entry.summary })),
-      { date: selectedPlanDate, tasks, summary: null }
+        .map((entry) => ({ date: entry.plan_date, summary: entry.summary ?? summarizeProductionDay(entry.tasks, entry.plan_date) })),
+      { date: selectedPlanDate, summary: summarizeProductionDay(tasks, selectedPlanDate) }
     ];
     if (reportPeriod === 'all') return allDays;
     const from = new Date();
@@ -1758,28 +1783,10 @@ export default function PrzygotowanieProdukcjiPage() {
   const workReport = useMemo(() => {
     const totals = Object.fromEntries(reportKinds.map((kind) => [kind.id, { total: 0, done: 0 }])) as Record<ReportKind, { total: number; done: number }>;
     reportDays.forEach((entry) => {
-      if (entry.summary) {
-        Object.entries(entry.summary.kinds).forEach(([kind, counts]) => {
-          if (!Object.prototype.hasOwnProperty.call(totals, kind)) return;
-          totals[kind as ReportKind].total += counts.total;
-          totals[kind as ReportKind].done += counts.done;
-        });
-        return;
-      }
-      entry.tasks.forEach((task) => {
-      (task.kinds ?? []).forEach((kind) => {
+      Object.entries(entry.summary.kinds).forEach(([kind, counts]) => {
         if (!Object.prototype.hasOwnProperty.call(totals, kind)) return;
-        totals[kind as WorkKind].total += 1;
-        if (productionTaskDoneOnDate(task, entry.date)) totals[kind as WorkKind].done += 1;
-      });
-      if (preparesDistributionStation(task)) {
-        totals['przygotowanie-stanowiska'].total += 1;
-        if (productionTaskDoneOnDate(task, entry.date)) totals['przygotowanie-stanowiska'].done += 1;
-      }
-      if (restartsProcessAfterToolroom(task)) {
-        totals['wznowienie-procesu'].total += 1;
-        if (productionTaskDoneOnDate(task, entry.date)) totals['wznowienie-procesu'].done += 1;
-      }
+        totals[kind as ReportKind].total += counts.total;
+        totals[kind as ReportKind].done += counts.done;
       });
     });
     return totals;
@@ -1789,7 +1796,7 @@ export default function PrzygotowanieProdukcjiPage() {
     .map((entry) => ({
       dateKey: entry.date,
       date: new Date(`${entry.date}T12:00:00`).toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }),
-      prace: entry.summary?.assignments ?? entry.tasks.reduce((total, task) => total + (task.kinds?.length ?? 0) + (preparesDistributionStation(task) ? 1 : 0) + (restartsProcessAfterToolroom(task) ? 1 : 0), 0)
+      prace: Object.values(entry.summary.kinds).reduce((total, count) => total + count.done, 0)
     }))
     .sort((left, right) => left.dateKey.localeCompare(right.dateKey)), [reportDays]);
 
@@ -1798,13 +1805,7 @@ export default function PrzygotowanieProdukcjiPage() {
       .map((entry) => ({
         dateKey: entry.date,
         date: new Date(`${entry.date}T12:00:00`).toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }),
-        value: entry.summary?.kinds[kind.id]?.total ?? entry.tasks.reduce((total, task) => {
-          if (kind.id === 'przygotowanie-stanowiska') {
-            return total + (preparesDistributionStation(task) ? 1 : 0);
-          }
-          if (kind.id === 'wznowienie-procesu') return total + (restartsProcessAfterToolroom(task) ? 1 : 0);
-          return total + (task.kinds?.includes(kind.id) ? 1 : 0);
-        }, 0)
+        value: entry.summary.kinds[kind.id]?.done ?? 0
       }))
       .sort((left, right) => left.dateKey.localeCompare(right.dateKey));
     return { id: kind.id, label: kind.label, total: data.reduce((sum, item) => sum + item.value, 0), data };
@@ -2339,6 +2340,9 @@ export default function PrzygotowanieProdukcjiPage() {
       <style jsx global>{`
         .production-preparation {
           --production-task-note: #b45aff;
+          --production-completed-bg: #1b4934;
+          --production-completed-border: #64b783;
+          --production-completed-glow: rgba(100, 183, 131, 0.12);
         }
 
         html.light .production-preparation {
@@ -2352,6 +2356,12 @@ export default function PrzygotowanieProdukcjiPage() {
 
         .production-preparation .production-task-note {
           color: var(--production-task-note);
+        }
+
+        .production-preparation [data-source-highlighted='true']:not([data-cancelled='true']) {
+          border-color: color-mix(in srgb, var(--warning-signal-fill) 50%, var(--border)) !important;
+          background: color-mix(in srgb, var(--warning-signal-fill) 10%, var(--surface-2)) !important;
+          box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warning-signal-fill) 75%, transparent), inset 0 0 22px rgba(245, 197, 66, 0.08) !important;
         }
 
         .production-preparation [data-team-done='true'] .production-task-note,
@@ -2472,19 +2482,19 @@ export default function PrzygotowanieProdukcjiPage() {
 
         .production-queues .space-y-2 > div[data-team-done='true'],
         .process-engineer-columns .divide-y > div[data-team-done='true'] {
-          border: 3px solid #4ade80 !important;
-          background: #12462b !important;
-          box-shadow: inset 0 0 0 1px rgba(187, 247, 208, 0.28), 0 0 18px rgba(34, 197, 94, 0.3) !important;
+          border: 3px solid var(--production-completed-border) !important;
+          background: var(--production-completed-bg) !important;
+          box-shadow: 0 0 10px var(--production-completed-glow) !important;
         }
 
         .production-queues .outlined-task-list > div[data-team-done='true'] {
           border-width: 4px !important;
         }
 
-        .production-queues .space-y-2 > div[data-team-done='true'] > button:first-child,
-        .process-engineer-columns .divide-y > div[data-team-done='true'] > button:first-child,
-        .production-queues .distribution-task-list > div[data-team-done='true'] > .distribution-comment-footer {
-          background: rgba(34, 197, 94, 0.15) !important;
+        .production-preparation .production-queues .space-y-2 > div[data-team-done='true'] > *,
+        .production-preparation .process-engineer-columns .divide-y > div[data-team-done='true'] > *,
+        .production-preparation .production-queues .space-y-2 > div[data-team-done='true'] > section > button {
+          background: transparent !important;
         }
       `}</style>
       <Tabs value={activeView} className="space-y-4">
@@ -2596,15 +2606,15 @@ export default function PrzygotowanieProdukcjiPage() {
                   const assignedTeams = new Set(workItems.flatMap(item => item.teams.filter(team => !isProductionTeamDone(item, team))));
                   return <div className="space-y-3" key={task.id}>
                   {startsGroup && task.planGroup !== 'standard' && <div className={cn('rounded-lg border px-3 py-2 text-sm font-bold uppercase tracking-wide', task.planGroup === 'emergency' ? 'border-[rgba(239,68,68,0.65)] bg-[rgba(239,68,68,0.12)] text-red-300' : 'border-[rgba(183,122,255,0.65)] bg-[rgba(183,122,255,0.12)] text-[#debaff]')}>{planGroupLabel[task.planGroup]}</div>}
-                <article data-cancelled={task.kinds.includes('anulowane') || undefined} className={cn('rounded-lg border border-border bg-surface2 p-4', task.highlighted && 'border-[rgba(245,197,66,0.65)] bg-[rgba(245,197,66,0.07)]', task.done && 'border-[rgba(34,197,94,0.65)] bg-[rgba(34,197,94,0.07)]')}>
+                <article data-source-highlighted={task.highlighted || undefined} data-cancelled={task.kinds.includes('anulowane') || undefined} className={cn('rounded-lg border border-border bg-surface2 p-4', productionTaskDoneOnDate(task, selectedPlanDate) && !task.kinds.includes('anulowane') && 'border-[rgba(34,197,94,0.65)] bg-[rgba(34,197,94,0.07)]')}>
                   <fieldset className="min-w-0">
                   <div className="grid gap-3 xl:grid-cols-[minmax(280px,1fr)_minmax(420px,1.3fr)_minmax(420px,1.3fr)]">
-                    <section className={cn('space-y-2 rounded-lg border border-[rgba(255,122,0,0.35)] bg-[rgba(255,122,0,0.045)] p-3', task.highlighted && 'border-yellow-400 bg-yellow-300')}>
+                    <section className="space-y-2 rounded-lg border border-[rgba(255,122,0,0.35)] bg-[rgba(255,122,0,0.045)] p-3">
                       {task.kinds.includes('anulowane') && <p className="cancelled-task-label">ANULOWANE</p>}
-                      <p className={cn('text-[10px] font-bold uppercase tracking-wide text-[var(--brand)]', task.highlighted && 'text-zinc-800')}>Indeks</p>
-                      <div className={cn('flex min-h-11 w-full items-center justify-center rounded-lg border border-[rgba(255,122,0,0.55)] bg-bg px-3 text-center text-base font-bold text-[var(--brand)]', task.highlighted && 'border-yellow-500 bg-yellow-200 text-zinc-950')}>{task.station}</div>
-                      {machineForms[task.station] && <p className="text-[11px] text-dim">Na maszynie: {machineForms[task.station].detail} · {machineForms[task.station].stage === 'started' ? 'rozruch wykonany' : 'forma zawieszona, rozruch niewykonany'}</p>}
-                      <div><textarea className={cn('min-h-14 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm font-semibold text-[var(--brand)] outline-none focus:border-[rgba(255,122,0,0.65)]', task.highlighted && 'border-yellow-500 bg-yellow-100 text-zinc-950 focus:border-yellow-600')} readOnly={!isPreparationAdmin} value={task.detail} onChange={(event) => updateTask(task.id, { detail: event.target.value })} /><p className={cn('mt-1 text-xs text-dim', task.highlighted && 'text-zinc-700')}>Ilość: <strong className={cn('text-title', task.highlighted && 'text-zinc-950')}>{task.quantity || '---'}</strong> &nbsp; Norma: <strong className={cn('text-title', task.highlighted && 'text-zinc-950')}>{task.norm || '---'}</strong></p></div>
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--brand)]">Indeks</p>
+                      <div className="flex min-h-11 w-full items-center justify-center rounded-lg border border-[rgba(255,122,0,0.55)] bg-bg px-3 text-center text-base font-bold text-[var(--brand)]">{task.station}</div>
+                      <MachineConfirmation state={machineForms[task.station]} detail={task.detail} />
+                      <div><textarea className="min-h-14 w-full resize-y rounded-lg border border-border bg-bg px-3 py-2 text-sm font-semibold text-[var(--brand)] outline-none focus:border-[rgba(255,122,0,0.65)]" readOnly={!isPreparationAdmin} value={task.detail} onChange={(event) => updateTask(task.id, { detail: event.target.value })} /><p className="mt-1 text-xs text-dim">Ilość: <strong className="text-title">{task.quantity || '---'}</strong> &nbsp; Norma: <strong className="text-title">{task.norm || '---'}</strong></p></div>
                     </section>
                     <section className="technical-texture-panel rounded-lg border border-border p-3" style={{ backgroundImage: 'linear-gradient(var(--technical-overlay), var(--technical-overlay)), url(/przygotowanie-produkcji-techniczne-tlo.png)', backgroundPosition: 'center', backgroundSize: 'cover' }}>
                       <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[var(--brand)]">Praca</p>
@@ -2631,7 +2641,7 @@ export default function PrzygotowanieProdukcjiPage() {
                 const workItems = planTaskWorkItems(task);
                     const assignedTeams = new Set(workItems.flatMap(item => item.teams.filter(team => !isProductionTeamDone(item, team))));
                 const assigned = workItems.some(assignedForTheDay);
-                return <div className={cn(expanded && 'bg-[rgba(183,122,255,0.055)]')} key={task.id}>
+                return <div data-source-highlighted={task.highlighted || undefined} data-cancelled={task.kinds.includes('anulowane') || undefined} className={cn(expanded && 'bg-[rgba(183,122,255,0.055)]')} key={task.id}>
                   <button
                     aria-expanded={expanded}
                     className="grid w-full gap-1 px-4 py-3 text-left transition-colors hover:bg-[rgba(183,122,255,0.09)] sm:grid-cols-[90px_90px_minmax(0,1fr)_auto_auto] sm:items-center"

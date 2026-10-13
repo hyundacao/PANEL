@@ -24,12 +24,12 @@ import {
   validateRecurringTasks,
   type RecurringTaskDefinition
 } from '@/lib/utils/productionRecurringTasks';
-import { canSelectToolroomWork, createToolroomReturnTask, isToolroomWorkKind, isToolroomReturnTask, toolroomLinkNotes, toolroomParentId, toolroomReturnId, toolroomWorkMutation, withToolroomReturnTasks, type ToolroomWorkSelection } from '@/lib/utils/productionToolroomTasks';
+import { canSelectToolroomWork, createToolroomReturnTask, isToolroomWorkKind, isToolroomReturnTask, mechanicOnlyToolroomReturnTask, toolroomLinkNotes, toolroomParentId, toolroomReturnId, toolroomWorkMutation, withToolroomReturnTasks, type ToolroomWorkSelection } from '@/lib/utils/productionToolroomTasks';
 import { PRODUCTION_TEAMS, TEAM_COMMENT_KEY_PREFIX, defaultTeamComments, isProductionTeam, normalizeTeamComment, validateTeamComment } from '@/lib/utils/productionTeamComments';
 import { productionWorkCommentNoteKey, validateProductionWorkCommentText, withProductionWorkComment } from '@/lib/utils/productionWorkComments';
 import { canRestoreProductionWorkInPlace, productionRestorableEvents, PRODUCTION_RESTORED_EVENT_NOTE, PRODUCTION_RESTORED_WORK_PREFIX, revokeProductionWork } from '@/lib/utils/productionWorkRestore';
 import { PRODUCTION_HALL_NOTE, normalizeProductionHallAssignment } from '@/lib/utils/productionTaskReference';
-import { appendProductionWorkEvent, canRetireProductionSession, PRODUCTION_LEGACY_COMPLETION_DAY_NOTE, isRecentProductionHistoryDate, productionHistoryCutoffDate, productionKindOwner, productionSummaryFromTasks, productionWorkEvents, revertProductionWorkEvent, shouldCarryProductionTask, summarizeProductionDay, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
+import { appendProductionWorkEvent, canRetireProductionSession, PRODUCTION_LEGACY_COMPLETION_DAY_NOTE, isRecentProductionHistoryDate, productionHistoryCutoffDate, productionKindOwner, productionMachineConfirmations, productionSummaryFromTasks, productionWorkEvents, revertProductionWorkEvent, shouldCarryProductionTask, summarizeProductionDay, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
 import {
   PRODUCTION_TEAM_PROGRESS_NOTE_KEY,
   PRODUCTION_STARTUP_TEAMS,
@@ -384,7 +384,7 @@ const archivePreviousDays = async () => {
 };
 
 const retireCompactedSession = async (date: string, expectedSummary: ProductionDaySummary) => {
-  if (!expectedSummary.sourceDigest || date >= todayKey()) return;
+  if (date === PROCESS_ENGINEERS_SETTINGS_DATE || !expectedSummary.sourceDigest || date >= todayKey()) return;
   const [historyResult, oldResult, currentResult] = await Promise.all([
     supabaseAdmin.from('przygotowanie_produkcji_history').select('tasks').eq('plan_date', date).maybeSingle(),
     supabaseAdmin.from('przygotowanie_produkcji_sessions').select('id, session_date, updated_at').eq('session_date', date).maybeSingle(),
@@ -426,6 +426,7 @@ const compactOldHistorySnapshots = async () => {
     .from('przygotowanie_produkcji_history')
     .select('plan_date')
     .lt('plan_date', productionHistoryCutoffDate(todayKey()))
+    .neq('plan_date', PROCESS_ENGINEERS_SETTINGS_DATE)
     .is('tasks->0->__productionSummary', null)
     .order('plan_date', { ascending: false })
     .limit(10);
@@ -549,26 +550,42 @@ const updateMachineState = async (
   userName: string,
   at: string
 ) => {
-  if (!task.station.trim() || !task.detail.trim()) return;
+  if (!task.station.trim() || !task.detail.trim() || task.kinds.includes('anulowane')) return false;
+  if (!task.isCurrentPlan) {
+    const parentId = toolroomParentId(task);
+    if (!parentId) return false;
+    const { data: parent, error: parentError } = await supabaseAdmin.from('przygotowanie_produkcji_tasks')
+      .select('is_current_plan, station, detail').eq('session_id', sessionId).eq('task_key', parentId).maybeSingle();
+    if (parentError) throw parentError;
+    if (!parent?.is_current_plan || parent.station !== task.station || parent.detail !== task.detail) return false;
+  }
   const key = machineStateKey(task.station);
   const id = stableTaskRowUuid(sessionId, key);
   const { data: existing, error: readError } = await supabaseAdmin
     .from('przygotowanie_produkcji_tasks')
-    .select('detail')
+    .select('detail, notes, updated_at')
     .eq('id', id)
     .maybeSingle();
   if (readError) throw readError;
-  if (stage === 'started' && existing?.detail !== task.detail) return;
+  const previousAt = (existing?.notes as Record<string, unknown> | null)?.__machineAt;
+  if (typeof previousAt === 'string' && Date.parse(previousAt) >= Date.parse(at)) return false;
   const state: StoredTask = {
     id: key, isCurrentPlan: false, planGroup: 'standard', station: task.station, detail: task.detail,
     quantity: '', norm: '', highlighted: false, kinds: [], teams: [],
     notes: { __machineStage: stage, __machineAt: at, __machineBy: userName },
     teamProgress: {}, done: false, material: '', materialType: '', source: '', dryer: '', temperature: ''
   };
-  const { error: writeError } = await supabaseAdmin
-    .from('przygotowanie_produkcji_tasks')
-    .upsert({ id, ...toDbTask(state, sessionId, 0, userName) }, { onConflict: 'id' });
-  if (writeError) throw writeError;
+  const values = toDbTask(state, sessionId, 0, userName);
+  if (existing) {
+    const { data: saved, error } = await supabaseAdmin.from('przygotowanie_produkcji_tasks')
+      .update(values).eq('id', id).eq('updated_at', existing.updated_at).select('id').maybeSingle();
+    if (error) throw error;
+    return Boolean(saved);
+  }
+  const { error } = await supabaseAdmin.from('przygotowanie_produkcji_tasks')
+    .upsert({ id, ...values }, { onConflict: 'id', ignoreDuplicates: true });
+  if (error) throw error;
+  return true;
 };
 
 const ensureAccess = async (request: NextRequest) => {
@@ -1143,9 +1160,15 @@ const syncToolroomReturns = async (sessionId: string, userName: string) => {
       if (error && error.code !== '23505') throw error;
       changed = true;
     } else if (existing.station !== task.station || existing.detail !== task.detail
-      || existing.quantity !== task.quantity || existing.norm !== task.norm || existing.is_current_plan !== false) {
+      || existing.quantity !== task.quantity || existing.norm !== task.norm || existing.is_current_plan !== false
+      || (Array.isArray(existing.teams) && existing.teams.includes('process'))) {
+      const legacyProcessAssignment = Array.isArray(existing.teams) && existing.teams.includes('process');
+      const normalized = legacyProcessAssignment
+        ? toDbTask(task, sessionId, Number(existing.position_no ?? 0), userName)
+        : null;
       const { error } = await supabaseAdmin.from('przygotowanie_produkcji_tasks')
         .update({ station: task.station, detail: task.detail, quantity: task.quantity, norm: task.norm,
+          ...(normalized ? { teams: normalized.teams, notes: normalized.notes, done: normalized.done } : {}),
           is_current_plan: false, updated_at: new Date().toISOString(), updated_by: userName })
         .eq('id', existing.id);
       if (error) throw error;
@@ -1337,6 +1360,29 @@ export async function GET(request: NextRequest) {
         at: String((row.notes as Record<string, unknown> | null)?.__machineAt ?? '')
       }]));
     const tasksWithReturns = withToolroomReturnTasks(tasks);
+    let machineStateChanged = false;
+    for (const confirmation of productionMachineConfirmations(tasksWithReturns, planDate)) {
+      const previous = machineForms[confirmation.task.station];
+      if (previous && Date.parse(previous.at) >= Date.parse(confirmation.at)) continue;
+      if (await updateMachineState(session.id, confirmation.task, confirmation.stage, confirmation.by, confirmation.at)) {
+        machineForms[confirmation.task.station] = {
+          detail: confirmation.task.detail, stage: confirmation.stage, at: confirmation.at
+        };
+        machineStateChanged = true;
+      }
+    }
+    if (machineStateChanged) {
+      const previousVersion = Date.parse(String(session.updated_at ?? ''));
+      const updatedAt = new Date(Math.max(Date.now(), Number.isFinite(previousVersion) ? previousVersion + 1 : 0)).toISOString();
+      const { data: updated, error } = await supabaseAdmin.from('przygotowanie_produkcji_sessions')
+        .update({ updated_at: updatedAt }).eq('id', session.id).eq('updated_at', session.updated_at)
+        .select('updated_at').maybeSingle();
+      if (error) throw error;
+      if (updated) {
+        session.updated_at = updatedAt;
+        syncVersion = `${updatedAt}|${responseAccess.materialAccess}`;
+      }
+    }
     const visibleTasks = responseAccess.materialAccess === 'none'
       ? tasksWithReturns.map(maskMaterialFields)
       : tasksWithReturns;
@@ -1957,7 +2003,7 @@ export async function POST(request: NextRequest) {
 
         const currentTask = await withStoredToolroomReturnState(
           session.id,
-          fromDbTask(currentRow as Record<string, unknown>)
+          mechanicOnlyToolroomReturnTask(fromDbTask(currentRow as Record<string, unknown>))
         );
         if (toolroomSelection && !canSelectToolroomWork(currentTask, toolroomSelection.kind)) {
           return NextResponse.json({ code: 'TOOLROOM_TASK_FORBIDDEN', message: 'Nie można przypisać tej pracy do wskazanej pozycji.' }, { status: 403 });
@@ -2032,12 +2078,14 @@ export async function POST(request: NextRequest) {
           if (teamDoneMutation?.done === true && teamDoneMutation.team === 'mechanics'
             && !isProductionTeamDone(currentTask, 'mechanics')
             && (nextTask.kinds.includes('zmiana-formy') || nextTask.kinds.includes('powrot-formy-narzedziownia'))) {
-            await updateMachineState(session.id, nextTask, 'mounted', access.user.name, storedTask.updated_at);
+            await updateMachineState(session.id, nextTask, 'mounted', access.user.name,
+              nextTask.teamProgress?.mechanics?.completedAt || storedTask.updated_at);
           }
           if (teamDoneMutation?.done === true && teamDoneMutation.team === 'process'
             && !isProductionTeamDone(currentTask, 'process')
-            && (nextTask.kinds.includes('rozruch') || nextTask.kinds.includes('wznowienie'))) {
-            await updateMachineState(session.id, nextTask, 'started', access.user.name, storedTask.updated_at);
+            && (nextTask.kinds.includes('rozruch') || nextTask.kinds.includes('wznowienie') || nextTask.kinds.includes('zmiana-koloru'))) {
+            await updateMachineState(session.id, nextTask, 'started', access.user.name,
+              nextTask.teamProgress?.process?.completedAt || storedTask.updated_at);
           }
         } catch (error) {
           machineStateError = error;

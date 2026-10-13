@@ -1,0 +1,5258 @@
+{
+  "capturedAt": "2026-10-13T18:22:44.651Z",
+  "session": {
+    "id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+    "session_date": "2026-10-13",
+    "file_name": "13.10.2026.xlsx",
+    "plan_sheet": "14.10",
+    "created_by": "k.rafal",
+    "created_at": "2026-10-13T04:09:29.861865+00:00",
+    "updated_at": "2026-10-13T18:13:41.16+00:00"
+  },
+  "tasks": [
+    {
+      "id": "93788bff-5860-5273-8da4-4705743b2cbc",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "29.09-28",
+      "position_no": 35,
+      "station": "WTR 48",
+      "detail": "POJEMNIK 47X80 CZERWONY (1-1007)",
+      "quantity": "134 400",
+      "norm": "21500",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "1521e951-d16d-5d30-8cb4-b1665e1b748b",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "9.10-83",
+      "position_no": 69,
+      "station": "WTR 48",
+      "detail": "POJEMNIK 55X145 BEZBARWNY W4 (1-1006)",
+      "quantity": "13,000",
+      "norm": "20000",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch",
+        "anulowane"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"9.10-83:mechanics:2026-10-12T07:22:17.622Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T07:22:17.622Z\",\"completedBy\":\"czaja.fabian\"},{\"id\":\"9.10-83:distribution:2026-10-12T07:35:49.083Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T07:35:49.083Z\",\"completedBy\":\"CHMAJ PAWEŁ\"},{\"id\":\"9.10-83:technician:2026-10-12T10:38:49.079Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T10:38:49.079Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"9.10-83:process:2026-10-12T11:28:17.369Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T11:28:17.369Z\",\"completedBy\":\"sz.pawel\"}]",
+        "distribution": "Przygotować stanowisko, tatren spod maszyny",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-12T11:28:17.369Z",
+            "completedBy": "sz.pawel"
+          },
+          "mechanics": {
+            "completedAt": "2026-10-12T07:22:17.622Z",
+            "completedBy": "czaja.fabian"
+          },
+          "technician": {
+            "completedAt": "2026-10-12T10:38:49.079Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-12T07:35:49.083Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-12T07:35:49.083Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-12T07:35:46.984Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.547+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "8865d26d-5d72-57f8-8ec7-c66afc4a44c2",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "9.10-26",
+      "position_no": 18,
+      "station": "WTR 52",
+      "detail": "POKRYWA WYMIENNIKÓW CIEPŁA T27SC0 (PÓŁWYRÓB) 303022445 (M-10-8001312050)",
+      "quantity": "5 000",
+      "norm": "1240",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "e6ef34e9-5b19-5b20-8d7b-6fa542e3b425",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "9.10-48",
+      "position_no": 39,
+      "station": "ST 54",
+      "detail": "MAINT. DOOR CUBIC VZF29066+ STOPPER (8001233071)",
+      "quantity": "660",
+      "norm": "500",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "dd2fb102-0a50-5643-8f3e-52a6c08cb930",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "30.09-33",
+      "position_no": 42,
+      "station": "WTR 37",
+      "detail": "MAX-DRAIN SLIM SZCZELINA KANAŁU PP B125 (8311)",
+      "quantity": "735",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "75aa520e-bdab-53b8-8a15-cc6421eddc6d",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "6.10-63",
+      "position_no": 44,
+      "station": "WTR 37",
+      "detail": "SYSTEM 1000X98 KANAŁ Z KRATĄ PVC A15 POPIEL (01748)",
+      "quantity": "216",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "21f4bf78-dcba-50a7-8ae1-c9f2906e5ef5",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "6.10-64",
+      "position_no": 45,
+      "station": "WTR 37",
+      "detail": "SYSTEM 1000X98 KANAŁ Z KRATĄ PVC B125 POPIEL (01749)",
+      "quantity": "324",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "e39ea030-9de1-540a-88fb-0e19d279cafb",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "6.10-65",
+      "position_no": 46,
+      "station": "WTR 37",
+      "detail": "SYSTEM 1000X98 KANAŁ Z KRATĄ PP A15 CZARNY (01718)",
+      "quantity": "2 000",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "651b5a94-ffa5-585b-8a5a-1b317f68a77c",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "12.10-28",
+      "position_no": 19,
+      "station": "ST 54",
+      "detail": "MAINT. DOOR CUBIC VZF39171+ STOPPER (8001184600)",
+      "quantity": "410",
+      "norm": "500",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "dd811ea1-8e49-56aa-8461-bf767c6f7e25",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:40b252ace14a72c4a569e454",
+      "position_no": 50,
+      "station": "WTR 4",
+      "detail": "TRAY HANDLE INSERT BO WELDED + HS (M-10-8001226134)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-09-30T09:49:34.661Z",
+        "__machineBy": "Mikołaj Nikitiuk",
+        "__machineStage": "mounted",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.109+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "de10aef4-77b8-59e0-82a6-6dbc93dc4ed8",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "6.10-39",
+      "position_no": 51,
+      "station": "ST 24",
+      "detail": "HOUSING 1.605.806.69Y BI GKF18V COLT (160580669Y)",
+      "quantity": "1,416",
+      "norm": "960",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "31250eb7-6f0c-5036-8adf-36de25f2580d",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-66",
+      "position_no": 10,
+      "station": "WTR 34",
+      "detail": "QUICKLIFT DORIS LEFT ASSEMBLY (D0159752_010), QUICKLIFT DORIS RIGHT ASSEMBLY (D0159752_010) (A18192709, A18192710)",
+      "quantity": "15 228, 15 228",
+      "norm": "1485",
+      "highlighted": false,
+      "kinds": [
+        "wznowienie"
+      ],
+      "teams": [
+        "process"
+      ],
+      "notes": {
+        "process": "jak tylko przyjada poj",
+        "__workEvents": "[{\"id\":\"8.10-66:process:2026-10-13T17:51:20.125Z\",\"team\":\"process\",\"kinds\":[\"wznowienie\"],\"completedAt\":\"2026-10-13T17:51:20.125Z\",\"completedBy\":\"k.rafal\"}]",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T17:51:20.125Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T17:51:20.564+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "1195cbc5-cba5-5621-855a-82600f0807da",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-52",
+      "position_no": 60,
+      "station": "ST 30",
+      "detail": "SYSTEM 300X300 STUDZIENKA Z KOSZEM I KRATĄ ŻELIWNĄ WAVE C250 (01881-3)",
+      "quantity": "96",
+      "norm": "410",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "9523da0a-10fc-5189-89c8-29066af587af",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "12.10-48",
+      "position_no": 61,
+      "station": "ST 30",
+      "detail": "SYSTEM 1000X63X98X148 KRATA STALOWA 1 M A15 DOMELO (01700)",
+      "quantity": "1,400",
+      "norm": "1000",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "c9dd6891-86fd-50f2-88b4-4b0858fcb04d",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-71",
+      "position_no": 37,
+      "station": "WTR 44",
+      "detail": "MAX-DRAIN DUAL SLIM KANAŁ SZCZELINOWY PP B125 (8323)",
+      "quantity": "1 504",
+      "norm": "510",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "cef787c9-9145-5ede-85b8-954ba9d4a20f",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "29.09-44",
+      "position_no": 40,
+      "station": "WTR 23",
+      "detail": "MOTOR HOUSING SET 919.0180 (8001214565) (OSŁONA DOLNA AGREGATU ( FORMA DUBLER ))",
+      "quantity": "3 540",
+      "norm": "680",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "727ee837-427b-5fd0-84ce-0f761a0d110b",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "2.10-79",
+      "position_no": 64,
+      "station": "ST 34",
+      "detail": "KONEWKA TRAPEZIUM 14L C3 ZIELEŃ (2420)",
+      "quantity": "800",
+      "norm": "600",
+      "highlighted": true,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "870efba8-db65-5221-8029-1f4158108864",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "2.10-54",
+      "position_no": 65,
+      "station": "WTR 43",
+      "detail": "SYSTEM 1000X63X98X148 KRATA PP A15 CZARNA DOMELO (01712)",
+      "quantity": "850",
+      "norm": "580",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "emergency"
+    },
+    {
+      "id": "e63f907d-edf3-5949-826d-919768854302",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-58",
+      "position_no": 44,
+      "station": "WTR 8",
+      "detail": "LATCH - ZATRZASK (2609003334)",
+      "quantity": "",
+      "norm": "5600",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "emergency"
+    },
+    {
+      "id": "004cb820-810c-46c9-8e62-915b2535a5df",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-5-pozycja-6",
+      "position_no": 5,
+      "station": "ST 2",
+      "detail": "MAX CP+TH PRINTED F1_WQG2450XWW (9001993049)",
+      "quantity": "120",
+      "norm": "540",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:48:20.016208+00:00",
+      "updated_at": "2026-10-13T13:00:46.545+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "41cf73cf-a228-4c88-a154-a9a6a98a3001",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-23",
+      "position_no": 23,
+      "station": "WTR 29",
+      "detail": "SYSTEM 300X300 STUDZIENKA Z KRATĄ PVC A15 POPIEL (01791)",
+      "quantity": "100",
+      "norm": "625",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:48:20.016208+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "855bf84d-4402-404d-84db-6d455e9d1e9f",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-6",
+      "position_no": 9,
+      "station": "ST 2",
+      "detail": "MAX CP+TH PRINTED F1_WPG24108IN (9001909491)",
+      "quantity": "500",
+      "norm": "540",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "additional"
+      ],
+      "notes": {
+        "additional": "Operator, ",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:48:20.016208+00:00",
+      "updated_at": "2026-10-13T13:00:46.545+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "b1e6b88a-b0f7-596e-881a-d2e5b7db8572",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "6.10-25",
+      "position_no": 69,
+      "station": "WTR 50",
+      "detail": "MOTOR COVER (8001278907)",
+      "quantity": "7,680",
+      "norm": "3220",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "emergency"
+    },
+    {
+      "id": "63ff5ea9-5265-51c5-8c87-7c7497d4d76e",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "7.10-60",
+      "position_no": 72,
+      "station": "ST 55",
+      "detail": "TRAY HANDLE COST IRON FOR WELDED (M-10-8001235435)",
+      "quantity": "672",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "07fd0652-7673-5a4d-8ce0-46a66e0250b4",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "12.10-63",
+      "position_no": 74,
+      "station": "ST 55",
+      "detail": "ASSY STUD GS70 BLACK/RED (8001389520)",
+      "quantity": "768",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "70c7059b-dd51-5dea-8915-dab59aaeed29",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:33b93f59b30c359c89bc27f4",
+      "position_no": 0,
+      "station": "WTR 50",
+      "detail": "FILTER FRAME CARTRIDGE CPL. GS20 (8001214528)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-13T17:48:05.172Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "mounted",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T17:48:05.327+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "fb0ae587-5827-4184-b9a3-be7144466e42",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-54",
+      "position_no": 22,
+      "station": "WTR 11",
+      "detail": "BRACKET PLASTIC MOTORIZED VALVE (E28-8756)",
+      "quantity": "1,400",
+      "norm": "1600",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy"
+      ],
+      "teams": [
+        "mechanics",
+        "technician"
+      ],
+      "notes": {
+        "mechanics": "można już",
+        "technician": "można już",
+        "__workEvents": "[{\"id\":\"13.10-54:technician:2026-10-13T14:41:26.234Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T14:41:26.234Z\",\"completedBy\":\"f.grzegorz\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-10-13T14:41:26.234Z",
+            "completedBy": "f.grzegorz"
+          }
+        }
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:48:20.016208+00:00",
+      "updated_at": "2026-10-13T17:53:39.112+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "58a5039a-ee75-4cc2-bc5f-36ac7d228cf6",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-56",
+      "position_no": 24,
+      "station": "WTR 49",
+      "detail": "MANETA BOSCH VG.1 DE PROVEEDOR CON LOGO-CLIP TERMOGRABADO (9001434742)",
+      "quantity": "10,000",
+      "norm": "1610",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-koloru"
+      ],
+      "teams": [
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:48:20.016208+00:00",
+      "updated_at": "2026-10-13T18:13:41.16+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "42bab175-0ddd-4d4f-919e-b160882faeac",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-55-pozycja-53",
+      "position_no": 60,
+      "station": "ST 34",
+      "detail": "KONEWKA TRAPEZIUM 14L C3 ZIELEŃ (2420)",
+      "quantity": "800",
+      "norm": "600",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "14.10",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:48:20.016208+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "planned"
+    },
+    {
+      "id": "0fa0adb2-d986-5275-84c1-8392b78e7c52",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:483085dc54166c75063c4934",
+      "position_no": 0,
+      "station": "WTR 29",
+      "detail": "SYSTEM 300X300 STUDZIENKA (01792)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-13T17:51:32.501Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:56:34.043895+00:00",
+      "updated_at": "2026-10-13T17:51:32.599+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "63b047e1-a2ff-545c-8cb5-c8958b7d1085",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "toolroom-return:2.10-78",
+      "position_no": 42,
+      "station": "ST 34",
+      "detail": "KONEWKA TRAPEZIUM 10L C3 ZIELEŃ (2416)",
+      "quantity": "505",
+      "norm": "630",
+      "highlighted": false,
+      "kinds": [
+        "powrot-formy-narzedziownia"
+      ],
+      "teams": [
+        "mechanics"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"toolroom-return:2.10-78:mechanics:2026-10-13T17:52:48.059Z\",\"team\":\"mechanics\",\"kinds\":[\"powrot-formy-narzedziownia\"],\"completedAt\":\"2026-10-13T17:52:48.059Z\",\"completedBy\":\"k.rafal\"}]",
+        "__teamProgress": {
+          "mechanics": {
+            "completedAt": "2026-10-13T17:52:48.059Z",
+            "completedBy": "k.rafal"
+          }
+        },
+        "toolroomParentId": "2.10-78"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:59:25.245976+00:00",
+      "updated_at": "2026-10-13T18:13:40.676+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "31452758-0b92-5523-80e2-450cdea18ae6",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:23ee093bfc47a6bc34fcbc9a",
+      "position_no": 0,
+      "station": "WTR 12",
+      "detail": "PRZEWIETRZNIK 33061567 WD132 F3 24MM T27 MCS V0 (TM33061567)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-13T17:51:25.398Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:58:37.984234+00:00",
+      "updated_at": "2026-10-13T17:51:25.539+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "c8e9dd5c-58a7-5792-8d05-ea74153dca95",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "9.10-82",
+      "position_no": 11,
+      "station": "WTR 20",
+      "detail": "DISPLAY WINDOW-VG1 BO (8001130395)",
+      "quantity": "24,000",
+      "norm": "1400",
+      "highlighted": false,
+      "kinds": [
+        "wznowienie"
+      ],
+      "teams": [
+        "process",
+        "distribution"
+      ],
+      "notes": {
+        "process": "można już",
+        "__workEvents": "[{\"id\":\"9.10-82:distribution:2026-10-13T17:48:45.555Z\",\"team\":\"distribution\",\"kinds\":[\"wznowienie\"],\"completedAt\":\"2026-10-13T17:48:45.555Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"9.10-82:process:2026-10-13T17:51:21.104Z\",\"team\":\"process\",\"kinds\":[\"wznowienie\"],\"completedAt\":\"2026-10-13T17:51:21.104Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "włączyć suszenie",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T17:51:21.104Z",
+            "completedBy": "k.rafal"
+          },
+          "distribution": {
+            "completedAt": "2026-10-13T17:48:45.555Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T17:48:45.555Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T17:48:44.453Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T17:51:21.485+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "cb50a699-aa84-5d1b-883e-1855a1f3bc57",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "toolroom-return:29.09-43",
+      "position_no": 39,
+      "station": "WTR 21",
+      "detail": "OSŁONA GÓRNA AGREGATU ( FORMA DUBLER ) (8865)",
+      "quantity": "",
+      "norm": "680",
+      "highlighted": false,
+      "kinds": [
+        "powrot-formy-narzedziownia"
+      ],
+      "teams": [
+        "mechanics"
+      ],
+      "notes": {
+        "__teamProgress": {},
+        "toolroomParentId": "29.09-43"
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:58:55.591095+00:00",
+      "updated_at": "2026-10-13T18:13:40.588+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "37da0fb3-1a37-5801-8807-847a622be43a",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "29.09-62",
+      "position_no": 48,
+      "station": "ST 32",
+      "detail": "DISPLAY LIGHT GUIDE GS41 SMART SENSOR CONTROL (TAMPOPRINT) (8001271433)",
+      "quantity": "",
+      "norm": "1400",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [
+        "additional"
+      ],
+      "notes": {
+        "additional": "Jutro - Jacek będzie montował",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "e19a54d0-17d2-5372-85fc-fa0b3c918b7b",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "12.10-67",
+      "position_no": 77,
+      "station": "WTR 39",
+      "detail": "MAINT. DOOR CUBIC VZF07020 + STOPPER (8001184614)",
+      "quantity": "10,000",
+      "norm": "615",
+      "highlighted": true,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "12.10",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "planned"
+    },
+    {
+      "id": "e45094c0-4c34-543a-8283-48bfe00ac3b6",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "zadanie-reczne-1790593011131",
+      "position_no": 74,
+      "station": "ZADANIE DODATKOWE",
+      "detail": "Jak znajdziecie czas to folia i kartony są do ogarnięcia na obu halach,z góry dziękuję 😉",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "technician"
+      ],
+      "notes": {
+        "__dueDate": "2026-09-28",
+        "__workEvents": "[{\"id\":\"zadanie-reczne-1790593011131:technician:2026-09-28T15:59:13.882Z\",\"team\":\"technician\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-09-28T15:59:13.882Z\",\"completedBy\":\"f.grzegorz\"}]",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-09-28T15:59:13.882Z",
+            "completedBy": "f.grzegorz"
+          }
+        },
+        "productionHall": "both"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.547+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "e49a65f3-a628-5ffe-8365-bd80302bea0f",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "zadanie-reczne-1790746731449",
+      "position_no": 75,
+      "station": "ZADANIE DODATKOWE",
+      "detail": "folia i kartony na obu halach",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"zadanie-reczne-1790746731449:technician:2026-10-02T07:05:43.874Z\",\"team\":\"technician\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-10-02T07:05:43.874Z\",\"completedBy\":\"Miłosz z\"}]",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-10-02T07:05:43.874Z",
+            "completedBy": "Miłosz z"
+          }
+        },
+        "productionHall": "both"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.547+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "5cbc2ac5-6e21-5fea-8469-6d20f20d8701",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:da60c7b9f6b1f612724d35ad",
+      "position_no": 82,
+      "station": "WTR 37",
+      "detail": "MAX-DRAIN SLIM SZCZELINA KANAŁU PP A15 (8311)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-09-29T08:13:45.422Z",
+        "__machineBy": "czaja.fabian",
+        "__machineStage": "mounted",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.109+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "388e4090-9783-5bef-8fb2-06a5a28005c2",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "toolroom-return:28.09-4",
+      "position_no": 78,
+      "station": "WTR 39",
+      "detail": "MAINT. DOOR CUBIC VZF07020 + STOPPER (8001184614)",
+      "quantity": "7,200",
+      "norm": "615",
+      "highlighted": false,
+      "kinds": [
+        "powrot-formy-narzedziownia"
+      ],
+      "teams": [
+        "mechanics"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"toolroom-return:28.09-4:mechanics:2026-09-28T09:14:36.988Z\",\"team\":\"mechanics\",\"kinds\":[\"powrot-formy-narzedziownia\"],\"completedAt\":\"2026-09-28T09:14:36.988Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"toolroom-return:28.09-4:process:2026-09-28T17:18:57.633Z\",\"team\":\"process\",\"kinds\":[\"powrot-formy-narzedziownia\"],\"completedAt\":\"2026-09-28T17:18:57.633Z\",\"completedBy\":\"k.rafal\"}]",
+        "__teamProgress": {
+          "mechanics": {
+            "completedAt": "2026-09-28T09:14:36.988Z",
+            "completedBy": "k.rafal"
+          }
+        },
+        "toolroomParentId": "28.09-4"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T18:13:40.763+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "7e639d2b-c705-5950-83b2-7a864448f76e",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "zadanie-reczne-1790746938307",
+      "position_no": 76,
+      "station": "ZADANIE DODATKOWE",
+      "detail": "Jak złoża młyn na PP od razu zmielić to co nasze",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"zadanie-reczne-1790746938307:technician:2026-10-02T07:05:41.361Z\",\"team\":\"technician\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-10-02T07:05:41.361Z\",\"completedBy\":\"Miłosz z\"}]",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-10-02T07:05:41.361Z",
+            "completedBy": "Miłosz z"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.547+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "4506b490-d439-5f88-8187-e0d9ef0b7df8",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "zadanie-reczne-1790752636680",
+      "position_no": 77,
+      "station": "ZADANIE DODATKOWE",
+      "detail": "Wtr 9-holder fan w200 - z tarnamidu t27 czarneo , pasuje wysuszyć w tc5",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"zadanie-reczne-1790752636680:technician:2026-09-30T10:23:04.347Z\",\"team\":\"technician\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-09-30T10:23:04.347Z\",\"completedBy\":\"Miłosz z\"},{\"id\":\"zadanie-reczne-1790752636680:distribution:2026-09-30T12:38:53.333Z\",\"team\":\"distribution\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-09-30T12:38:53.333Z\",\"completedBy\":\"Wojciechowski Dawid\"}]",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-09-30T10:23:04.347Z",
+            "completedBy": "Miłosz z"
+          },
+          "distribution": {
+            "completedAt": "2026-09-30T12:38:53.333Z",
+            "completedBy": "Wojciechowski Dawid"
+          },
+          "distributionStation": {
+            "completedAt": "2026-09-30T12:38:53.333Z",
+            "completedBy": "Wojciechowski Dawid"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-09-30T12:38:50.537Z",
+            "completedBy": "Wojciechowski Dawid"
+          }
+        },
+        "productionHall": "hala-1",
+        "__workComment:distribution": "{\"text\":\"Panie TC 6 jest wolne\",\"author\":\"Wojciechowski Dawid\",\"updatedAt\":\"2026-09-30T09:17:48.889Z\"}"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.547+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "dd3416f3-d9c3-5d60-8582-da81767791ae",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:8eb95b2359c8f7e71a115edd",
+      "position_no": 89,
+      "station": "WTR 18",
+      "detail": "PLV QUICK LIFT SLIDER LEFT + WHEEL DORIS 229, PLV QUICK LIFT SLIDER RIGHT + WHEEL DORIS 229 (A18208403, A18208404)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-09-29T11:53:43.636Z",
+        "__machineBy": "sz.pawel",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.109+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "d7500bcc-abae-5ddf-88ef-c85a2bc9bc83",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:ec01da158ca2b9fa1ce8a2ed",
+      "position_no": 90,
+      "station": "WTR 10",
+      "detail": "TABLICZKA 4 ZACISKOWA W-146.0 AG74B/DK 357 25242870900310 (10537)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-09-29T04:27:23.538Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.109+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "050f8bc2-1f79-5bc0-800c-dc84e7cefbcd",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:1e7e2089185747630a83389e",
+      "position_no": 0,
+      "station": "WTR 8",
+      "detail": "END COVER PW200 CLOSED (16950-1)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-13T07:14:01.917Z",
+        "__machineBy": "czaja.fabian",
+        "__machineStage": "mounted",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T07:14:02.218855+00:00",
+      "updated_at": "2026-10-13T07:14:02.16+00:00",
+      "updated_by": "czaja.fabian",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "d6cf26f1-b1f1-5a47-889e-b60af48a6373",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:bcae962159c9224737803d93",
+      "position_no": 91,
+      "station": "WTR 47",
+      "detail": "TOP SECTION GS70 TORNADO RED (8001356946)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-09-29T11:25:24.673Z",
+        "__machineBy": "Mikołaj Nikitiuk",
+        "__machineStage": "mounted",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.109+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "f49ff3c7-0281-504f-8f44-31c0208a2b37",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:68de63e8e41683dc1abb8103",
+      "position_no": 92,
+      "station": "WTR 39",
+      "detail": "MAINT. DOOR CUBIC VZF07020 + STOPPER (8001184614)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-09-28T09:14:37.911Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "mounted",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.109+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "f2a6e14c-a988-565c-8f60-7efd66438389",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:69959646f54aacb894caa01d",
+      "position_no": 93,
+      "station": "WTR 51",
+      "detail": "OPERATIONAL CONTROL BUTTON CLEAN GS70 (8001028412)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-09-29T04:27:08.810Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.109+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "13845966-91f9-5770-8379-af947736fb36",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "9.10-80",
+      "position_no": 12,
+      "station": "ST 33",
+      "detail": "PŁYTA OSŁONY PRZECIWOLŚNIENIOWEJ H=900 (7728)",
+      "quantity": "7 940",
+      "norm": "210",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"9.10-80:distribution:2026-10-12T07:36:01.916Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T07:36:01.916Z\",\"completedBy\":\"CHMAJ PAWEŁ\"},{\"id\":\"9.10-80:technician:2026-10-12T10:38:53.868Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T10:38:53.868Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"9.10-80:mechanics:2026-10-13T04:36:44.845Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T04:36:44.845Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"9.10-80:process:2026-10-13T04:36:46.634Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T04:36:46.634Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T04:36:46.634Z",
+            "completedBy": "k.rafal"
+          },
+          "mechanics": {
+            "completedAt": "2026-10-13T04:36:44.845Z",
+            "completedBy": "k.rafal"
+          },
+          "technician": {
+            "completedAt": "2026-10-12T10:38:53.868Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-12T07:36:01.916Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-12T07:36:01.916Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-12T07:36:00.345Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "2dae39df-1c41-447c-b93a-504d3a2b5d5d",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-14",
+      "position_no": 16,
+      "station": "WTR 47",
+      "detail": "MAX BO VG1 PANEL+TH WHITE/LOGO+INSERT (9001909401)",
+      "quantity": "4 800",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:48:20.016208+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "488b1251-3e30-5293-8efd-0f741b72baf6",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "9.10-85",
+      "position_no": 17,
+      "station": "WTR 45",
+      "detail": "HOUSING COVER 2CTRL POPIEL (M-10-9825)",
+      "quantity": "1,070",
+      "norm": "1250",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"9.10-85:mechanics:2026-10-12T06:14:38.304Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T06:14:38.304Z\",\"completedBy\":\"czaja.fabian\"},{\"id\":\"9.10-85:distribution:2026-10-12T06:49:49.723Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T06:49:49.723Z\",\"completedBy\":\"CHMAJ PAWEŁ\",\"revertedAt\":\"2026-10-12T06:56:12.495Z\"},{\"id\":\"9.10-85:distribution:2026-10-12T09:13:47.376Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T09:13:47.376Z\",\"completedBy\":\"CHMAJ PAWEŁ\"},{\"id\":\"9.10-85:technician:2026-10-12T10:39:10.994Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T10:39:10.994Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"9.10-85:process:2026-10-13T04:36:39.510Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T04:36:39.510Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, i suszarkę na przemiał elix z kropkami, oktabina z przemiałem stoi obok wtr 52",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T04:36:39.510Z",
+            "completedBy": "k.rafal"
+          },
+          "mechanics": {
+            "completedAt": "2026-10-12T06:14:38.304Z",
+            "completedBy": "czaja.fabian"
+          },
+          "technician": {
+            "completedAt": "2026-10-12T10:39:10.994Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-12T09:13:47.376Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-12T09:13:47.376Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-12T09:13:41.517Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "62a1743c-0b95-5827-8710-b73e48c1948f",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "12.10-20",
+      "position_no": 25,
+      "station": "WTR 35",
+      "detail": "EXTERNAL WHEEL 2ND (A24231801)",
+      "quantity": "158 000",
+      "norm": "17370",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy"
+      ],
+      "teams": [
+        "mechanics",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "technician": "zmiana na pom",
+        "__workEvents": "[{\"id\":\"12.10-20:distribution:2026-10-12T07:35:46.914Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T07:35:46.914Z\",\"completedBy\":\"CHMAJ PAWEŁ\"},{\"id\":\"12.10-20:mechanics:2026-10-12T10:22:54.474Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T10:22:54.474Z\",\"completedBy\":\"czaja.fabian\"},{\"id\":\"12.10-20:technician:2026-10-12T10:38:47.431Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T10:38:47.431Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"12.10-20:process:2026-10-13T04:36:40.641Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T04:36:40.641Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, z tarnoformu 300 z silosa",
+        "__teamProgress": {
+          "mechanics": {
+            "completedAt": "2026-10-12T10:22:54.474Z",
+            "completedBy": "czaja.fabian"
+          },
+          "technician": {
+            "completedAt": "2026-10-12T10:38:47.431Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-12T07:35:46.914Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-12T07:35:46.914Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-12T07:35:44.124Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "b3858346-abd7-5898-86d7-436b35783336",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "30.09-64",
+      "position_no": 31,
+      "station": "WTR 31",
+      "detail": "ŁOPATA DO ŚNIEGU DUŻA POMARAŃCZOWA (2023)",
+      "quantity": "3,470",
+      "norm": "600",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "mechanics": "Można juz",
+        "__workEvents": "[{\"id\":\"30.09-64:technician:2026-09-29T16:20:05.171Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-29T16:20:05.171Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"30.09-64:mechanics:2026-09-30T09:51:24.018Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-30T09:51:24.018Z\",\"completedBy\":\"Mikołaj Nikitiuk\",\"revertedAt\":\"2026-10-13T07:16:55.347Z\"},{\"id\":\"30.09-64:distribution:2026-09-30T11:05:27.481Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-30T11:05:27.481Z\",\"completedBy\":\"Jankowski Jakub\"},{\"id\":\"30.09-64:process:2026-10-11T19:32:07.215Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-11T19:32:07.215Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, prod. z POLIPROPYLEN PPC NTP MFI2:26",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-09-29T16:20:05.171Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-09-30T11:05:27.481Z",
+            "completedBy": "Jankowski Jakub"
+          },
+          "distributionStation": {
+            "completedAt": "2026-09-30T11:05:27.481Z",
+            "completedBy": "Jankowski Jakub"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-09-30T11:05:25.637Z",
+            "completedBy": "Jankowski Jakub"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "71df48a0-032d-42f7-b8bc-6c4c5a9155e9",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-35",
+      "position_no": 32,
+      "station": "ST 29",
+      "detail": "T27SC1R LID HEX NUPS WELDED (MUCELL) 303022445 (M-10-10490-2)",
+      "quantity": "5,000",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:48:20.016208+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "0ae76989-a4ec-5c67-8e34-e5f081573c2e",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "6.10-21",
+      "position_no": 36,
+      "station": "WTR 44",
+      "detail": "MAX-DRAIN SLIM KANAŁ SZCZELINOWY PP B125 (8320)",
+      "quantity": "1,946",
+      "norm": "510",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"6.10-21:technician:2026-10-06T07:16:02.058Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-06T07:16:02.058Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"6.10-21:mechanics:2026-10-08T08:41:47.551Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-08T08:41:47.551Z\",\"completedBy\":\"czaja.fabian\"},{\"id\":\"6.10-21:distribution:2026-10-11T19:31:46.259Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-11T19:31:46.259Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"6.10-21:process:2026-10-11T19:32:06.907Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-11T19:32:06.907Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, zmiana półwyrobów",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-11T19:32:06.907Z",
+            "completedBy": "k.rafal"
+          },
+          "mechanics": {
+            "completedAt": "2026-10-08T08:41:47.551Z",
+            "completedBy": "czaja.fabian"
+          },
+          "technician": {
+            "completedAt": "2026-10-06T07:16:02.058Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-11T19:31:46.259Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-11T19:31:44.833Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-11T19:31:46.259Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "ba9b6156-0245-5e2e-8072-d99b3c273538",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "2.10-78",
+      "position_no": 41,
+      "station": "ST 34",
+      "detail": "KONEWKA TRAPEZIUM 10L C3 ZIELEŃ (2416)",
+      "quantity": "505",
+      "norm": "630",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"2.10-78:technician:2026-10-07T07:41:50.326Z\",\"team\":\"technician\",\"kinds\":[],\"completedAt\":\"2026-10-07T07:41:50.326Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"2.10-78:mechanics:2026-10-11T19:31:13.798Z\",\"team\":\"mechanics\",\"kinds\":[],\"completedAt\":\"2026-10-11T19:31:13.798Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"2.10-78:distribution:2026-10-11T19:31:52.265Z\",\"team\":\"distribution\",\"kinds\":[],\"completedAt\":\"2026-10-11T19:31:52.265Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"2.10-78:process:2026-10-11T19:32:05.338Z\",\"team\":\"process\",\"kinds\":[],\"completedAt\":\"2026-10-11T19:32:05.338Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "mechanics": {
+            "completedAt": "2026-10-11T19:31:13.798Z",
+            "completedBy": "k.rafal"
+          },
+          "technician": {
+            "completedAt": "2026-10-07T07:41:50.326Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-11T19:31:52.265Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-11T19:31:50.779Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-11T19:31:52.265Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "08b56faf-b490-5550-8c52-717cc185a076",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "29.09-63",
+      "position_no": 44,
+      "station": "WTR 3",
+      "detail": "TRAY HANDLE INSERT BO CLIPPED + HS (M-10-8001103471)",
+      "quantity": "19,466",
+      "norm": "2000",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "distribution"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"29.09-63:distribution:2026-09-30T09:44:23.627Z\",\"team\":\"distribution\",\"kinds\":[],\"completedAt\":\"2026-09-30T09:44:23.627Z\",\"completedBy\":\"Wojciechowski Dawid\",\"revertedAt\":\"2026-10-07T04:47:09.741Z\"},{\"id\":\"29.09-63:technician:2026-09-30T10:11:53.977Z\",\"team\":\"technician\",\"kinds\":[],\"completedAt\":\"2026-09-30T10:11:53.977Z\",\"completedBy\":\"Miłosz z\"},{\"id\":\"29.09-63:distribution:2026-10-11T19:31:54.226Z\",\"team\":\"distribution\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-10-11T19:31:54.226Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "pod koniec zmiany będzie przejscie na hf381 + kon.9203",
+        "__teamProgress": {
+          "distribution": {
+            "completedAt": "2026-10-11T19:31:54.226Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-11T19:31:52.697Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-11T19:31:54.226Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "e1ccc0f7-e7d2-5dc9-8839-81fa0ce67423",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "9.10-74",
+      "position_no": 51,
+      "station": "WTR 43",
+      "detail": "SYSTEM 1000X63X98X148 KRATA PP LINE A15 CZARNA DOMELO (4403)",
+      "quantity": "965",
+      "norm": "645",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "emergency"
+    },
+    {
+      "id": "44e4f6a3-b3e2-53f0-859e-60bc6fd50c2c",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-57",
+      "position_no": 56,
+      "station": "WTR 1",
+      "detail": "TANK_HANDLE 919.0067 (M-10-8001346848)",
+      "quantity": "5 776",
+      "norm": "2200",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "emergency"
+    },
+    {
+      "id": "929c36b3-60b2-4fe6-ae56-fbc5e3ea3985",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-51",
+      "position_no": 59,
+      "station": "ST 55",
+      "detail": "CONTROL PANEL VG1 BO INOX (M-10-8001128933)",
+      "quantity": "1 000",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:48:20.016208+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "e6e421a9-7212-56bc-8d8f-2e7c4a2beb88",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "7.10-18",
+      "position_no": 70,
+      "station": "WTR 16",
+      "detail": "ZESPÓŁ PŁYTY MONTAŻOWEJ KRAJALNICY 294.0018 BIAŁY (3248)",
+      "quantity": "840",
+      "norm": "360",
+      "highlighted": false,
+      "kinds": [
+        "rozruch",
+        "anulowane"
+      ],
+      "teams": [
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "technician": "przygotować młyn - najlepiej ten po czarnym absie",
+        "__workEvents": "[{\"id\":\"7.10-18:technician:2026-10-07T07:29:00.846Z\",\"team\":\"technician\",\"kinds\":[\"rozruch\"],\"completedAt\":\"2026-10-07T07:29:00.846Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"7.10-18:distribution:2026-10-11T19:31:47.711Z\",\"team\":\"distribution\",\"kinds\":[\"rozruch\"],\"completedAt\":\"2026-10-11T19:31:47.711Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, z przemiału 0240-50 spod maszyny",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-10-07T07:29:00.846Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-11T19:31:47.711Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-11T19:31:46.198Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-11T19:31:47.711Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.547+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "45ce2296-3e29-5696-82e5-a9a5454eace2",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "28.09-10",
+      "position_no": 71,
+      "station": "WTR 49",
+      "detail": "TRAY HANDLE BO CLIPPED VG1 VZF07020 (M-10-8001128941)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch",
+        "anulowane"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "mechanics": "Po skończeniu ",
+        "technician": "można już",
+        "__workEvents": "[{\"id\":\"28.09-10:distribution:2026-09-30T09:16:29.868Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-30T09:16:29.868Z\",\"completedBy\":\"Wojciechowski Dawid\"},{\"id\":\"28.09-10:technician:2026-10-02T05:59:03.740Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-02T05:59:03.740Z\",\"completedBy\":\"Miłosz z\"},{\"id\":\"28.09-10:mechanics:2026-10-02T12:43:44.582Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-02T12:43:44.582Z\",\"completedBy\":\"czaja.fabian\"},{\"id\":\"28.09-10:process:2026-10-11T19:32:09.715Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-11T19:32:09.715Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-11T19:32:09.715Z",
+            "completedBy": "k.rafal"
+          },
+          "mechanics": {
+            "completedAt": "2026-10-02T12:43:44.582Z",
+            "completedBy": "czaja.fabian"
+          },
+          "technician": {
+            "completedAt": "2026-10-02T05:59:03.740Z",
+            "completedBy": "Miłosz z"
+          },
+          "distribution": {
+            "completedAt": "2026-09-30T09:16:29.868Z",
+            "completedBy": "Wojciechowski Dawid"
+          },
+          "distributionStation": {
+            "completedAt": "2026-09-30T09:16:29.868Z",
+            "completedBy": "Wojciechowski Dawid"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-09-30T09:16:28.249Z",
+            "completedBy": "Wojciechowski Dawid"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.547+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "f8e6b46d-d6fa-5e40-8b96-bf2957db5f61",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "29.09-27",
+      "position_no": 72,
+      "station": "WTR 48",
+      "detail": "POJEMNIK 47X80 BEZBARWNY (1-1492)",
+      "quantity": "1 200",
+      "norm": "21500",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch",
+        "anulowane"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"29.09-27:technician:2026-09-29T11:15:38.727Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-29T11:15:38.727Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"29.09-27:distribution:2026-09-30T07:53:51.937Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-30T07:53:51.937Z\",\"completedBy\":\"Jankowski Jakub\"},{\"id\":\"29.09-27:mechanics:2026-09-30T09:50:57.848Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-30T09:50:57.848Z\",\"completedBy\":\"Mikołaj Nikitiuk\"},{\"id\":\"29.09-27:process:2026-10-11T19:32:07.961Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-11T19:32:07.961Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, ",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-11T19:32:07.961Z",
+            "completedBy": "k.rafal"
+          },
+          "mechanics": {
+            "completedAt": "2026-09-30T09:50:57.848Z",
+            "completedBy": "Mikołaj Nikitiuk"
+          },
+          "technician": {
+            "completedAt": "2026-09-29T11:15:38.727Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-09-30T07:53:51.937Z",
+            "completedBy": "Jankowski Jakub"
+          },
+          "distributionStation": {
+            "completedAt": "2026-09-30T07:53:51.937Z",
+            "completedBy": "Jankowski Jakub"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-09-30T07:53:48.250Z",
+            "completedBy": "Jankowski Jakub"
+          }
+        },
+        "__reopenedNoteBase:distribution": "v1:Przygotować stanowisko"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.547+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "b33ca1db-415a-414e-b2df-7f2b30e6af55",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-0",
+      "position_no": 0,
+      "station": "ST.",
+      "detail": "14.10.2026 I",
+      "quantity": "ILOŚĆ:",
+      "norm": "NORMA",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.545+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "0617dcb5-6ef9-45cc-a853-7901f69d2f11",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-1",
+      "position_no": 1,
+      "station": "ST.",
+      "detail": "14.10.2026 I",
+      "quantity": "ILOŚĆ:",
+      "norm": "NORMA",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.545+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "8f5bd4b6-7635-43d0-aa8c-cd85a881e600",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-7",
+      "position_no": 6,
+      "station": "ST 1",
+      "detail": "MAX CP+TH PRINTED F1_F1_WQ35G2D0NL (9001976911)",
+      "quantity": "90",
+      "norm": "380",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.545+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "ce6bbbc8-e3ab-48e8-8a6a-e18ddf8bcdbd",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-8",
+      "position_no": 7,
+      "station": "ST 1",
+      "detail": "MAX CP+TH PRINTED F1_WQ33G2D41 (9001990815)",
+      "quantity": "180",
+      "norm": "380",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.545+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "7e86f575-d695-428a-b576-4558165a6b51",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-9",
+      "position_no": 8,
+      "station": "ST 2",
+      "detail": "PANELE B0",
+      "quantity": "",
+      "norm": "540",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.545+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "6f3cc72e-46f7-4369-998b-bb6c1ad9bd70",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-20",
+      "position_no": 19,
+      "station": "WTR 45",
+      "detail": "DOOR END TOP EH R4 600 VZF07020 - WHITE (8001053776)",
+      "quantity": "1,200",
+      "norm": "1120",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "3944a09d-b79c-4f70-806c-2ba923551c25",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-28",
+      "position_no": 27,
+      "station": "ST 40",
+      "detail": "HOUSING 1.605.806.6AP EASY SANDER (16058066AP)",
+      "quantity": "546",
+      "norm": "612",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "dae5aadc-bee9-4e7b-a765-20215deaea21",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-29",
+      "position_no": 28,
+      "station": "WTR 40",
+      "detail": "HOUSING 1.605.806.6AR UNIVERSAL SANDER (16058066AR)",
+      "quantity": "3,000",
+      "norm": "612",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "23a44813-2b71-43d5-9738-d9b5e073aceb",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-31",
+      "position_no": 30,
+      "station": "WTR 41",
+      "detail": "CABLE CHANNEL BOTTOM GROUP T27 (8001014676)",
+      "quantity": "80,000",
+      "norm": "6800",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "cb9c9881-5d50-4653-ac08-1d1d55d9c622",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-52",
+      "position_no": 52,
+      "station": "WTR 43",
+      "detail": "SYSTEM 1000X63X98X148 KRATA PP LINE A15 POPIEL DOMELO (4404)",
+      "quantity": "1,500",
+      "norm": "645",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "emergency"
+    },
+    {
+      "id": "527e1402-d0e0-40a2-b104-bdf69555cadb",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-64",
+      "position_no": 61,
+      "station": "WTR 32",
+      "detail": "REAR_TANK 919.0067 CPL. BLACK (8001346829)",
+      "quantity": "3 944",
+      "norm": "630",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "14.10",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "planned"
+    },
+    {
+      "id": "f8ff9a80-f879-468a-aaf1-06e05ef6d496",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-66",
+      "position_no": 62,
+      "station": "WTR 42",
+      "detail": "ŁOPATA DO ŚNIEGU MAŁA CZERWONA (2025)",
+      "quantity": "1 000",
+      "norm": "526",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "15.10",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "planned"
+    },
+    {
+      "id": "34dfd14e-bb5c-430a-a0b3-29e41b2c0e91",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-67",
+      "position_no": 63,
+      "station": "WTR 45",
+      "detail": "CONTROL PANEL PREASSY SE VG1 + KRAWĘDŹ BLACK (M-10-8001209319)",
+      "quantity": "3 000",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "15.10",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "planned"
+    },
+    {
+      "id": "4ef6a108-8eed-4e41-a298-83c5dbb61840",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-68",
+      "position_no": 64,
+      "station": "ST 30",
+      "detail": "SYSTEM 300X300 STUDZIENKA Z KRATĄ PVC A15 POPIEL (01791)",
+      "quantity": "100",
+      "norm": "625",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "15.10",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "planned"
+    },
+    {
+      "id": "51eb2dbe-5580-428d-83e3-1a0bcc670cea",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-69",
+      "position_no": 65,
+      "station": "WTR 35",
+      "detail": "IRIS LR WHEEL HOLDER (A22154801)",
+      "quantity": "100 000",
+      "norm": "22000",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "16.10",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "planned"
+    },
+    {
+      "id": "93c40b53-3dfe-4e4a-a041-10ec74c1ed56",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-55",
+      "position_no": 55,
+      "station": "WTR 27",
+      "detail": "SYSTEM 1000X98 ZAŚLEPKA (01744)",
+      "quantity": "15,000",
+      "norm": "1300",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy"
+      ],
+      "teams": [
+        "mechanics",
+        "technician"
+      ],
+      "notes": {
+        "mechanics": "można już",
+        "technician": "można już",
+        "__workEvents": "[{\"id\":\"14.10-55:technician:2026-10-13T16:34:37.143Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\"],\"completedAt\":\"2026-10-13T16:34:37.143Z\",\"completedBy\":\"f.grzegorz\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-10-13T16:34:37.143Z",
+            "completedBy": "f.grzegorz"
+          }
+        }
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T16:34:38.949+00:00",
+      "updated_by": "f.grzegorz",
+      "is_current_plan": true,
+      "plan_group": "emergency"
+    },
+    {
+      "id": "f5cc938c-a914-452d-b5a2-c26f9ea11bc7",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-54",
+      "position_no": 54,
+      "station": "WTR 30 (ST 42)",
+      "detail": "KRATA PP A15 CZARNA 1M 01712 DOMELO (30056)",
+      "quantity": "2,500",
+      "norm": "720",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy"
+      ],
+      "teams": [
+        "mechanics",
+        "technician"
+      ],
+      "notes": {
+        "mechanics": "można już",
+        "technician": "można już",
+        "__workEvents": "[{\"id\":\"14.10-54:technician:2026-10-13T14:41:37.019Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\"],\"completedAt\":\"2026-10-13T14:41:37.019Z\",\"completedBy\":\"f.grzegorz\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-10-13T14:41:37.019Z",
+            "completedBy": "f.grzegorz"
+          }
+        }
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T14:41:38.83+00:00",
+      "updated_by": "f.grzegorz",
+      "is_current_plan": true,
+      "plan_group": "emergency"
+    },
+    {
+      "id": "fb99a204-1cb6-4da7-ba7d-f31d9aaf13e9",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "14.10-50",
+      "position_no": 50,
+      "station": "WTR 48",
+      "detail": "POKRYWKA OLEJAK FI 55 NIEBIESKA (1012)",
+      "quantity": "32,000",
+      "norm": "35000",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy"
+      ],
+      "teams": [
+        "mechanics",
+        "technician"
+      ],
+      "notes": {
+        "mechanics": "można już",
+        "technician": "można już",
+        "__workEvents": "[{\"id\":\"14.10-50:technician:2026-10-13T16:47:37.298Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\"],\"completedAt\":\"2026-10-13T16:47:37.298Z\",\"completedBy\":\"f.grzegorz\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-10-13T16:47:37.298Z",
+            "completedBy": "f.grzegorz"
+          }
+        }
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T13:00:47.374065+00:00",
+      "updated_at": "2026-10-13T16:47:38.885+00:00",
+      "updated_by": "f.grzegorz",
+      "is_current_plan": true,
+      "plan_group": "emergency"
+    },
+    {
+      "id": "8fe2255d-e005-5e3f-89e2-1ba836ff13ff",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "zadanie-cykliczne:cykl-1790016317633-5:2026-10-13",
+      "position_no": 100000,
+      "station": "ZADANIE CYKLICZNE",
+      "detail": "Mielenie kosza z brakami PP",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"zadanie-cykliczne:cykl-1790016317633-5:2026-10-13:technician:2026-10-13T17:51:10.069Z\",\"team\":\"technician\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-10-13T17:51:10.069Z\",\"completedBy\":\"k.rafal\"}]",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-10-13T17:51:10.069Z",
+            "completedBy": "k.rafal"
+          }
+        },
+        "productionHall": "both"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T17:33:18.791701+00:00",
+      "updated_at": "2026-10-13T17:51:10.575+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "2574d204-1e3e-5e8f-8fda-1d5992bbdf80",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "zadanie-cykliczne:cykl-1790018712804-9:2026-10-13",
+      "position_no": 100004,
+      "station": "ZADANIE CYKLICZNE",
+      "detail": "Prasowanie folii oraz kartonów",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "distribution"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"zadanie-cykliczne:cykl-1790018712804-9:2026-10-13:distribution:2026-10-13T17:49:05.645Z\",\"team\":\"distribution\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-10-13T17:49:05.645Z\",\"completedBy\":\"k.rafal\"}]",
+        "__teamProgress": {
+          "distribution": {
+            "completedAt": "2026-10-13T17:49:05.645Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T17:49:05.645Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T17:49:05.645Z",
+            "completedBy": "k.rafal"
+          }
+        },
+        "productionHall": "hala-2"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T17:33:19.012856+00:00",
+      "updated_at": "2026-10-13T17:49:05.962+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "55824914-00d2-5f90-8b5c-ad440329e94f",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "zadanie-cykliczne:cykl-1790016943317-7:2026-10-13",
+      "position_no": 100002,
+      "station": "ZADANIE CYKLICZNE",
+      "detail": "Zmielenie przynajmniej jednego kartonu braków z czerwonej strefy (zawiera się w tym przygotowanie i segregacja detali do mielenia)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "distribution"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"zadanie-cykliczne:cykl-1790016943317-7:2026-10-13:distribution:2026-10-13T17:49:03.749Z\",\"team\":\"distribution\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-10-13T17:49:03.749Z\",\"completedBy\":\"k.rafal\"}]",
+        "__teamProgress": {
+          "distribution": {
+            "completedAt": "2026-10-13T17:49:03.749Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T17:49:03.749Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T17:49:03.749Z",
+            "completedBy": "k.rafal"
+          }
+        },
+        "productionHall": "both"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T17:33:18.907087+00:00",
+      "updated_at": "2026-10-13T17:49:04.174+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "d3456832-c6a0-5479-85ce-632af408ae17",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "zadanie-cykliczne:cykl-1790018676237-8:2026-10-13",
+      "position_no": 100003,
+      "station": "ZADANIE CYKLICZNE",
+      "detail": "Prasowanie folii oraz kartonów",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "distribution"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"zadanie-cykliczne:cykl-1790018676237-8:2026-10-13:distribution:2026-10-13T17:49:05.057Z\",\"team\":\"distribution\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-10-13T17:49:05.057Z\",\"completedBy\":\"k.rafal\"}]",
+        "__teamProgress": {
+          "distribution": {
+            "completedAt": "2026-10-13T17:49:05.057Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T17:49:05.057Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T17:49:05.057Z",
+            "completedBy": "k.rafal"
+          }
+        },
+        "productionHall": "hala-1"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T17:33:18.961265+00:00",
+      "updated_at": "2026-10-13T17:49:05.421+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "f8f9f7d0-bceb-4514-8362-7fa7a7c321b1",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-43-pozycja-43",
+      "position_no": 53,
+      "station": "WTR 50",
+      "detail": "FILTER FRAME CARTRIDGE CPL. GS20 (8001214528)",
+      "quantity": "20,000",
+      "norm": "1600",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"13.10-43-pozycja-43:technician:2026-10-13T10:20:30.772Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T10:20:30.772Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"13.10-43-pozycja-43:mechanics:2026-10-13T17:48:04.837Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T17:48:04.837Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"13.10-43-pozycja-43:distribution:2026-10-13T17:48:55.386Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T17:48:55.386Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "mechanics": {
+            "completedAt": "2026-10-13T17:48:04.837Z",
+            "completedBy": "k.rafal"
+          },
+          "technician": {
+            "completedAt": "2026-10-13T10:20:30.772Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-13T17:48:55.386Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T17:48:55.386Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T17:48:54.478Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:48:20.016208+00:00",
+      "updated_at": "2026-10-13T17:48:55.691+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "emergency"
+    },
+    {
+      "id": "f85aa25e-e970-50fb-88a1-a174eaa3fe03",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "12.10-66",
+      "position_no": 29,
+      "station": "WTR 41",
+      "detail": "PARTITION FLOOR CENTRAL BLOWER SC1C (8001287739)",
+      "quantity": "4 080 + 960",
+      "norm": "1610",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "wznowienie",
+        "proby",
+        "regulacja"
+      ],
+      "teams": [
+        "mechanics",
+        "process"
+      ],
+      "notes": {
+        "technician": "zmiana koloru",
+        "__workEvents": "[{\"id\":\"12.10-66:mechanics:2026-10-12T07:22:21.098Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T07:22:21.098Z\",\"completedBy\":\"czaja.fabian\"},{\"id\":\"12.10-66:distribution:2026-10-12T09:33:18.012Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T09:33:18.012Z\",\"completedBy\":\"CHMAJ PAWEŁ\"},{\"id\":\"12.10-66:technician:2026-10-12T10:38:51.142Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-12T10:38:51.142Z\",\"completedBy\":\"f.grzegorz\",\"revertedAt\":\"2026-10-13T07:12:51.563Z\"},{\"id\":\"12.10-66:process:2026-10-13T04:36:42.570Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T04:36:42.570Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"12.10-66:process:2026-10-13T17:51:27.012Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"wznowienie\",\"proby\",\"regulacja\"],\"completedAt\":\"2026-10-13T17:51:27.012Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, HOSTGREY",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T17:51:27.012Z",
+            "completedBy": "k.rafal"
+          },
+          "mechanics": {
+            "completedAt": "2026-10-12T07:22:21.098Z",
+            "completedBy": "czaja.fabian"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T17:51:27.398+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "5484e985-689e-5c19-8221-46c0de52af8d",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "zadanie-cykliczne:cykl-1790016883977-6:2026-10-13",
+      "position_no": 100001,
+      "station": "ZADANIE CYKLICZNE",
+      "detail": "Dbanie o czystosc na wyznaczonych strefach centralnych zasypów",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "technician",
+        "distribution"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"zadanie-cykliczne:cykl-1790016883977-6:2026-10-13:distribution:2026-10-13T17:48:59.126Z\",\"team\":\"distribution\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-10-13T17:48:59.126Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"zadanie-cykliczne:cykl-1790016883977-6:2026-10-13:technician:2026-10-13T17:51:10.725Z\",\"team\":\"technician\",\"kinds\":[\"inne\"],\"completedAt\":\"2026-10-13T17:51:10.725Z\",\"completedBy\":\"k.rafal\"}]",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-10-13T17:51:10.725Z",
+            "completedBy": "k.rafal"
+          },
+          "distribution": {
+            "completedAt": "2026-10-13T17:48:59.126Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T17:48:59.126Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T17:48:59.126Z",
+            "completedBy": "k.rafal"
+          }
+        },
+        "productionHall": "both"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T17:33:18.848838+00:00",
+      "updated_at": "2026-10-13T17:51:11.065+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "b14e235f-4383-5b4c-8a3b-e3c6c637b01d",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "9.10-81",
+      "position_no": 26,
+      "station": "WTR 40",
+      "detail": "HOUSING 1.605.108.2SS ORCA (16051082SS)",
+      "quantity": "1 060",
+      "norm": "510",
+      "highlighted": false,
+      "kinds": [
+        "rozruch"
+      ],
+      "teams": [
+        "process",
+        "distribution"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"9.10-81:distribution:2026-10-12T07:35:55.716Z\",\"team\":\"distribution\",\"kinds\":[\"rozruch\"],\"completedAt\":\"2026-10-12T07:35:55.716Z\",\"completedBy\":\"CHMAJ PAWEŁ\"},{\"id\":\"9.10-81:process:2026-10-13T04:36:40.935Z\",\"team\":\"process\",\"kinds\":[\"rozruch\"],\"completedAt\":\"2026-10-13T04:36:40.935Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, włączyć suszarkę tc 35 i piovan z gumą",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T04:36:40.935Z",
+            "completedBy": "k.rafal"
+          },
+          "distribution": {
+            "completedAt": "2026-10-12T07:35:55.716Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-12T07:35:55.716Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-12T07:35:54.046Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "cad48a32-3913-4c08-8844-f0158298620f",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-44",
+      "position_no": 21,
+      "station": "WTR 12",
+      "detail": "PRZEWIETRZNIK 33061567 WD132 F3 24MM T27 MCS V0 (TM33061567)",
+      "quantity": "300",
+      "norm": "380",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"13.10-44:mechanics:2026-10-13T06:58:36.708Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T06:58:36.708Z\",\"completedBy\":\"czaja.fabian\"},{\"id\":\"13.10-44:technician:2026-10-13T14:41:32.721Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T14:41:32.721Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"13.10-44:distribution:2026-10-13T17:49:14.130Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T17:49:14.130Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"13.10-44:process:2026-10-13T17:51:25.007Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T17:51:25.007Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T17:51:25.007Z",
+            "completedBy": "k.rafal"
+          },
+          "mechanics": {
+            "completedAt": "2026-10-13T06:58:36.708Z",
+            "completedBy": "czaja.fabian"
+          },
+          "technician": {
+            "completedAt": "2026-10-13T14:41:32.721Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-13T17:49:14.130Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T17:49:14.130Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T17:49:13.333Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:48:20.016208+00:00",
+      "updated_at": "2026-10-13T17:51:25.398+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "c2107c96-a3d8-44cf-825e-e18921da238a",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-43",
+      "position_no": 13,
+      "station": "WTR 39",
+      "detail": "MAINT. DOOR CUBIC POPIEL (8563)",
+      "quantity": "3,000",
+      "norm": "615",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-koloru"
+      ],
+      "teams": [
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "process": "można już",
+        "technician": "można już",
+        "__workEvents": "[{\"id\":\"13.10-43:distribution:2026-10-13T07:49:24.276Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-koloru\"],\"completedAt\":\"2026-10-13T07:49:24.276Z\",\"completedBy\":\"CHMAJ PAWEŁ\"},{\"id\":\"13.10-43:technician:2026-10-13T10:20:20.991Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-koloru\"],\"completedAt\":\"2026-10-13T10:20:20.991Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"13.10-43:process:2026-10-13T17:51:22.635Z\",\"team\":\"process\",\"kinds\":[\"zmiana-koloru\"],\"completedAt\":\"2026-10-13T17:51:22.635Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, można już- suszarka do zabrania z wtr 16 - przemiał elix z kropkami zabrać spod młyna",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T17:51:22.635Z",
+            "completedBy": "k.rafal"
+          },
+          "technician": {
+            "completedAt": "2026-10-13T10:20:20.991Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-13T07:49:24.276Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T07:49:24.276Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T07:41:22.375Z",
+            "completedBy": "Jankowski Jakub"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T17:51:23.022+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "31aabfe5-fc12-4329-960d-e95c67161a8e",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-12",
+      "position_no": 18,
+      "station": "WTR 45",
+      "detail": "MAINTENANCE DOOR 2CTRL POPIEL (M-10-9824)",
+      "quantity": "3,000",
+      "norm": "1250",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch"
+      ],
+      "teams": [
+        "process",
+        "distribution",
+        "technician",
+        "mechanics"
+      ],
+      "notes": {
+        "mechanics": "po skończeniu",
+        "technician": "po skończeniu",
+        "__workEvents": "[{\"id\":\"13.10-12:distribution:2026-10-13T07:51:54.202Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T07:51:54.202Z\",\"completedBy\":\"CHMAJ PAWEŁ\"},{\"id\":\"13.10-12:technician:2026-10-13T10:32:00.040Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T10:32:00.040Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"13.10-12:mechanics:2026-10-13T17:48:29.560Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T17:48:29.560Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"13.10-12:process:2026-10-13T17:51:23.794Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T17:51:23.794Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, po skończeniu",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T17:51:23.794Z",
+            "completedBy": "k.rafal"
+          },
+          "mechanics": {
+            "completedAt": "2026-10-13T17:48:29.560Z",
+            "completedBy": "k.rafal"
+          },
+          "technician": {
+            "completedAt": "2026-10-13T10:32:00.040Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-13T07:51:54.202Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T07:51:54.202Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T07:51:51.273Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T17:51:24.183+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "6fcd9c31-ba83-59cd-8aff-ecef01d7f7c7",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:0b6a729a833b52e3246fab53",
+      "position_no": 0,
+      "station": "ST 33",
+      "detail": "PŁYTA OSŁONY PRZECIWOLŚNIENIOWEJ H=900 (7728)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-13T04:36:47.188Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:36:45.748522+00:00",
+      "updated_at": "2026-10-13T04:36:47.432+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "db604bb6-6270-43c8-825b-509e24095281",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-0",
+      "position_no": 0,
+      "station": "ST.",
+      "detail": "13.10.2026 I, II, III",
+      "quantity": "ILOŚĆ:",
+      "norm": "NORMA",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "3ac95415-de38-47e0-a9c1-d267baa4c413",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-1",
+      "position_no": 1,
+      "station": "ST.",
+      "detail": "13.10.2026 I, II, III",
+      "quantity": "ILOŚĆ:",
+      "norm": "NORMA",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "227ebc94-cc87-4109-8411-01c1f15fccc8",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-3",
+      "position_no": 3,
+      "station": "ST 2",
+      "detail": "MAX CP+TH PRINTED F1_WQG245R1GB (9001994021)",
+      "quantity": "330",
+      "norm": "540",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "a1a7bf3b-d100-4eff-bae8-29de618f8828",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-4",
+      "position_no": 3,
+      "station": "ST 2",
+      "detail": "MAX CP+TH PRINTED f1_WQG2450RDN (9002024460)",
+      "quantity": "15",
+      "norm": "540",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T13:00:46.545+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "fea71d54-65ab-4f40-b8ed-5f0f54ec9c64",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-5",
+      "position_no": 4,
+      "station": "ST 2",
+      "detail": "MAX CP+TH PRINTED f1_WQG243CRPL (9002023001)",
+      "quantity": "90",
+      "norm": "540",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T13:00:46.545+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "3e504e5c-bb07-5d98-88b3-e24513a6f4cb",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "12.10-72",
+      "position_no": 33,
+      "station": "WTR 29",
+      "detail": "SYSTEM 300X300 STUDZIENKA (01792)",
+      "quantity": "2,500",
+      "norm": "410",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "mechanics": "można już - temat pilny",
+        "technician": "można już - temat pilny",
+        "__workEvents": "[{\"id\":\"12.10-72:mechanics:2026-10-13T06:56:33.075Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T06:56:33.075Z\",\"completedBy\":\"czaja.fabian\"},{\"id\":\"12.10-72:distribution:2026-10-13T07:54:03.886Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T07:54:03.886Z\",\"completedBy\":\"CHMAJ PAWEŁ\"},{\"id\":\"12.10-72:technician:2026-10-13T10:20:23.374Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T10:20:23.374Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"12.10-72:process:2026-10-13T17:51:32.110Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T17:51:32.110Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko,",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T17:51:32.110Z",
+            "completedBy": "k.rafal"
+          },
+          "mechanics": {
+            "completedAt": "2026-10-13T06:56:33.075Z",
+            "completedBy": "czaja.fabian"
+          },
+          "technician": {
+            "completedAt": "2026-10-13T10:20:23.374Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-13T07:54:03.886Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T07:54:03.886Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T07:54:01.368Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T17:51:32.501+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "3bfb04d9-3f06-5ff4-8178-5838ff219732",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:52758782ff12a1b116ec0f43",
+      "position_no": 0,
+      "station": "ST 34",
+      "detail": "KONEWKA TRAPEZIUM 10L C3 ZIELEŃ (2416)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-13T17:52:48.415Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "mounted",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T17:52:48.366078+00:00",
+      "updated_at": "2026-10-13T17:52:48.507+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "996efb47-128a-4960-b13e-8dff2a083ffb",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-26",
+      "position_no": 35,
+      "station": "WTR 37",
+      "detail": "SYSTEM 1000X98 KANAŁ Z KRATĄ STALOWĄ A15 (01738)",
+      "quantity": "2,000",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "81dcd2a0-2e46-555c-85f4-28b38ac6149e",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-70",
+      "position_no": 14,
+      "station": "ST 27",
+      "detail": "POKRYWA WYMIENNIKÓW CIEPŁA T27SC0 (8001312017)",
+      "quantity": "3 380 + 6 000",
+      "norm": "1000",
+      "highlighted": false,
+      "kinds": [
+        "wznowienie"
+      ],
+      "teams": [
+        "process"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"8.10-70:process:2026-10-13T04:36:40.342Z\",\"team\":\"process\",\"kinds\":[\"wznowienie\"],\"completedAt\":\"2026-10-13T04:36:40.342Z\",\"completedBy\":\"k.rafal\"}]",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T04:36:40.342Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "51613b0d-0d2b-473d-8af9-83e242aca855",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-17",
+      "position_no": 17,
+      "station": "WTR 31",
+      "detail": "EXTERNAL WHEEL 2ND (A24231801)",
+      "quantity": "200 000",
+      "norm": "17370",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "8328747f-0424-4cd8-9f84-3d46febc30b3",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-37",
+      "position_no": 37,
+      "station": "NH",
+      "detail": "RĄCZKA VG1_SE VZF39171 (8001128987)",
+      "quantity": "10",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "e98a5cdf-30e3-55be-8c9b-80d235575d66",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-30",
+      "position_no": 21,
+      "station": "WTR 37",
+      "detail": "SYSTEM 1000X98 KANAŁ Z KRATĄ ŻELIWNĄ STANDARD B125 (01877)",
+      "quantity": "96",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "1b661129-225e-541b-865c-9dbbd6f4f604",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "9.10-78",
+      "position_no": 66,
+      "station": "WTR 32",
+      "detail": "REAR_TANK 919.0067 CPL. BLACK (8001346829)",
+      "quantity": "3 944",
+      "norm": "630",
+      "highlighted": false,
+      "kinds": [
+        "anulowane"
+      ],
+      "teams": [
+        "distribution"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"9.10-78:distribution:2026-10-12T07:35:53.404Z\",\"team\":\"distribution\",\"kinds\":[\"rozruch\"],\"completedAt\":\"2026-10-12T07:35:53.404Z\",\"completedBy\":\"CHMAJ PAWEŁ\"},{\"id\":\"9.10-78:process:2026-10-12T11:28:18.822Z\",\"team\":\"process\",\"kinds\":[\"rozruch\"],\"completedAt\":\"2026-10-12T11:28:18.822Z\",\"completedBy\":\"sz.pawel\"}]",
+        "distribution": "Przygotować stanowisko, z moplenu spod maszyny",
+        "__teamProgress": {
+          "distribution": {
+            "completedAt": "2026-10-12T07:35:53.404Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-12T07:35:53.404Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-12T07:35:50.611Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "d80b9b9a-a941-5d72-8521-e4a56369a2ca",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "29.09-43",
+      "position_no": 38,
+      "station": "WTR 21",
+      "detail": "OSŁONA GÓRNA AGREGATU ( FORMA DUBLER ) (8865)",
+      "quantity": "",
+      "norm": "680",
+      "highlighted": false,
+      "kinds": [
+        "rozruch",
+        "forma-narzedziownia"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "process": "Wznowienie procesu po powrocie z narzędziowni.",
+        "mechanics": "Po skończeniu ",
+        "technician": "Po skończeniu ",
+        "__workEvents": "[{\"id\":\"29.09-43:technician:2026-09-30T12:18:43.612Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-30T12:18:43.612Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"29.09-43:distribution:2026-09-30T12:38:31.439Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-30T12:38:31.439Z\",\"completedBy\":\"Wojciechowski Dawid\"},{\"id\":\"29.09-43:mechanics:2026-10-02T12:43:41.700Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-02T12:43:41.700Z\",\"completedBy\":\"czaja.fabian\",\"revertedAt\":\"2026-10-13T06:58:54.215Z\"},{\"id\":\"29.09-43:process:2026-10-11T19:32:07.005Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-11T19:32:07.005Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"29.09-43:mechanics:2026-10-13T17:53:02.868Z\",\"team\":\"mechanics\",\"kinds\":[\"rozruch\",\"forma-narzedziownia\"],\"completedAt\":\"2026-10-13T17:53:02.868Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko,dać skrzynię z przemiałem",
+        "__teamProgress": {
+          "mechanics": {
+            "completedAt": "2026-10-13T17:53:02.868Z",
+            "completedBy": "k.rafal"
+          },
+          "technician": {
+            "completedAt": "2026-09-30T12:18:43.612Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-09-30T12:38:31.439Z",
+            "completedBy": "Wojciechowski Dawid"
+          },
+          "distributionStation": {
+            "completedAt": "2026-09-30T12:38:31.439Z",
+            "completedBy": "Wojciechowski Dawid"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-09-30T12:38:28.383Z",
+            "completedBy": "Wojciechowski Dawid"
+          }
+        }
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T17:53:03.155+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "dd818edc-35a2-49d6-9adb-2b6099d578ed",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-55",
+      "position_no": 50,
+      "station": "WTR 51",
+      "detail": "GUIDE MUH NG (8001365078)",
+      "quantity": "10,000",
+      "norm": "1620",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "14.10",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "planned"
+    },
+    {
+      "id": "b6ae28c8-576d-436b-ab11-41f0b7cc9731",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-53",
+      "position_no": 58,
+      "station": "ST 55",
+      "detail": "TRAY HANDLE BO INOX FOR CLIPPED (M-10-PWY-BSHL-10015)",
+      "quantity": "1 000",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "32d94fb3-7b29-46e5-86ea-d67330b05894",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-52",
+      "position_no": 49,
+      "station": "ST 55",
+      "detail": "MD + HC SET G/VCTR VZF39171 (8001127276)",
+      "quantity": "490",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "54480952-5940-5d86-83a4-011d2428edfa",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-69",
+      "position_no": 43,
+      "station": "WTR 51",
+      "detail": "GUIDE MUH NG (8001365078)",
+      "quantity": "10,000",
+      "norm": "1620",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "distribution": "włączyc suszenie",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "57d7977f-3639-58c5-83da-0f2e383d522f",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "2.10-61",
+      "position_no": 47,
+      "station": "ST 58",
+      "detail": "MAX-DRAIN SLIM LISTWA ALUMINIOWA (PROFIL AL.57544) (8458)",
+      "quantity": "30 000",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "3ff47af0-27bd-5d88-8d31-316bab9d4791",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "28.09-65",
+      "position_no": 57,
+      "station": "ST 59",
+      "detail": "LISTWA ALUMINIOWA ŁOPATY DUŻEJ (30141)",
+      "quantity": "4 000",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [
+        "distribution"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"28.09-65:distribution:2026-10-11T19:31:41.879Z\",\"team\":\"distribution\",\"kinds\":[],\"completedAt\":\"2026-10-11T19:31:41.879Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "distribution": {
+            "completedAt": "2026-10-11T19:31:41.879Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-11T19:31:41.879Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-11T19:31:39.920Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "7a091f03-49b3-5c13-83f5-55450db36bd8",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "12.10-0",
+      "position_no": 0,
+      "station": "ST.",
+      "detail": "12.10.2026 I",
+      "quantity": "ILOŚĆ:",
+      "norm": "NORMA",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "199399b6-2e93-5aed-853f-f43115775e13",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:e9dc18015877e4ae65d390ae",
+      "position_no": 3,
+      "station": "WTR 48",
+      "detail": "POJEMNIK 55X145 BEZBARWNY W4 (1-1006)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-12T11:28:17.929Z",
+        "__machineBy": "sz.pawel",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.108+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "7dcc6fbf-481f-55c2-8bde-e147d095db19",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:43efd6d869761cf6cd9bf71b",
+      "position_no": 5,
+      "station": "WTR 32",
+      "detail": "TRAY HANDLE BLACK FOR WELDED (M-10-10009)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-11T19:32:06.768Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.108+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "e5a6592a-cdc7-57b7-8b18-f808ac2f8aa4",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "12.10-1",
+      "position_no": 6,
+      "station": "ST.",
+      "detail": "12.10.2026 I",
+      "quantity": "ILOŚĆ:",
+      "norm": "NORMA",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "7d648c00-7c87-57e6-8535-7f9db94e4824",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:8cbbbfbb17c7373753274db0",
+      "position_no": 0,
+      "station": "WTR 45",
+      "detail": "MAINTENANCE DOOR 2CTRL POPIEL (M-10-9824)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-13T17:51:24.183Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T17:51:24.334+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "cf0d2029-7594-5230-8c07-fd925ad40768",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:0057e02b291e3e8ca84bb876",
+      "position_no": 0,
+      "station": "WTR 35",
+      "detail": "EXTERNAL WHEEL 2ND (A24231801)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-13T04:36:41.679Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:36:41.906+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "37c35cab-f684-564d-86c1-88be77d957b3",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:636ce5df7e6f5c4b87da2ca7",
+      "position_no": 0,
+      "station": "WTR 41",
+      "detail": "PARTITION FLOOR CENTRAL BLOWER SC1C (8001287739)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-13T17:51:27.398Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T17:51:27.502+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "f8a7b481-d443-56df-8ae2-1b86d158ef1c",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "12.10-2",
+      "position_no": 2,
+      "station": "ST 2",
+      "detail": "PANELE B0",
+      "quantity": "",
+      "norm": "540",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.545+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "b76e1c3a-0d2d-568a-8dec-a0e4638d4cde",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:d862e6a1806e34d8366baa21",
+      "position_no": 8,
+      "station": "WTR 44",
+      "detail": "MAX-DRAIN SLIM KANAŁ SZCZELINOWY PP B125 (8320)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-11T19:32:07.492Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.108+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "4f24161c-f10d-5110-8cc0-413bfb260110",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:e5e406815a6e45be6d41db31",
+      "position_no": 10,
+      "station": "WTR 26",
+      "detail": "SYSTEM 1000X63X98X148 KRATA PVC B125 GRAFIT DOMELO (01787)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-11T19:32:10.203Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.108+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "47d80a5b-c4db-5477-81fb-1dc210ba84f0",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:5b614781774ad85b083a33fa",
+      "position_no": 11,
+      "station": "WTR 21",
+      "detail": "OSŁONA GÓRNA AGREGATU ( FORMA DUBLER ) (8865)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-11T19:32:07.596Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.108+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "b4ad03ec-1de0-5e8e-836f-eb0843655045",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:631ae3c353846008da3b32f9",
+      "position_no": 13,
+      "station": "WTR 49",
+      "detail": "TRAY HANDLE BO CLIPPED VG1 VZF07020 (M-10-8001128941)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-11T19:32:10.292Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.108+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "391b279d-c4ed-5dc9-89b5-c058e0831aa6",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "28.09-9",
+      "position_no": 15,
+      "station": "WTR 46",
+      "detail": "MAX BO VG1 CP BODY 07020 + HANDLE + LOGOCLIP (8001128772)",
+      "quantity": "9 360",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "0ac5fa58-de2d-5b60-88cf-47fe400122a4",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:d838cd4b41c8b2b661fbe039",
+      "position_no": 16,
+      "station": "WTR 31",
+      "detail": "ŁOPATA DO ŚNIEGU DUŻA POMARAŃCZOWA (2023)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-11T19:32:07.801Z",
+        "__machineBy": "k.rafal",
+        "__machineStage": "started",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.108+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "05f929f6-2f4d-5d2d-8fd2-84ddbea2bceb",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "6.10-54",
+      "position_no": 45,
+      "station": "WTR 4",
+      "detail": "TRAY HANDLE INSERT BO WELDED + HS (M-10-8001226134)",
+      "quantity": "4 340",
+      "norm": "1560",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "8e412d9d-9a07-53f8-8dcd-58e1ba5467fe",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "12.10-8",
+      "position_no": 23,
+      "station": "WTR 49",
+      "detail": "TRAY HANDLE BO BLACK FOR CLIPPED (M-10-10014)",
+      "quantity": "2 000",
+      "norm": "1250",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-koloru"
+      ],
+      "teams": [
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "technician": "zmiana koloru na czarny",
+        "__workEvents": "[{\"id\":\"12.10-8:distribution:2026-10-12T06:49:47.792Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-koloru\"],\"completedAt\":\"2026-10-12T06:49:47.792Z\",\"completedBy\":\"CHMAJ PAWEŁ\"},{\"id\":\"12.10-8:technician:2026-10-12T10:38:40.834Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-koloru\"],\"completedAt\":\"2026-10-12T10:38:40.834Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"12.10-8:process:2026-10-12T11:28:09.490Z\",\"team\":\"process\",\"kinds\":[\"zmiana-koloru\"],\"completedAt\":\"2026-10-12T11:28:09.490Z\",\"completedBy\":\"sz.pawel\"}]",
+        "distribution": "Przygotować stanowisko, przestawić suszarkę z czarnym abs spod wtr 32",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-12T11:28:09.490Z",
+            "completedBy": "sz.pawel"
+          },
+          "technician": {
+            "completedAt": "2026-10-12T10:38:40.834Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-12T06:49:47.792Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-12T06:49:47.792Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-12T06:49:45.357Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "5396e551-0271-5623-8b4e-c9bdde6b9584",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "28.09-47",
+      "position_no": 47,
+      "station": "ST 46 B",
+      "detail": "ASSEMBLY BRACKET (A25801202)",
+      "quantity": "12,000",
+      "norm": "7200",
+      "highlighted": false,
+      "kinds": [
+        "wznowienie"
+      ],
+      "teams": [
+        "distribution"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"28.09-47:distribution:2026-10-13T17:49:11.394Z\",\"team\":\"distribution\",\"kinds\":[\"wznowienie\"],\"completedAt\":\"2026-10-13T17:49:11.394Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "distribution": {
+            "completedAt": "2026-10-13T17:49:11.394Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T17:49:11.394Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T17:49:10.645Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T17:49:11.695+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "8b1f9360-6466-549c-8383-7577a739e47f",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:20f8a1fc7ebf0f41922b80e6",
+      "position_no": 20,
+      "station": "WTR 40",
+      "detail": "HOUSING 1.605.806.6AR UNIVERSAL SANDER (16058066AR)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-08T08:41:36.281Z",
+        "__machineBy": "czaja.fabian",
+        "__machineStage": "mounted",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.108+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "d20b1a86-f9d7-5e32-814e-ee1c8be48928",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "9.10-20",
+      "position_no": 13,
+      "station": "WTR 47",
+      "detail": "CPB NOT PRINTED BO VZF07020 (M-10-8001128928)",
+      "quantity": "700",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "d7f16ef8-0be0-5a92-883b-680ce1bd2600",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-72",
+      "position_no": 23,
+      "station": "WTR 45",
+      "detail": "MD + HC SET G/VCTR WHITE (8001127273) (HOUSING COVER 2CTRL WHITE)",
+      "quantity": "2 160",
+      "norm": "1250",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "29f39f80-2a17-500e-8002-0458be65f050",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-73",
+      "position_no": 24,
+      "station": "WTR 45",
+      "detail": "HOUSING COVER 2CTRL WHITE (M-10-9001027356)",
+      "quantity": "3 000",
+      "norm": "1250",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "cbcb8510-d551-53ec-8701-564901029b0a",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "7.10-50",
+      "position_no": 46,
+      "station": "ST 46 A",
+      "detail": "IRIS LR WHEEL ASM PPTV20 (A27409202)",
+      "quantity": "",
+      "norm": "7 000",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "e8f50e13-8622-509a-8b4d-9d60a2664a4c",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "__machine_state__:ea67773f730298ca486b3380",
+      "position_no": 27,
+      "station": "WTR 5",
+      "detail": "EXTENSION BEARING BED03/220 (03/220)",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__machineAt": "2026-10-05T08:04:36.810Z",
+        "__machineBy": "czaja.fabian",
+        "__machineStage": "mounted",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T04:09:30.109+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "44210f53-308b-51a4-8194-788d28c59680",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-56",
+      "position_no": 29,
+      "station": "WTR 28",
+      "detail": "PLV WHEEL DORIS 229 (A17210302)",
+      "quantity": "72 500",
+      "norm": "11400",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "f928130f-2f81-5726-8110-550b23b1a4bd",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-68",
+      "position_no": 30,
+      "station": "WTR 42",
+      "detail": "POJEMNIK PP 55X110 BEZBARWNY Z UNIEPAL.V3 TRANSPARENTNY (3010)",
+      "quantity": "15 000",
+      "norm": "9000",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "6704bc73-45df-5954-8a97-2240e2eaca4d",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "6.10-55",
+      "position_no": 31,
+      "station": "WTR 35",
+      "detail": "IRIS LR WHEEL (A22154704)",
+      "quantity": "63 000 + 60 000",
+      "norm": "13104",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "10cdfd66-28f9-5b39-8fb9-cd961c6b41cb",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "28.09-31",
+      "position_no": 68,
+      "station": "WTR 18",
+      "detail": "PLV QUICK LIFT SLIDER LEFT + WHEEL DORIS 229, PLV QUICK LIFT SLIDER RIGHT + WHEEL DORIS 229 (A18208403, A18208404)",
+      "quantity": "",
+      "norm": "1400",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch",
+        "anulowane"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician",
+        "additional"
+      ],
+      "notes": {
+        "mechanics": "Można juz",
+        "additional": "Pwppp",
+        "technician": "Można juz",
+        "__workEvents": "[{\"id\":\"28.09-31:distribution:2026-09-28T08:54:37.756Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-28T08:54:37.756Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"28.09-31:technician:2026-09-28T10:13:01.265Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-28T10:13:01.265Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"28.09-31:mechanics:2026-09-28T18:07:02.413Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-28T18:07:02.413Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"28.09-31:additional:2026-09-29T08:05:47.008Z\",\"team\":\"additional\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-29T08:05:47.008Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"28.09-31:distribution:2026-09-29T11:02:59.306Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-29T11:02:59.306Z\",\"completedBy\":\"Wojciechowski Dawid\"},{\"id\":\"28.09-31:process:2026-09-29T11:53:42.955Z\",\"team\":\"process\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-09-29T11:53:42.955Z\",\"completedBy\":\"sz.pawel\"}]",
+        "distribution": "Przygotować stanowisko",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-09-29T11:53:42.955Z",
+            "completedBy": "sz.pawel"
+          },
+          "mechanics": {
+            "completedAt": "2026-09-28T18:07:02.413Z",
+            "completedBy": "k.rafal"
+          },
+          "additional": {
+            "completedAt": "2026-09-29T08:05:47.008Z",
+            "completedBy": "k.rafal"
+          },
+          "technician": {
+            "completedAt": "2026-09-28T10:13:01.265Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-09-29T11:02:59.306Z",
+            "completedBy": "Wojciechowski Dawid"
+          },
+          "distributionStation": {
+            "completedAt": "2026-09-29T11:02:56.779Z",
+            "completedBy": "Wojciechowski Dawid"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-09-29T11:02:59.306Z",
+            "completedBy": "Wojciechowski Dawid"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.547+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "0dcd894b-ee4a-55fa-8719-a07362417ad4",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "9.10-72",
+      "position_no": 20,
+      "station": "WTR 18",
+      "detail": "PLV QUICK LIFT SLIDER LEFT + WHEEL, PLV QUICK LIFT SLIDER RIGHT + WHEEL (A18208401, A18208402)",
+      "quantity": "10 000, 10 000",
+      "norm": "1400",
+      "highlighted": false,
+      "kinds": [
+        "inne"
+      ],
+      "teams": [
+        "additional"
+      ],
+      "notes": {
+        "additional": "Sprawdzić czasy zaciągania ",
+        "distribution": "Przygotować stanowisko, z ppgf35 z silosa",
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "95232132-48bb-559c-813a-cd1b8d3a6db1",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "6.10-57",
+      "position_no": 33,
+      "station": "WTR 41",
+      "detail": "GRID GUIDE VANES UPS - BIG (8001284146)",
+      "quantity": "7 080",
+      "norm": "1410",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "9831e09a-5d1a-5d03-8084-da3b86636241",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "6.10-62",
+      "position_no": 73,
+      "station": "WTR 5",
+      "detail": "BACKREST PIVOT BED04/220 - REV 0 (04/220)",
+      "quantity": "1 640",
+      "norm": "820",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch",
+        "anulowane"
+      ],
+      "teams": [
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "technician": "tworzywo to samo",
+        "__workEvents": "[{\"id\":\"6.10-62:technician:2026-10-07T07:29:08.380Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-07T07:29:08.380Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"6.10-62:distribution:2026-10-11T19:31:49.917Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-11T19:31:49.917Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, tworzywo to samo",
+        "__teamProgress": {
+          "technician": {
+            "completedAt": "2026-10-07T07:29:08.380Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-11T19:31:49.917Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-11T19:31:48.310Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-11T19:31:49.917Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.547+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "98194c9b-b517-5183-8620-ab9ff535787c",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "8.10-34",
+      "position_no": 22,
+      "station": "WTR 37",
+      "detail": "SYSTEM 1000X98 KANAŁ Z KRATĄ ŻELIWNĄ STANDARD C250 (01878)",
+      "quantity": "96",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "__teamProgress": {}
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:45.935+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "626dfaee-f8d2-51fa-80f0-8d2f99c05170",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "6.10-66",
+      "position_no": 34,
+      "station": "WTR 37",
+      "detail": "SYSTEM 1000X98 KANAŁ (01723)",
+      "quantity": "985",
+      "norm": "700",
+      "highlighted": false,
+      "kinds": [
+        "proby"
+      ],
+      "teams": [
+        "process",
+        "distribution"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"6.10-66:distribution:2026-10-13T07:52:45.061Z\",\"team\":\"distribution\",\"kinds\":[\"proby\"],\"completedAt\":\"2026-10-13T07:52:45.061Z\",\"completedBy\":\"Jankowski Jakub\"},{\"id\":\"6.10-66:process:2026-10-13T17:51:33.383Z\",\"team\":\"process\",\"kinds\":[\"proby\"],\"completedAt\":\"2026-10-13T17:51:33.383Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować tworzywo spur w tc32 suszyć",
+        "__teamProgress": {
+          "process": {
+            "completedAt": "2026-10-13T17:51:33.383Z",
+            "completedBy": "k.rafal"
+          },
+          "distribution": {
+            "completedAt": "2026-10-13T07:52:45.061Z",
+            "completedBy": "Jankowski Jakub"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T07:52:45.061Z",
+            "completedBy": "Jankowski Jakub"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T07:50:14.596Z",
+            "completedBy": "CHMAJ PAWEŁ"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T17:51:33.691+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "standard"
+    },
+    {
+      "id": "89dfa8db-5790-5267-8c7a-1fb167d8ac52",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "2.10-43",
+      "position_no": 67,
+      "station": "WTR 29",
+      "detail": "CARRYING CASE (60827622TX)",
+      "quantity": "",
+      "norm": "880",
+      "highlighted": false,
+      "kinds": [
+        "anulowane"
+      ],
+      "teams": [
+        "distribution"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"2.10-43:distribution:2026-10-11T19:31:44.902Z\",\"team\":\"distribution\",\"kinds\":[\"wznowienie\"],\"completedAt\":\"2026-10-11T19:31:44.902Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, możliwe że jak nie naprawią centralnego to trzeba będzie przygotować piovana",
+        "__teamProgress": {
+          "distribution": {
+            "completedAt": "2026-10-11T19:31:44.902Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-11T19:31:43.452Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-11T19:31:44.902Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T13:00:46.546+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "564b5caa-8536-48bd-939d-db27df13177c",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "13.10-47",
+      "position_no": 49,
+      "station": "WTR 8",
+      "detail": "END COVER PW200 CLOSED (16950-1)",
+      "quantity": "544",
+      "norm": "660",
+      "highlighted": false,
+      "kinds": [
+        "zmiana-formy",
+        "rozruch"
+      ],
+      "teams": [
+        "mechanics",
+        "process",
+        "distribution",
+        "technician"
+      ],
+      "notes": {
+        "mechanics": "można już",
+        "technician": "można już",
+        "__workEvents": "[{\"id\":\"13.10-47:mechanics:2026-10-13T07:14:01.138Z\",\"team\":\"mechanics\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T07:14:01.138Z\",\"completedBy\":\"czaja.fabian\"},{\"id\":\"13.10-47:technician:2026-10-13T10:20:25.523Z\",\"team\":\"technician\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T10:20:25.523Z\",\"completedBy\":\"f.grzegorz\"},{\"id\":\"13.10-47:distribution:2026-10-13T17:48:52.706Z\",\"team\":\"distribution\",\"kinds\":[\"zmiana-formy\",\"rozruch\"],\"completedAt\":\"2026-10-13T17:48:52.706Z\",\"completedBy\":\"k.rafal\"}]",
+        "distribution": "Przygotować stanowisko, można już - z grillon - suszyć w tc 5",
+        "__teamProgress": {
+          "mechanics": {
+            "completedAt": "2026-10-13T07:14:01.138Z",
+            "completedBy": "czaja.fabian"
+          },
+          "technician": {
+            "completedAt": "2026-10-13T10:20:25.523Z",
+            "completedBy": "f.grzegorz"
+          },
+          "distribution": {
+            "completedAt": "2026-10-13T17:48:52.706Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionStation": {
+            "completedAt": "2026-10-13T17:48:52.706Z",
+            "completedBy": "k.rafal"
+          },
+          "distributionMaterials": {
+            "completedAt": "2026-10-13T17:48:51.823Z",
+            "completedBy": "k.rafal"
+          }
+        }
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:37:16.527774+00:00",
+      "updated_at": "2026-10-13T17:48:53.04+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": true,
+      "plan_group": "emergency"
+    },
+    {
+      "id": "514ff6c8-1af3-5a8d-87aa-b6242fae9e13",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "toolroom-return:28.09-18",
+      "position_no": 79,
+      "station": "WTR 47",
+      "detail": "TOP SECTION GS70 TORNADO RED (8001356946)",
+      "quantity": "572",
+      "norm": "620",
+      "highlighted": false,
+      "kinds": [
+        "powrot-formy-narzedziownia"
+      ],
+      "teams": [
+        "mechanics"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"toolroom-return:28.09-18:mechanics:2026-09-29T11:25:24.090Z\",\"team\":\"mechanics\",\"kinds\":[\"powrot-formy-narzedziownia\"],\"completedAt\":\"2026-09-29T11:25:24.090Z\",\"completedBy\":\"Mikołaj Nikitiuk\"},{\"id\":\"toolroom-return:28.09-18:process:2026-10-11T19:32:07.397Z\",\"team\":\"process\",\"kinds\":[\"powrot-formy-narzedziownia\"],\"completedAt\":\"2026-10-11T19:32:07.397Z\",\"completedBy\":\"k.rafal\"}]",
+        "__teamProgress": {
+          "mechanics": {
+            "completedAt": "2026-09-29T11:25:24.090Z",
+            "completedBy": "Mikołaj Nikitiuk"
+          }
+        },
+        "toolroomParentId": "28.09-18"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T18:13:40.819+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    },
+    {
+      "id": "b1818272-3cb8-5515-8120-bd0671e6a02e",
+      "session_id": "f9de5b70-5c25-4d78-b29e-e6da35064681",
+      "task_key": "toolroom-return:28.09-24",
+      "position_no": 80,
+      "station": "WTR 48",
+      "detail": "TACKA 294.0006 BIAŁY (7738)",
+      "quantity": "510",
+      "norm": "800",
+      "highlighted": false,
+      "kinds": [
+        "powrot-formy-narzedziownia"
+      ],
+      "teams": [
+        "mechanics"
+      ],
+      "notes": {
+        "__workEvents": "[{\"id\":\"toolroom-return:28.09-24:mechanics:2026-09-29T04:24:29.024Z\",\"team\":\"mechanics\",\"kinds\":[\"powrot-formy-narzedziownia\"],\"completedAt\":\"2026-09-29T04:24:29.024Z\",\"completedBy\":\"k.rafal\"},{\"id\":\"toolroom-return:28.09-24:process:2026-09-29T04:27:21.736Z\",\"team\":\"process\",\"kinds\":[\"powrot-formy-narzedziownia\"],\"completedAt\":\"2026-09-29T04:27:21.736Z\",\"completedBy\":\"k.rafal\"}]",
+        "__teamProgress": {
+          "mechanics": {
+            "completedAt": "2026-09-29T04:24:29.024Z",
+            "completedBy": "k.rafal"
+          }
+        },
+        "toolroomParentId": "28.09-24"
+      },
+      "done": true,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T04:09:31.446273+00:00",
+      "updated_at": "2026-10-13T18:13:40.885+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    }
+  ]
+}

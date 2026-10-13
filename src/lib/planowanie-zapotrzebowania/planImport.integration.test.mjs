@@ -16,7 +16,7 @@ const ts = require('typescript');
 const source = readFileSync(pageFile,'utf8');
 const ast = ts.createSourceFile('page.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const directQuantityEditing = source.includes('const updatePlanQuantity =');
-const names = ['uid','numberValue','normalize','CATEGORIES','normalizeReturnExclusions','productIdentityMatches','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','inferPickingWarehouseCode','pickingWarehouseCode','sortPickingDocumentRows','PACKAGING_CATEGORIES','splitProductFields','stationKey','applyStationMappings','materialKey','materialMatches','materialIdentityMatches','isPackagingMaterial','technologyMaterialsForMode','migrateLegacyEmergencyTechnologies','normalizedMaterialUnit','isKilogramUnit','isGramUnit','isThousandPiecesUnit','technologyResultUnit','technologyResultQuantity','roundTechnologyMaterialQuantity','canonicalProductIndex','linkedProductKey','linkedProductMatchesPlanItem','linkedSourceSelectionForItem','linkedMachineProductQuantity','linkedWarehouseProductQuantity','linkedSurplusQuantity','normalizeLinkedSources','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','technologyLabel','latestPriorPlanVersion','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
+const names = ['uid','numberValue','normalize','CATEGORIES','normalizeReturnExclusions','productIdentityMatches','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','inferPickingWarehouseCode','pickingWarehouseCode','sortPickingDocumentRows','PACKAGING_CATEGORIES','splitProductFields','stationKey','applyStationMappings','materialKey','materialMatches','materialIdentityMatches','isPackagingMaterial','technologyMaterialsForMode','migrateLegacyEmergencyTechnologies','normalizedMaterialUnit','isKilogramUnit','isGramUnit','isThousandPiecesUnit','technologyResultUnit','technologyResultQuantity','roundTechnologyMaterialQuantity','canonicalProductIndex','linkedProductKey','linkedProductMatchesPlanItem','linkedSourceSelectionForItem','linkedMachineProductQuantity','linkedWarehouseProductQuantity','linkedSurplusQuantity','normalizeLinkedSources','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','technologyLabel','latestPriorPlanVersion','planningStateForDate','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
   'handleWorkbook','importSelectedSheet','selectPlanDate','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','shiftNormForItem','scopedItemProductionQty','plannedItemProductionQty','itemProductionQty','planQuantityNeedsReview','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','updatePickingDocumentWarehouse','deriveReturnsForDate','syncOriginalInventory'];
 if (directQuantityEditing) names.push('updatePlanNorm');
 names.push('planNormNeedsReview');
@@ -875,6 +875,27 @@ test('a continuing production keeps its selected technology across plan days, th
   const restarted=upload('2026-09-03','A100',600);
   assert.equal(restarted.technologyId,'base-a');
   assert.notEqual(restarted.runId,first.runId);
+});
+
+test('opening today keeps yesterday available and manual date selection remains reversible',()=>{
+  const h=setup();
+  h.ctx.state.technologies=[{id:'base-a',productIndex:'A100',productName:'DETAIL A',variant:'base',alternativeNo:0,description:'',shiftNorm:500,materials:[],archived:false}];
+  h.ctx.pending.workbook.Sheets.Plan.rows=[['Lp.','','Ilość','ST.','Norma','','Uwagi'],['1','DETAIL A (A100)',1000,'WTR 34',500]];
+  h.importSelectedSheet();
+  const yesterday={...h.ctx.state.plan[0],manualOverride:true,workingMaterials:[{id:'mat',code:'ALT',name:'Alternative',category:'Tworzywo',usage:0.5,unit:'kg',logisticQty:1}]};
+  h.ctx.state.plan=[yesterday];
+
+  const today=h.planningStateForDate(h.ctx.state,'2026-09-01');
+  assert.equal(today.selectedPlanDate,'2026-09-01');
+  assert.equal(today.plan[0].workingMaterials[0].code,'ALT');
+  assert.equal(today.dailyPlans['2026-08-31'][0].workingMaterials[0].code,'ALT');
+  assert.equal(today.planVersions.some(version=>version.planDate==='2026-09-01'),false);
+  assert.equal(h.planningStateForDate(today,'2026-09-01'),today);
+
+  const selectedYesterday=h.planningStateForDate(today,'2026-08-31');
+  assert.equal(selectedYesterday.selectedPlanDate,'2026-08-31');
+  assert.equal(selectedYesterday.plan[0].workingMaterials[0].code,'ALT');
+  assert.equal(h.planningStateForDate(selectedYesterday,'2026-09-01').selectedPlanDate,'2026-09-01');
 });
 
 test('a working recipe survives the day boundary without carrying daily scope or manual quantity',()=>{

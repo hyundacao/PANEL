@@ -2102,10 +2102,10 @@ html.light .production-preparation .process-engineer-columns .divide-y > div[dat
   --t-dim: #d3e8d9;
   --brand: #ffda9e;
   --catalog-accent: #ffda9e;
-  --border: #6bc48c;
-  --inset-panel-bg: #236d4b;
-  background-color: #236d4b !important;
-  border-color: #6bc48c !important;
+  --border: var(--production-completed-border);
+  --inset-panel-bg: var(--production-completed-bg);
+  background-color: var(--production-completed-bg) !important;
+  border-color: var(--production-completed-border) !important;
 }
 
 html.light .production-preparation .production-queues .space-y-2 > div[data-team-done='true'] > button:first-child,
@@ -2114,7 +2114,7 @@ html.light .production-preparation .process-engineer-columns .divide-y > div[dat
 }
 
 html.light .production-preparation .production-queues .space-y-2 > div[data-team-done='true'] > button:first-child:hover {
-  background-color: #2d7754 !important;
+  background-color: transparent !important;
 }
 
 html.light .production-preparation .production-queues .space-y-2 > div[data-team-done='true'] [class~="text-emerald-200"],

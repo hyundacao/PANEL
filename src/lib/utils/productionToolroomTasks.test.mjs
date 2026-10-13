@@ -15,7 +15,7 @@ test('creates one return directly below the matching index and station',()=>{
   assert.deepEqual(result.map(task=>task.id),[source.id,toolroomReturnId(source.id),next.id]);
   const child=result[1];
   assert.equal(child.station,source.station);assert.equal(child.detail,source.detail);
-  assert.deepEqual(child.teams,['mechanics','process']);assert.deepEqual(child.kinds,['powrot-formy-narzedziownia']);
+  assert.deepEqual(child.teams,['mechanics']);assert.deepEqual(child.kinds,['powrot-formy-narzedziownia']);
   assert.deepEqual(child.teamProgress,{});
   assert.equal(child.notes.mechanics,undefined);assert.equal(child.notes.processAssignee,undefined);
   assert.equal(child.isCurrentPlan,false);assert.equal(child.material,'');assert.equal(child.done,false);
@@ -29,6 +29,21 @@ test('repeated normalization never duplicates returns, even on identical machine
   for(let i=0;i<10;i++)tasks=withToolroomReturnTasks(tasks);
   assert.equal(tasks.length,4);assert.equal(new Set(tasks.map(task=>task.id)).size,4);
   assert.deepEqual(tasks.filter(isToolroomReturnTask).map(task=>task.notes.toolroomParentId),['plan-1','plan-2']);
+});
+
+test('an existing dual-assigned return keeps mechanic completion but no longer creates an engineer task',()=>{
+  const source=parent();
+  const legacy={...createToolroomReturnTask(source),teams:['mechanics','process'],
+    teamProgress:{mechanics:{completedAt:'2026-09-06T08:00:00.000Z',completedBy:'Mechanik'}},
+    notes:{toolroomParentId:source.id,mechanics:'Forma wróciła',process:'Stara uwaga'}};
+  const [normalized,child]=withToolroomReturnTasks([source,legacy]);
+  assert.deepEqual(child.teams,['mechanics']);
+  assert.equal(child.done,true);
+  assert.equal(child.teamProgress.process,undefined);
+  assert.equal(child.notes.mechanics,'Forma wróciła');
+  assert.equal(child.notes.process,'Stara uwaga');
+  assert.equal(normalized.toolroomReturnDone,true);
+  assert.deepEqual(withToolroomReturnTasks([source,child])[1].teams,['mechanics']);
 });
 
 test('return keeps its own note, completion and cancellation, not the source state',()=>{
@@ -66,7 +81,7 @@ test('parent process stays blocked until the separate return is completed',()=>{
 test('removing the sending assignment or the whole source does not remove an existing return',()=>{
   const [source,child]=withToolroomReturnTasks([parent()]);
   let result=withToolroomReturnTasks([{...source,teams:['process'],kinds:[]},child]);
-  assert.equal(result[1].id,child.id);assert.deepEqual(result[1].teams,['mechanics','process']);
+  assert.equal(result[1].id,child.id);assert.deepEqual(result[1].teams,['mechanics']);
   result=withToolroomReturnTasks([child]);assert.equal(result.length,1);assert.equal(result[0].id,child.id);
 });
 
@@ -121,11 +136,11 @@ test('toolroom selection generates only scoped changes and repeated selection pr
   assert.deepEqual(remove.removeTeams, ['mechanics', 'process']);
 });
 
-test('selecting a return assigns both teams, including an existing mechanic-only return', () => {
+test('selecting a return assigns only the mechanic and clears a legacy engineer assignment', () => {
   const child = { ...createToolroomReturnTask(parent()), teams: ['mechanics'], done: true };
   const selection = toolroomWorkMutation(child, { kind: 'powrot-formy-narzedziownia', enabled: true });
-  assert.deepEqual(selection.addTeams, ['mechanics', 'process']);
-  assert.deepEqual(selection.removeTeams, []);
+  assert.deepEqual(selection.addTeams, ['mechanics']);
+  assert.deepEqual(selection.removeTeams, ['process']);
   assert.equal(selection.setTeamDone, undefined);
   assert.deepEqual(child.teams, ['mechanics']);
 });

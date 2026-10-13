@@ -785,6 +785,34 @@ test('old plan rows are removed only after chart summary and machine state survi
   assert.equal((await api.post({action:'savePlan',planDate:'2020-01-01',tasks:[]})).status,410);
 });
 
+test('history cleanup never retires the permanent settings session', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-28T09:00:00Z') });
+  const api = testApi();
+  api.db.przygotowanie_produkcji_history.push({
+    plan_date: '2000-01-01',
+    tasks: [{ id: '__recurring_tasks__', station: 'USTAWIENIA', kinds: [], teams: [], notes: {}, done: false }]
+  });
+  api.db.przygotowanie_produkcji_sessions.push(
+    { id: 'settings-session', session_date: '2000-01-01', updated_at: 'settings-version' },
+    { id: 'current-session', session_date: '2026-09-28', updated_at: 'current-version' }
+  );
+  api.db.przygotowanie_produkcji_tasks.push({
+    id: 'recurring-settings',
+    session_id: 'settings-session',
+    task_key: '__recurring_tasks__',
+    station: 'USTAWIENIA',
+    kinds: [],
+    teams: [],
+    notes: { recurringTasks: [{ id: 'weekly', title: 'Kontrola', weekdays: [1], teams: ['technician'], active: true }] },
+    done: false
+  });
+
+  assert.equal((await api.get('?history=1')).status, 200);
+  assert.ok(api.db.przygotowanie_produkcji_sessions.some(session => session.id === 'settings-session'));
+  assert.ok(api.db.przygotowanie_produkcji_tasks.some(task => task.id === 'recurring-settings'));
+  assert.equal(taskLifecycle.productionSummaryFromTasks(api.db.przygotowanie_produkcji_history[0].tasks), null);
+});
+
 test('recent completions exclude old and future days even when only a few production dates exist', async context => {
   context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-28T09:00:00Z') });
   const api = testApi();
@@ -1152,7 +1180,7 @@ test('direct return selection persists once, remains unfinished, and gates proce
   let result = await (await api.get()).json();
   assert.equal(result.tasks.filter(toolroom.isToolroomReturnTask).length, 1);
   assert.equal(result.tasks.find(task => task.id === returnId).done, false);
-  assert.deepEqual(result.tasks.find(task => task.id === returnId).teams, ['mechanics', 'process']);
+  assert.deepEqual(result.tasks.find(task => task.id === returnId).teams, ['mechanics']);
   assert.equal(result.tasks.find(task => task.id === source.id).toolroomReturnDone, false);
   assert.deepEqual(result.tasks.find(task => task.id === source.id).kinds, ['rozruch']);
   api.state.preparationTeams = ['process'];
@@ -1163,11 +1191,9 @@ test('direct return selection persists once, remains unfinished, and gates proce
   assert.equal((await select(true)).status, 200);
   result = await (await api.get()).json();
   assert.ok(result.tasks.find(task => task.id === returnId).teamProgress.mechanics);
-  assert.equal(result.tasks.find(task => task.id === returnId).done, false);
-  api.state.preparationTeams = ['process'];
-  assert.equal((await api.post({ action: 'mutateTask', taskId: returnId, mutation: { setTeamDone: { team: 'process', done: true } } })).status, 200);
-  result = await (await api.get()).json();
   assert.equal(result.tasks.find(task => task.id === returnId).done, true);
+  api.state.preparationTeams = ['process'];
+  assert.equal((await api.post({ action: 'mutateTask', taskId: returnId, mutation: { setTeamDone: { team: 'process', done: true } } })).status, 409);
   assert.equal((await api.post({ action: 'mutateTask', taskId: source.id, mutation: { setTeamDone: { team: 'process', done: true } } })).status, 200);
   api.state.preparationTeams = ['mechanics'];
   assert.equal((await select(false)).status, 200);
@@ -1261,6 +1287,57 @@ test('tomorrow inherits the plan and mounted form but not a new mechanic complet
   const requeued = await (await api.get(`?date=${tomorrow}`)).json();
   assert.equal(workProgress.isProductionTeamDone(requeued.tasks[0], 'mechanics'), false);
   assert.equal(taskLifecycle.productionWorkEvents(requeued.tasks[0].notes).length, 1);
+});
+
+test('new colour confirmation replaces the old machine product and repairs an older persisted state', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-11T08:00:00Z') });
+  const api = testApi();
+  const old = { ...toolroomSource(), id: 'clipped', detail: 'TRAY HANDLE CLIPPED',
+    kinds: ['zmiana-formy', 'rozruch'], teams: ['mechanics', 'process'], notes: {}, teamProgress: {}, done: false };
+  await api.post({ action: 'savePlan', planDate: '2026-10-11', tasks: [old] });
+  for (const team of ['mechanics', 'process']) {
+    context.mock.timers.setTime(Date.now() + 1000);
+    assert.equal((await api.post({ action: 'mutateTask', planDate: '2026-10-11', taskId: old.id,
+      mutation: { setTeamDone: { team, done: true } } })).status, 200);
+  }
+  const initial = await (await api.get('?date=2026-10-11')).json();
+  const oldState = initial.machineForms['WTR 49'];
+  context.mock.timers.setTime(Date.parse('2026-10-12T08:00:00Z'));
+  await api.get('?date=2026-10-12');
+  const black = { ...old, id: 'black', detail: 'TRAY HANDLE BLACK', kinds: ['zmiana-koloru'], teams: ['process'] };
+  await api.post({ action: 'savePlan', planDate: '2026-10-12', tasks: [black] });
+  assert.equal((await api.post({ action: 'mutateTask', planDate: '2026-10-12', taskId: black.id,
+    mutation: { setTeamDone: { team: 'process', done: true } } })).status, 200);
+  let result = await (await api.get('?date=2026-10-12')).json();
+  assert.equal(result.machineForms['WTR 49'].detail, black.detail);
+  assert.equal(result.machineForms['WTR 49'].stage, 'started');
+  const machine = api.db.przygotowanie_produkcji_tasks.find(row => row.session_id === result.session.id
+    && row.task_key.startsWith('__machine_state__:'));
+  machine.detail = old.detail;
+  machine.notes.__machineAt = oldState.at;
+  result = await (await api.get('?date=2026-10-12')).json();
+  assert.equal(result.machineForms['WTR 49'].detail, black.detail);
+  assert.equal(machine.detail, black.detail);
+  const writes = api.state.writeCount;
+  await api.get('?date=2026-10-12');
+  assert.equal(api.state.writeCount, writes);
+});
+
+test('closing old work on the same station does not overwrite the current machine state', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-13T08:00:00Z') });
+  const api = testApi();
+  const current = { ...toolroomSource(), id: 'current-product', detail: 'CURRENT PRODUCT',
+    kinds: ['zmiana-koloru'], teams: ['process'], notes: {}, teamProgress: {}, done: false };
+  const old = { ...current, id: 'old-product', detail: 'OLD PRODUCT', isCurrentPlan: false, kinds: ['rozruch'] };
+  await api.post({ action: 'savePlan', planDate: '2026-10-13', tasks: [current, old] });
+  for (const task of [current, old]) {
+    context.mock.timers.setTime(Date.now() + 1000);
+    assert.equal((await api.post({ action: 'mutateTask', planDate: '2026-10-13', taskId: task.id,
+      mutation: { setTeamDone: { team: 'process', done: true } } })).status, 200);
+  }
+  const result = await (await api.get('?date=2026-10-13')).json();
+  assert.equal(result.machineForms['WTR 49'].detail, current.detail);
+  assert.equal(result.tasks.find(task => task.id === old.id).done, true);
 });
 
 test('API rejects impossible selected dates before creating a plan', async () => {
@@ -1920,7 +1997,32 @@ test('API stores two linked work tasks and snapshots both, with just one product
   assert.deepEqual(data.tasks.map(task=>task.id),[source.id,toolroom.toolroomReturnId(source.id)]);
   assert.equal(data.tasks.filter(task=>task.isCurrentPlan).length,1);
   assert.equal(api.db.przygotowanie_produkcji_history[0].tasks.length,2);
-  assert.deepEqual(data.tasks[1].teams,['mechanics','process']);
+  assert.deepEqual(data.tasks[1].teams,['mechanics']);
+});
+
+test('API migrates an existing dual-assigned return to mechanic-only without losing its completion', async()=>{
+  const api=testApi();const source=toolroomSource();
+  assert.equal((await api.post({action:'savePlan',tasks:[source]})).status,200);
+  const childId=toolroom.toolroomReturnId(source.id);
+  const row=api.db.przygotowanie_produkcji_tasks.find(task=>task.task_key===childId);
+  row.teams=['mechanics','process'];
+  row.notes={...row.notes,process:'Stara uwaga',
+    [workProgress.PRODUCTION_TEAM_PROGRESS_NOTE_KEY]:{
+      mechanics:{completedAt:'2026-09-06T08:00:00.000Z',completedBy:'Mechanik'}
+    }};
+  row.done=false;
+
+  const response=await api.get();
+  assert.equal(response.status,200);
+  const data=await response.json();
+  assert.deepEqual(data.tasks.find(task=>task.id===childId).teams,['mechanics']);
+  assert.equal(data.tasks.find(task=>task.id===childId).done,true);
+  assert.equal(data.tasks.find(task=>task.id===source.id).toolroomReturnDone,true);
+  assert.deepEqual(workProgress.productionWorkQueueForTeam(data.tasks,'process').map(task=>task.id),[source.id]);
+  assert.equal((await api.post({action:'mutateTask',taskId:childId,mutation:{setTeamDone:{team:'process',done:true}}})).status,409);
+  assert.deepEqual(row.teams,['mechanics']);
+  assert.equal(row.done,true);
+  assert.equal(row.notes.process,'Stara uwaga');
 });
 
 test('API unlocks process only after the mould returns and never resurrects a reverted completion', async()=>{
@@ -1967,7 +2069,7 @@ test('API return notes and removal do not modify sending work; old imports do no
   await api.post({action:'mutateTask',taskId:childId,mutation:{removeTeams:['mechanics']}});
   await api.post({action:'savePlan',tasks:[{...source,quantity:'3000'}]});
   data=await(await api.get()).json();
-  assert.equal(data.tasks.length,2);assert.deepEqual(data.tasks[1].teams,['process']);
+  assert.equal(data.tasks.length,2);assert.deepEqual(data.tasks[1].teams,[]);
   assert.equal(data.tasks[1].notes.mechanics,'Zawiesić po naprawie');assert.equal(data.tasks[1].quantity,'3000');
   assert.ok(data.tasks[0].teams.includes('mechanics'));
 });
@@ -1979,7 +2081,7 @@ test('API creates return when toolroom work is selected and retains it if origin
   await api.post({action:'mutateTask',taskId:source.id,mutation:{removeTeams:['mechanics']}});
   const data=await(await api.get()).json();
   assert.equal(data.tasks.length,2);assert.deepEqual(data.tasks[0].teams,['process']);
-  assert.deepEqual(data.tasks[1].teams,['mechanics','process']);
+  assert.deepEqual(data.tasks[1].teams,['mechanics']);
 });
 
 test('API repeated and simultaneous saves create one return record',async()=>{

@@ -128,6 +128,47 @@ const { PlanFixture } = compile(planFixtureSource, {
   SelectField: element('select'), Search: icon, X: icon, Upload: icon, Trash2: icon, ChevronDown: icon
 });
 
+test('plan highlights completion only on its actual day and never on a cancelled row', () => {
+  const task = { ...makeTask('completed', 'WTR 49'), done: true,
+    teamProgress: { mechanics: { completedAt: '2026-10-12T08:00:00Z', completedBy: 'Test' } } };
+  const render = (selectedPlanDate, value = task) => renderToStaticMarkup(React.createElement(PlanFixture, {
+    access: access([], true), requestedView: 'plan', tasks: [value], selectedPlanDate
+  }));
+  assert.match(render('2026-10-12'), /<article[^>]*border-\[rgba\(34,197,94,0\.65\)\]/);
+  assert.doesNotMatch(render('2026-10-13'), /<article[^>]*border-\[rgba\(34,197,94,0\.65\)\]/);
+  assert.doesNotMatch(render('2026-10-12', { ...task, kinds: [...task.kinds, 'anulowane'] }),
+    /<article[^>]*border-\[rgba\(34,197,94,0\.65\)\]/);
+});
+
+test('another product machine confirmation is hidden under the current plan index', () => {
+  const markup = renderToStaticMarkup(React.createElement(PlanFixture, {
+    access: access([], true), requestedView: 'plan', tasks: [makeTask('new-product', 'WTR 49')],
+    machineForms: { 'WTR 49': { detail: 'TRAY HANDLE CLIPPED', stage: 'started', at: '2026-10-11T19:32:10Z' } }
+  }));
+  assert.doesNotMatch(markup, /Poprzedni potwierdzony detal|Ostatnie potwierdzenie|TRAY HANDLE CLIPPED|11\.10\.2026/);
+  assert.doesNotMatch(markup, /rozruch wykonany|rozruch niewykonany|proces potwierdzony/);
+  const current = renderToStaticMarkup(React.createElement(PlanFixture, {
+    access: access([], true), requestedView: 'plan', tasks: [makeTask('new-product', 'WTR 49')],
+    machineForms: { 'WTR 49': { detail: 'Product new-product', stage: 'mounted', at: '2026-10-12T08:00:00Z' } }
+  }));
+  assert.match(current, /Ostatnie potwierdzenie/);
+  assert.match(current, /zawieszenie formy potwierdzone/);
+  assert.doesNotMatch(current, /rozruch niewykonany/);
+});
+
+test('old TOP SECTION confirmation is not displayed under the WTR 47 MAX index', () => {
+  const task = { ...makeTask('max', 'WTR 47'),
+    detail: 'MAX BO VG1 PANEL+TH WHITE/LOGO+INSERT (9001909401)', kinds: [], teams: [], notes: {} };
+  const markup = renderToStaticMarkup(React.createElement(PlanFixture, {
+    access: access([], true), requestedView: 'plan', tasks: [task],
+    machineForms: { 'WTR 47': { detail: 'TOP SECTION GS70 TORNADO RED (8001356946)',
+      stage: 'mounted', at: '2026-09-29T11:25:24.673Z' } }
+  }));
+  assert.match(markup, /9001909401/);
+  assert.doesNotMatch(markup, /TOP SECTION|8001356946|29\.09\.2026|potwierdzony detal|potwierdzenie/);
+  assert.doesNotMatch(markup, /<article[^>]*border-\[rgba\(34,197,94,0\.65\)\]/);
+});
+
 const render = props => renderToStaticMarkup(React.createElement(PlanFixture, {
   access: access(['mechanics']), tasks: sampleTasks, initiallyExpanded: ['planned-34'], ...props
 }));
@@ -143,6 +184,18 @@ test('real plan UI filters current, emergency and planned rows without mutating 
   assert.equal(JSON.stringify(sampleTasks), before);
   assert.match(render({ initialSearch: 'WTR 999' }), /Brak pozycji dla podanej maszyny/);
   assert.match(render({ initialSearch: '' }), /Pozycje: 5 z 5/);
+});
+
+test('Excel source highlighting remains attached to current, completed and planned rows', () => {
+  for (const planGroup of ['standard', 'emergency', 'planned']) {
+    for (const done of [false, true]) {
+      const task = { ...makeTask('highlighted', 'WTR 34', planGroup), highlighted: true, done };
+      const html = render({ access: access([], true), tasks: [task], initiallyExpanded: [task.id] });
+      assert.equal((html.match(/data-source-highlighted="true"/g) ?? []).length, 1);
+      const clear = render({ access: access([], true), tasks: [{ ...task, highlighted: false }], initiallyExpanded: [task.id] });
+      assert.doesNotMatch(clear, /data-source-highlighted="true"/);
+    }
+  }
 });
 
 test('mechanic plan UI allows only two toolroom work choices while other fields stay protected', () => {
@@ -168,7 +221,7 @@ test('admin search sits between import and discussion; all admin controls remain
 const checkedTeam = (html, label) => new RegExp(`<input[^>]*checked=""[^>]*>${label}</label>`).test(html);
 
 for (const group of ['standard', 'planned']) {
-  test(`saved toolroom return displays both assigned roles beside work in the ${group} plan row`, () => {
+  test(`saved toolroom return assigns only the mechanic in the ${group} plan row`, () => {
     const parent = { ...makeTask('unassigned', 'WTR 34', group), kinds: [], teams: [], notes: {} };
     const child = toolroom.createToolroomReturnTask(parent);
     child.notes.mechanics = 'Return instruction';
@@ -177,11 +230,11 @@ for (const group of ['standard', 'planned']) {
     for (const isAdmin of [false, true]) {
       const html = render({ access: access(['mechanics'], isAdmin), tasks, initiallyExpanded: [parent.id] });
       assert.equal(checkedTeam(html, 'Mechanik'), true);
-      assert.equal(checkedTeam(html, 'Inżynier procesu'), true);
+      assert.equal(checkedTeam(html, 'Inżynier procesu'), false);
       assert.equal(checkedTeam(html, 'Rozdzielca'), false);
       assert.match(html, /Uwagi dla: Mechanik.*Powrót formy z narzędziowni/);
       assert.match(html, /value="Return instruction"/);
-      assert.match(html, /Uwagi dla: Inżynier procesu.*Powrót formy z narzędziowni/);
+      assert.doesNotMatch(html, /Uwagi dla: Inżynier procesu.*Powrót formy z narzędziowni/);
       if (group === 'planned') assert.match(html, /Przypisano/);
     }
     assert.equal(JSON.stringify(tasks), before);
@@ -211,20 +264,20 @@ test('plan role edits target linked return work without creating duplicate paren
   });
   toggle(parent, 'mechanics');
   assert.deepEqual(requests.splice(0), [[child.id, 'mechanics']]);
-  child.teams = ['process'];
+  child.teams = [];
   toggle(parent, 'mechanics');
   assert.deepEqual(requests.splice(0), [[child.id, 'mechanics']]);
   parent.teams = ['process'];
   parent.kinds = ['rozruch'];
   toggle(parent, 'process');
-  assert.deepEqual(requests.splice(0), [[parent.id, 'process'], [child.id, 'process']]);
+  assert.deepEqual(requests.splice(0), [[parent.id, 'process']]);
   toggle(parent, 'distribution');
   assert.deepEqual(requests.splice(0), [[parent.id, 'distribution']]);
 });
 
 test('return work remains selected independently of a manually removed mechanic assignment', () => {
   const parent = makeTask('source', 'WTR 34');
-  const child = { ...toolroom.createToolroomReturnTask(parent), teams: ['process'] };
+  const child = { ...toolroom.createToolroomReturnTask(parent), teams: [] };
   const { selected } = compile(`${declaration('isWorkKindSelected')} export const selected = isWorkKindSelected;`, {
     ...toolroom, ...progress, ...lifecycle, tasks: [parent, child]
   });

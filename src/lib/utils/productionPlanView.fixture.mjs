@@ -37,8 +37,8 @@ export function resolveView(preparationAccess, requestedView = null) {
 
 // Compile the real JSX, so tests catch accidental read-only or filtering regressions.
 export const planFixtureSource = `
-${['teamOptions', 'workKinds', 'automaticTeams', 'editableWorkKinds', 'normalize', 'isPanelGroupHeader', 'planGroupLabel', 'taskChoiceBackground', 'assignedForTheDay'].map(name => declaration(name)).join('\n')}
-export function PlanFixture({ access, requestedView = null, tasks: initialTasks, initialSearch = '', initiallyExpanded = [], onMutation = () => {}, onTasksChange }) {
+${['teamOptions', 'workKinds', 'automaticTeams', 'editableWorkKinds', 'normalize', 'MachineConfirmation', 'isPanelGroupHeader', 'planGroupLabel', 'taskChoiceBackground', 'assignedForTheDay'].map(name => declaration(name)).join('\n')}
+export function PlanFixture({ access, requestedView = null, tasks: initialTasks, initialSearch = '', initiallyExpanded = [], machineForms = {}, selectedPlanDate = '2026-10-13', onMutation = () => {}, onTasksChange }) {
   const [tasks, setTasks] = useState(initialTasks);
   React.useEffect(() => { onTasksChange?.(tasks); }, [tasks, onTasksChange]);
   const preparationAccess = access;
@@ -53,7 +53,6 @@ export function PlanFixture({ access, requestedView = null, tasks: initialTasks,
   const workbookSource = null;
   const fileName = 'plan-test.xlsx';
   const sheetName = 'Plan';
-  const machineForms = {};
   const importError = null;
   const preparePlanImport = onMutation;
   const clearAllAssignments = onMutation;

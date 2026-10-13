@@ -40,6 +40,18 @@ export const toolroomParentId = (task: Pick<ToolroomTask, 'id' | 'notes'>): stri
 
 export const isToolroomReturnTask = (task: Pick<ToolroomTask, 'id' | 'notes'>) => toolroomParentId(task) !== null;
 
+export const mechanicOnlyToolroomReturnTask = <T extends ToolroomTask>(task: T): T => {
+  if (!isToolroomReturnTask(task) || !task.teams.includes('process')) return task;
+  const teamProgress = { ...task.teamProgress };
+  delete teamProgress.process;
+  return {
+    ...task,
+    teams: task.teams.filter((team) => team !== 'process'),
+    teamProgress,
+    done: task.teams.includes('mechanics') && (Boolean(teamProgress.mechanics) || task.done)
+  };
+};
+
 export const toolroomLinkNotes = (task: Pick<ToolroomTask, 'id' | 'notes'>): { toolroomParentId?: string } => {
   const parentId = toolroomParentId(task);
   return parentId ? { toolroomParentId: parentId } : {};
@@ -52,7 +64,7 @@ export const createToolroomReturnTask = <T extends ToolroomTask>(parent: T): T =
   planGroup: 'standard',
   highlighted: false,
   kinds: [TOOLROOM_RETURN_KIND],
-  teams: ['mechanics', 'process'],
+  teams: ['mechanics'],
   notes: { toolroomParentId: parent.id },
   teamProgress: {},
   toolroomReturnDone: undefined,
@@ -75,22 +87,24 @@ export const toolroomWorkMutation = (task: ToolroomTask, selection: ToolroomWork
   return {
     addKinds: enabled ? [kind] : [],
     removeKinds: enabled ? [] : [kind],
-    addTeams: enabled ? ['mechanics' as const, 'process' as const] : [],
-    removeTeams: !enabled && kind === TOOLROOM_RETURN_KIND ? ['mechanics' as const, 'process' as const] : [],
+    addTeams: enabled ? kind === TOOLROOM_RETURN_KIND ? ['mechanics' as const] : ['mechanics' as const, 'process' as const] : [],
+    removeTeams: kind === TOOLROOM_RETURN_KIND
+      ? enabled ? ['process' as const] : ['mechanics' as const, 'process' as const]
+      : [],
     setNotesIfMissing,
     ...(changed ? { setTeamDone: { team: 'mechanics' as const, done: false } } : {})
   };
 };
 
 // Returns are work instructions, never an additional production/material-plan row.
-// Existing return tasks retain their own assignments, notes, cancellation and completion.
+// Existing returns keep their notes and mechanic completion, including after old dual assignments are normalized.
 export const withToolroomReturnTasks = <T extends ToolroomTask>(tasks: T[], createMissing = true): T[] => {
   const children = new Map<string, T>();
   const parents: T[] = [];
   for (const task of tasks) {
     const parentId = toolroomParentId(task);
     if (parentId) {
-      if (!children.has(parentId)) children.set(parentId, task);
+      if (!children.has(parentId)) children.set(parentId, mechanicOnlyToolroomReturnTask(task));
     } else parents.push(task);
   }
   const result: T[] = [];

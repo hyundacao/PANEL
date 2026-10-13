@@ -128,6 +128,43 @@ export const productionTaskDoneOnDate = (task: {
   return warsawDateAt(completions.sort().at(-1) ?? '') === date;
 };
 
+type MachineWorkTask = {
+  id: string;
+  isCurrentPlan: boolean;
+  station: string;
+  detail: string;
+  kinds: readonly string[];
+  notes: Record<string, string | undefined>;
+  teamProgress?: Record<string, { completedAt?: string; completedBy?: string } | undefined>;
+};
+
+export const productionMachineConfirmations = <T extends MachineWorkTask>(tasks: readonly T[], date: string) => {
+  const byId = new Map(tasks.map(task => [task.id, task]));
+  const latest = new Map<string, { task: T; stage: 'mounted' | 'started'; at: string; by: string }>();
+  for (const task of tasks) {
+    const parent = byId.get(task.notes.toolroomParentId ?? '');
+    const activeReturn = task.id.startsWith('toolroom-return:') && parent?.isCurrentPlan
+      && parent.station === task.station && parent.detail === task.detail;
+    if ((!task.isCurrentPlan && !activeReturn) || task.kinds.includes('anulowane')) continue;
+    for (const team of ['mechanics', 'process'] as const) {
+      const changesMachine = team === 'mechanics'
+        ? task.kinds.some(kind => kind === 'zmiana-formy' || kind === 'powrot-formy-narzedziownia')
+        : task.kinds.some(kind => kind === 'rozruch' || kind === 'wznowienie' || kind === 'zmiana-koloru');
+      const completion = task.teamProgress?.[team];
+      if (!changesMachine || !completion?.completedAt || !Number.isFinite(Date.parse(completion.completedAt))
+        || warsawDateAt(completion.completedAt) > date
+        || productionWorkEvents(task.notes).some(event => event.team === team && event.revertedAt
+          && event.completedAt === completion.completedAt)) continue;
+      const previous = latest.get(task.station);
+      if (!previous || Date.parse(completion.completedAt) >= Date.parse(previous.at)) {
+        latest.set(task.station, { task, stage: team === 'mechanics' ? 'mounted' : 'started',
+          at: completion.completedAt, by: completion.completedBy ?? '' });
+      }
+    }
+  }
+  return [...latest.values()];
+};
+
 export const summarizeProductionDay = (tasks: readonly {
   station?: string;
   kinds?: readonly string[];
@@ -137,27 +174,65 @@ export const summarizeProductionDay = (tasks: readonly {
   teamProgress?: Record<string, { completedAt?: string } | undefined>;
 }[], date: string): ProductionDaySummary => {
   const kinds: ProductionDaySummary['kinds'] = {};
-  let assignments = 0;
   const eventIds = new Set<string>();
+  const countedKinds = new Set<string>();
   let missedRecurring = 0;
-  const add = (kind: string, done: boolean) => {
+  const addAssignment = (kind: string) => {
     const count = kinds[kind] ?? { total: 0, done: 0 };
-    kinds[kind] = { total: count.total + 1, done: count.done + (done ? 1 : 0) };
-    assignments += 1;
+    kinds[kind] = { ...count, total: count.total + 1 };
   };
   for (const task of tasks) {
     if (task.station === 'ZADANIE CYKLICZNE' && !task.done) missedRecurring += 1;
-    for (const event of productionWorkEvents(task.notes)) {
+    const events = productionWorkEvents(task.notes);
+    for (const event of events) {
       if (!event.revertedAt && warsawDateAt(event.completedAt) === date) eventIds.add(event.id);
     }
-    const doneOnDate = productionTaskDoneOnDate(task, date);
-    for (const kind of task.kinds ?? []) add(kind, doneOnDate);
-    if (task.teams?.includes('distribution') && task.notes?.distribution?.toLocaleLowerCase().includes('przygotowa')) {
-      add('przygotowanie-stanowiska', doneOnDate);
+    const assignedKinds = new Set(task.kinds ?? []);
+    const preparesStation = task.teams?.includes('distribution')
+      && task.notes?.distribution?.toLocaleLowerCase().includes('przygotowa');
+    const restartsProcess = task.kinds?.includes('forma-narzedziownia') && task.teams?.includes('process');
+    if (preparesStation) assignedKinds.add('przygotowanie-stanowiska');
+    if (restartsProcess) assignedKinds.add('wznowienie-procesu');
+    for (const kind of assignedKinds) addAssignment(kind);
+
+    // Completion belongs to the team doing this work, even while other teams are still pending.
+    const completedKinds = new Set([...assignedKinds, ...events.flatMap(event => event.kinds)]);
+    for (const kind of completedKinds) {
+      if (kind === 'anulowane') continue;
+      const owner = kind === 'inne' && !task.teams?.includes('additional')
+        ? task.teams?.[0] ?? 'additional'
+        : productionKindOwner(kind);
+      const ownerEvents = events.filter(event => event.team === owner);
+      let completed = 0;
+      if (ownerEvents.length > 0) {
+        for (const event of ownerEvents) {
+          if (event.revertedAt || warsawDateAt(event.completedAt) !== date) continue;
+          const includesKind = kind === 'przygotowanie-stanowiska' ? preparesStation
+            : kind === 'wznowienie-procesu' ? restartsProcess : event.kinds.includes(kind);
+          const key = `${event.id}:${kind}`;
+          if (!includesKind || countedKinds.has(key)) continue;
+          countedKinds.add(key);
+          completed += 1;
+        }
+      } else {
+        const completion = task.teamProgress?.[owner];
+        const legacyDate = task.notes?.[PRODUCTION_LEGACY_COMPLETION_DAY_NOTE];
+        if (completion) {
+          completed = (warsawDateAt(completion.completedAt ?? '') || legacyDate || date) === date ? 1 : 0;
+        } else if (productionTaskDoneOnDate(task, date)) {
+          completed = 1;
+        }
+      }
+      if (completed > 0) {
+        const count = kinds[kind] ?? { total: 0, done: 0 };
+        kinds[kind] = { ...count, done: count.done + completed };
+      }
     }
-    if (task.kinds?.includes('forma-narzedziownia') && task.teams?.includes('process')) {
-      add('wznowienie-procesu', doneOnDate);
-    }
+  }
+  let assignments = 0;
+  for (const count of Object.values(kinds)) {
+    count.total = Math.max(count.total, count.done);
+    assignments += count.total;
   }
   return { version: 1, assignments, completedEvents: eventIds.size, missedRecurring, kinds };
 };
@@ -210,6 +285,7 @@ export const productionKindOwner = (kind: string): string => {
   if (kind === 'zmiana-formy' || kind === 'forma-narzedziownia' || kind === 'powrot-formy-narzedziownia') return 'mechanics';
   if (kind === 'zmiana-grafiki') return 'graphics';
   if (kind === 'inne') return 'additional';
+  if (kind === 'przygotowanie-stanowiska') return 'distribution';
   return 'process';
 };
 

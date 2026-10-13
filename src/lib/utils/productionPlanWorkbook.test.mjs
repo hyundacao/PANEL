@@ -152,6 +152,19 @@ test('only yellow fill from the selected worksheet is imported, never another sh
   assert.deepEqual(Array.from(clear, task => task.highlighted), [false, false, false, false]);
 });
 
+test('yellow Excel shades stay highlighted while orange, green, blue and neutral fills stay clear', async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Colors');
+  const colors = ['FFFFFF00', 'FFFFF2CC', 'FFFFEB9C', 'FFFFD966', 'FFFFC000', 'FFF4B183', 'FF00FF00', 'FF00B0F0', 'FFFFFFFF', 'FFE2EFDA'];
+  for (const [position, color] of colors.entries()) {
+    sheet.addRow(['', `DETAIL ${position}`, 300, `WTR ${position + 1}`, 100]);
+    sheet.getCell(`B${position + 1}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: color } };
+  }
+  const source = readProductionPlanWorkbook(await workbook.xlsx.writeBuffer(), 'colors.xlsx');
+  const tasks = createHarness().parseTasks(readProductionPlanSheet(source, 'Colors'), 'Colors');
+  assert.deepEqual(Array.from(tasks, task => task.highlighted), [true, true, true, true, true, false, false, false, false, false]);
+});
+
 test('reimport replaces saved highlighting in both directions without losing assigned work', async () => {
   const h = createHarness();
   const source = await coloredWorkbook();

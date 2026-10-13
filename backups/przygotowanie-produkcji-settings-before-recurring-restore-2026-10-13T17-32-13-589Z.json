@@ -1,0 +1,66 @@
+{
+  "capturedAt": "2026-10-13T17:32:13.589Z",
+  "session": {
+    "id": "36d71035-993d-46e3-b627-fcdf88615f3e",
+    "session_date": "2000-01-01",
+    "file_name": "USTAWIENIA",
+    "plan_sheet": "",
+    "created_by": "k.rafal",
+    "created_at": "2026-10-13T06:24:16.178251+00:00",
+    "updated_at": "2026-10-13T06:24:16.088+00:00"
+  },
+  "tasks": [
+    {
+      "id": "97fe56c8-9c9a-40f7-b0f4-996f357c62ab",
+      "session_id": "36d71035-993d-46e3-b627-fcdf88615f3e",
+      "task_key": "__recurring_tasks__",
+      "position_no": -2,
+      "station": "USTAWIENIA",
+      "detail": "ZADANIA CYKLICZNE",
+      "quantity": "",
+      "norm": "",
+      "highlighted": false,
+      "kinds": [],
+      "teams": [],
+      "notes": {
+        "recurringTasks": [
+          {
+            "id": "cykl-1791872626723-0",
+            "hall": "hala-1",
+            "teams": [
+              "technician"
+            ],
+            "title": "Czyszczenie filtrów pompy",
+            "active": true,
+            "weekdays": [
+              5
+            ]
+          },
+          {
+            "id": "cykl-1791872662794-1",
+            "hall": "hala-2",
+            "teams": [
+              "technician"
+            ],
+            "title": "Czyszczenie filtrów pompy",
+            "active": true,
+            "weekdays": [
+              5
+            ]
+          }
+        ]
+      },
+      "done": false,
+      "material": "",
+      "material_type": "",
+      "source": "",
+      "dryer": "",
+      "temperature": "",
+      "created_at": "2026-10-13T06:24:16.632578+00:00",
+      "updated_at": "2026-10-13T06:24:35.158+00:00",
+      "updated_by": "k.rafal",
+      "is_current_plan": false,
+      "plan_group": "standard"
+    }
+  ]
+}
