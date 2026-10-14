@@ -343,6 +343,7 @@ export type PaintTapeInventorySession = {
   createdBy: string;
   completedAt?: string | null;
   completedBy?: string | null;
+  archivePending?: boolean;
 };
 
 export type PaintTapeInventoryEntry = {
@@ -356,11 +357,23 @@ export type PaintTapeInventoryEntry = {
   checkedBy: string;
 };
 
+export type PaintTapeInventoryComparison = {
+  version: 1;
+  inventoryDate: string;
+  capturedAt: string;
+  rows: Array<{
+    item: PaintTapeInventoryCatalogItem;
+    physicalQty: number | null;
+    erp: { realQty: number; availableQty: number; unit: string } | null;
+  }>;
+};
+
 export type PaintTapeInventoryData = {
   catalog: PaintTapeInventoryCatalogItem[];
   sessions: PaintTapeInventorySession[];
   session: PaintTapeInventorySession | null;
   entries: PaintTapeInventoryEntry[];
+  comparison?: PaintTapeInventoryComparison | null;
 };
 
 export type PaintTapeSettlement = {
@@ -384,6 +397,7 @@ export type PaintTapeSettlement = {
   usageCheckNote?: string | null;
   status: PaintTapeSettlementStatus;
   productionCompletedAt?: string | null;
+  erpArchive?: { date: string; entry: OriginalInventoryErpSnapshotEntry | null } | null;
   accountedAt?: string | null;
   accountedBy?: string | null;
 };

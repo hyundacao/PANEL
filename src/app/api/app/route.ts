@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { loadInventoryOwnership, INVENTORY_OWNER_ERROR } from '@/lib/utils/originalInventoryOwnership';
 import { PALLET_SET_SOURCE_TYPE, normalizePalletSets } from '@/lib/planowanie-zapotrzebowania/palletSets';
 import { addPalletInventory, updatePalletInventory, removePalletInventory } from '@/lib/planowanie-zapotrzebowania/palletInventoryServer';
-import { NextRequest, NextResponse } from 'next/server';
+import { after, NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { formatDate } from '@/lib/utils/format';
 import { isRegrindStatsWarehouse } from '@/lib/utils/regrindStats';
@@ -30,6 +30,10 @@ import {
   planningAreaIdForWarehouse
 } from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
 import { PAINT_TAPE_INVENTORY_SEED } from '@/lib/data/paintTapeInventorySeed';
+import {
+  archivePaintTapeInventorySession,
+  purgeOriginalErpHistory
+} from '@/lib/utils/paintTapeInventoryArchiveServer';
 import {
   sendWarehouseTransferDocumentCreatedPush,
   sendWarehouseTransferDocumentIssuedPush,
@@ -70,6 +74,7 @@ import type {
   PaintTapeInventoryCatalogItem,
   PaintTapeInventoryCategory,
   PaintTapeInventoryEntry,
+  PaintTapeInventoryComparison,
   PaintTapeInventorySession,
   PaintTapePermissionKey,
   PaintTapeSettlementStatus,
@@ -659,6 +664,10 @@ const mapPaintTapeSettlement = (
     usageCheckNote: row.usage_check_note ? String(row.usage_check_note) : null,
     status: normalizePaintTapeStatus(row.status, endQty, producedQty),
     productionCompletedAt: row.production_completed_at ?? null,
+    erpArchive: row.erp_archive ? {
+      date: String(row.erp_archive.date),
+      entry: row.erp_archive.entry ? mapOriginalInventoryErpSnapshotEntry(row.erp_archive.entry) : null
+    } : null,
     accountedAt: row.accounted_at ?? null,
     accountedBy: row.accounted_by ? String(row.accounted_by).trim() : null
   };
@@ -2665,18 +2674,7 @@ const mapOriginalInventoryErpSnapshotEntry = (row: any): OriginalInventoryErpSna
 });
 
 const fetchOriginalInventoryErpSnapshot = async (snapshotDate: string) => {
-  const { data, error } = await supabaseAdmin
-    .from('original_inventory_erp_snapshots')
-    .select('*')
-    .eq('snapshot_date', snapshotDate)
-    .order('name', { ascending: true });
-  if (error) {
-    if (isMissingOriginalInventoryErpSnapshotsTableError(error)) {
-      throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
-    }
-    throw error;
-  }
-  return (data ?? []).map(mapOriginalInventoryErpSnapshotEntry);
+  return fetchOriginalInventoryErpSnapshotsByDates([snapshotDate]);
 };
 
 const fetchOriginalInventoryErpSnapshotsByDates = async (snapshotDates: string[]) => {
@@ -2730,6 +2728,25 @@ const fetchOriginalInventoryErpSnapshotsByDates = async (snapshotDates: string[]
   }
 
   return rows.map(mapOriginalInventoryErpSnapshotEntry);
+};
+
+const paintTapeArchiveMappers = {
+  catalog: mapPaintTapeInventoryCatalogItem,
+  entry: mapPaintTapeInventoryEntry,
+  snapshots: fetchOriginalInventoryErpSnapshot
+};
+let erpHistoryPurgeAt = 0;
+let erpHistoryPurge: Promise<unknown> | null = null;
+const scheduleOriginalErpHistoryPurge = () => {
+  if (erpHistoryPurge || Date.now() - erpHistoryPurgeAt < 60 * 60 * 1000) return;
+  erpHistoryPurgeAt = Date.now();
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Warsaw' }).format(new Date());
+  after(async () => {
+    erpHistoryPurge = purgeOriginalErpHistory(supabaseAdmin, today, paintTapeArchiveMappers)
+      .catch((error) => console.error('ORIGINAL_ERP_HISTORY_PURGE_FAILED', error))
+      .finally(() => { erpHistoryPurge = null; });
+    await erpHistoryPurge;
+  });
 };
 
 const extractErpOriginalCatalogItems = (payload: unknown): Array<Record<string, unknown>> => {
@@ -7127,7 +7144,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           .order('name', { ascending: true }),
         supabaseAdmin
           .from('paint_tape_inventory_sessions')
-          .select('*')
+          .select('id,inventory_date,status,expected_count,checked_count,created_at,created_by,completed_at,completed_by')
           .order('inventory_date', { ascending: false })
           .limit(120),
         supabaseAdmin
@@ -7145,7 +7162,18 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         throw firstError;
       }
 
-      const sessionRow = sessionResult.data;
+      let sessionRow = sessionResult.data;
+      if (sessionRow?.status === 'CLOSED' && !sessionRow.erp_comparison) {
+        try {
+          sessionRow = await archivePaintTapeInventorySession(
+            supabaseAdmin, dateKey, null, paintTapeArchiveMappers, false
+          );
+        } catch (error) {
+          if (!(error instanceof Error && error.message === 'MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY_ARCHIVE')) {
+            throw error;
+          }
+        }
+      }
       let entryRows: any[] = [];
       if (sessionRow?.id) {
         const { data, error } = await supabaseAdmin
@@ -7162,11 +7190,16 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         entryRows = data ?? [];
       }
 
+      const comparison = sessionRow?.erp_comparison as PaintTapeInventoryComparison | null;
+      scheduleOriginalErpHistoryPurge();
       return {
-        catalog: (catalogResult.data ?? []).map(mapPaintTapeInventoryCatalogItem),
+        catalog: sessionRow?.status === 'CLOSED' && comparison
+          ? comparison.rows.map((row) => row.item)
+          : (catalogResult.data ?? []).map(mapPaintTapeInventoryCatalogItem),
         sessions: (sessionsResult.data ?? []).map(mapPaintTapeInventorySession),
         session: sessionRow ? mapPaintTapeInventorySession(sessionRow) : null,
-        entries: entryRows.map(mapPaintTapeInventoryEntry)
+        entries: entryRows.map(mapPaintTapeInventoryEntry),
+        comparison: comparison ?? null
       };
     }
     case 'savePaintTapeInventoryEntry': {
@@ -7379,7 +7412,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'getPaintTapeInventorySessionsAdmin': {
       const { data, error } = await supabaseAdmin
         .from('paint_tape_inventory_sessions')
-        .select('*')
+        .select('id,inventory_date,status,expected_count,checked_count,created_at,created_by,completed_at,completed_by')
         .order('inventory_date', { ascending: false })
         .limit(365);
       if (error) {
@@ -7436,13 +7469,25 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const dateKey = String(payload?.dateKey ?? '').trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) throw new Error('DATE_REQUIRED');
       const closing = action === 'closePaintTapeInventorySession';
-      const updates = closing
-        ? {
-            status: 'CLOSED',
-            completed_at: new Date().toISOString(),
-            completed_by: getActorName(currentUser)
-          }
-        : { status: 'OPEN', completed_at: null, completed_by: null };
+      if (closing) {
+        try {
+          const data = await archivePaintTapeInventorySession(
+            supabaseAdmin, dateKey, getActorName(currentUser), paintTapeArchiveMappers, true
+          );
+          scheduleOriginalErpHistoryPurge();
+          return mapPaintTapeInventorySession(data);
+        } catch (error) {
+          if (!(error instanceof Error && error.message === 'MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY_ARCHIVE')) throw error;
+          // Keep existing counting available until migration; retention cannot run yet.
+          const pending = await supabaseAdmin.from('paint_tape_inventory_sessions')
+            .update({ status: 'CLOSED', completed_at: new Date().toISOString(), completed_by: getActorName(currentUser) })
+            .eq('inventory_date', dateKey).eq('status', 'OPEN').select('*').maybeSingle();
+          if (pending.error) throw pending.error;
+          if (!pending.data) throw new Error('NOT_FOUND');
+          return { ...mapPaintTapeInventorySession(pending.data), archivePending: true };
+        }
+      }
+      const updates = { status: 'OPEN', completed_at: null, completed_by: null };
       const { data, error } = await supabaseAdmin
         .from('paint_tape_inventory_sessions')
         .update(updates)
@@ -7869,7 +7914,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'getOriginalInventoryErpSnapshot': {
       const snapshotDate = String(payload?.snapshotDate ?? '').trim();
       if (!snapshotDate) throw new Error('DATE_REQUIRED');
-      return fetchOriginalInventoryErpSnapshot(snapshotDate);
+      const snapshot = await fetchOriginalInventoryErpSnapshot(snapshotDate);
+      scheduleOriginalErpHistoryPurge();
+      return snapshot;
     }
     case 'getOriginalInventoryErpSnapshotsByDates': {
       const snapshotDates = Array.isArray(payload?.snapshotDates) ? payload.snapshotDates : [];
@@ -8323,6 +8370,12 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'removeOriginalInventoryErpSnapshot': {
       const snapshotDate = String(payload?.snapshotDate ?? '').trim();
       if (!snapshotDate) throw new Error('DATE_REQUIRED');
+      const sessionResult = await supabaseAdmin.from('paint_tape_inventory_sessions')
+        .select('status').eq('inventory_date', snapshotDate).maybeSingle();
+      if (sessionResult.error && !isMissingPaintTapeInventoryTableError(sessionResult.error)) throw sessionResult.error;
+      if (sessionResult.data?.status === 'CLOSED') {
+        await archivePaintTapeInventorySession(supabaseAdmin, snapshotDate, null, paintTapeArchiveMappers, false);
+      }
       const { error } = await supabaseAdmin
         .from('original_inventory_erp_snapshots')
         .delete()

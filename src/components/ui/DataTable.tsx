@@ -2,6 +2,13 @@ import { cn } from '@/lib/utils/cn';
 
 import React from 'react';
 
+const isRowActivationClick = (event: React.MouseEvent<HTMLElement>) => {
+  const target = event.target;
+  if (event.defaultPrevented || !(target instanceof Element) || !event.currentTarget.contains(target)) return false;
+  const control = target.closest('button, a[href], input, select, textarea, [role="button"], [role="combobox"], [role="option"], [role="listbox"], [contenteditable="true"], [data-table-row-details]');
+  return !control || control === event.currentTarget;
+};
+
 export const DataTable = ({
   columns,
   rows,
@@ -34,11 +41,11 @@ export const DataTable = ({
               onRowClick && 'cursor-pointer',
               rowClassName
             )}
-            onClick={onRowClick ? () => onRowClick(rowIndex) : undefined}
+            onClick={onRowClick ? (event) => { if (isRowActivationClick(event)) onRowClick(rowIndex); } : undefined}
             onKeyDown={
               onRowClick
                 ? (event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
+                    if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
                       event.preventDefault();
                       onRowClick(rowIndex);
                     }
@@ -72,7 +79,7 @@ export const DataTable = ({
               ))}
             </div>
             {details && (
-              <div className="mt-3 border-t border-border pt-3">{details}</div>
+              <div data-table-row-details className="mt-3 border-t border-border pt-3">{details}</div>
             )}
           </div>
         );
@@ -117,11 +124,11 @@ export const DataTable = ({
                     'bg-[image:var(--row-alt)]',
                   rowClassName
                 )}
-                onClick={onRowClick ? () => onRowClick(rowIndex) : undefined}
+                onClick={onRowClick ? (event) => { if (isRowActivationClick(event)) onRowClick(rowIndex); } : undefined}
                 onKeyDown={
                   onRowClick
                     ? (event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
+                        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
                           event.preventDefault();
                           onRowClick(rowIndex);
                         }

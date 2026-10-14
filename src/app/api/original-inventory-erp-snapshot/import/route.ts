@@ -1,10 +1,11 @@
 import { randomUUID } from 'crypto';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import * as XLSX from 'xlsx';
 import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
+import { originalErpRetentionCutoff } from '@/lib/utils/paintTapeInventoryArchive';
 import {
   normalizeOriginalInventoryName,
   normalizeOriginalInventoryNameKey
@@ -248,6 +249,9 @@ export async function POST(request: Request) {
       if (isMissingSnapshotsTableError(deleteError)) {
         throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
       }
+      if (deleteError.message?.includes('ERP_SNAPSHOT_ARCHIVE_REQUIRED')) {
+        throw new Error('ERP_SNAPSHOT_ARCHIVE_REQUIRED');
+      }
       throw deleteError;
     }
 
@@ -289,6 +293,13 @@ export async function POST(request: Request) {
       added: 0, existing: 0, failed: true, warningCount: 1,
       warnings: [{ name: '', indexCode: '', reason: 'Stany ERP zostały wgrane. Nie udało się zakończyć dopisywania kartotek; ponów import, aby spróbować ponownie.' }]
     }));
+    after(async () => {
+      const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Warsaw' }).format(new Date());
+      const { error } = await supabaseAdmin.rpc('purge_original_inventory_erp_snapshots', {
+        p_cutoff_date: originalErpRetentionCutoff(today)
+      });
+      if (error && error.code !== 'PGRST202') console.error('ORIGINAL_ERP_IMPORT_PURGE_FAILED', error);
+    });
     return NextResponse.json({
       total: items.length,
       inserted,
@@ -304,6 +315,8 @@ export async function POST(request: Request) {
         ? 403
         : code === 'FILE_REQUIRED' || code === 'DATE_REQUIRED' || code === 'EMPTY'
           ? 400
+          : code === 'ERP_SNAPSHOT_ARCHIVE_REQUIRED'
+            ? 409
           : code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS'
             ? 503
             : 500;

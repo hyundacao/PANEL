@@ -184,15 +184,19 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
   const erpSnapshotQuery = useQuery({
     queryKey: ['original-inventory-erp-snapshot', selectedDate],
     queryFn: () => getOriginalInventoryErpSnapshot(selectedDate),
-    enabled: view === 'HISTORY',
+    enabled: view === 'HISTORY' && inventoryQuery.isSuccess &&
+      !(inventoryQuery.data?.session?.status === 'CLOSED' && inventoryQuery.data.comparison),
     retry: false
   });
   const data = inventoryQuery.data;
   const entries = useMemo(() => data?.entries ?? [], [data?.entries]);
   const catalog = useMemo(() => data?.catalog ?? [], [data?.catalog]);
   const session = data?.session ?? null;
+  const comparison = data?.comparison;
   const locked = readOnly || session?.status === 'CLOSED' || (view === 'HISTORY' && !session);
   const showErpComparison = view === 'HISTORY';
+  const isComparisonFrozen = session?.status === 'CLOSED' && Boolean(comparison);
+  const isLiveErpMissing = erpSnapshotQuery.isSuccess && erpSnapshotQuery.data.length === 0;
 
   const entriesByItem = useMemo(() => {
     const grouped = new Map<string, PaintTapeInventoryEntry[]>();
@@ -206,6 +210,12 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
   const erpSnapshotLookup = useMemo(
     () => buildPaintTapeInventoryErpLookup(erpSnapshotQuery.data ?? []),
     [erpSnapshotQuery.data]
+  );
+  const archivedComparisonByItem = useMemo(
+    () => comparison && (isComparisonFrozen || isLiveErpMissing)
+      ? new Map(comparison.rows.map((row) => [row.item.id, row]))
+      : null,
+    [comparison, isComparisonFrozen, isLiveErpMissing]
   );
   const checkedItemCount = entriesByItem.size;
   const existingCatalogIndexes = useMemo(
@@ -441,11 +451,21 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
 
   const closeMutation = useMutation({
     mutationFn: closePaintTapeInventorySession,
-    onSuccess: () => {
+    onSuccess: (closedSession) => {
       void queryClient.invalidateQueries({ queryKey: ['paint-tape-inventory'] });
-      toast({ title: 'Spis został zamknięty', tone: 'success' });
+      toast({
+        title: closedSession.archivePending
+          ? 'Spis zamknięty. Archiwum ERP oczekuje aktualizacji bazy.'
+          : 'Spis został zamknięty',
+        tone: closedSession.archivePending ? 'info' : 'success'
+      });
     },
-    onError: () => toast({ title: 'Nie udało się zamknąć spisu', tone: 'error' })
+    onError: (error) => toast({
+      title: error instanceof Error && error.message === 'MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY_ARCHIVE'
+        ? 'Wymagana aktualizacja bazy danych dla archiwum spisów'
+        : 'Nie udało się zamknąć spisu',
+      tone: 'error'
+    })
   });
 
   const reopenMutation = useMutation({
@@ -504,14 +524,18 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
 
   const renderInventoryRow = (item: PaintTapeInventoryCatalogItem) => {
     const itemEntries = entriesByItem.get(item.id) ?? [];
-    const totalQty = itemEntries.reduce((sum, entry) => sum + entry.qty, 0);
+    const totalQty = isComparisonFrozen && archivedComparisonByItem
+      ? archivedComparisonByItem.get(item.id)?.physicalQty ?? 0
+      : itemEntries.reduce((sum, entry) => sum + entry.qty, 0);
     const hasEntries = itemEntries.length > 0;
     const draftKey = `${selectedDate}:${item.id}`;
     const draft = drafts[draftKey] ?? { qty: '' };
     const isSaving = saveMutation.isPending && saveMutation.variables?.item.id === item.id;
     const expandedKey = `${selectedDate}:${item.id}`;
     const isExpanded = expandedItems.has(expandedKey);
-    const erpSnapshot = findPaintTapeInventoryErpSnapshot(erpSnapshotLookup, item);
+    const erpSnapshot = archivedComparisonByItem
+      ? archivedComparisonByItem.get(item.id)?.erp ?? undefined
+      : findPaintTapeInventoryErpSnapshot(erpSnapshotLookup, item);
     const unitsMatch =
       !erpSnapshot || normalizeUnit(erpSnapshot.unit) === normalizeUnit(item.unit);
     const difference = hasEntries && unitsMatch && erpSnapshot

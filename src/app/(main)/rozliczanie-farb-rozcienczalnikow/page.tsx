@@ -865,6 +865,7 @@ export default function PaintTapeSettlementsPage() {
 
   const completedSnapshotDates = useMemo(() => [...new Set(
     filteredSettlements
+      .filter((settlement) => !settlement.erpArchive)
       .map((settlement) => getWarsawDateValue(settlement.productionCompletedAt))
       .filter(Boolean)
   )], [filteredSettlements]);
@@ -893,6 +894,12 @@ export default function PaintTapeSettlementsPage() {
   }, [completedSnapshotDates, completedSnapshotQueries]);
 
   const getErpSnapshotForSettlement = (settlement: PaintTapeSettlement) => {
+    if (settlement.erpArchive) return {
+      date: settlement.erpArchive.date,
+      entry: settlement.erpArchive.entry,
+      historical: true,
+      loading: false
+    };
     const completedDate = getWarsawDateValue(settlement.productionCompletedAt);
     const state = completedDate ? completedSnapshotStates.get(completedDate) : null;
     const map = completedDate ? state?.map : snapshotMap;

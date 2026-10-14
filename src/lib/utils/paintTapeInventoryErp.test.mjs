@@ -100,11 +100,13 @@ const ui = {
   ...load(resolve(root, 'components/ui/Badge.tsx')),
   ...load(resolve(root, 'lib/utils/cn.ts'))
 };
-const renderRow = (snapshots, qty = 17.2) => {
+const renderRow = (snapshots, qty = 17.2, archiveRow = null) => {
   const context = {
     ...ui, exports: {}, require,
     findPaintTapeInventoryErpSnapshot,
     erpSnapshotLookup: buildPaintTapeInventoryErpLookup(snapshots),
+    archivedComparisonByItem: archiveRow ? new Map([[foil.id, archiveRow]]) : null,
+    isComparisonFrozen: Boolean(archiveRow),
     erpSnapshotQuery: { isLoading: false },
     entriesByItem: new Map([[foil.id, [{ qty }]]]),
     selectedDate: '2026-09-24', drafts: {}, saveMutation: { isPending: false },
@@ -145,4 +147,69 @@ test('incompatible units do not produce a misleading discrepancy', () => {
 
 test('equal recorded inventory and ERP stock still show a matching state', () => {
   assert.match(renderRow([erp], 28.549), /Stan zgodny/);
+});
+
+test('archived history row still shows physical and ERP quantities after live ERP deletion', () => {
+  const html = renderRow([], 999, { physicalQty: 17.2, erp: { realQty: 28.549, availableQty: 25, unit: 'ro' } });
+  assert.match(html, /17,2 ro/);
+  assert.match(html, /28,549 ro/);
+  assert.match(html, /Do rozpisania: 11,349 ro/);
+  assert.doesNotMatch(html, /999 ro|Brak danych/);
+});
+
+test('archived ERP does not change when newer live values are returned', () => {
+  const html = renderRow([{ ...erp, realQty: 999 }], 17.2,
+    { physicalQty: 17.2, erp: { realQty: 28.549, availableQty: 25, unit: 'ro' } });
+  assert.match(html, /28,549 ro/);
+  assert.doesNotMatch(html, /999 ro/);
+});
+
+test('archive explicitly remembers missing ERP instead of silently using a later import', () => {
+  const html = renderRow([erp], 17.2, { physicalQty: 17.2, erp: null });
+  assert.match(html, /Brak stanu ERP/);
+  assert.doesNotMatch(html, /28,549 ro|Do rozpisania/);
+});
+
+const settlementFile = resolve(root, 'app/(main)/rozliczanie-farb-rozcienczalnikow/page.tsx');
+const settlementSource = ts.createSourceFile(settlementFile, readFileSync(settlementFile, 'utf8'),
+  ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
+const settlementDeclarations = new Map();
+const collectSettlementDeclarations = (node) => {
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+    settlementDeclarations.set(node.name.text, node.getText(settlementSource));
+  }
+  ts.forEachChild(node, collectSettlementDeclarations);
+};
+collectSettlementDeclarations(settlementSource);
+const settlementCode = ['getWarsawDateValue', 'normalizeKey', 'getErpSnapshotForSettlement', 'completedSnapshotDates']
+  .map((name) => `const ${settlementDeclarations.get(name)};`).join('\n');
+const settlementCompiled = ts.transpileModule(`${settlementCode}
+exports.get = getErpSnapshotForSettlement; exports.dates = completedSnapshotDates;`, { compilerOptions }).outputText;
+const settlementContext = (settlements) => {
+  const context = { exports: {}, filteredSettlements: settlements, useMemo: (fn) => fn(),
+    completedSnapshotStates: new Map(), snapshotMap: new Map(), snapshotDate: '2026-10-14' };
+  vm.runInNewContext(settlementCompiled, context);
+  return context.exports;
+};
+
+test('settlement history uses its frozen ERP with no live stock request or loading state', () => {
+  const settlement = { productionCompletedAt: '2025-01-01T12:00:00Z',
+    erpArchive: { date: '2025-01-01', entry: { ...erp, realQty: 28.549 } } };
+  const result = settlementContext([settlement]);
+  assert.equal(result.dates.length, 0);
+  const info = result.get(settlement);
+  assert.equal(info.entry.realQty, 28.549);
+  assert.equal(info.loading, false);
+  assert.equal(info.historical, true);
+  assert.equal(info.date, '2025-01-01');
+});
+
+test('settlement history freezes an explicit missing ERP and only fetches legacy unarchived dates', () => {
+  const archived = { productionCompletedAt: '2025-01-01T12:00:00Z',
+    erpArchive: { date: '2025-01-01', entry: null } };
+  const legacy = { productionCompletedAt: '2026-10-01T12:00:00Z' };
+  const result = settlementContext([archived, legacy, legacy]);
+  assert.equal(JSON.stringify(result.dates), '["2026-10-01"]');
+  assert.equal(result.get(archived).entry, null);
+  assert.equal(result.get(archived).loading, false);
 });

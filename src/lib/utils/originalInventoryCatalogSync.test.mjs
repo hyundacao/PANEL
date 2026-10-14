@@ -15,9 +15,9 @@ const row = (item, id = 'old') => ({ id, name: item.name, unit: item.unit, index
 function fixture() {
   const state = {
     user: { id: 'test', username: 'counter', name: 'Counter', role: 'USER', access: { warehouses: { PLANOWANIE_ZAPOTRZEBOWANIA: { readOnly: false, tabs: ['planowanie-zapotrzebowania'] } } } },
-    tables: { original_inventory_catalog: [], original_inventory_erp_snapshots: [], audit_logs: [] },
+    tables: { original_inventory_catalog: [], original_inventory_erp_snapshots: [], paint_tape_inventory_sessions: [], audit_logs: [] },
     operations: [], failCatalogRead: false, failCatalogWriteFrom: Infinity, catalogWrites: 0,
-    beforeCatalogWrite: null, pdfItems: [], holdCatalogRead: null
+    beforeCatalogWrite: null, pdfItems: [], holdCatalogRead: null, afterWork: [], purgeError: null
   };
   class Query {
     constructor(table) { this.table = table; this.filters = []; this.mode = 'select'; }
@@ -63,8 +63,15 @@ function fixture() {
       return response;
     }
   }
-  const db = { from: (table) => new Query(table) };
+  const db = {
+    from: (table) => new Query(table),
+    async rpc(name, payload) {
+      state.operations.push({ rpc: name, payload });
+      return { data: 0, error: state.purgeError };
+    }
+  };
   const mocks = {
+    'next/server': { ...require('next/server'), after: (callback) => state.afterWork.push(callback) },
     '@/lib/auth/session': { getAuthenticatedUser: async () => ({ user: state.user, code: 'UNAUTHORIZED' }), clearSessionCookie() {} },
     '@/lib/supabase/admin': { supabaseAdmin: db },
     '@/lib/push/server': {},
@@ -104,6 +111,28 @@ function fixture() {
   };
   return { state, sync, importFile, app };
 }
+
+test('successful ERP import schedules guarded retention after responding, not during the import', async () => {
+  const f = fixture();
+  const response = await f.importFile([material()]);
+  assert.equal(response.status, 200);
+  assert.equal(f.state.afterWork.length, 1);
+  assert.equal(f.state.operations.some((op) => op.rpc), false);
+  await f.state.afterWork[0]();
+  const operation = f.state.operations.find((op) => op.rpc);
+  assert.equal(operation.rpc, 'purge_original_inventory_erp_snapshots');
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Warsaw' }).format(new Date());
+  const date = new Date(`${today}T12:00:00Z`); date.setUTCDate(date.getUTCDate() - 90);
+  assert.equal(operation.payload.p_cutoff_date, date.toISOString().slice(0, 10));
+});
+
+test('missing retention migration cannot change a successful import into a failure', async () => {
+  const f = fixture(); f.state.purgeError = { code: 'PGRST202', message: 'missing RPC' };
+  const response = await f.importFile([material()]);
+  assert.equal(response.status, 200);
+  await f.state.afterWork[0]();
+  assert.equal(f.state.tables.original_inventory_erp_snapshots.length, 1);
+});
 
 test('ERP import saves stock and permanently adds only new catalog identities', async () => {
   const f = fixture();

@@ -1348,7 +1348,9 @@ export default function SpisRzeczywisty() {
       const messageMap: Record<string, string> = {
         DATE_REQUIRED: 'Wybierz poprawny dzien.',
         MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS:
-          'Brakuje migracji bazy dla stanow ERP. Uruchom migracje SQL.'
+          'Brakuje migracji bazy dla stanow ERP. Uruchom migracje SQL.',
+        MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY_ARCHIVE:
+          'Najpierw wymagana jest aktualizacja bazy archiwum spisow farb i tasm.'
       };
       toast({
         title: messageMap[err.message] ?? 'Nie usunieto stanow ERP.',
@@ -1615,6 +1617,8 @@ export default function SpisRzeczywisty() {
         FILE_REQUIRED: 'Wybierz plik do importu.',
         EMPTY: 'Plik nie zawiera poprawnych stanow ERP.',
         FORBIDDEN: 'Brak uprawnien do importu stanow ERP.',
+        ERP_SNAPSHOT_ARCHIVE_REQUIRED:
+          'Otworz historie spisu farb i tasm dla tego dnia, aby zabezpieczyc porownanie przed ponownym importem.',
         MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS:
           'Brakuje migracji bazy dla stanow ERP. Uruchom migracje SQL.'
       };
@@ -1878,8 +1882,12 @@ export default function SpisRzeczywisty() {
 
   const handleEditSave = (entryId: string) => {
     if (readOnly || !entries.some(entry => entry.id === entryId && entry.canModify === true)) return;
-    const draft = editDrafts[entryId];
-    if (!draft) return;
+    const entry = entries.find((item) => item.id === entryId);
+    if (!entry || !editDrafts[entryId]) return;
+    const draft = {
+      qty: editDrafts[entryId].qty ?? String(entry.qty),
+      warehouseId: editDrafts[entryId].warehouseId ?? entry.warehouseId
+    };
     const qtyValue = parseQtyInput(draft.qty);
     if (qtyValue === null || qtyValue <= 0) {
       toast({ title: 'Wpisz poprawna ilosc.', tone: 'error' });
@@ -1892,9 +1900,15 @@ export default function SpisRzeczywisty() {
     });
   };
   const updateEditDraft = (entryId: string, patch: Partial<{ qty: string; warehouseId: string }>) => {
+    const entry = entries.find((item) => item.id === entryId);
+    if (!entry) return;
     setEditDrafts((prev) => ({
       ...prev,
-      [entryId]: { ...prev[entryId], ...patch }
+      [entryId]: {
+        qty: prev[entryId]?.qty ?? String(entry.qty),
+        warehouseId: prev[entryId]?.warehouseId ?? entry.warehouseId,
+        ...patch
+      }
     }));
   };
   const handleRemoveEntry = (entryId: string, entryName: string) => {
@@ -3971,9 +3985,9 @@ export default function SpisRzeczywisty() {
                         columns={['Data', 'Ilosc', 'Jedn.', 'Hala', 'Kto', 'Akcje']}
                         rows={selectedEntries.map((entry) => {
                           const canModifyEntry = !readOnly && entry.canModify === true;
-                          const draft = editDrafts[entry.id] ?? {
-                            qty: String(entry.qty),
-                            warehouseId: entry.warehouseId
+                          const draft = {
+                            qty: editDrafts[entry.id]?.qty ?? String(entry.qty),
+                            warehouseId: editDrafts[entry.id]?.warehouseId ?? entry.warehouseId
                           };
                           const isFixedDeviceEntry = String(entry.sourceType ?? '').toUpperCase() === FIXED_INVENTORY_DEVICE_SOURCE_TYPE;
                           const palletSource = parsePalletSource(entry.sourceId);
