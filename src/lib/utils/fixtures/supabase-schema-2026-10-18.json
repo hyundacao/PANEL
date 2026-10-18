@@ -1,0 +1,1770 @@
+{
+  "readAt": "2026-10-18",
+  "source": "Supabase REST OpenAPI, authenticated service-role GET, no database writes",
+  "limitations": "API describes columns and RPC signatures, not function bodies, policies or triggers.",
+  "tables": {
+    "app_users": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "username": {
+        "type": "text",
+        "nullable": false
+      },
+      "password_hash": {
+        "type": "text",
+        "nullable": false
+      },
+      "role": {
+        "type": "text",
+        "nullable": false
+      },
+      "access": {
+        "type": "jsonb",
+        "nullable": false
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "last_login": {
+        "type": "timestamp with time zone",
+        "nullable": true
+      },
+      "active_session_id": {
+        "type": "uuid",
+        "nullable": true
+      }
+    },
+    "audit_logs": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "user_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "action": {
+        "type": "text",
+        "nullable": false
+      },
+      "warehouse": {
+        "type": "text",
+        "nullable": true
+      },
+      "location": {
+        "type": "text",
+        "nullable": true
+      },
+      "material": {
+        "type": "text",
+        "nullable": true
+      },
+      "prev_qty": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "next_qty": {
+        "type": "numeric",
+        "nullable": true
+      }
+    },
+    "daily_entries": {
+      "date_key": {
+        "type": "date",
+        "nullable": false
+      },
+      "location_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "material_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "confirmed": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "comment": {
+        "type": "text",
+        "nullable": true
+      },
+      "updated_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "daily_entry_measurements": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "date_key": {
+        "type": "date",
+        "nullable": false
+      },
+      "location_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "material_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "comment": {
+        "type": "text",
+        "nullable": true
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "created_by": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "daily_location_status": {
+      "date_key": {
+        "type": "date",
+        "nullable": false
+      },
+      "location_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "is_confirmed": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "dryers": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "order_no": {
+        "type": "integer",
+        "nullable": false
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "material_id": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "erp_target_locations": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "order_no": {
+        "type": "integer",
+        "nullable": false
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "updated_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "halls": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "order_no": {
+        "type": "integer",
+        "nullable": false
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": false
+      }
+    },
+    "inventory_adjustments": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "location_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "material_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "prev_qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "next_qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "note": {
+        "type": "text",
+        "nullable": true
+      },
+      "legacy_location_id": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "locations": {
+      "id": {
+        "type": "text",
+        "nullable": false
+      },
+      "warehouse_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "order_no": {
+        "type": "integer",
+        "nullable": false
+      },
+      "type": {
+        "type": "text",
+        "nullable": false
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": false
+      }
+    },
+    "material_catalogs": {
+      "id": {
+        "type": "text",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": false
+      }
+    },
+    "material_inventory_legacy_location_backup": {
+      "run_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "table_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "row_data": {
+        "type": "jsonb",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "material_inventory_warehouse_migration_report": {
+      "run_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "section": {
+        "type": "text",
+        "nullable": false
+      },
+      "warehouse_id": {
+        "type": "text",
+        "nullable": true
+      },
+      "material_id": {
+        "type": "text",
+        "nullable": true
+      },
+      "qty_before": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "qty_after": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "diff": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "details": {
+        "type": "jsonb",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "material_inventory_warehouse_migration_runs": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "started_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "note": {
+        "type": "text",
+        "nullable": false
+      }
+    },
+    "material_planning_events": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "event_type": {
+        "type": "text",
+        "nullable": false
+      },
+      "event_data": {
+        "type": "jsonb",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "created_by": {
+        "type": "text",
+        "nullable": false
+      }
+    },
+    "material_planning_state": {
+      "id": {
+        "type": "text",
+        "nullable": false
+      },
+      "state": {
+        "type": "jsonb",
+        "nullable": false
+      },
+      "updated_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "updated_by": {
+        "type": "text",
+        "nullable": false
+      },
+      "revision": {
+        "type": "bigint",
+        "nullable": false
+      }
+    },
+    "materials": {
+      "id": {
+        "type": "text",
+        "nullable": false
+      },
+      "code": {
+        "type": "text",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "catalog_id": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "mixed_materials": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "location_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "legacy_location_id": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "original_inventory_catalog": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "unit": {
+        "type": "text",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "index_code": {
+        "type": "text",
+        "nullable": true
+      },
+      "warehouse_code": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "original_inventory_entries": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "warehouse_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "unit": {
+        "type": "text",
+        "nullable": false
+      },
+      "location": {
+        "type": "text",
+        "nullable": true
+      },
+      "note": {
+        "type": "text",
+        "nullable": true
+      },
+      "user_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "source_type": {
+        "type": "text",
+        "nullable": true
+      },
+      "source_id": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "original_inventory_erp_snapshots": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "snapshot_date": {
+        "type": "date",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "unit": {
+        "type": "text",
+        "nullable": false
+      },
+      "imported_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "imported_by": {
+        "type": "text",
+        "nullable": false
+      },
+      "source_file_name": {
+        "type": "text",
+        "nullable": true
+      },
+      "real_qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "available_qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "index_code": {
+        "type": "text",
+        "nullable": true
+      },
+      "warehouse_code": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "original_inventory_grind_tasks": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "material_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "target_material_name": {
+        "type": "text",
+        "nullable": true
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "unit": {
+        "type": "text",
+        "nullable": false
+      },
+      "status": {
+        "type": "text",
+        "nullable": false
+      },
+      "source_report_date": {
+        "type": "text",
+        "nullable": true
+      },
+      "created_by": {
+        "type": "text",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "completed_by": {
+        "type": "text",
+        "nullable": true
+      },
+      "completed_at": {
+        "type": "timestamp with time zone",
+        "nullable": true
+      }
+    },
+    "original_inventory_silo_entries": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "config_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "date_key": {
+        "type": "text",
+        "nullable": false
+      },
+      "percent": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "hopper_present": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "calculated_qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "generated_entry_id": {
+        "type": "uuid",
+        "nullable": true
+      },
+      "user_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "updated_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "original_inventory_silos": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "chamber": {
+        "type": "text",
+        "nullable": false
+      },
+      "material_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "warehouse_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "percent_kg": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "hopper_kg": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "order_no": {
+        "type": "integer",
+        "nullable": false
+      },
+      "updated_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "paint_tape_inventory_catalog": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "item_index": {
+        "type": "text",
+        "nullable": false
+      },
+      "item_code": {
+        "type": "text",
+        "nullable": true
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "category": {
+        "type": "text",
+        "nullable": false
+      },
+      "unit": {
+        "type": "text",
+        "nullable": false
+      },
+      "sort_order": {
+        "type": "integer",
+        "nullable": false
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "created_by": {
+        "type": "text",
+        "nullable": false
+      }
+    },
+    "paint_tape_inventory_entries": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "session_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "catalog_item_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "note": {
+        "type": "text",
+        "nullable": true
+      },
+      "checked_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "checked_by": {
+        "type": "text",
+        "nullable": false
+      },
+      "location": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "paint_tape_inventory_sessions": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "inventory_date": {
+        "type": "date",
+        "nullable": false
+      },
+      "status": {
+        "type": "text",
+        "nullable": false
+      },
+      "expected_count": {
+        "type": "integer",
+        "nullable": false
+      },
+      "checked_count": {
+        "type": "integer",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "created_by": {
+        "type": "text",
+        "nullable": false
+      },
+      "completed_at": {
+        "type": "timestamp with time zone",
+        "nullable": true
+      },
+      "completed_by": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "paint_tape_settlement_issues": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "settlement_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "created_by": {
+        "type": "text",
+        "nullable": false
+      }
+    },
+    "paint_tape_settlements": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "updated_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "created_by": {
+        "type": "text",
+        "nullable": false
+      },
+      "order_number": {
+        "type": "text",
+        "nullable": true
+      },
+      "detail_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "item_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "item_index_code": {
+        "type": "text",
+        "nullable": true
+      },
+      "unit": {
+        "type": "text",
+        "nullable": false
+      },
+      "start_qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "warehouse_issued_qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "end_qty": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "produced_qty": {
+        "type": "numeric",
+        "nullable": true
+      },
+      "status": {
+        "type": "text",
+        "nullable": false
+      },
+      "accounted_at": {
+        "type": "timestamp with time zone",
+        "nullable": true
+      },
+      "accounted_by": {
+        "type": "text",
+        "nullable": true
+      },
+      "production_completed_at": {
+        "type": "timestamp with time zone",
+        "nullable": true
+      },
+      "order_note": {
+        "type": "text",
+        "nullable": true
+      },
+      "usage_check_note": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "paint_tape_technology_usages": {
+      "index_code": {
+        "type": "text",
+        "nullable": false
+      },
+      "item_name": {
+        "type": "text",
+        "nullable": true
+      },
+      "usage_per_piece": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "unit": {
+        "type": "text",
+        "nullable": false
+      },
+      "updated_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "updated_by": {
+        "type": "text",
+        "nullable": false
+      }
+    },
+    "permission_groups": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "description": {
+        "type": "text",
+        "nullable": true
+      },
+      "access": {
+        "type": "jsonb",
+        "nullable": false
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "przygotowanie_produkcji_history": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "plan_date": {
+        "type": "date",
+        "nullable": false
+      },
+      "file_name": {
+        "type": "text",
+        "nullable": true
+      },
+      "plan_sheet": {
+        "type": "text",
+        "nullable": true
+      },
+      "tasks": {
+        "type": "jsonb",
+        "nullable": false
+      },
+      "archived_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "archived_by": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "przygotowanie_produkcji_sessions": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "session_date": {
+        "type": "date",
+        "nullable": false
+      },
+      "file_name": {
+        "type": "text",
+        "nullable": true
+      },
+      "plan_sheet": {
+        "type": "text",
+        "nullable": true
+      },
+      "created_by": {
+        "type": "text",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "updated_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "przygotowanie_produkcji_tasks": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "session_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "task_key": {
+        "type": "text",
+        "nullable": false
+      },
+      "position_no": {
+        "type": "integer",
+        "nullable": false
+      },
+      "station": {
+        "type": "text",
+        "nullable": false
+      },
+      "detail": {
+        "type": "text",
+        "nullable": false
+      },
+      "quantity": {
+        "type": "text",
+        "nullable": true
+      },
+      "norm": {
+        "type": "text",
+        "nullable": true
+      },
+      "highlighted": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "kinds": {
+        "type": "jsonb",
+        "nullable": false
+      },
+      "teams": {
+        "type": "jsonb",
+        "nullable": false
+      },
+      "notes": {
+        "type": "jsonb",
+        "nullable": false
+      },
+      "done": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "material": {
+        "type": "text",
+        "nullable": false
+      },
+      "material_type": {
+        "type": "text",
+        "nullable": false
+      },
+      "source": {
+        "type": "text",
+        "nullable": false
+      },
+      "dryer": {
+        "type": "text",
+        "nullable": false
+      },
+      "temperature": {
+        "type": "text",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "updated_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "updated_by": {
+        "type": "text",
+        "nullable": true
+      },
+      "is_current_plan": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "plan_group": {
+        "type": "text",
+        "nullable": false
+      }
+    },
+    "push_subscriptions": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "user_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "endpoint": {
+        "type": "text",
+        "nullable": false
+      },
+      "p256dh": {
+        "type": "text",
+        "nullable": false
+      },
+      "auth": {
+        "type": "text",
+        "nullable": false
+      },
+      "user_agent": {
+        "type": "text",
+        "nullable": true
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "updated_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "last_seen_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "erp_warehouseman_source_warehouses": {
+        "type": "text[]",
+        "nullable": true
+      },
+      "erp_dispatcher_target_locations": {
+        "type": "text[]",
+        "nullable": true
+      }
+    },
+    "raport_brakowosci_latest": {
+      "id": {
+        "type": "text",
+        "nullable": false
+      },
+      "payload": {
+        "type": "jsonb",
+        "nullable": false
+      },
+      "updated_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "raport_zmianowy_entries": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "item_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "note": {
+        "type": "text",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "author_id": {
+        "type": "uuid",
+        "nullable": true
+      },
+      "author_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "edited_at": {
+        "type": "timestamp with time zone",
+        "nullable": true
+      },
+      "edited_by_id": {
+        "type": "uuid",
+        "nullable": true
+      },
+      "edited_by_name": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "raport_zmianowy_items": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "session_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "index_code": {
+        "type": "text",
+        "nullable": false
+      },
+      "description": {
+        "type": "text",
+        "nullable": true
+      },
+      "station": {
+        "type": "text",
+        "nullable": true
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "raport_zmianowy_sessions": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "created_by": {
+        "type": "text",
+        "nullable": false
+      },
+      "session_date": {
+        "type": "date",
+        "nullable": false
+      },
+      "plan_sheet": {
+        "type": "text",
+        "nullable": false
+      },
+      "file_name": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "spare_part_history": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "user_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "part_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "part_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "kind": {
+        "type": "text",
+        "nullable": false
+      },
+      "note": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "spare_parts": {
+      "id": {
+        "type": "text",
+        "nullable": false
+      },
+      "code": {
+        "type": "text",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "unit": {
+        "type": "text",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "location": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "transfers": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "kind": {
+        "type": "text",
+        "nullable": false
+      },
+      "material_id": {
+        "type": "text",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "from_location_id": {
+        "type": "text",
+        "nullable": true
+      },
+      "to_location_id": {
+        "type": "text",
+        "nullable": true
+      },
+      "partner": {
+        "type": "text",
+        "nullable": true
+      },
+      "note": {
+        "type": "text",
+        "nullable": true
+      },
+      "legacy_from_location_id": {
+        "type": "text",
+        "nullable": true
+      },
+      "legacy_to_location_id": {
+        "type": "text",
+        "nullable": true
+      },
+      "cancelled_at": {
+        "type": "timestamp with time zone",
+        "nullable": true
+      },
+      "cancelled_by": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "user_permission_groups": {
+      "user_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "group_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      }
+    },
+    "warehouse_transfer_document_items": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "document_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "line_no": {
+        "type": "integer",
+        "nullable": false
+      },
+      "index_code": {
+        "type": "text",
+        "nullable": false
+      },
+      "index_code2": {
+        "type": "text",
+        "nullable": true
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "batch": {
+        "type": "text",
+        "nullable": true
+      },
+      "location": {
+        "type": "text",
+        "nullable": true
+      },
+      "unit": {
+        "type": "text",
+        "nullable": false
+      },
+      "planned_qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "note": {
+        "type": "text",
+        "nullable": true
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "priority": {
+        "type": "text",
+        "nullable": false
+      }
+    },
+    "warehouse_transfer_documents": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "created_by_id": {
+        "type": "uuid",
+        "nullable": true
+      },
+      "created_by_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "document_number": {
+        "type": "text",
+        "nullable": false
+      },
+      "source_warehouse": {
+        "type": "text",
+        "nullable": true
+      },
+      "target_warehouse": {
+        "type": "text",
+        "nullable": true
+      },
+      "note": {
+        "type": "text",
+        "nullable": true
+      },
+      "status": {
+        "type": "text",
+        "nullable": false
+      },
+      "closed_at": {
+        "type": "timestamp with time zone",
+        "nullable": true
+      },
+      "closed_by_name": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "warehouse_transfer_item_issues": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "item_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "issuer_id": {
+        "type": "uuid",
+        "nullable": true
+      },
+      "issuer_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "note": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "warehouse_transfer_item_receipts": {
+      "id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "item_id": {
+        "type": "uuid",
+        "nullable": false
+      },
+      "created_at": {
+        "type": "timestamp with time zone",
+        "nullable": false
+      },
+      "receiver_id": {
+        "type": "uuid",
+        "nullable": true
+      },
+      "receiver_name": {
+        "type": "text",
+        "nullable": false
+      },
+      "qty": {
+        "type": "numeric",
+        "nullable": false
+      },
+      "note": {
+        "type": "text",
+        "nullable": true
+      }
+    },
+    "warehouses": {
+      "id": {
+        "type": "text",
+        "nullable": false
+      },
+      "name": {
+        "type": "text",
+        "nullable": false
+      },
+      "order_no": {
+        "type": "integer",
+        "nullable": false
+      },
+      "include_in_spis": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "include_in_stats": {
+        "type": "boolean",
+        "nullable": false
+      },
+      "is_active": {
+        "type": "boolean",
+        "nullable": false
+      }
+    }
+  },
+  "functions": [
+    {
+      "name": "save_material_planning_state",
+      "arguments": {
+        "p_expected_revision": {
+          "format": "bigint",
+          "type": "integer"
+        },
+        "p_module_id": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_state": {
+          "format": "jsonb"
+        },
+        "p_updated_by": {
+          "format": "text",
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "cancel_regrind_transfer",
+      "arguments": {
+        "p_cancelled_by": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_transfer_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "create_regrind_transfer",
+      "arguments": {
+        "p_from_location_id": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_kind": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_material_id": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_note": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_partner": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_qty": {
+          "format": "numeric",
+          "type": "number"
+        },
+        "p_to_location_id": {
+          "format": "text",
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "create_app_user",
+      "arguments": {
+        "p_access": {
+          "format": "jsonb"
+        },
+        "p_name": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_password": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_role": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_username": {
+          "format": "text",
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "authenticate_user",
+      "arguments": {
+        "p_password": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_username": {
+          "format": "text",
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "deactivate_app_user",
+      "arguments": {
+        "p_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "update_app_user",
+      "arguments": {
+        "p_access": {
+          "format": "jsonb"
+        },
+        "p_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "p_is_active": {
+          "format": "boolean",
+          "type": "boolean"
+        },
+        "p_name": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_password": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_role": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_username": {
+          "format": "text",
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "list_app_users",
+      "arguments": {}
+    },
+    {
+      "name": "apply_regrind_transfer_delta",
+      "arguments": {
+        "p_date": {
+          "format": "date",
+          "type": "string"
+        },
+        "p_delta": {
+          "format": "numeric",
+          "type": "number"
+        },
+        "p_location_id": {
+          "format": "text",
+          "type": "string"
+        },
+        "p_material_id": {
+          "format": "text",
+          "type": "string"
+        }
+      }
+    }
+  ]
+}

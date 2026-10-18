@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import * as imports from './planImport.ts';
 import * as fixedDevices from './fixedInventoryDevices.ts';
 import * as palletSets from './palletSets.ts';
+import * as pickingRows from './pickingDocumentRows.ts';
+import { buildZoneStockSummary } from './zoneStock.ts';
 import { shouldInvalidatePlanDocument } from './stateScopes.ts';
 import { isMaterialPlanningDateRetained, MATERIAL_PLANNING_HISTORY_DAYS, pruneMaterialPlanningHistory } from './historyRetention.ts';
 
@@ -19,6 +21,7 @@ const directQuantityEditing = source.includes('const updatePlanQuantity =');
 const names = ['uid','numberValue','normalize','CATEGORIES','normalizeReturnExclusions','productIdentityMatches','MATERIAL_WAREHOUSE_PRIORITY','MATERIAL_WAREHOUSE_RANK','inferPickingWarehouseCode','pickingWarehouseCode','sortPickingDocumentRows','PACKAGING_CATEGORIES','splitProductFields','stationKey','applyStationMappings','materialKey','materialMatches','materialIdentityMatches','isPackagingMaterial','technologyMaterialsForMode','migrateLegacyEmergencyTechnologies','normalizedMaterialUnit','isKilogramUnit','isGramUnit','isThousandPiecesUnit','technologyResultUnit','technologyResultQuantity','roundTechnologyMaterialQuantity','canonicalProductIndex','linkedProductKey','linkedProductMatchesPlanItem','linkedSourceSelectionForItem','linkedMachineProductQuantity','linkedWarehouseProductQuantity','linkedSurplusQuantity','normalizeLinkedSources','technologyUsageInputUnit','technologyUsageForEditor','technologyUsageFromEditor','technologyMaterialWithUnit','clonePlanItems','cloneMaterials','applyDefaultTechnologyAssignments','preparePlanningAutosaveState','technologyLabel','latestPriorPlanVersion','planningStateForDate','documentStatusLabel','pickingRowWasWritten','cleanImportedTechnologyDescription','technologyMatchesProduct','updateBaseTechnologyFromWorkingCopy','findExactCatalogItem','parseStoredState','parsePlanRows','planItemSignature',
   'handleWorkbook','importSelectedSheet','selectPlanDate','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','shiftNormForItem','scopedItemProductionQty','plannedItemProductionQty','itemProductionQty','planQuantityNeedsReview','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','updatePickingDocumentWarehouse','deriveReturnsForDate','syncOriginalInventory'];
 if (directQuantityEditing) names.push('updatePlanNorm');
+names.push('returnMaterialKey');
 names.push('planNormNeedsReview');
 const definitions = new Map();
 const areaCalculationNames = ['technologyForItem','materialsForItem','technologyLinksForItem','linkedProducerCandidates','linkedProducerFor','linkedAllocationByProducer','selectedLinkedAllocationByProducer','fullLinkedAllocationByProducer','materialDemandContributionsForItem','demandByArea','sharedAreaIds','materialSupply','requirementsForArea','linkedSourceIssuesForArea'];
@@ -38,7 +41,7 @@ const rows=[['Lp.','','Ilość','ST.','Norma','','Uwagi'],['1','LEFT + RIGHT (A1
 
 function setup() {
   const messages=[];
-  const ctx=vm.createContext({exports:{},...imports,...fixedDevices,...palletSets,...domain.exports,shouldInvalidatePlanDocument,isMaterialPlanningDateRetained,MATERIAL_PLANNING_HISTORY_DAYS,
+  const ctx=vm.createContext({exports:{},...imports,...fixedDevices,...palletSets,...pickingRows,...domain.exports,shouldInvalidatePlanDocument,isMaterialPlanningDateRetained,MATERIAL_PLANNING_HISTORY_DAYS,
     state:{plan:[],technologies:[],archive:[],planVersions:[],documents:[],quantityCorrections:[],stationMappings:[],selectedPlanDate:'2026-08-31',selectedAreaId:'hala-2',dailyPlans:{},returnStatuses:{},returnExclusions:[],inventory:[],areas:[],calculationMode:'all',horizonShifts:3.5,continuationBufferPercent:0},
     pending:{fileName:'test.xlsx',purpose:'plan',workbook:{SheetNames:['Plan'],Sheets:{Plan:{rows}}}},sheetName:'Plan',currentUserName:'Test',quantityInputs:{},readOnly:false,
     calculationEditorOpen:false,closeCalculationEditorIfAllowed:()=>true,inventorySyncRequestRef:{current:0},headAdmin:false,today:'2026-09-01',
@@ -190,6 +193,56 @@ test('plan import preserves a yellow Excel marker on the calculation row',()=>{
   assert.equal(h.ctx.state.plan[2].sourceHighlighted,false);
 });
 
+test('zone hint uses effective working materials and each other product selected scope',()=>{
+  const h=setup();
+  h.importSelectedSheet();
+  const material={id:'pp',code:'PP',name:'Regranulat PP',category:'Tworzywo',unit:'kg',usage:0.02,logisticQty:1};
+  const base={...h.ctx.state.plan[0],quantityStatus:'parsed',technologyId:'tech',workingMaterials:null,
+    totalQty:10000,remainingQty:10000,scopeMode:'shifts',scopeShifts:2,shiftNorm:1000,included:true,areaId:'hala-1'};
+  h.ctx.state.plan=[
+    {...base,id:'A'},
+    {...base,id:'B',manualOverride:true,workingMaterials:[{...material,usage:0.03}]},
+    {...base,id:'C',scopeMode:'quantity',scopeQuantity:500},
+    {...base,id:'D',manualOverride:true,workingMaterials:[{...material,code:'ABS',name:'ABS'}]},
+    {...base,id:'E',areaId:'hala-2'},
+    {...base,id:'F',included:false}
+  ];
+  h.ctx.state.technologies=[{id:'tech',materials:[material]}];
+  h.ctx.needsMaterialBalances=true;
+  h.ctx.documentLedger=new Map();
+  const code=ts.transpileModule('(()=>{'+[...areaCalculationDefinitions.values()].join('\n')+
+    ';return state.plan.map(item=>({...item,contributions:materialDemandContributionsForItem(item)}));})()',
+    {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  const result=buildZoneStockSummary({material,areaId:'hala-1',currentItemId:'A',inventory:[],
+    sources:vm.runInContext(code,h.ctx),matchesMaterial:h.materialIdentityMatches});
+  assert.equal(result.otherDemand,70);
+  assert.deepEqual(result.others.map(row=>[row.id,row.demand]),[['B',60],['C',10]]);
+});
+
+test('one silo pool covers three halls without multiplying its quantity in issue calculations',()=>{
+  const h=setup();
+  h.importSelectedSheet();
+  const base={...h.ctx.state.plan[0],quantityStatus:'parsed',technologyId:'tech',workingMaterials:null,
+    totalQty:100,remainingQty:100,scopeMode:'all',included:true};
+  const material={id:'pp',code:'PP',name:'PP',category:'Tworzywo',unit:'kg',usage:1};
+  h.ctx.state.areas=[1,2,3].map(number=>({id:'hala-'+number,name:'Hala '+number}));
+  h.ctx.state.plan=h.ctx.state.areas.map(area=>({...base,id:area.id,areaId:area.id}));
+  h.ctx.state.inventory=h.ctx.state.areas.map(area=>({...material,areaId:area.id,qty:10}));
+  h.ctx.state.areas.push({id:'silosy',name:'Silosy',shared:true});
+  h.ctx.state.inventory.push({...material,areaId:'silosy',qty:150});
+  h.ctx.state.technologies=[{id:'tech',materials:[material]}];
+  h.ctx.needsMaterialBalances=true;
+  h.ctx.documentLedger=new Map();
+  h.ctx.CATEGORY_ORDER=new Map();
+  const code=ts.transpileModule('(()=>{'+[...areaCalculationDefinitions.values()].join('\n')+';return requirementsForArea;})()',
+    {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  const requirementsForArea=vm.runInContext(code,h.ctx);
+  const requirements=[1,2,3].map(number=>requirementsForArea('hala-'+number)[0]);
+  assert.ok(requirements.every(row=>row.sharedStock===150 && row.globalSharedDemand===270));
+  assert.ok(requirements.every(row=>Math.abs(row.toIssue-40)<1e-9));
+  assert.equal(requirements.reduce((sum,row)=>sum+row.toIssue,0),120);
+});
+
 test('requirements round every discrete product source before aggregation',()=>{
   const h=setup();
   h.importSelectedSheet();
@@ -212,6 +265,115 @@ test('requirements round every discrete product source before aggregation',()=>{
   assert.deepEqual(Array.from(requirement.sources,(source)=>source.demand),[2,2]);
   assert.equal(requirement.demand,4);
   assert.equal(requirement.toIssue,4);
+});
+
+function metalBoxScenario({ sameProduct = false } = {}) {
+  const h = setup();
+  h.importSelectedSheet();
+  const base = { ...h.ctx.state.plan[0], quantityStatus: 'parsed', technologyId: 'metal-tech', manualOverride: true,
+    totalQty: 1, remainingQty: 1, scopeMode: 'all', included: true, areaId: 'hala-2' };
+  const material = { id: 'metal', code: 'M-4-BSHL-786-015', name: 'METAL BOX 1230X830X730',
+    category: 'Inne', unit: 'szt', usage: 6, logisticQty: 1 };
+  const second = { ...material, id: 'metal-2', unit: 'szt.', usage: 18 };
+  h.ctx.state.plan = sameProduct
+    ? [{ ...base, id: 'A', workingMaterials: [material, second] }]
+    : [{ ...base, id: 'A', index: 'A100', workingMaterials: [material] },
+      { ...base, id: 'B', index: 'B200', workingMaterials: [second] }];
+  h.ctx.state.areas = [{ id: 'hala-2', name: 'Hala 2' }];
+  h.ctx.state.inventory = [{ ...material, areaId: 'hala-2', qty: 6, unit: 'szt.' }];
+  h.ctx.state.technologies = [{ id: 'metal-tech', materials: [material] }];
+  h.ctx.needsMaterialBalances = true;
+  h.ctx.documentLedger = new Map();
+  h.ctx.CATEGORY_ORDER = new Map();
+  const code = ts.transpileModule('(()=>{' + [...areaCalculationDefinitions.values()].join('\n') + ';return requirementsForArea;})()',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  h.requirementsForArea = vm.runInContext(code, h.ctx);
+  return h;
+}
+
+test('metal boxes in szt and szt. use one stock pool and one document row', () => {
+  const h = metalBoxScenario();
+  const rows = h.requirementsForArea('hala-2');
+  assert.equal(rows.length, 1);
+  assert.deepEqual([rows[0].demand, rows[0].fullDemand, rows[0].areaStock, rows[0].toIssue], [24, 24, 6, 18]);
+  assert.deepEqual(Array.from(rows[0].sources, source => [source.index, source.demand]), [['A100', 6], ['B200', 18]]);
+  h.ctx.requirementsForArea = h.requirementsForArea;
+  h.ctx.setExpandedDocument = () => {};
+  h.createOrRefreshPickingDocument();
+  assert.equal(h.ctx.state.documents[0].rows.length, 1);
+  assert.equal(h.ctx.state.documents[0].rows[0].toIssue, 18);
+  assert.equal(h.ctx.state.documents[0].rows[0].unit, 'szt.');
+});
+
+test('alias contributions within one detail do not multiply full-plan demand', () => {
+  const h = metalBoxScenario({ sameProduct: true });
+  const [row] = h.requirementsForArea('hala-2');
+  assert.deepEqual([row.demand, row.fullDemand, row.toIssue], [24, 24, 18]);
+  assert.equal(row.sources.length, 1);
+  assert.equal(row.sources[0].demand, 24);
+});
+
+test('confirmed legacy unit keys reduce new requirements exactly once', () => {
+  const h = metalBoxScenario();
+  const requirement = h.requirementsForArea('hala-2')[0];
+  h.ctx.state.documents = [{ id: 'old', areaId: 'hala-2', planDate: h.ctx.state.selectedPlanDate, status: 'issued', rows: [
+    { key: requirement.key.replace(/szt\.$/, 'szt'), toIssue: 6 }, { key: requirement.key, toIssue: 12 }
+  ] }];
+  const start = source.indexOf('const documentLedger =');
+  const end = source.indexOf('const demandByArea =', start);
+  const code = ts.transpileModule('(()=>{' + source.slice(start, end) + ';return documentLedger;})()',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  h.ctx.documentLedger = vm.runInContext(code, h.ctx);
+  const [row] = h.requirementsForArea('hala-2');
+  assert.equal(row.issued, 18);
+  assert.ok(row.toIssue === 0);
+});
+
+test('combined saved document toggles and warehouse changes cover every original member', () => {
+  const h = metalBoxScenario();
+  const base = { ...h.requirementsForArea('hala-2')[0], warehouseCode: 'M-4', issuedBefore: 0, pendingBefore: 0 };
+  h.ctx.state.documents = [{ id: 'doc', status: 'draft', rows: [
+    { ...base, key: 'metal|szt', unit: 'szt', confirmed: true, demand: 6, areaStock: 0, toIssue: 6 },
+    { ...base, key: 'metal|szt.', unit: 'szt.', confirmed: false, demand: 18, areaStock: 6, toIssue: 12 }
+  ] }];
+  h.togglePickingConfirmation('doc', 'metal|szt');
+  assert.ok(h.ctx.state.documents[0].rows.every(row => row.confirmed));
+  h.togglePickingConfirmation('doc', 'metal|szt');
+  assert.ok(h.ctx.state.documents[0].rows.every(row => !row.confirmed));
+  h.updatePickingDocumentWarehouse('doc', 'metal|szt', 'm-51');
+  assert.ok(h.ctx.state.documents[0].rows.every(row => row.warehouseCode === 'M-51'));
+  assert.deepEqual(Array.from(h.ctx.state.documents[0].rows, row => row.toIssue), [6, 12]);
+  assert.equal(h.ctx.state.documents[0].rows.length, 2, 'stored document history is not rewritten');
+});
+
+test('recalculating an old unit alias keeps its manually selected warehouse', () => {
+  const h = metalBoxScenario();
+  const row = h.requirementsForArea('hala-2')[0];
+  h.ctx.state.documents = [{ id: 'doc', areaId: 'hala-2', planDate: h.ctx.state.selectedPlanDate,
+    createdBy: 'Test', createdAt: '2026-08-31', status: 'draft', kind: 'base', rows: [
+      { ...row, key: row.key.replace(/szt\.$/, 'szt'), unit: 'szt', warehouseCode: 'M-51', confirmed: false }
+    ] }];
+  h.ctx.requirementsForArea = h.requirementsForArea;
+  h.ctx.setExpandedDocument = () => {};
+  h.createOrRefreshPickingDocument();
+  assert.equal(h.ctx.state.documents.length, 1);
+  assert.equal(h.ctx.state.documents[0].rows.length, 1);
+  assert.equal(h.ctx.state.documents[0].rows[0].warehouseCode, 'M-51');
+  assert.equal(h.ctx.state.documents[0].rows[0].toIssue, 18);
+});
+
+test('picking unit aliases do not reset existing return decisions or exclusions', () => {
+  const h = setup();
+  h.importSelectedSheet();
+  h.ctx.materialsForItem = () => [{ code: 'USED', name: 'Used material', unit: 'kg' }];
+  h.ctx.state.areas = [{ id: 'hala-2', name: 'Hala 2' }];
+  h.ctx.state.inventory = [{ code: 'METAL', name: 'Metal box', unit: 'szt', areaId: 'hala-2', qty: 6 }];
+  h.ctx.state.returnStatuses = { '2026-08-31|hala-2|metal|szt|return': 'completed' };
+  const [returned] = h.deriveReturnsForDate('2026-08-31');
+  assert.equal(returned.status, 'completed');
+  h.ctx.state.returnExclusions = h.normalizeReturnExclusions([{ areaId: 'hala-2', code: 'METAL', name: 'Metal box', unit: 'szt' }]);
+  assert.equal(h.ctx.state.returnExclusions[0].id, 'hala-2|metal|szt');
+  assert.equal(h.deriveReturnsForDate('2026-08-31').length, 0);
 });
 
 function mixedSourceScenario({ remaining = 30000, usage = 1, mode = 'mixed', buffer = 0 } = {}) {

@@ -1,0 +1,2 @@
+# Preserve exact SQL source bytes, including historical mixed line endings.
+*.sql -text

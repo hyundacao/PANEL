@@ -4,6 +4,7 @@ import { createRequire, Module } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { readSqlModule, readSqlSource } from '../../../scripts/sql-files.mjs';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -163,9 +164,7 @@ test('SQL archive and retention are transactional, guarded and idempotent', asyn
         id uuid primary key default gen_random_uuid(), snapshot_date date not null,
         name text, index_code text, real_qty numeric, available_qty numeric, unit text);
     `);
-    await db.exec(readFileSync(resolve(root, '../supabase/migrate_paint_tape_settlements.sql'), 'utf8'));
-    await db.exec(readFileSync(resolve(root, '../supabase/migrate_paint_tape_inventory.sql'), 'utf8'));
-    const migration = readFileSync(resolve(root, '../supabase/migrate_paint_tape_inventory_archive.sql'), 'utf8');
+    const migration = readSqlModule('05_farby_i_tasmy.sql');
     await db.exec(migration);
     await db.exec(migration);
     const dates = (await db.query(`select
@@ -307,10 +306,9 @@ test('SQL archive and retention are transactional, guarded and idempotent', asyn
   } finally { await db.close(); }
 });
 
-test('full setup embeds the same archive migration', () => {
-  const migration = readFileSync(resolve(root, '../supabase/migrate_paint_tape_inventory_archive.sql'), 'utf8');
-  const setup = readFileSync(resolve(root, '../supabase/setup_full.sql'), 'utf8');
-  const body = migration.trim().replace(/^begin;\s*/, '').replace(/notify pgrst, 'reload schema';\s*commit;$/, '').trim();
-  const embedded = setup.split('-- BEGIN PAINT TAPE INVENTORY ARCHIVE')[1].split('-- END PAINT TAPE INVENTORY ARCHIVE')[0].trim();
-  assert.equal(embedded.replaceAll('\r\n', '\n'), body.replaceAll('\r\n', '\n'));
+test('paint and tape module includes the archive migration', () => {
+  const migration = readSqlSource('migrate_paint_tape_inventory_archive.sql');
+  const moduleSql = readSqlModule('05_farby_i_tasmy.sql');
+  assert.ok(moduleSql.includes(migration));
+  assert.equal((moduleSql.match(/create or replace function public\.archive_paint_tape_inventory_session\(/gi) ?? []).length, 1);
 });

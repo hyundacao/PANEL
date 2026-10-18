@@ -44,6 +44,9 @@ import { Input as BaseInput } from '@/components/ui/Input';
 import { SelectField } from '@/components/ui/Select';
 import { WarningTriangle } from '@/components/ui/WarningTriangle';
 import { WarehouseCodeInput } from '@/components/planowanie-zapotrzebowania/WarehouseCodeInput';
+import { ZoneStockCell } from '@/components/planowanie-zapotrzebowania/ZoneStockCell';
+import { buildZoneStockSummary } from '@/lib/planowanie-zapotrzebowania/zoneStock';
+import { canonicalPlanningUnit, canonicalPlanningMaterialKey, groupPickingDocumentRows, mergePickingSources } from '@/lib/planowanie-zapotrzebowania/pickingDocumentRows';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { PlanningSaveNotice, PlanningSaveStatus } from '@/components/planowanie-zapotrzebowania/PlanningSaveStatus';
 import { usePlanningAutosave } from '@/lib/planowanie-zapotrzebowania/usePlanningAutosave';
@@ -569,6 +572,9 @@ const applyStationMappings = (plan: PlanItem[], mappings: StationMapping[]) => {
   return plan.map((item) => ({ ...item, areaId: areaByStation.get(stationKey(item.station)) ?? '' }));
 };
 const materialKey = (item: Pick<TechnologyMaterial, 'code' | 'name' | 'unit'>) =>
+  `${normalize(item.code || item.name)}|${canonicalPlanningUnit(item.unit)}`;
+// Return decisions already use these persisted keys; picking aliases must not reset them.
+const returnMaterialKey = (item: Pick<TechnologyMaterial, 'code' | 'name' | 'unit'>) =>
   `${normalize(item.code || item.name)}|${normalize(item.unit)}`;
 const normalizeReturnExclusions = (value: unknown): ReturnExclusion[] => {
   if (!Array.isArray(value)) return [];
@@ -581,7 +587,7 @@ const normalizeReturnExclusions = (value: unknown): ReturnExclusion[] => {
     const name = String(candidate.name ?? '').trim();
     const unit = String(candidate.unit ?? '').trim() || 'szt.';
     const storedMaterialKey = String(candidate.materialKey ?? '').trim();
-    const normalizedKey = storedMaterialKey || materialKey({ code, name, unit });
+    const normalizedKey = storedMaterialKey || returnMaterialKey({ code, name, unit });
     if (!areaId || !normalizedKey || (!code && !name)) return;
     const id = areaId + '|' + normalizedKey;
     byId.set(id, {
@@ -609,7 +615,7 @@ const materialMatches = (
     (normalize(material.code) && normalize(material.code) === normalize(stock.code)) ||
     (normalize(material.name) && normalize(material.name) === normalize(stock.name))
   );
-  return sameIdentity && normalize(material.unit) === normalize(stock.unit);
+  return sameIdentity && canonicalPlanningUnit(material.unit) === canonicalPlanningUnit(stock.unit);
 };
 const materialIdentityMatches = (
   material: Pick<TechnologyMaterial, 'code' | 'name'>,
@@ -2536,7 +2542,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       ))
       .forEach((document) => document.rows.forEach((row) => {
         if (document.status !== 'issued' && document.status !== 'handed' && !pickingRowWasWritten(document, row)) return;
-        const key = `${document.areaId}|${row.key}`;
+        const key = `${document.areaId}|${canonicalPlanningMaterialKey(row.key)}`;
         const current = documentLedger.get(key) ?? { issued: 0, pending: 0 };
         if (document.status === 'issued') current.issued += row.toIssue;
         else current.pending += row.toIssue;
@@ -2588,12 +2594,18 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   const requirementsForArea = (areaId: string) => {
     const aggregate = new Map<string, { material: TechnologyMaterial; demand: number; fullDemand: number; sources: PickingDocumentSource[] }>();
     state.plan.filter((item) => item.included && item.areaId === areaId && item.technologyId).forEach((item) => {
-      const fullDemands = new Map(materialDemandContributionsForItem(item, true).map(({ material, demand }) => [materialKey(material), demand]));
+      const fullDemands = new Map<string, number>();
+      materialDemandContributionsForItem(item, true).forEach(({ material, demand }) => {
+        const key = materialKey(material);
+        fullDemands.set(key, (fullDemands.get(key) ?? 0) + demand);
+      });
+      const addedFullDemandKeys = new Set<string>();
       materialDemandContributionsForItem(item).forEach(({ material, demand }) => {
         const key = materialKey(material);
         const row = aggregate.get(key) ?? { material, demand: 0, fullDemand: 0, sources: [] };
         row.demand += demand;
-        row.fullDemand += fullDemands.get(key) ?? 0;
+        if (!addedFullDemandKeys.has(key)) row.fullDemand += fullDemands.get(key) ?? 0;
+        addedFullDemandKeys.add(key);
         row.sources.push({ planItemId: item.id, index: item.index, name: item.name, demand });
         aggregate.set(key, row);
       });
@@ -2603,7 +2615,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       return {
         key, code: row.material.code, name: row.material.name, category: row.material.category, unit: row.material.unit,
         demand: row.demand, selectedDemand: row.demand, fullDemand: row.fullDemand, issued: supply.issued, pending: supply.pending,
-        sources: row.sources, areaStock: supply.areaStock, sharedStock: supply.sharedStock, toIssue: supply.toIssue,
+        sources: mergePickingSources(row.sources), areaStock: supply.areaStock, sharedStock: supply.sharedStock, toIssue: supply.toIssue,
         globalSharedDemand: supply.globalSharedDemand, globalSharedShortage: supply.globalSharedShortage
       };
     }).sort((a, b) => (CATEGORY_ORDER.get(a.category) ?? 99) - (CATEGORY_ORDER.get(b.category) ?? 99) || a.name.localeCompare(b.name, 'pl')) as Requirement[];
@@ -3014,7 +3026,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   useEffect(() => {
     if (
       !hydrated ||
-      !(['plan', 'dokument', 'zwroty'] as View[]).includes(view)
+      !(['plan', 'obliczenia', 'dokument', 'zwroty'] as View[]).includes(view)
     ) {
       return;
     }
@@ -4198,6 +4210,17 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     const fullAllocatedOutput = fullLinkedAllocationByProducer.get(item.id) ?? 0;
     const selectedSurplusQuantity = linkedSurplusQuantity(selectedQty, selectedAllocatedOutput);
     const fullSurplusQuantity = linkedSurplusQuantity(remaining, fullAllocatedOutput);
+    const zoneArea = state.areas.find((area) => area.id === item.areaId && !area.shared);
+    const zoneStockReady = Boolean(zoneArea && state.inventorySourceDate === state.selectedPlanDate);
+    const stockPlan = state.plan.filter((row) => row.included && !sharedAreaIds.has(row.areaId));
+    const incompleteStockPlan = stockPlan.filter((row) => !row.areaId || !technologyForItem(row) || planQuantityNeedsReview(row) || planNormNeedsReview(row));
+    const zoneDemandSources = stockPlan.map((row) => ({
+      id: row.id, index: row.index, name: row.name, station: row.station, areaId: row.areaId, areaName: areaName(row.areaId), included: row.included,
+      contributions: materialDemandContributionsForItem(row).map((contribution) => ({
+        ...contribution,
+        demand: planQuantityNeedsReview(row) || planNormNeedsReview(row) ? null : contribution.demand
+      }))
+    }));
 
     return <div className="space-y-4 px-5 py-4 md:px-6 md:py-5">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-borderStrong pb-3">
@@ -4316,8 +4339,8 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           <Button className="h-9 min-h-9 rounded-lg px-3 py-1.5 text-xs" variant="ghost" disabled={editorLocked} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, workingMaterials: null, manualOverride: false } : row) }))}><RefreshCw className="mr-2 h-3.5 w-3.5" />Przywróć wybraną</Button>
         </div> : null}
         {materials.length ? <div className="overflow-x-auto rounded-lg border border-borderStrong bg-[image:var(--table-frame-bg)]">
-          <table className="w-full min-w-[1394px] table-fixed text-xs">
-            <colgroup><col className="w-[220px]" /><col className="w-[420px]" /><col className="w-[145px]" /><col className="w-[150px]" /><col className="w-[105px]" /><col className="w-[110px]" /><col className="w-[105px]" /><col className="w-[95px]" /><col className="w-[44px]" /></colgroup>
+          <table className="w-full min-w-[1544px] table-fixed text-xs">
+            <colgroup><col className="w-[220px]" /><col className="w-[420px]" /><col className="w-[145px]" /><col className="w-[150px]" /><col className="w-[105px]" /><col className="w-[110px]" /><col className="w-[150px]" /><col className="w-[105px]" /><col className="w-[95px]" /><col className="w-[44px]" /></colgroup>
             <thead className="sticky top-0 z-10 bg-[image:var(--table-sticky-header-bg)] text-left text-[10px] uppercase text-dim">
               <tr>
                 <th className="border-r border-border px-2 py-1.5">Kod</th>
@@ -4326,6 +4349,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
                 <th className="border-r border-border px-2 py-1.5 text-right">Przelicznik / szt.</th>
                 <th className="border-r border-border px-2 py-1.5 text-right">Cały plan</th>
                 <th className="border-r border-border px-2 py-1.5 text-right">Wybrany zakres</th>
+                <th className="border-r border-border px-2 py-1.5 text-right">Stan strefy / silosów<span className="mt-0.5 block normal-case text-muted">{zoneArea?.name || 'Brak strefy'}</span></th>
                 <th className="border-r border-border px-2 py-1.5 text-right">Do wypisania</th>
                 <th className="border-r border-border px-2 py-1.5">J.m. wyniku</th>
                 <th><span className="sr-only">Akcje</span></th>
@@ -4338,6 +4362,11 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           const supply = materialSupply(key, material, item.areaId);
           const itemShare = supply.demand > 0 ? Math.min(1, demand / supply.demand) : 0;
           const toIssue = roundTechnologyMaterialQuantity(supply.toIssue * itemShare, material.unit, material.name);
+          const zoneStock = buildZoneStockSummary({
+            material, areaId: zoneArea?.id ?? '', currentItemId: item.id,
+            inventory: zoneStockReady ? state.inventory : [], sources: zoneDemandSources,
+            matchesMaterial: materialIdentityMatches, sharedAreaIds
+          });
           return <tr key={material.id} className="border-t border-border transition hover:bg-[var(--surface-faint)]">
             <td className="border-r border-border p-0"><Input className={cn(compactPlanMaterialInputClass, 'font-semibold text-title')} disabled={editorLocked} list="material-code-suggestions" value={material.code} aria-label="Kod materiału" onCatalogSelect={(catalogItem) => updateWorkingMaterial(item.id, material.id, catalogMaterialPatch(material, catalogItem))} onChange={(event) => updateWorkingMaterial(item.id, material.id, { code: event.target.value })} /></td>
             <td className="border-r border-border p-0"><Input className={cn(compactPlanMaterialInputClass, 'font-semibold')} disabled={editorLocked} list="material-name-suggestions" title={material.name} value={material.name} aria-label="Nazwa materiału" onCatalogSelect={(catalogItem) => updateWorkingMaterial(item.id, material.id, catalogMaterialPatch(material, catalogItem))} onChange={(event) => updateWorkingMaterial(item.id, material.id, { name: event.target.value })} /></td>
@@ -4345,6 +4374,13 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             <td className="border-r border-border p-0"><div className="flex h-9 items-center"><Input aria-label={`Przelicznik na sztukę (${technologyUsageInputUnit(material)})`} className={cn(compactPlanMaterialInputClass, 'text-right tabular-nums')} disabled={editorLocked} type="number" step="0.001" value={technologyUsageForEditor(material)} onChange={(event) => updateWorkingMaterial(item.id, material.id, { usage: technologyUsageFromEditor(material, Math.max(0, numberValue(event.target.value))) })} /><span className="pr-2 text-[10px] font-bold text-muted">{technologyUsageInputUnit(material)}</span></div></td>
             <td className="h-9 border-r border-border px-2 text-right font-semibold tabular-nums text-body">{quantityReview ? '—' : fmt(technologyResultQuantity(fullDemand, material.unit))}</td>
             <td className="h-9 border-r border-border px-2 text-right font-bold tabular-nums text-title">{quantityReview ? '—' : fmt(technologyResultQuantity(demand, material.unit))}</td>
+            <td className="border-r border-border p-0"><ZoneStockCell
+              areaName={zoneArea?.name ?? ''} materialName={material.name} summary={zoneStock}
+              stockReady={zoneStockReady} sourceDate={state.inventorySourceDate ? formatPlanDate(state.inventorySourceDate) : ''}
+              currentDemand={quantityReview || normReview ? null : demand} included={item.included}
+              incompletePlan={incompleteStockPlan.some((row) => zoneStock.sharedStock !== null || zoneStock.incompatibleSharedStock || row.areaId === item.areaId)}
+              formatQuantity={(value) => `${fmt(technologyResultQuantity(value, material.unit))} ${technologyResultUnit(material.unit)}`}
+            /></td>
             <td className="h-9 border-r border-border px-2 text-right font-black tabular-nums text-warning">{quantityReview ? '—' : fmt(technologyResultQuantity(toIssue, material.unit))}</td>
             <td className="border-r border-border p-0"><Input className={cn(compactPlanMaterialInputClass, 'font-semibold')} aria-label="Jednostka wyniku" disabled={editorLocked} value={technologyResultUnit(material.unit)} onChange={(event) => updateWorkingMaterial(item.id, material.id, technologyMaterialWithUnit(material, event.target.value))} /></td>
             <td className="p-0 text-center"><Button title="Usuń materiał z technologii roboczej" aria-label="Usuń materiał z technologii roboczej" variant="ghost" className="h-9 min-h-9 w-9 rounded-none border-0 px-0 py-0 text-danger ring-0" disabled={editorLocked} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, manualOverride: true, workingMaterials: materials.filter((entry) => entry.id !== material.id) } : row) }))}><Trash2 className="h-3.5 w-3.5" /></Button></td>
@@ -4541,7 +4577,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         name: row.name,
         warehouseCode: inferPickingWarehouseCode(row.code),
         category: row.category,
-        unit: row.unit,
+        unit: canonicalPlanningUnit(row.unit),
         demand: row.demand,
         areaStock: row.areaStock,
         issuedBefore: row.issued,
@@ -4592,7 +4628,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         ? `${baseScopeLabel} · +20% dla kontynuowanych`
         : baseScopeLabel;
       if (editable) {
-        const previousRows = new Map(editable.rows.map((row) => [row.key, row]));
+        const previousRows = new Map(editable.rows.map((row) => [canonicalPlanningMaterialKey(row.key), row]));
         return {
           ...current,
           documents: current.documents.map((document) => document.id === editable.id ? {
@@ -4689,10 +4725,12 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     if (!document || document.status !== 'draft') return;
     updateState((current) => ({
       ...current,
-      documents: current.documents.map((item) => item.id === documentId ? {
-        ...item,
-        rows: item.rows.map((row) => row.key === rowKey ? { ...row, confirmed: !row.confirmed } : row)
-      } : item)
+      documents: current.documents.map((item) => {
+        if (item.id !== documentId || item.status !== 'draft') return item;
+        const group = groupPickingDocumentRows(item.rows, materialKey, pickingWarehouseCode).find((row) => row.memberKeys.includes(rowKey));
+        if (!group) return item;
+        return { ...item, rows: item.rows.map((row) => group.memberKeys.includes(row.key) ? { ...row, confirmed: !group.confirmed } : row) };
+      })
     }));
   };
 
@@ -4700,16 +4738,13 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     if (readOnly) return;
     updateState((current) => ({
       ...current,
-      documents: current.documents.map((document) => (
-        document.id === documentId
-          ? {
-              ...document,
-              rows: document.rows.map((row) => row.key === rowKey
-                ? { ...row, warehouseCode: warehouseCode.replace(/\s+/g, '').trim().toUpperCase() }
-                : row)
-            }
-          : document
-      ))
+      documents: current.documents.map((document) => {
+        if (document.id !== documentId) return document;
+        const group = groupPickingDocumentRows(document.rows, materialKey, pickingWarehouseCode).find((row) => row.memberKeys.includes(rowKey));
+        if (!group) return document;
+        return { ...document, rows: document.rows.map((row) => group.memberKeys.includes(row.key)
+          ? { ...row, warehouseCode: warehouseCode.replace(/\s+/g, '').trim().toUpperCase() } : row) };
+      })
     }));
   };
 
@@ -4737,7 +4772,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       'Dokument', 'Status', 'Typ', 'Data planu', 'Wersja planu', 'Strefa', 'Magazyn', 'Zakres', 'Materiał', 'Kod',
       'Zapotrzebowanie', 'Stan rzeczywisty MAG 40', 'Wydano wcześniej', 'Oczekuje', 'Ilość do wypisania', 'J.m.', 'Źródła'
     ]];
-    visibleRows.forEach((row) => rows.push([
+    groupPickingDocumentRows(visibleRows, materialKey, pickingWarehouseCode).forEach((row) => rows.push([
       pickingDocument.documentNo,
       documentStatusLabel[pickingDocument.status],
       pickingDocument.kind === 'base' ? 'Podstawowy' : 'Korekta',
@@ -4813,7 +4848,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     state.inventory.forEach((inventoryItem) => {
       if (inventoryItem.qty <= 0.000001) return;
       if (state.areas.find((area) => area.id === inventoryItem.areaId)?.shared) return;
-      const key = `${inventoryItem.areaId}|${materialKey(inventoryItem)}`;
+      const key = `${inventoryItem.areaId}|${returnMaterialKey(inventoryItem)}`;
       const current = inventoriedByMaterial.get(key);
       const protectedQty = Math.min(inventoryItem.qty, Math.max(0, numberValue(inventoryItem.protectedQty)));
       if (current) {
@@ -4873,7 +4908,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         rows.push({
           id,
           planDate,
-          materialKey: materialKey(inventoryItem),
+          materialKey: returnMaterialKey(inventoryItem),
           code: inventoryItem.code,
           name: inventoryItem.name,
           category: inventoryItem.category ?? 'Pozostałe',
@@ -4899,7 +4934,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       rows.push({
         id,
         planDate,
-        materialKey: materialKey(inventoryItem),
+        materialKey: returnMaterialKey(inventoryItem),
         code: inventoryItem.code,
         name: inventoryItem.name,
         category: inventoryItem.category ?? 'Pozostałe',
@@ -4969,18 +5004,19 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       {documents.length ? documents.map((document) => {
         const expanded = expandedDocument === document.id;
         const locked = document.status === 'handed' || document.status === 'issued';
-        const confirmedRows = document.rows.filter((row) => row.confirmed).length;
-        const allRowsConfirmed = document.rows.length > 0 && confirmedRows === document.rows.length;
+        const documentRows = groupPickingDocumentRows(document.rows, materialKey, pickingWarehouseCode);
+        const confirmedRows = documentRows.filter((row) => row.confirmed).length;
+        const allRowsConfirmed = documentRows.length > 0 && confirmedRows === documentRows.length;
         const warehouseOptions = [...new Set([
           ...PICKING_WAREHOUSE_OPTIONS,
-          ...document.rows.map(pickingWarehouseCode).filter(Boolean)
+          ...documentRows.map(pickingWarehouseCode).filter(Boolean)
         ])].sort((left, right) => left.localeCompare(right, 'pl', { numeric: true }));
         const activeWarehouseFilter = documentWarehouseFilter === 'all'
           || documentWarehouseFilter === 'unassigned'
           || warehouseOptions.includes(documentWarehouseFilter)
           ? documentWarehouseFilter
           : 'all';
-        const visibleRows = sortPickingDocumentRows(document.rows.filter((row) => {
+        const visibleRows = sortPickingDocumentRows(documentRows.filter((row) => {
           const warehouseCode = pickingWarehouseCode(row);
           if (activeWarehouseFilter === 'all') return true;
           if (activeWarehouseFilter === 'unassigned') return !warehouseCode;
@@ -4991,7 +5027,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           counts.set(warehouseCode, (counts.get(warehouseCode) ?? 0) + 1);
           return counts;
         }, new Map<string, number>());
-        const unassignedRows = document.rows.filter((row) => !pickingWarehouseCode(row)).length;
+        const unassignedRows = documentRows.filter((row) => !pickingWarehouseCode(row)).length;
         return <Card key={document.id} className="overflow-hidden p-0">
           <div className="flex flex-col gap-3 border-b border-border px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
             <button type="button" className="flex min-w-0 items-center gap-3 text-left" onClick={() => setExpandedDocument(expanded ? '' : document.id)}>
@@ -5001,7 +5037,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone={document.kind === 'correction' ? 'warning' : 'info'}>{document.kind === 'correction' ? 'Korekta' : 'Podstawowy'}</Badge>
               <Badge tone={documentTone(document.status)}>{documentStatusLabel[document.status]}</Badge>
-              <Badge tone={allRowsConfirmed ? 'success' : 'warning'}>{allRowsConfirmed ? `Wszystko wypisane · ${confirmedRows}/${document.rows.length}` : `Wypisano ${confirmedRows}/${document.rows.length}`}</Badge>
+              <Badge tone={allRowsConfirmed ? 'success' : 'warning'}>{allRowsConfirmed ? `Wszystko wypisane · ${confirmedRows}/${documentRows.length}` : `Wypisano ${confirmedRows}/${documentRows.length}`}</Badge>
               {!readOnly && (document.status === 'draft' || document.status === 'outdated') ? <Button variant="outline" onClick={createOrRefreshPickingDocument}><RefreshCw className="mr-2 h-4 w-4" />Przelicz</Button> : null}
               {!readOnly && (document.status === 'draft' || document.status === 'handed') ? <Button variant="secondary" disabled={!allRowsConfirmed} title={!allRowsConfirmed ? 'Najpierw oznacz wszystkie pozycje jako wypisane' : undefined} onClick={() => changePickingDocumentStatus(document.id, 'issued')}><Check className="mr-2 h-4 w-4" />Oznacz jako wydany</Button> : null}
               {!readOnly && locked ? <Button variant="outline" onClick={() => changePickingDocumentStatus(document.id, 'draft')}><Undo2 className="mr-2 h-4 w-4" />Cofnij do edycji</Button> : null}
@@ -5012,7 +5048,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           {expanded ? <div>
             <div className="flex flex-col gap-3 border-b border-border bg-[var(--surface-faint)] px-4 py-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <p className="text-sm font-bold text-title">Pozycje do wypisania: {visibleRows.length}/{document.rows.length}</p>
+                <p className="text-sm font-bold text-title">Pozycje do wypisania: {visibleRows.length}/{documentRows.length}</p>
                 <p className={cn('mt-1 text-xs', unassignedRows ? 'text-warning' : 'text-muted')}>{unassignedRows ? `Bez przypisanego magazynu: ${unassignedRows}` : 'Wszystkie pozycje mają przypisany magazyn'}</p>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
@@ -5160,7 +5196,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
 
       <section className="space-y-3"><SectionTitle title="Ręczne korekty ilości" subtitle={`${corrections.length} operacji`} />{corrections.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[920px] text-sm"><thead className="bg-[var(--surface-soft)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data planu</th><th className="p-3">Pozycja</th><th className="p-3 text-right">Poprzednio</th><th className="p-3 text-right">Nowa ilość</th><th className="p-3 text-right">Różnica</th><th className="p-3">Użytkownik / czas</th><th className="p-3">Status</th></tr></thead><tbody>{corrections.map((correction) => <tr key={correction.id} className="border-t border-border"><td className="p-3">{formatPlanDate(correction.planDate)}</td><td className="p-3"><p className="font-bold text-title">{correction.index}</p><p className="catalog-label text-xs font-semibold">{correction.name}</p></td><td className="p-3 text-right">{fmt(correction.previousValue)}</td><td className="p-3 text-right">{fmt(correction.newValue)}</td><td className={cn('p-3 text-right font-black', correction.difference > 0 ? 'text-success' : 'text-warning')}>{correction.difference > 0 ? '+' : ''}{fmt(correction.difference)}</td><td className="p-3"><p>{correction.createdBy}</p><p className="text-xs text-muted">{correction.createdAt}</p></td><td className="p-3"><Badge tone={correction.revertedAt ? 'default' : 'info'}>{correction.revertedAt ? 'Cofnięta' : correction.source}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak ręcznych korekt" description="Zmiana dokładna, + lub - przy pozycji planu pojawi się tutaj." />}</section>
 
-      <section className="space-y-3"><SectionTitle title="Dokumenty i wydania" subtitle={`${documents.length} dokumentów`} />{documents.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-[var(--surface-soft)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Dokument</th><th className="p-3">Data / strefa</th><th className="p-3">Wersja i zakres</th><th className="p-3">Utworzył</th><th className="p-3">Typ</th><th className="p-3">Status</th><th className="p-3 text-right">Pozycje</th></tr></thead><tbody>{documents.map((document) => <tr key={document.id} className="border-t border-border"><td className="p-3 font-black text-title">{document.documentNo}</td><td className="p-3"><p>{formatPlanDate(document.planDate)}</p><p className="text-xs text-muted">{areaName(document.areaId)}</p></td><td className="p-3"><p>Wersja {document.planVersionNo || '—'}</p><p className="text-xs text-muted">{document.scopeLabel}</p></td><td className="p-3"><p>{document.createdBy}</p><p className="text-xs text-muted">{document.createdAt}</p></td><td className="p-3"><Badge tone={document.kind === 'correction' ? 'warning' : 'info'}>{document.kind === 'correction' ? 'Korekta' : 'Podstawowy'}</Badge></td><td className="p-3"><Badge tone={documentTone(document.status)}>{documentStatusLabel[document.status]}</Badge></td><td className="p-3 text-right">{document.rows.length}</td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak dokumentów" description="Dokumenty podstawowe i korekty pojawią się po ich utworzeniu." />}</section>
+      <section className="space-y-3"><SectionTitle title="Dokumenty i wydania" subtitle={`${documents.length} dokumentów`} />{documents.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-[var(--surface-soft)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Dokument</th><th className="p-3">Data / strefa</th><th className="p-3">Wersja i zakres</th><th className="p-3">Utworzył</th><th className="p-3">Typ</th><th className="p-3">Status</th><th className="p-3 text-right">Pozycje</th></tr></thead><tbody>{documents.map((document) => <tr key={document.id} className="border-t border-border"><td className="p-3 font-black text-title">{document.documentNo}</td><td className="p-3"><p>{formatPlanDate(document.planDate)}</p><p className="text-xs text-muted">{areaName(document.areaId)}</p></td><td className="p-3"><p>Wersja {document.planVersionNo || '—'}</p><p className="text-xs text-muted">{document.scopeLabel}</p></td><td className="p-3"><p>{document.createdBy}</p><p className="text-xs text-muted">{document.createdAt}</p></td><td className="p-3"><Badge tone={document.kind === 'correction' ? 'warning' : 'info'}>{document.kind === 'correction' ? 'Korekta' : 'Podstawowy'}</Badge></td><td className="p-3"><Badge tone={documentTone(document.status)}>{documentStatusLabel[document.status]}</Badge></td><td className="p-3 text-right">{groupPickingDocumentRows(document.rows, materialKey, pickingWarehouseCode).length}</td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak dokumentów" description="Dokumenty podstawowe i korekty pojawią się po ich utworzeniu." />}</section>
 
       <section className="space-y-3"><SectionTitle title="Przesunięcia i zwroty" subtitle={`${returnRows.length} wykrytych pozycji dla aktualnego spisu`} />{returnRows.length ? <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[920px] text-sm"><thead className="bg-[var(--surface-soft)] text-left text-xs uppercase text-dim"><tr><th className="p-3">Data planu</th><th className="p-3">Materiał</th><th className="p-3">Z hali</th><th className="p-3">Kierunek</th><th className="p-3">Przyczyna</th><th className="p-3 text-right">Ilość</th><th className="p-3">Status</th></tr></thead><tbody>{returnRows.map((row) => <tr key={row.id} className="border-t border-border"><td className="p-3">{formatPlanDate(row.planDate)}</td><td className="p-3"><p className="font-bold text-title">{row.code || '—'}</p><p className="catalog-label text-xs font-semibold">{row.name}</p></td><td className="p-3">{areaName(row.areaId)}</td><td className="p-3"><Badge tone={row.action === 'transfer' ? 'info' : 'default'}>{row.action === 'transfer' && row.destinationAreaId ? areaName(row.destinationAreaId) : 'Magazyn'}</Badge></td><td className="p-3">{row.reason}</td><td className="p-3 text-right font-black text-warning">{fmt(row.surplus)} {row.unit}</td><td className="p-3"><Badge tone={row.status === 'completed' ? 'success' : 'warning'}>{row.status === 'completed' ? 'Wykonany' : 'Otwarty'}</Badge></td></tr>)}</tbody></table></div></Card> : <EmptyState title="Brak przesunięć i zwrotów" description="Materiały są porównywane z aktywnym planem i stanami wszystkich stref." />}</section>
 

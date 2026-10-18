@@ -58,8 +58,10 @@ Zasada:
 - operacje magazynowe.
 
 ### 2.5 Schemat i migracje DB
-- Pelny setup: `supabase/setup_full.sql`
-- Migracje punktowe: `supabase/migrate_catalogs.sql`, `supabase/migrate_raport_zmianowy.sql`
+- Jeden katalog SQL, dziewiec plikow modulow: `supabase/CZYTAJ_NAJPIERW.md`.
+- Kazdy plik uruchamia sie w calosci, w kolejnosci 01-09; istniejace obiekty sa zachowywane. Modul 05 dodatkowo instaluje uzgodniona archiwizacje ERP.
+- Testy `sqlModules.test.mjs` sprawdzaja zgodnosc kolumn ze schematem API, zachowanie danych, funkcji, RLS i powtorne uruchomienie.
+- Dawne pliki i pelne instalacje: jedna kopia bezpieczenstwa `docs/archiwum-sql-przed-porzadkowaniem.zip`.
 
 Najwazniejsze tabele:
 - `warehouses`, `locations`, `materials`, `material_catalogs`,

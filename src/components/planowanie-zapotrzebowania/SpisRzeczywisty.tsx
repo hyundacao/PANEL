@@ -4242,7 +4242,7 @@ export default function SpisRzeczywisty() {
             </p>
             {erpSnapshotMigrationRequired && (
               <p className="text-xs text-danger">
-                Brakuje migracji bazy dla stanow ERP. Uruchom SQL z `supabase/setup_full.sql`.
+                Brakuje migracji bazy dla stanow ERP. Uruchom plik `supabase/04_spis_rzeczywisty_i_stany_erp.sql`.
               </p>
             )}
             {readOnly && (
@@ -4538,7 +4538,7 @@ export default function SpisRzeczywisty() {
               <p className="text-sm text-dim">Wczytywanie rezerwacji mielenia...</p>
             ) : reportErpSnapshotMigrationRequired ? (
               <p className="text-sm text-dim">
-                Brakuje migracji bazy dla stanów ERP. Uruchom SQL z `supabase/setup_full.sql`.
+                Brakuje migracji bazy dla stanów ERP. Uruchom plik `supabase/04_spis_rzeczywisty_i_stany_erp.sql`.
               </p>
             ) : reportRows.length === 0 ? (
               <p className="text-sm text-dim">Brak wpisów dla wybranego dnia.</p>
@@ -4757,7 +4757,7 @@ export default function SpisRzeczywisty() {
               <p className="text-sm text-dim">Wczytywanie rezerwacji mielenia...</p>
             ) : reportErpSnapshotMigrationRequired ? (
               <p className="text-sm text-dim">
-                Brakuje migracji bazy dla stanów ERP. Uruchom SQL z `supabase/setup_full.sql`.
+                Brakuje migracji bazy dla stanów ERP. Uruchom plik `supabase/04_spis_rzeczywisty_i_stany_erp.sql`.
               </p>
             ) : dailyComparison.length === 0 ? (
               <p className="text-sm text-dim">Brak danych ERP i spisu dla wybranego dnia.</p>
@@ -4910,7 +4910,7 @@ export default function SpisRzeczywisty() {
               )}
             </Card>
           ) : erpSnapshotMigrationRequired ? (
-            <Card><p className="text-sm text-danger">Brakuje migracji bazy dla stanów ERP. Uruchom SQL z `supabase/setup_full.sql`.</p></Card>
+            <Card><p className="text-sm text-danger">Brakuje migracji bazy dla stanów ERP. Uruchom plik `supabase/04_spis_rzeczywisty_i_stany_erp.sql`.</p></Card>
           ) : isErpSnapshotError || isGrindTasksError ? (
             <Card><p className="text-sm text-danger">Nie udało się pobrać stanów ERP lub rezerwacji mielenia. Spróbuj ponownie za chwilę.</p></Card>
           ) : isErpSnapshotLoading || isLoading || isGrindTasksLoading ? (

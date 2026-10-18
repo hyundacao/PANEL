@@ -40,6 +40,9 @@ const names = [
   'emptyTechnologyDraft', 'selectedTechnologyForEditor', 'cloneTechnologyForEditor', 'sameTechnologyEditorValue'
 ];
 names.push('canonicalProductIndex', 'linkedProductKey');
+names.push('returnMaterialKey');
+names.push('materialIdentityMatches');
+names.push('sharedAreaIds');
 names.push('planNormNeedsReview', 'normIssuePlanItemIds', 'missingNormActiveCount', 'calculationBlockedCount', 'calculationBlockLabel', 'calculationBlockTitle');
 const definitions = new Map();
 const visit = (node) => {
@@ -85,6 +88,9 @@ export const createHeaderFixture = (overrides = {}) => {
     ...load('@/components/ui/EmptyState'), ...load('@/components/ui/Select'),
     ...load('@/components/planowanie-zapotrzebowania/PlanningSaveStatus'),
     ...load('@/components/planowanie-zapotrzebowania/PlanQuantity'),
+    ...load('@/components/planowanie-zapotrzebowania/ZoneStockCell'),
+    ...load('@/lib/planowanie-zapotrzebowania/zoneStock'),
+    ...load('@/lib/planowanie-zapotrzebowania/pickingDocumentRows'),
     ...load('@/lib/planowanie-zapotrzebowania/planImport'), ...load('@/lib/utils/cn'),
     BaseInput: load('@/components/ui/Input').Input, Input: load('@/components/ui/Input').Input,
     today: '2026-08-31', currentUserName: 'Test', nowLabel: () => '08.09.2026, 12:00', dateOffsetKey: () => '2026-09-01',
@@ -100,6 +106,7 @@ export const createHeaderFixture = (overrides = {}) => {
     pending: null, sheetName: '', lastPlanWorkbook: null, planUploadModeRef: { current: 'plan' }, importSelectedSheet: () => {},
     renderPendingImport: () => null, technologiesFor: () => [], technologyForItem: () => undefined,
     materialsForItem: () => [], itemProductionQty: () => 0,
+    materialDemandContributionsForItem: () => [],
     selectedLinkedAllocationByProducer: new Map(), fullLinkedAllocationByProducer: new Map(),
     linkedProducerCandidates: () => [], linkedProducerFor: () => undefined, updateLinkedSourceSelection: () => {},
     resetCalculationEditorChanges: () => {}, saveCalculationEditorChanges: async () => {}, flash: () => {}, syncOriginalInventory: async () => {},

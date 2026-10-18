@@ -802,7 +802,7 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
         <Card className="border-[rgba(230,70,70,0.45)] bg-[rgba(120,20,20,0.12)]">
           <p className="font-black text-danger">Spis wymaga utworzenia tabel w Supabase.</p>
           <p className="mt-2 text-sm text-body">
-            Uruchom plik <span className="font-mono">supabase/migrate_paint_tape_inventory.sql</span> w SQL Editor.
+            W SQL Editor uruchom plik <span className="font-mono">supabase/05_farby_i_tasmy.sql</span>.
           </p>
         </Card>
       ) : view === 'HISTORY' ? (

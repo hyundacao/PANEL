@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFile } from 'node:fs/promises';
+import { readSqlModule, readSqlSource } from '../../../scripts/sql-files.mjs';
 import { pathToFileURL } from 'node:url';
 import { expandTransferStatsRows, isActiveTransferForStats } from './transferCancellation.ts';
 import { formatDate } from './format.ts';
@@ -11,6 +11,9 @@ const transfer = (kind, overrides = {}) => ({
   to_location_id: kind === 'EXTERNAL_OUT' ? null : 'b',
   ...overrides
 });
+
+const cancellationSql = () => ['apply_regrind_transfer_delta', 'create_regrind_transfer', 'cancel_regrind_transfer']
+  .map((name) => readSqlSource(`funkcja/${name}`)).join('\n');
 
 for (const kind of ['INTERNAL', 'EXTERNAL_IN', 'EXTERNAL_OUT']) {
   test(`${kind}: cancellation neutralizes stock deltas without adding new production`, () => {
@@ -46,13 +49,11 @@ test('active transfers remain unchanged', () => {
   assert.equal(isActiveTransferForStats(original), true);
 });
 
-const migrationUrl = new URL('../../../supabase/migrate_regrind_transfer_cancellation.sql', import.meta.url);
-test('full setup includes the same cancellation schema and functions', async () => {
-  const migration = await readFile(migrationUrl, 'utf8');
-  const setup = await readFile(new URL('../../../supabase/setup_full.sql', import.meta.url), 'utf8');
-  const body = migration.replace(/^begin;\s*/, '').replace(/notify pgrst, 'reload schema';\s*commit;\s*$/, '').trim();
-  const embedded = setup.split('-- BEGIN REGRIND TRANSFER CANCELLATION')[1].split('-- END REGRIND TRANSFER CANCELLATION')[0].trim();
-  assert.equal(embedded.replaceAll('\r\n', '\n'), body.replaceAll('\r\n', '\n'));
+test('warehouse module includes the cancellation schema and functions', () => {
+  const migration = cancellationSql();
+  const moduleSql = readSqlModule('02_magazyn_przemialow.sql');
+  assert.ok(moduleSql.includes(readSqlSource('funkcja/cancel_regrind_transfer')));
+  assert.equal((moduleSql.match(/create or replace function public\.cancel_regrind_transfer\(/gi) ?? []).length, 1);
   assert.equal(/original_inventory|daily_entry_measurements/i.test(migration), false);
 });
 
@@ -64,7 +65,7 @@ test('SQL cancellation transaction', async (t) => {
   const db = new PGlite();
   try {
     await db.exec(`
-      create role service_role;
+      create role service_role; create role anon; create role authenticated;
       create table materials (id text primary key);
       create table locations (id text primary key, warehouse_id text, is_active boolean default true);
       create table daily_entries (date_key date, location_id text, material_id text, qty numeric not null,
@@ -73,11 +74,12 @@ test('SQL cancellation transaction', async (t) => {
       create table daily_location_status (date_key date, location_id text, primary key(date_key, location_id));
       create table transfers (id uuid primary key default gen_random_uuid(), at timestamptz not null default now(),
         kind text not null, material_id text not null, qty numeric not null,
-        from_location_id text, to_location_id text, partner text, note text);
+        from_location_id text, to_location_id text, partner text, note text,
+        cancelled_at timestamptz, cancelled_by text);
       insert into materials values ('pp');
       insert into locations values ('a', 'hall-1', true), ('b', 'hall-2', true);
     `);
-    const migration = await readFile(migrationUrl, 'utf8');
+    const migration = cancellationSql();
     await db.exec(migration);
     await db.exec(migration);
 

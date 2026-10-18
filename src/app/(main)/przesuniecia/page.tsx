@@ -269,7 +269,7 @@ export default function TransfersPage() {
         TRANSFER_NOT_FOUND: 'Nie znaleziono przesunięcia. Odśwież historię.',
         MISSING_LOCATION: 'Brakuje magazynu powiązanego z tym przesunięciem. Nie zmieniono stanów.',
         FORBIDDEN: 'Nie masz uprawnień do cofania przesunięć.',
-        MIGRATION_REQUIRED_TRANSFER_CANCELLATION: 'Najpierw uruchom migrację migrate_regrind_transfer_cancellation.sql w bazie danych.'
+        MIGRATION_REQUIRED_TRANSFER_CANCELLATION: 'Najpierw uruchom plik supabase/02_magazyn_przemialow.sql w bazie danych.'
       };
       toast({ title: 'Nie cofnięto przesunięcia.', description: messages[error.message] ?? 'Spróbuj ponownie lub odśwież historię.', tone: 'error' });
     }

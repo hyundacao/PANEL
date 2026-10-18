@@ -712,7 +712,7 @@ export default function PaintTapeSettlementsPage() {
         title: 'Nie udało się zaimportować norm technologicznych',
         description:
           error.message === 'MIGRATION_REQUIRED_PAINT_TAPE_TECHNOLOGY_USAGES'
-            ? 'Uruchom migrację supabase/migrate_paint_tape_settlements.sql.'
+            ? 'Uruchom plik supabase/05_farby_i_tasmy.sql.'
             : 'Sprawdź nagłówki i wartości w pliku.',
         tone: 'error'
       });
@@ -765,7 +765,7 @@ export default function PaintTapeSettlementsPage() {
         title: 'Nie udało się dodać rozliczenia',
         description:
           error.message === 'MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENTS'
-            ? 'Uruchom migrację supabase/migrate_paint_tape_settlements.sql.'
+            ? 'Uruchom plik supabase/05_farby_i_tasmy.sql.'
             : 'Sprawdź wymagane pola.',
         tone: 'error'
       });
@@ -791,7 +791,7 @@ export default function PaintTapeSettlementsPage() {
         title: 'Nie udało się zapisać zlecenia',
         description:
           error.message === 'MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENT_ACCOUNTING'
-            ? 'Uruchom migrację supabase/migrate_paint_tape_settlements.sql.'
+            ? 'Uruchom plik supabase/05_farby_i_tasmy.sql.'
             : undefined,
         tone: 'error'
       });
