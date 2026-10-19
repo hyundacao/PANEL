@@ -45,6 +45,8 @@ import { SelectField } from '@/components/ui/Select';
 import { WarningTriangle } from '@/components/ui/WarningTriangle';
 import { WarehouseCodeInput } from '@/components/planowanie-zapotrzebowania/WarehouseCodeInput';
 import { ZoneStockCell } from '@/components/planowanie-zapotrzebowania/ZoneStockCell';
+import { IssueQuantityField } from '@/components/planowanie-zapotrzebowania/IssueQuantityField';
+import { allocateIssueQuantities, committedIssueQuantity, normalizeManualIssueQuantities, remainingManualIssueQuantity, type ManualIssueQuantities } from '@/lib/planowanie-zapotrzebowania/manualIssueQuantities';
 import { buildZoneStockSummary } from '@/lib/planowanie-zapotrzebowania/zoneStock';
 import { canonicalPlanningUnit, canonicalPlanningMaterialKey, groupPickingDocumentRows, mergePickingSources } from '@/lib/planowanie-zapotrzebowania/pickingDocumentRows';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
@@ -208,6 +210,7 @@ type PlanItem = PlanSourceFields & {
   scopeQuantity?: number;
   productionGroupId?: string;
   linkedSources?: Record<string, LinkedSourceSelection>;
+  issueQuantityOverrides?: ManualIssueQuantities;
 };
 
 
@@ -249,6 +252,7 @@ type PickingDocumentSource = {
   index: string;
   name: string;
   demand: number;
+  toIssue?: number;
 };
 
 type PickingDocumentRow = {
@@ -789,6 +793,7 @@ const formatPlanDate = (value: string) => value
   : 'Brak daty';
 const clonePlanItems = (items: PlanItem[]) => items.map((item) => ({
   ...item,
+  ...(item.issueQuantityOverrides ? { issueQuantityOverrides: normalizeManualIssueQuantities(item.issueQuantityOverrides) } : {}),
   workingMaterials: item.workingMaterials ? item.workingMaterials.map((material) => ({ ...material })) : null,
   linkedSources: normalizeLinkedSources(item.linkedSources)
 }));
@@ -1247,6 +1252,7 @@ const parseStoredState = (value: unknown): AppState | null => {
       scopeMode: item.scopeMode ?? 'global',
       scopeShifts: Math.max(0.5, numberValue(item.scopeShifts) || 3.5),
       scopeQuantity: Math.max(0, numberValue(item.scopeQuantity)),
+      ...(item.issueQuantityOverrides ? { issueQuantityOverrides: normalizeManualIssueQuantities(item.issueQuantityOverrides) } : {}),
       linkedSources: normalizeLinkedSources(item.linkedSources)
     };
   };
@@ -1274,6 +1280,7 @@ const parseStoredState = (value: unknown): AppState | null => {
       workingMaterials: null,
       packagingMode: 'base',
       linkedSources: {},
+      issueQuantityOverrides: undefined,
       manualOverride: false
     }, preserveLibrarySnapshots));
   }), stationMappings);
@@ -2591,6 +2598,13 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     return { ...selected, sharedStock, globalSharedDemand, globalSharedShortage, toIssue };
   };
 
+  const manualIssueForItem = (item: PlanItem, key: string) => {
+    const override = item.issueQuantityOverrides?.[key];
+    if (!override || override.planDate !== state.selectedPlanDate || override.areaId !== item.areaId) return null;
+    return remainingManualIssueQuantity(override, state.selectedPlanDate, item.areaId,
+      committedIssueQuantity(state.documents, state.selectedPlanDate, item.areaId, key, item.id, canonicalPlanningMaterialKey));
+  };
+
   const requirementsForArea = (areaId: string) => {
     const aggregate = new Map<string, { material: TechnologyMaterial; demand: number; fullDemand: number; sources: PickingDocumentSource[] }>();
     state.plan.filter((item) => item.included && item.areaId === areaId && item.technologyId).forEach((item) => {
@@ -2612,10 +2626,14 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     });
     return [...aggregate.entries()].map(([key, row]) => {
       const supply = materialSupply(key, row.material, areaId);
+      const issue = allocateIssueQuantities(mergePickingSources(row.sources), supply.toIssue, (source) => {
+        const item = state.plan.find((item) => item.id === source.planItemId);
+        return item ? manualIssueForItem(item, key) : null;
+      }, (quantity) => roundTechnologyMaterialQuantity(quantity, row.material.unit, row.material.name));
       return {
         key, code: row.material.code, name: row.material.name, category: row.material.category, unit: row.material.unit,
         demand: row.demand, selectedDemand: row.demand, fullDemand: row.fullDemand, issued: supply.issued, pending: supply.pending,
-        sources: mergePickingSources(row.sources), areaStock: supply.areaStock, sharedStock: supply.sharedStock, toIssue: supply.toIssue,
+        sources: issue.sources, areaStock: supply.areaStock, sharedStock: supply.sharedStock, toIssue: issue.toIssue,
         globalSharedDemand: supply.globalSharedDemand, globalSharedShortage: supply.globalSharedShortage
       };
     }).sort((a, b) => (CATEGORY_ORDER.get(a.category) ?? 99) - (CATEGORY_ORDER.get(b.category) ?? 99) || a.name.localeCompare(b.name, 'pl')) as Requirement[];
@@ -2825,6 +2843,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             workingMaterials: active.workingMaterials,
             packagingMode: active.packagingMode ?? 'base',
             linkedSources: sameDayPlan ? normalizeLinkedSources(active.linkedSources) : {},
+            ...(sameDayPlan && active.issueQuantityOverrides ? { issueQuantityOverrides: normalizeManualIssueQuantities(active.issueQuantityOverrides) } : {}),
             manualOverride: active.manualOverride,
             remainingQty: incoming.totalQty,
             ...(sameDayPlan && active.quantityStatus === 'manual' && incoming.sourceQuantity === active.sourceQuantity
@@ -3204,6 +3223,29 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     setEditingTechnologyId(technology.id);
     setTechnologyDraft(cloneTechnologyForEditor(technology));
     flash(source ? 'Zmiany technologii zostały zapisane.' : 'Technologia została dodana do biblioteki.');
+  };
+
+  const updateIssueQuantity = (itemId: string, material: TechnologyMaterial, displayQuantity: number | null) => {
+    if (readOnly || calculationEditorSaving || (displayQuantity !== null && (!Number.isFinite(displayQuantity) || displayQuantity < 0))) return;
+    const key = materialKey(material);
+    updateState((current) => ({
+      ...current,
+      plan: current.plan.map((item) => {
+        if (item.id !== itemId) return item;
+        const overrides = normalizeManualIssueQuantities(item.issueQuantityOverrides);
+        if (displayQuantity === null) delete overrides[key];
+        else overrides[key] = {
+          quantity: roundTechnologyMaterialQuantity(isThousandPiecesUnit(material.unit) ? displayQuantity / 1000 : displayQuantity, material.unit, material.name),
+          committedBaseline: committedIssueQuantity(current.documents, current.selectedPlanDate, item.areaId, key, item.id, canonicalPlanningMaterialKey),
+          planDate: current.selectedPlanDate,
+          areaId: item.areaId
+        };
+        return { ...item, issueQuantityOverrides: overrides };
+      }),
+      documents: current.documents.map((document) => document.areaId === current.plan.find((item) => item.id === itemId)?.areaId
+        && shouldInvalidatePlanDocument(document, current.selectedPlanDate, currentUserName)
+        ? { ...document, status: 'outdated' as const } : document)
+    }));
   };
 
   const updateWorkingMaterial = (itemId: string, materialId: string, patch: Partial<TechnologyMaterial>) => {
@@ -4339,8 +4381,8 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           <Button className="h-9 min-h-9 rounded-lg px-3 py-1.5 text-xs" variant="ghost" disabled={editorLocked} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, workingMaterials: null, manualOverride: false } : row) }))}><RefreshCw className="mr-2 h-3.5 w-3.5" />Przywróć wybraną</Button>
         </div> : null}
         {materials.length ? <div className="overflow-x-auto rounded-lg border border-borderStrong bg-[image:var(--table-frame-bg)]">
-          <table className="w-full min-w-[1544px] table-fixed text-xs">
-            <colgroup><col className="w-[220px]" /><col className="w-[420px]" /><col className="w-[145px]" /><col className="w-[150px]" /><col className="w-[105px]" /><col className="w-[110px]" /><col className="w-[150px]" /><col className="w-[105px]" /><col className="w-[95px]" /><col className="w-[44px]" /></colgroup>
+          <table className="w-full min-w-[1579px] table-fixed text-xs">
+            <colgroup><col className="w-[220px]" /><col className="w-[420px]" /><col className="w-[145px]" /><col className="w-[150px]" /><col className="w-[105px]" /><col className="w-[110px]" /><col className="w-[150px]" /><col className="w-[140px]" /><col className="w-[95px]" /><col className="w-[44px]" /></colgroup>
             <thead className="sticky top-0 z-10 bg-[image:var(--table-sticky-header-bg)] text-left text-[10px] uppercase text-dim">
               <tr>
                 <th className="border-r border-border px-2 py-1.5">Kod</th>
@@ -4361,7 +4403,9 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           const fullDemand = roundTechnologyMaterialQuantity(remaining * material.usage, material.unit, material.name);
           const supply = materialSupply(key, material, item.areaId);
           const itemShare = supply.demand > 0 ? Math.min(1, demand / supply.demand) : 0;
-          const toIssue = roundTechnologyMaterialQuantity(supply.toIssue * itemShare, material.unit, material.name);
+          const automaticToIssue = roundTechnologyMaterialQuantity(supply.toIssue * itemShare, material.unit, material.name);
+          const manualToIssue = manualIssueForItem(item, key);
+          const toIssue = manualToIssue ?? automaticToIssue;
           const zoneStock = buildZoneStockSummary({
             material, areaId: zoneArea?.id ?? '', currentItemId: item.id,
             inventory: zoneStockReady ? state.inventory : [], sources: zoneDemandSources,
@@ -4381,7 +4425,13 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
               incompletePlan={incompleteStockPlan.some((row) => zoneStock.sharedStock !== null || zoneStock.incompatibleSharedStock || row.areaId === item.areaId)}
               formatQuantity={(value) => `${fmt(technologyResultQuantity(value, material.unit))} ${technologyResultUnit(material.unit)}`}
             /></td>
-            <td className="h-9 border-r border-border px-2 text-right font-black tabular-nums text-warning">{quantityReview ? '—' : fmt(technologyResultQuantity(toIssue, material.unit))}</td>
+            <td className="border-r border-border p-0">{quantityReview ? <span className="block px-2 text-right">—</span> : <IssueQuantityField
+              label={`Do wypisania: ${material.name} (${technologyResultUnit(material.unit)})`}
+              value={technologyResultQuantity(toIssue, material.unit)} manual={manualToIssue !== null}
+              automaticLabel={`${fmt(technologyResultQuantity(automaticToIssue, material.unit))} ${technologyResultUnit(material.unit)}`}
+              disabled={editorLocked || normReview || !item.areaId}
+              onChange={(quantity) => updateIssueQuantity(item.id, material, quantity)} onReset={() => updateIssueQuantity(item.id, material, null)}
+            />}</td>
             <td className="border-r border-border p-0"><Input className={cn(compactPlanMaterialInputClass, 'font-semibold')} aria-label="Jednostka wyniku" disabled={editorLocked} value={technologyResultUnit(material.unit)} onChange={(event) => updateWorkingMaterial(item.id, material.id, technologyMaterialWithUnit(material, event.target.value))} /></td>
             <td className="p-0 text-center"><Button title="Usuń materiał z technologii roboczej" aria-label="Usuń materiał z technologii roboczej" variant="ghost" className="h-9 min-h-9 w-9 rounded-none border-0 px-0 py-0 text-danger ring-0" disabled={editorLocked} onClick={() => updateState((current) => ({ ...current, plan: current.plan.map((row) => row.id === item.id ? { ...row, manualOverride: true, workingMaterials: materials.filter((entry) => entry.id !== material.id) } : row) }))}><Trash2 className="h-3.5 w-3.5" /></Button></td>
           </tr>;

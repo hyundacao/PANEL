@@ -15,7 +15,7 @@ export const canonicalPlanningMaterialKey = (key: string) => {
   return separator < 0 ? key : `${key.slice(0, separator)}|${canonicalPlanningUnit(key.slice(separator + 1))}`;
 };
 
-type Source = { planItemId: string; index: string; name: string; demand: number };
+type Source = { planItemId: string; index: string; name: string; demand: number; toIssue?: number };
 type Row = {
   key: string;
   unit: string;
@@ -33,7 +33,11 @@ export function mergePickingSources(sources: Source[] = []): Source[] {
   sources.forEach((source) => {
     const key = JSON.stringify([source.planItemId, source.index]);
     const current = merged.get(key);
-    if (current) current.demand += source.demand;
+    if (current) {
+      current.demand += source.demand;
+      if (current.toIssue !== undefined && source.toIssue !== undefined) current.toIssue += source.toIssue;
+      else delete current.toIssue;
+    }
     else merged.set(key, { ...source });
   });
   return [...merged.values()];

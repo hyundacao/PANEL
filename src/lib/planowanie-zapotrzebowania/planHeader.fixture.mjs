@@ -41,6 +41,7 @@ const names = [
 ];
 names.push('canonicalProductIndex', 'linkedProductKey');
 names.push('returnMaterialKey');
+names.push('manualIssueForItem', 'updateIssueQuantity');
 names.push('materialIdentityMatches');
 names.push('sharedAreaIds');
 names.push('planNormNeedsReview', 'normIssuePlanItemIds', 'missingNormActiveCount', 'calculationBlockedCount', 'calculationBlockLabel', 'calculationBlockTitle');
@@ -89,6 +90,8 @@ export const createHeaderFixture = (overrides = {}) => {
     ...load('@/components/planowanie-zapotrzebowania/PlanningSaveStatus'),
     ...load('@/components/planowanie-zapotrzebowania/PlanQuantity'),
     ...load('@/components/planowanie-zapotrzebowania/ZoneStockCell'),
+    ...load('@/components/planowanie-zapotrzebowania/IssueQuantityField'),
+    ...load('@/lib/planowanie-zapotrzebowania/manualIssueQuantities'),
     ...load('@/lib/planowanie-zapotrzebowania/zoneStock'),
     ...load('@/lib/planowanie-zapotrzebowania/pickingDocumentRows'),
     ...load('@/lib/planowanie-zapotrzebowania/planImport'), ...load('@/lib/utils/cn'),

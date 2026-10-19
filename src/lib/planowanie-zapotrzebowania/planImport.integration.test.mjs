@@ -8,6 +8,7 @@ import * as imports from './planImport.ts';
 import * as fixedDevices from './fixedInventoryDevices.ts';
 import * as palletSets from './palletSets.ts';
 import * as pickingRows from './pickingDocumentRows.ts';
+import * as manualIssues from './manualIssueQuantities.ts';
 import { buildZoneStockSummary } from './zoneStock.ts';
 import { shouldInvalidatePlanDocument } from './stateScopes.ts';
 import { isMaterialPlanningDateRetained, MATERIAL_PLANNING_HISTORY_DAYS, pruneMaterialPlanningHistory } from './historyRetention.ts';
@@ -22,10 +23,12 @@ const names = ['uid','numberValue','normalize','CATEGORIES','normalizeReturnExcl
   'handleWorkbook','importSelectedSheet','selectPlanDate','selectPlanningArea',directQuantityEditing ? 'updatePlanQuantity' : 'applyQuantityCorrection','undoLastCorrection','scopeForItem','shiftNormForItem','scopedItemProductionQty','plannedItemProductionQty','itemProductionQty','planQuantityNeedsReview','createOrRefreshPickingDocument','changePickingDocumentStatus','togglePickingConfirmation','updatePickingDocumentWarehouse','deriveReturnsForDate','syncOriginalInventory'];
 if (directQuantityEditing) names.push('updatePlanNorm');
 names.push('returnMaterialKey');
+names.push('updateIssueQuantity');
 names.push('planNormNeedsReview');
 const definitions = new Map();
 const areaCalculationNames = ['technologyForItem','materialsForItem','technologyLinksForItem','linkedProducerCandidates','linkedProducerFor','linkedAllocationByProducer','selectedLinkedAllocationByProducer','fullLinkedAllocationByProducer','materialDemandContributionsForItem','demandByArea','sharedAreaIds','materialSupply','requirementsForArea','linkedSourceIssuesForArea'];
 const areaCalculationDefinitions = new Map();
+areaCalculationNames.push('manualIssueForItem');
 function visit(node) {
   if(ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) definitions.set(node.name.getText(ast),`const ${node.getText(ast)};`);
   if(ts.isVariableDeclaration(node) && areaCalculationNames.includes(node.name.getText(ast))) areaCalculationDefinitions.set(node.name.getText(ast),`const ${node.getText(ast)};`);
@@ -41,10 +44,10 @@ const rows=[['Lp.','','Ilość','ST.','Norma','','Uwagi'],['1','LEFT + RIGHT (A1
 
 function setup() {
   const messages=[];
-  const ctx=vm.createContext({exports:{},...imports,...fixedDevices,...palletSets,...pickingRows,...domain.exports,shouldInvalidatePlanDocument,isMaterialPlanningDateRetained,MATERIAL_PLANNING_HISTORY_DAYS,
+  const ctx=vm.createContext({exports:{},...imports,...fixedDevices,...palletSets,...pickingRows,...manualIssues,...domain.exports,shouldInvalidatePlanDocument,isMaterialPlanningDateRetained,MATERIAL_PLANNING_HISTORY_DAYS,
     state:{plan:[],technologies:[],archive:[],planVersions:[],documents:[],quantityCorrections:[],stationMappings:[],selectedPlanDate:'2026-08-31',selectedAreaId:'hala-2',dailyPlans:{},returnStatuses:{},returnExclusions:[],inventory:[],areas:[],calculationMode:'all',horizonShifts:3.5,continuationBufferPercent:0},
     pending:{fileName:'test.xlsx',purpose:'plan',workbook:{SheetNames:['Plan'],Sheets:{Plan:{rows}}}},sheetName:'Plan',currentUserName:'Test',quantityInputs:{},readOnly:false,
-    calculationEditorOpen:false,closeCalculationEditorIfAllowed:()=>true,inventorySyncRequestRef:{current:0},headAdmin:false,today:'2026-09-01',
+    calculationEditorOpen:false,calculationEditorSaving:false,closeCalculationEditorIfAllowed:()=>true,inventorySyncRequestRef:{current:0},headAdmin:false,today:'2026-09-01',
     technologyById:{get:(id)=>ctx?.state?.technologies?.find((technology)=>technology.id===id)},
     XLSX:{read:(data)=>data,utils:{sheet_to_json:(sheet)=>sheet.rows,decode_range:()=>({s:{r:0}})}},
     flash:(message)=>messages.push(message),nowLabel:()=>new Date().toISOString(),localDateKey:()=>'2026-08-31',formatPlanDate:(date)=>date,
@@ -374,6 +377,78 @@ test('picking unit aliases do not reset existing return decisions or exclusions'
   h.ctx.state.returnExclusions = h.normalizeReturnExclusions([{ areaId: 'hala-2', code: 'METAL', name: 'Metal box', unit: 'szt' }]);
   assert.equal(h.ctx.state.returnExclusions[0].id, 'hala-2|metal|szt');
   assert.equal(h.deriveReturnsForDate('2026-08-31').length, 0);
+});
+
+test('manual issue quantity survives reload, sums with other details and leaves technology untouched', () => {
+  const h = metalBoxScenario();
+  const material = h.ctx.state.plan[0].workingMaterials[0];
+  const technologyBefore = JSON.stringify(h.ctx.state.technologies);
+  const materialsBefore = JSON.stringify(h.ctx.state.plan[0].workingMaterials);
+  h.updateIssueQuantity('A', material, 40);
+  const [row] = h.requirementsForArea('hala-2');
+  assert.equal(row.demand, 24);
+  assert.equal(row.toIssue, 54, '40 manual plus the other detail automatic share of 13.5, rounded to pieces');
+  assert.equal(row.sources[0].toIssue, 40);
+  assert.equal(row.sources[1].toIssue, 14);
+  assert.equal(JSON.stringify(h.ctx.state.technologies), technologyBefore);
+  assert.equal(JSON.stringify(h.ctx.state.plan[0].workingMaterials), materialsBefore);
+  const restored = h.parseStoredState(JSON.parse(JSON.stringify(h.ctx.state)));
+  assert.equal(restored.plan[0].issueQuantityOverrides[row.key].quantity, 40);
+  const cloned = h.clonePlanItems(h.ctx.state.plan);
+  cloned[0].issueQuantityOverrides[row.key].quantity = 999;
+  assert.equal(h.ctx.state.plan[0].issueQuantityOverrides[row.key].quantity, 40);
+  h.updateIssueQuantity('A', material, null);
+  assert.equal(h.requirementsForArea('hala-2')[0].toIssue, 18);
+});
+
+test('manual zero, positive quantity over covered stock and display unit conversion are supported', () => {
+  const h = metalBoxScenario({ sameProduct: true });
+  const material = h.ctx.state.plan[0].workingMaterials[0];
+  h.updateIssueQuantity('A', material, 0);
+  assert.equal(h.requirementsForArea('hala-2')[0].toIssue, 0);
+  h.ctx.state.inventory[0].qty = 100;
+  h.updateIssueQuantity('A', material, 100);
+  assert.equal(h.requirementsForArea('hala-2')[0].toIssue, 100);
+  const labels = { ...material, code: 'LABEL', unit: '1000szt.' };
+  h.updateIssueQuantity('A', labels, 100);
+  assert.equal(h.ctx.state.plan[0].issueQuantityOverrides[h.materialKey(labels)].quantity, 0.1);
+  h.updateIssueQuantity('A', labels, -1);
+  assert.equal(h.ctx.state.plan[0].issueQuantityOverrides[h.materialKey(labels)].quantity, 0.1);
+});
+
+test('manual issue is credited after the grouped document was written and restored after undo', () => {
+  const h = metalBoxScenario();
+  const material = h.ctx.state.plan[0].workingMaterials[0];
+  h.updateIssueQuantity('A', material, 100);
+  h.ctx.requirementsForArea = h.requirementsForArea;
+  h.ctx.setExpandedDocument = () => {};
+  h.createOrRefreshPickingDocument();
+  const doc = h.ctx.state.documents[0];
+  const row = doc.rows[0];
+  assert.equal(row.toIssue, 114);
+  assert.equal(row.sources[0].toIssue, 100);
+  h.togglePickingConfirmation(doc.id, row.key);
+  h.ctx.documentLedger.set(`hala-2|${row.key}`, { issued: 0, pending: row.toIssue });
+  assert.equal(h.requirementsForArea('hala-2')[0].toIssue, 0);
+  h.togglePickingConfirmation(doc.id, row.key);
+  h.ctx.documentLedger.clear();
+  assert.equal(h.requirementsForArea('hala-2')[0].toIssue, 114);
+  h.ctx.state.selectedPlanDate = '2026-09-01';
+  assert.equal(h.requirementsForArea('hala-2')[0].toIssue, 18, 'manual reserve belongs only to its day');
+});
+
+test('manual edits invalidate only the author draft in that area and honor read-only access', () => {
+  const h = metalBoxScenario();
+  const material = h.ctx.state.plan[0].workingMaterials[0];
+  h.ctx.state.documents = ['draft', 'issued', 'handed'].map(status => ({ id: status, status,
+    planDate: h.ctx.state.selectedPlanDate, areaId: 'hala-2', createdBy: 'Test', rows: [] }));
+  h.ctx.state.documents.push({ ...h.ctx.state.documents[0], id: 'other', areaId: 'hala-1' });
+  h.ctx.readOnly = true;
+  h.updateIssueQuantity('A', material, 40);
+  assert.equal(h.ctx.state.plan[0].issueQuantityOverrides, undefined);
+  h.ctx.readOnly = false;
+  h.updateIssueQuantity('A', material, 40);
+  assert.deepEqual(Array.from(h.ctx.state.documents, row => row.status), ['outdated', 'issued', 'handed', 'draft']);
 });
 
 function mixedSourceScenario({ remaining = 30000, usage = 1, mode = 'mixed', buffer = 0 } = {}) {
