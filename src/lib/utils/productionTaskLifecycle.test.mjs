@@ -7,26 +7,54 @@ import {
   isRecentProductionHistoryDate,
   mergeProductionCompletedWork,
   productionKindOwner,
+  productionKindsForNewWork,
   productionHistoryCutoffDate,
   productionSummaryFromTasks,
   productionTaskDoneOnDate,
   productionTaskDueDate,
   productionWorkEvents,
   recentProductionDates,
+  resetProductionTaskForNewDay,
   revertProductionWorkEvent,
   shouldCarryProductionTask,
   summarizeProductionDay
 } from './productionTaskLifecycle.ts';
 
-test('only active plan and open additional work carry into the new day', () => {
+test('only plan rows carry into the new day, never additional or linked work', () => {
   const base = { id: 'plan-1', station: 'WTR 10', isCurrentPlan: true, kinds: ['zmiana-formy'], teams: ['mechanics'] };
   assert.equal(shouldCarryProductionTask(base), true);
   assert.equal(shouldCarryProductionTask({ ...base, kinds: ['anulowane'] }), false);
   assert.equal(shouldCarryProductionTask({ ...base, id: 'zadanie-cykliczne:x:2026-09-27', station: 'ZADANIE CYKLICZNE' }), false);
-  assert.equal(shouldCarryProductionTask({ ...base, id: 'manual', station: 'ZADANIE DODATKOWE', isCurrentPlan: false }), true);
+  assert.equal(shouldCarryProductionTask({ ...base, id: 'manual', station: 'ZADANIE DODATKOWE', isCurrentPlan: false }), false);
   assert.equal(shouldCarryProductionTask({ ...base, id: 'manual', station: 'ZADANIE DODATKOWE', isCurrentPlan: false, teams: [] }), false);
-  assert.equal(shouldCarryProductionTask({ ...base, id: 'toolroom-return:plan-1', isCurrentPlan: false }), true);
+  assert.equal(shouldCarryProductionTask({ ...base, id: 'toolroom-return:plan-1', isCurrentPlan: false }), false);
+  assert.equal(shouldCarryProductionTask({ ...base, id: 'restored-work:plan-1', isCurrentPlan: false }), false);
   assert.equal(shouldCarryProductionTask({ ...base, id: 'plan-1::work-event:x' }), false);
+});
+
+test('new day keeps product and material data but clears all daily work and comments', () => {
+  const task = { id: 'plan-1', station: 'WTR 10', detail: 'Product', material: 'RESIN',
+    quantity: '1000', norm: '500', highlighted: true, kinds: ['zmiana-formy', 'rozruch'],
+    teams: ['mechanics', 'process'], done: true, toolroomReturnDone: true,
+    teamProgress: { mechanics: { completedAt: '2026-10-19T08:00:00Z' } },
+    notes: { mechanics: 'Old instruction', processAssignee: 'Someone', productionHall: 'hala-2',
+      __workEvents: '[{}]', __dueDate: '2026-10-20' } };
+  const before = structuredClone(task);
+  const next = resetProductionTaskForNewDay(task, { productionHall: 'hala-2' });
+  assert.deepEqual(next.kinds, []);
+  assert.deepEqual(next.teams, []);
+  assert.deepEqual(next.teamProgress, {});
+  assert.deepEqual(next.notes, { productionHall: 'hala-2' });
+  assert.equal(next.done, false);
+  assert.equal(next.toolroomReturnDone, undefined);
+  for (const key of ['id', 'station', 'detail', 'material', 'quantity', 'norm', 'highlighted']) assert.equal(next[key], task[key]);
+  assert.deepEqual(task, before);
+});
+
+test('new work kinds replace only the completed work of the same owner', () => {
+  assert.deepEqual(productionKindsForNewWork(['zmiana-formy', 'rozruch'], ['regulacja'], ['process']), ['zmiana-formy', 'regulacja']);
+  assert.deepEqual(productionKindsForNewWork(['rozruch'], ['regulacja'], []), ['rozruch', 'regulacja']);
+  assert.deepEqual(productionKindsForNewWork(['rozruch', 'regulacja'], ['rozruch'], ['process']), ['rozruch']);
 });
 
 test('a Saturday due date is stored separately from the plan day', () => {
@@ -191,8 +219,8 @@ test('old session is retired only when the report and carried state are preserve
   assert.equal(canRetireProductionSession('2026-09-18', '2026-09-27', { ...summary, sourceDigest: undefined }, old, active), false);
   assert.equal(canRetireProductionSession('2026-09-18', '2026-09-27', { ...summary, assignments: 2 }, old, active), false);
   assert.equal(canRetireProductionSession('2026-09-18', '2026-09-27', summary, old, active.slice(1)), false);
-  assert.equal(canRetireProductionSession('2026-09-18', '2026-09-27', summary, old, [machine, parent, child]), false);
-  assert.equal(canRetireProductionSession('2026-09-18', '2026-09-27', summary, old, [machine, manual, parent]), false);
+  assert.equal(canRetireProductionSession('2026-09-18', '2026-09-27', summary, old, [machine, parent, child]), true);
+  assert.equal(canRetireProductionSession('2026-09-18', '2026-09-27', summary, old, [machine, manual, parent]), true);
   assert.equal(canRetireProductionSession('2026-09-18', '2026-09-27', summary, old,
     [{ ...machine, notes: { __machineAt: '2026-09-17T10:00:00Z' } }, manual, parent, child]), false);
 });

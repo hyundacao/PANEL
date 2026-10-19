@@ -283,3 +283,25 @@ test('return work remains selected independently of a manually removed mechanic 
   });
   assert.equal(selected(parent, 'powrot-formy-narzedziownia'), true);
 });
+
+test('plan checkbox requeues a completed department without calling the undo action', () => {
+  for (const team of ['process', 'distribution', 'mechanics']) {
+    const task = { ...makeTask('repeat', 'WTR 34'), kinds: ['regulacja'], teams: [team], done: true,
+      teamProgress: progress.setProductionTeamCompletion({}, team, true, { completedAt: '2026-10-19T08:00:00Z', completedBy: 'Test' }),
+      notes: { __workEvents: JSON.stringify([{ id: 'first', team, kinds: ['regulacja'], completedAt: '2026-10-19T08:00:00Z', completedBy: 'Test' }]) } };
+    const requests = [];
+    let optimistic;
+    const { toggle } = compile(`${['planTaskWorkItems', 'togglePlanTeam'].map(name => declaration(name)).join('\n')}
+      export const toggle = togglePlanTeam;`, {
+      ...toolroom, ...progress, tasks: [task], isPreparationAdmin: true,
+      mutateTask: (id, mutation, update) => { requests.push({ id, mutation }); optimistic = update(task); },
+      toggleTeamDone: () => assert.fail('This would undo the previous completion'),
+      toggleTeam: () => assert.fail('This would remove the department')
+    });
+    toggle(task, team);
+    assert.equal(JSON.stringify(requests), JSON.stringify([{ id: task.id, mutation: { requeueTeam: team } }]));
+    assert.equal(progress.isProductionTeamDone(optimistic, team), false);
+    assert.equal(lifecycle.productionWorkEvents(optimistic.notes).length, 1);
+    assert.equal(lifecycle.productionWorkEvents(optimistic.notes)[0].revertedAt, undefined);
+  }
+});

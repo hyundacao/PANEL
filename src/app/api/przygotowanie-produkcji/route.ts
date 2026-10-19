@@ -25,11 +25,11 @@ import {
   type RecurringTaskDefinition
 } from '@/lib/utils/productionRecurringTasks';
 import { canSelectToolroomWork, createToolroomReturnTask, isToolroomWorkKind, isToolroomReturnTask, mechanicOnlyToolroomReturnTask, toolroomLinkNotes, toolroomParentId, toolroomReturnId, toolroomWorkMutation, withToolroomReturnTasks, type ToolroomWorkSelection } from '@/lib/utils/productionToolroomTasks';
-import { PRODUCTION_TEAMS, TEAM_COMMENT_KEY_PREFIX, defaultTeamComments, isProductionTeam, normalizeTeamComment, validateTeamComment } from '@/lib/utils/productionTeamComments';
+import { PRODUCTION_TEAMS, TEAM_COMMENT_KEY_PREFIX, defaultTeamComments, isProductionTeam, normalizeTeamComment, validateTeamComment, type ProductionTeam } from '@/lib/utils/productionTeamComments';
 import { productionWorkCommentNoteKey, validateProductionWorkCommentText, withProductionWorkComment } from '@/lib/utils/productionWorkComments';
 import { canRestoreProductionWorkInPlace, productionRestorableEvents, PRODUCTION_RESTORED_EVENT_NOTE, PRODUCTION_RESTORED_WORK_PREFIX, revokeProductionWork } from '@/lib/utils/productionWorkRestore';
 import { PRODUCTION_HALL_NOTE, normalizeProductionHallAssignment } from '@/lib/utils/productionTaskReference';
-import { appendProductionWorkEvent, canRetireProductionSession, PRODUCTION_LEGACY_COMPLETION_DAY_NOTE, isRecentProductionHistoryDate, productionHistoryCutoffDate, productionKindOwner, productionMachineConfirmations, productionSummaryFromTasks, productionWorkEvents, revertProductionWorkEvent, shouldCarryProductionTask, summarizeProductionDay, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
+import { appendProductionWorkEvent, canRetireProductionSession, isRecentProductionHistoryDate, productionHistoryCutoffDate, productionKindOwner, productionKindsForNewWork, productionMachineConfirmations, productionSummaryFromTasks, productionWorkEvents, resetProductionTaskForNewDay, revertProductionWorkEvent, shouldCarryProductionTask, summarizeProductionDay, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
 import {
   PRODUCTION_TEAM_PROGRESS_NOTE_KEY,
   PRODUCTION_STARTUP_TEAMS,
@@ -106,6 +106,7 @@ type StoredTaskMutation = {
   setDistributionStageDone?: { stage?: unknown; done?: unknown };
   setWorkComment?: { team?: unknown; text?: unknown };
   requeueKind?: string;
+  requeueTeam?: ProductionTeam;
   clearWork?: boolean;
 };
 
@@ -480,7 +481,7 @@ const compactOldHistorySnapshots = async () => {
 const carryLatestPlanToDate = async (planDate: string, userName: string) => {
   const { data: previous, error: previousError } = await supabaseAdmin
     .from('przygotowanie_produkcji_sessions')
-    .select('id, session_date, file_name, plan_sheet')
+    .select('id, session_date, file_name, plan_sheet, created_by')
     .lt('session_date', planDate)
     .neq('session_date', PROCESS_ENGINEERS_SETTINGS_DATE)
     .order('session_date', { ascending: false })
@@ -495,18 +496,27 @@ const carryLatestPlanToDate = async (planDate: string, userName: string) => {
     .eq('session_id', previous.id)
     .order('position_no');
   if (previousRowsError) throw previousRowsError;
-  const carried = (previousRows ?? [])
+  await saveHistorySnapshot(previous, (previousRows ?? []) as Array<Record<string, unknown>>);
+  const previousTasks = (previousRows ?? [])
     .filter((row) => !isModuleSettings(row as Record<string, unknown>)
       || String(row.task_key ?? '').startsWith(MACHINE_STATE_KEY_PREFIX))
-    .map((row) => fromDbTask(row as Record<string, unknown>))
+    .map((row) => fromDbTask(row as Record<string, unknown>));
+  const carried = previousTasks
     .filter((task) => task.id.startsWith(MACHINE_STATE_KEY_PREFIX) || shouldCarryProductionTask(task))
-    .map((task) => {
-      const hasDatedCompletion = Object.values(task.teamProgress ?? {}).some(value => Boolean(value?.completedAt));
-      const hasUndatedCompletion = Object.values(task.teamProgress ?? {}).some(value => value && !value.completedAt);
-      return (hasUndatedCompletion || (task.done && !hasDatedCompletion)) && !task.notes[PRODUCTION_LEGACY_COMPLETION_DAY_NOTE]
-        ? { ...task, notes: { ...task.notes, [PRODUCTION_LEGACY_COMPLETION_DAY_NOTE]: String(previous.session_date) } }
-        : task;
-    });
+    .map((task) => task.id.startsWith(MACHINE_STATE_KEY_PREFIX) ? task : resetProductionTaskForNewDay(task,
+      normalizeProductionHallAssignment(task.notes[PRODUCTION_HALL_NOTE])
+        ? { [PRODUCTION_HALL_NOTE]: task.notes[PRODUCTION_HALL_NOTE] }
+        : {}));
+  // Legacy confirmations may not yet have their own persistent machine-state row.
+  for (const { task, stage, at, by } of productionMachineConfirmations(previousTasks, String(previous.session_date))) {
+    const id = machineStateKey(task.station);
+    const index = carried.findIndex(item => item.id === id);
+    if (index >= 0 && Date.parse(carried[index].notes.__machineAt ?? '') >= Date.parse(at)) continue;
+    const state = { ...resetProductionTaskForNewDay(task, { __machineStage: stage, __machineAt: at, __machineBy: by }),
+      id, isCurrentPlan: false, highlighted: false };
+    if (index >= 0) carried[index] = state;
+    else carried.push(state);
+  }
   const { data: inserted, error: insertError } = await supabaseAdmin
     .from('przygotowanie_produkcji_sessions')
     .insert({ session_date: planDate, file_name: previous.file_name, plan_sheet: previous.plan_sheet, created_by: userName })
@@ -784,11 +794,27 @@ const applyTaskMutation = (
 
   const removedKinds = new Set((mutation.removeKinds ?? []).filter((kind) => validWorkKinds.has(kind)));
   const addedKinds = (mutation.addKinds ?? []).filter((kind) => validWorkKinds.has(kind));
-  next.kinds = [...new Set([...next.kinds.filter((kind) => !removedKinds.has(kind)), ...addedKinds])];
+  const completedTeams = PRODUCTION_TEAMS.filter(team => isProductionTeamDone(task, team));
+  if (addedKinds.length || mutation.addTeams?.length || mutation.requeueKind || mutation.requeueTeam) {
+    for (const team of completedTeams) {
+      const previous = productionTeamProgressForTask(task)[team];
+      const completedAt = previous?.completedAt || completion.completedAt;
+      const id = `${task.id}:${team}:${completedAt}`;
+      if (productionWorkEvents(next.notes).some(event => event.id === id)) continue;
+      next.notes = appendProductionWorkEvent(next.notes, {
+        id, team, kinds: [...task.kinds], completedAt, completedBy: previous?.completedBy ?? ''
+      });
+    }
+  }
+  next.kinds = productionKindsForNewWork(next.kinds.filter(kind => !removedKinds.has(kind)), addedKinds, completedTeams);
 
   const removedTeams = new Set((mutation.removeTeams ?? []).filter((team) => validTeams.has(team)));
   const addedTeams = (mutation.addTeams ?? []).filter((team) => validTeams.has(team));
   next.teams = [...new Set([...next.teams.filter((team) => !removedTeams.has(team)), ...addedTeams])];
+  const newWorkTeams = new Set([...addedKinds.map(productionKindOwner), ...addedTeams]);
+  for (const team of completedTeams) {
+    if (newWorkTeams.has(team)) next.teamProgress = setProductionTeamCompletion(next.teamProgress, team, false);
+  }
 
   const reopenedTeams = PRODUCTION_TEAMS.filter((team) => {
     const value = mutation.setNotes?.[team];
@@ -912,10 +938,14 @@ const applyTaskMutation = (
   if (mutation.requeueKind && validWorkKinds.has(mutation.requeueKind)) {
     const team = productionKindOwner(mutation.requeueKind);
     if (isProductionCompletableTeam(team)) {
-      next.kinds = [...new Set([...next.kinds, mutation.requeueKind])];
+      next.kinds = productionKindsForNewWork(next.kinds, [mutation.requeueKind], completedTeams);
       next.teams = [...new Set([...next.teams, team])];
       next.teamProgress = setProductionTeamCompletion(next.teamProgress, team, false);
     }
+  }
+  if (mutation.requeueTeam && isProductionCompletableTeam(mutation.requeueTeam)
+    && next.teams.includes(mutation.requeueTeam)) {
+    next.teamProgress = setProductionTeamCompletion(next.teamProgress, mutation.requeueTeam, false);
   }
   for (const team of new Set([...reopenedTeams, ...reopenedDetailTeams])) {
     next.teamProgress = setProductionTeamCompletion(next.teamProgress, team, false);
@@ -1927,6 +1957,9 @@ export async function POST(request: NextRequest) {
     if (body.action === 'mutateTask' && body.taskId && body.mutation) {
       if (body.mutation.requeueKind !== undefined && !validWorkKinds.has(body.mutation.requeueKind)) {
         return NextResponse.json({ code: 'INVALID_WORK_KIND' }, { status: 400 });
+      }
+      if (body.mutation.requeueTeam !== undefined && !isProductionCompletableTeam(body.mutation.requeueTeam)) {
+        return invalidTeamCompletion();
       }
       const toolroomSelection = body.mutation.setToolroomWork;
       if (toolroomSelection !== undefined && (

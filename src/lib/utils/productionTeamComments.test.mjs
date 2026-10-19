@@ -653,7 +653,7 @@ test('restoring an older occurrence does not undo a later occurrence and retry n
   assert.equal(taskLifecycle.summarizeProductionDay(currentDay.tasks, '2026-09-28').completedEvents, 2);
 });
 
-test('removed production work can be restored beside a different current product and carries into tomorrow', async context => {
+test('restored work stays on its assignment day and does not carry into tomorrow', async context => {
   context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-25T08:00:00Z') });
   const api = testApi();
   const old = await completeRestorationTask(api, restorationTask(), '2026-09-25');
@@ -667,8 +667,8 @@ test('removed production work can be restored beside a different current product
   assert.equal((await api.post({ action: 'savePlan', planDate: '2026-09-28', tasks: [current] })).status, 200);
   context.mock.timers.setTime(Date.parse('2026-09-29T08:00:00Z'));
   ({ tasks } = await (await api.get('?date=2026-09-29')).json());
-  assert.equal(tasks.find(task => task.id === restored.restoredTaskId).done, false);
-  assert.equal(tasks.find(task => task.id === restored.restoredTaskId).kinds.includes('anulowane'), false);
+  assert.equal(tasks.some(task => task.id === restored.restoredTaskId), false);
+  assert.deepEqual(tasks.find(task => task.id === current.id).teams, []);
 });
 
 test('restoring dispatcher completion clears both stages rather than leaving a partially green card', async context => {
@@ -1190,8 +1190,10 @@ test('direct return selection persists once, remains unfinished, and gates proce
   assert.equal((await api.post({ action: 'mutateTask', taskId: returnId, mutation: { setTeamDone: { team: 'mechanics', done: true } } })).status, 200);
   assert.equal((await select(true)).status, 200);
   result = await (await api.get()).json();
-  assert.ok(result.tasks.find(task => task.id === returnId).teamProgress.mechanics);
-  assert.equal(result.tasks.find(task => task.id === returnId).done, true);
+  assert.equal(result.tasks.find(task => task.id === returnId).teamProgress.mechanics, undefined);
+  assert.equal(result.tasks.find(task => task.id === returnId).done, false);
+  assert.equal(taskLifecycle.productionWorkEvents(result.tasks.find(task => task.id === returnId).notes).filter(event => !event.revertedAt).length, 1);
+  assert.equal((await api.post({ action: 'mutateTask', taskId: returnId, mutation: { setTeamDone: { team: 'mechanics', done: true } } })).status, 200);
   api.state.preparationTeams = ['process'];
   assert.equal((await api.post({ action: 'mutateTask', taskId: returnId, mutation: { setTeamDone: { team: 'process', done: true } } })).status, 409);
   assert.equal((await api.post({ action: 'mutateTask', taskId: source.id, mutation: { setTeamDone: { team: 'process', done: true } } })).status, 200);
@@ -1262,7 +1264,7 @@ test('API loads and edits the selected production day without changing another d
   assert.deepEqual(api.db.przygotowanie_produkcji_sessions.map(row=>row.session_date).sort(),['2026-09-03','2026-09-04']);
 });
 
-test('tomorrow inherits the plan and mounted form but not a new mechanic completion', async (context) => {
+test('tomorrow inherits the plan and mounted form with a clean daily assignment slate', async (context) => {
   const api = testApi();
   const date = planDates.getWarsawProductionPlanDate();
   const task = { ...toolroomSource(), id: 'daily-form', kinds: ['zmiana-formy', 'rozruch'], teams: ['mechanics', 'process'], notes: {}, teamProgress: {}, done: false };
@@ -1276,8 +1278,11 @@ test('tomorrow inherits the plan and mounted form but not a new mechanic complet
   assert.equal(result.session.session_date, tomorrow);
   assert.equal(result.tasks.length, 1);
   assert.equal(result.tasks[0].id, task.id);
-  assert.equal(workProgress.isProductionTeamDone(result.tasks[0], 'mechanics'), true);
+  assert.equal(workProgress.isProductionTeamDone(result.tasks[0], 'mechanics'), false);
   assert.equal(workProgress.isProductionTeamDone(result.tasks[0], 'process'), false);
+  assert.deepEqual(result.tasks[0].kinds, []);
+  assert.deepEqual(result.tasks[0].teams, []);
+  assert.deepEqual(result.tasks[0].notes, {});
   assert.equal(result.machineForms['WTR 49'].stage, 'mounted');
   assert.equal(result.machineForms['WTR 49'].detail, task.detail);
   const recent = await (await api.get('?recentCompleted=1')).json();
@@ -1286,7 +1291,84 @@ test('tomorrow inherits the plan and mounted form but not a new mechanic complet
   assert.equal((await api.post({ action: 'mutateTask', planDate: tomorrow, taskId: task.id, mutation: { requeueKind: 'zmiana-formy' } })).status, 200);
   const requeued = await (await api.get(`?date=${tomorrow}`)).json();
   assert.equal(workProgress.isProductionTeamDone(requeued.tasks[0], 'mechanics'), false);
-  assert.equal(taskLifecycle.productionWorkEvents(requeued.tasks[0].notes).length, 1);
+  assert.equal(taskLifecycle.productionWorkEvents(requeued.tasks[0].notes).length, 0);
+  assert.equal((await (await api.get('?recentCompleted=1')).json()).completed.length, 1);
+});
+
+test('new day drops manual and toolroom work, generates due recurring tasks, and reload keeps new assignments', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-19T08:00:00Z') });
+  const api = testApi();
+  const source = { ...toolroomSource(), notes: { productionHall: 'hala-2', mechanics: 'Yesterday' } };
+  const manual = { ...source, id: 'manual', isCurrentPlan: false, station: 'ZADANIE DODATKOWE', kinds: ['inne'], teams: ['mechanics'] };
+  await api.post({ action: 'savePlan', tasks: [source, manual] });
+  const definitions = [
+    { id: 'daily', title: 'Daily job', weekdays: [1, 2], teams: ['mechanics'], active: true },
+    { id: 'monday', title: 'Monday only', weekdays: [1], teams: ['process'], active: true }
+  ];
+  assert.equal((await api.post({ action: 'saveRecurringTasks', recurringTasks: definitions })).status, 200);
+  const before = await (await api.get()).json();
+  assert.equal(before.tasks.filter(task => task.station === 'ZADANIE CYKLICZNE').length, 2);
+  assert.equal(before.tasks.filter(toolroom.isToolroomReturnTask).length, 1);
+  context.mock.timers.setTime(Date.parse('2026-10-19T22:00:00Z'));
+  const next = await (await api.get('?date=2026-10-20')).json();
+  assert.equal(next.session.session_date, '2026-10-20');
+  assert.deepEqual(next.tasks.map(task => task.id).sort(), [source.id, recurring.recurringTaskInstanceId('daily', '2026-10-20')].sort());
+  assert.deepEqual(next.tasks.find(task => task.id === source.id).notes, { productionHall: 'hala-2' });
+  assert.deepEqual(next.tasks.find(task => task.id === source.id).kinds, []);
+  const mutation = { addKinds: ['regulacja'], addTeams: ['process'], setNotes: { process: 'Today' } };
+  assert.equal((await api.post({ action: 'mutateTask', taskId: source.id, mutation })).status, 200);
+  for (let repeat = 0; repeat < 2; repeat++) {
+    const reload = await (await api.get('?date=2026-10-20')).json();
+    assert.deepEqual(reload.tasks.find(task => task.id === source.id).kinds, ['regulacja']);
+    assert.equal(reload.tasks.find(task => task.id === source.id).notes.process, 'Today');
+    assert.equal(reload.tasks.filter(task => task.station === 'ZADANIE CYKLICZNE').length, 1);
+  }
+  const history = await (await api.get('?history=1')).json();
+  assert.equal(taskLifecycle.summarizeProductionDay(history.history.find(item => item.plan_date === '2026-10-19').tasks, '2026-10-19').missedRecurring, 2);
+});
+
+test('new work on the same index preserves each completed occurrence and undo only reverts the last', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-19T08:00:00Z') });
+  const api = testApi();
+  const task = { ...toolroomSource(), kinds: ['rozruch'], teams: ['process'], notes: {} };
+  await api.post({ action: 'savePlan', tasks: [task] });
+  const mutate = mutation => api.post({ action: 'mutateTask', taskId: task.id, mutation });
+  assert.equal((await mutate({ setTeamDone: { team: 'process', done: true } })).status, 200);
+  context.mock.timers.setTime(Date.parse('2026-10-19T09:00:00Z'));
+  assert.equal((await mutate({ addKinds: ['regulacja'], addTeams: ['process'] })).status, 200);
+  let data = await (await api.get()).json();
+  assert.deepEqual(data.tasks[0].kinds, ['regulacja']);
+  assert.equal(data.tasks[0].done, false);
+  assert.equal((await (await api.get('?recentCompleted=1')).json()).completed.length, 1);
+  assert.equal((await mutate({ setTeamDone: { team: 'process', done: true } })).status, 200);
+  context.mock.timers.setTime(Date.parse('2026-10-19T10:00:00Z'));
+  assert.equal((await mutate({ requeueTeam: 'process' })).status, 200);
+  data = await (await api.get()).json();
+  assert.equal(data.tasks[0].done, false);
+  assert.equal(taskLifecycle.productionWorkEvents(data.tasks[0].notes).filter(event => !event.revertedAt).length, 2);
+  assert.equal((await mutate({ setTeamDone: { team: 'process', done: true } })).status, 200);
+  data = await (await api.get()).json();
+  const report = taskLifecycle.summarizeProductionDay(data.tasks, '2026-10-19');
+  assert.equal(report.kinds.rozruch.done, 1);
+  assert.equal(report.kinds.regulacja.done, 2);
+  assert.equal((await mutate({ setTeamDone: { team: 'process', done: false } })).status, 200);
+  assert.equal((await (await api.get('?recentCompleted=1')).json()).completed.length, 2);
+  api.state.isAdmin = false;
+  api.state.preparationTeams = ['process'];
+  assert.equal((await mutate({ requeueTeam: 'process' })).status, 403);
+});
+
+test('legacy mounted form is preserved at rollover even without a separate machine-state record', async context => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-20T08:00:00Z') });
+  const api = testApi();
+  api.db.przygotowanie_produkcji_sessions.push({ id: 'previous', session_date: '2026-10-19', updated_at: 'original' });
+  api.db.przygotowanie_produkcji_tasks.push({ id: 'old-task', session_id: 'previous', task_key: 'legacy', station: 'WTR 10', detail: 'Product', is_current_plan: true,
+    kinds: ['zmiana-formy', 'rozruch'], teams: ['mechanics', 'process'], done: false,
+    notes: { [workProgress.PRODUCTION_TEAM_PROGRESS_NOTE_KEY]: { mechanics: { completedAt: '2026-10-19T08:00:00Z', completedBy: 'Test' } } } });
+  const data = await (await api.get('?date=2026-10-20')).json();
+  assert.deepEqual(data.tasks[0].teams, []);
+  assert.equal(data.machineForms['WTR 10'].stage, 'mounted');
+  assert.equal(data.machineForms['WTR 10'].detail, 'Product');
 });
 
 test('new colour confirmation replaces the old machine product and repairs an older persisted state', async context => {
@@ -1460,7 +1542,7 @@ test('all preparation columns retain completed green tasks at the end of their o
   assert.equal(workProgress.canProductionTeamStart(partial, 'process'), true);
 });
 
-test('preparation completions disappear next day without losing readiness or work report data', async (context) => {
+test('all preparation assignments disappear next day while the previous report stays unchanged', async (context) => {
   context.mock.timers.enable({apis:['Date'],now:Date.parse('2026-09-28T09:00:00Z')});
   const api=testApi();
   const day='2026-09-28';
@@ -1490,12 +1572,12 @@ test('preparation completions disappear next day without losing readiness or wor
   const nextDay='2026-09-29';
   const after=await (await api.get(`?date=${nextDay}`)).json();
   const snapshot=structuredClone(after.tasks);
-  assert.deepEqual(visible(after.tasks,'distribution',nextDay).map(task=>task.id),['partial']);
-  assert.deepEqual(visible(after.tasks,'technician',nextDay).map(task=>task.id),['pending-tech']);
+  assert.deepEqual(visible(after.tasks,'distribution',nextDay).map(task=>task.id),[]);
+  assert.deepEqual(visible(after.tasks,'technician',nextDay).map(task=>task.id),[]);
   assert.deepEqual(after.tasks,snapshot);
-  assert.equal(workProgress.canProductionTeamStart(after.tasks.find(task=>task.id==='prepared'),'process'),true);
-  assert.equal(workProgress.isProductionDistributionStageDone(after.tasks.find(task=>task.id==='partial'),'materials'),true);
-  assert.deepEqual(taskLifecycle.summarizeProductionDay(after.tasks,day),reportBefore);
+  assert.equal(workProgress.canProductionTeamStart(after.tasks.find(task=>task.id==='prepared'),'process'),false);
+  assert.equal(workProgress.isProductionDistributionStageDone(after.tasks.find(task=>task.id==='partial'),'materials'),false);
+  assert.ok(after.tasks.every(task => task.kinds.length === 0 && task.teams.length === 0));
   assert.equal(taskLifecycle.summarizeProductionDay(after.tasks,nextDay).completedEvents,0);
   const history=await (await api.get('?history=1')).json();
   assert.deepEqual(taskLifecycle.summarizeProductionDay(history.history.find(entry=>entry.plan_date===day).tasks,day),reportBefore);
@@ -1503,7 +1585,7 @@ test('preparation completions disappear next day without losing readiness or wor
   assert.match(page,/isProductionCompletionVisibleOnDate\(\s*team\.id,\s*productionTeamCompletion\(task, team\.id\),\s*todayPlanDate,/);
 });
 
-test('legacy team completions keep their original day even while another team is still pending', async (context) => {
+test('legacy partial completions are kept on the original day instead of copied into tomorrow', async (context) => {
   context.mock.timers.enable({apis:['Date'],now:Date.parse('2026-09-29T09:00:00Z')});
   const api=testApi();
   api.db.przygotowanie_produkcji_sessions.push({id:'previous',session_date:'2026-09-28',updated_at:'original'});
@@ -1512,10 +1594,12 @@ test('legacy team completions keep their original day even while another team is
     notes:{[workProgress.PRODUCTION_TEAM_PROGRESS_NOTE_KEY]:{distribution:true,technician:{completedAt:'2026-09-28T08:00:00Z',completedBy:'Test'}}}});
   const data=await (await api.get('?date=2026-09-29')).json();
   const task=data.tasks.find(item=>item.id==='legacy-prepared');
-  assert.equal(task.notes[taskLifecycle.PRODUCTION_LEGACY_COMPLETION_DAY_NOTE],'2026-09-28');
+  assert.deepEqual(task.notes,{});
+  assert.deepEqual(task.teamProgress,{});
   assert.equal(task.done,false);
-  assert.equal(workProgress.canProductionTeamStart(task,'process'),true);
-  assert.equal(taskLifecycle.isProductionCompletionVisibleOnDate('distribution',workProgress.productionTeamCompletion(task,'distribution'),'2026-09-29',task.notes[taskLifecycle.PRODUCTION_LEGACY_COMPLETION_DAY_NOTE]),false);
+  assert.equal(workProgress.canProductionTeamStart(task,'process'),false);
+  const original = api.db.przygotowanie_produkcji_tasks.find(row => row.id === 'old-task');
+  assert.equal(original.notes[workProgress.PRODUCTION_TEAM_PROGRESS_NOTE_KEY].distribution, true);
 });
 
 test('technology departments still move completed work out of the open queue', () => {

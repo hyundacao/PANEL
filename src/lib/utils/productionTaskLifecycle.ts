@@ -75,17 +75,6 @@ export const canRetireProductionSession = (
       if (!current || !current.notes.__machineAt || current.notes.__machineAt < (task.notes.__machineAt ?? '')) return false;
       continue;
     }
-    if ((task.station === 'ZADANIE DODATKOWE' || task.id.startsWith('restored-work:')) && shouldCarryProductionTask(task)
-      && !task.done && !activeById.has(task.id)) return false;
-    if (task.id.startsWith('toolroom-return:') && shouldCarryProductionTask(task) && !task.done) {
-      let parentId: string;
-      try {
-        parentId = decodeURIComponent(task.id.slice('toolroom-return:'.length));
-      } catch {
-        return false;
-      }
-      if (activeById.has(parentId) && !activeById.has(task.id)) return false;
-    }
   }
   return true;
 };
@@ -289,6 +278,25 @@ export const productionKindOwner = (kind: string): string => {
   return 'process';
 };
 
+// A new instruction replaces completed kinds for its owner, not the completion log.
+export const productionKindsForNewWork = <K extends string>(
+  current: readonly K[], requested: readonly K[], completedTeams: readonly string[]
+): K[] => {
+  const replacedOwners = new Set(requested.map(productionKindOwner).filter(team => completedTeams.includes(team)));
+  return [...new Set([
+    ...current.filter(kind => kind === 'anulowane' || !replacedOwners.has(productionKindOwner(kind))),
+    ...requested
+  ])];
+};
+
+export const resetProductionTaskForNewDay = <T extends {
+  kinds: string[]; teams: string[]; notes: Record<string, string | undefined>;
+  teamProgress?: unknown; toolroomReturnDone?: boolean; done: boolean;
+}>(task: T, retainedNotes: Record<string, string> = {}): T => ({
+  ...task, kinds: [], teams: [], notes: retainedNotes, teamProgress: {},
+  toolroomReturnDone: undefined, done: false
+});
+
 export const productionTaskDueDate = (notes: Record<string, string | undefined> | undefined): string => {
   const value = notes?.[PRODUCTION_TASK_DUE_DATE_NOTE] ?? '';
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '';
@@ -307,8 +315,6 @@ export const shouldCarryProductionTask = (task: {
   if (task.id.startsWith('zadanie-cykliczne:') || task.station === 'ZADANIE CYKLICZNE') return false;
   if (task.id.includes('::work-event:')) return false;
   if (task.kinds.includes('anulowane')) return false;
-  if (task.id.startsWith('toolroom-return:')) return task.teams.length > 0;
-  if (task.id.startsWith('restored-work:')) return task.teams.length > 0;
-  if (task.isCurrentPlan) return true;
-  return task.station === 'ZADANIE DODATKOWE' && task.teams.length > 0;
+  if (task.id.startsWith('toolroom-return:') || task.id.startsWith('restored-work:')) return false;
+  return task.isCurrentPlan && task.station !== 'ZADANIE DODATKOWE';
 };

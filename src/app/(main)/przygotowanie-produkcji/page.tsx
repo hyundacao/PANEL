@@ -24,7 +24,7 @@ import { useUiStore } from '@/lib/store/ui';
 import { defaultTeamComments, normalizeTeamComments, productionMetricsForTask, teamCommentForTask, type ProductionTeam, type TeamComment, type TeamComments } from '@/lib/utils/productionTeamComments';
 import { cn } from '@/lib/utils/cn';
 import { getWarsawProductionPlanDate, isProductionPlanDate } from '@/lib/utils/productionPlanDate';
-import { PRODUCTION_LEGACY_COMPLETION_DAY_NOTE, PRODUCTION_TASK_DUE_DATE_NOTE, isProductionCompletionVisibleOnDate, isRecentProductionHistoryDate, mergeProductionCompletedWork, productionKindOwner, productionTaskDoneOnDate, productionTaskDueDate, productionWorkEvents, summarizeProductionDay, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
+import { PRODUCTION_LEGACY_COMPLETION_DAY_NOTE, PRODUCTION_TASK_DUE_DATE_NOTE, isProductionCompletionVisibleOnDate, isRecentProductionHistoryDate, mergeProductionCompletedWork, productionKindOwner, productionKindsForNewWork, productionTaskDoneOnDate, productionTaskDueDate, productionWorkEvents, summarizeProductionDay, type ProductionCompletedWork, type ProductionDaySummary } from '@/lib/utils/productionTaskLifecycle';
 import { matchesProductionPlanStation } from '@/lib/utils/productionPlanSearch';
 import { PRODUCTION_RESTORED_WORK_PREFIX } from '@/lib/utils/productionWorkRestore';
 import { RECURRING_TASK_STATION, normalizeRecurringTasks, validateRecurringTasks, type RecurringTaskDefinition } from '@/lib/utils/productionRecurringTasks';
@@ -139,6 +139,7 @@ type TaskMutation = {
   setDistributionStageDone?: { stage: ProductionDistributionStage; done: boolean };
   setWorkComment?: { team: Team; text: string };
   requeueKind?: WorkKind;
+  requeueTeam?: Team;
   clearWork?: boolean;
 };
 
@@ -1585,11 +1586,12 @@ export default function PrzygotowanieProdukcjiPage() {
     : task.kinds.includes(kind) && !isProductionTeamDone(task, productionKindOwner(kind) as Team);
   const toggleKind = (task: Task, kind: WorkKind) => {
     if (!canEditWorkKind(task, kind)) return;
-    if (task.kinds.includes(kind) && !isWorkKindSelected(task, kind)) {
+    if (!isToolroomWorkKind(kind) && task.kinds.includes(kind) && !isWorkKindSelected(task, kind)) {
       mutateTask(task.id, { requeueKind: kind }, (current) => {
         const team = productionKindOwner(kind) as Team;
         const nextTask = {
           ...current,
+          kinds: productionKindsForNewWork(current.kinds, [kind], teamOptions.filter(item => isProductionTeamDone(current, item.id)).map(item => item.id)),
           teamProgress: setProductionTeamCompletion(current.teamProgress, team, false)
         };
         return { ...nextTask, done: isProductionTaskDone({ ...nextTask, done: false }) };
@@ -1609,12 +1611,16 @@ export default function PrzygotowanieProdukcjiPage() {
         if (mutation.setNotesIfMissing.process && !notes.process?.trim()) notes.process = mutation.setNotesIfMissing.process;
         const next: Task = {
           ...target,
-          kinds: [...new Set([...target.kinds.filter(item => !mutation.removeKinds.some(removed => removed === item)), ...mutation.addKinds])],
+          kinds: productionKindsForNewWork(target.kinds.filter(item => !mutation.removeKinds.some(removed => removed === item)), mutation.addKinds,
+            teamOptions.filter(item => isProductionTeamDone(target, item.id)).map(item => item.id)),
           teams: [...new Set([...target.teams.filter(item => !mutation.removeTeams.some(team => team === item)), ...mutation.addTeams])],
           notes,
-          teamProgress: mutation.setTeamDone ? setProductionTeamCompletion(target.teamProgress, 'mechanics', false) : target.teamProgress,
+          teamProgress: mutation.setTeamDone || mutation.requeueKind ? setProductionTeamCompletion(target.teamProgress, 'mechanics', false) : target.teamProgress,
           done: false
         };
+        if (selection.enabled && isProductionTeamDone(target, 'process')) {
+          next.teamProgress = setProductionTeamCompletion(next.teamProgress, 'process', false);
+        }
         next.teamProgress = productionTeamProgressForTask(next);
         next.done = isProductionTaskDone(next);
         return withToolroomReturnTasks(existing ? current.map(item => item.id === targetId ? next : item) : [...current, next]);
@@ -1633,7 +1639,9 @@ export default function PrzygotowanieProdukcjiPage() {
       ...(adding ? { addKinds: addedKinds, addTeams: addedTeams } : { removeKinds: [kind] }),
       setNotesIfMissing
     }, (currentTask) => {
-      const kinds = [...new Set(adding ? [...currentTask.kinds, ...addedKinds] : currentTask.kinds.filter((item) => item !== kind))];
+      const completedTeams = teamOptions.filter(item => isProductionTeamDone(currentTask, item.id)).map(item => item.id);
+      const kinds = adding ? productionKindsForNewWork(currentTask.kinds, addedKinds, completedTeams)
+        : currentTask.kinds.filter(item => item !== kind);
       const teams = [...new Set([...currentTask.teams, ...addedTeams])];
       let notes = addedTeams.includes('distribution') && !currentTask.notes.distribution
         ? { ...currentTask.notes, distribution: 'Przygotować stanowisko' }
@@ -1641,7 +1649,13 @@ export default function PrzygotowanieProdukcjiPage() {
       if (adding && kind === 'forma-narzedziownia' && !notes.process) {
         notes = { ...notes, process: 'Wznowienie procesu po powrocie z narzędziowni.' };
       }
-      const nextTask = { ...currentTask, kinds, teams, notes };
+      let progress = currentTask.teamProgress;
+      if (adding) for (const team of completedTeams) {
+        if (addedTeams.includes(team) || addedKinds.some(item => productionKindOwner(item) === team)) {
+          progress = setProductionTeamCompletion(progress, team, false);
+        }
+      }
+      const nextTask = { ...currentTask, kinds, teams, notes, teamProgress: progress };
       const teamProgress = productionTeamProgressForTask({ ...nextTask, done: false });
       const normalizedTask = { ...nextTask, teamProgress };
       return { ...normalizedTask, done: isProductionTaskDone({ ...normalizedTask, done: false }) };
@@ -1675,7 +1689,13 @@ export default function PrzygotowanieProdukcjiPage() {
     const workItems = planTaskWorkItems(task);
     const assignedItems = workItems.filter(item => item.teams.includes(team));
     if (assignedItems.length) {
-      assignedItems.forEach(item => isProductionTeamDone(item, team) ? toggleTeamDone(item, team) : toggleTeam(item, team));
+      assignedItems.forEach(item => {
+        if (!isProductionTeamDone(item, team)) { toggleTeam(item, team); return; }
+        mutateTask(item.id, { requeueTeam: team }, current => {
+          const next = { ...current, teamProgress: setProductionTeamCompletion(current.teamProgress, team, false), done: false };
+          return { ...next, done: isProductionTaskDone(next) };
+        });
+      });
     } else {
       const target = task.kinds.length ? task : workItems.find(isToolroomReturnTask) ?? task;
       toggleTeam(target, team);

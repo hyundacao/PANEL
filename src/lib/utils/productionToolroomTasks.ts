@@ -81,6 +81,8 @@ export const canSelectToolroomWork = (task: ToolroomTask, kind: ToolroomWorkKind
 export const toolroomWorkMutation = (task: ToolroomTask, selection: ToolroomWorkSelection) => {
   const { kind, enabled } = selection;
   const changed = task.kinds.includes(kind) !== enabled || (enabled && !task.teams.includes('mechanics'));
+  const repeatCompleted = enabled && task.teams.includes('mechanics')
+    && Boolean(task.teamProgress?.mechanics || task.done);
   const setNotesIfMissing: Record<string, string> = enabled && kind === TOOLROOM_SEND_KIND
     ? { process: 'Wznowienie procesu po powrocie z narzędziowni.' }
     : {};
@@ -92,7 +94,8 @@ export const toolroomWorkMutation = (task: ToolroomTask, selection: ToolroomWork
       ? enabled ? ['process' as const] : ['mechanics' as const, 'process' as const]
       : [],
     setNotesIfMissing,
-    ...(changed ? { setTeamDone: { team: 'mechanics' as const, done: false } } : {})
+    ...(repeatCompleted ? { requeueKind: kind } : {}),
+    ...(!repeatCompleted && changed ? { setTeamDone: { team: 'mechanics' as const, done: false } } : {})
   };
 };
 
