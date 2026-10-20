@@ -30,6 +30,7 @@ type PdfTextSegment = {
 };
 
 const PDF_EXTENSION = '.pdf';
+const PDF_PAGE_Y_OFFSET = 2000;
 const PDF_ROW_MIN_Y = 175;
 const PDF_ROW_CODE_MAX_X = 60;
 const PDF_INDEX_MIN_X = 60;
@@ -259,6 +260,26 @@ const parsePdfTextArraySegments = (
   return segments;
 };
 
+const extractPdfRowSeparators = (content: string, pageYOffset: number) => {
+  const separators: number[] = [];
+  const lineRegex = /(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+m\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+l\s+S\b/g;
+  for (const match of content.matchAll(lineRegex)) {
+    const [, rawX1, rawY1, rawX2, rawY2] = match;
+    const x1 = Number(rawX1);
+    const y1 = Number(rawY1);
+    const x2 = Number(rawX2);
+    const y2 = Number(rawY2);
+    if (
+      Math.abs(y1 - y2) <= 0.5 &&
+      Math.min(x1, x2) <= PDF_ROW_CODE_MAX_X &&
+      Math.max(x1, x2) >= PDF_AVAILABLE_MAX_X
+    ) {
+      separators.push(y1 + pageYOffset);
+    }
+  }
+  return separators;
+};
+
 const extractPdfTextSegments = async (bytes: Uint8Array) => {
   const objects = await parsePdfObjects(bytes);
   const fonts = new Map<number, PdfFont>();
@@ -278,6 +299,7 @@ const extractPdfTextSegments = async (bytes: Uint8Array) => {
   });
 
   const segments: PdfTextSegment[] = [];
+  const rowSeparators: number[] = [];
   const pageEntries: Array<{ resourcesId: number; contentIds: number[] }> = [];
 
   objects.forEach((object) => {
@@ -294,7 +316,7 @@ const extractPdfTextSegments = async (bytes: Uint8Array) => {
   for (const [pageIndex, page] of pageEntries.entries()) {
     const resourcesObject = objects.get(page.resourcesId);
     if (!resourcesObject) continue;
-    const pageYOffset = pageIndex * 2000;
+    const pageYOffset = pageIndex * PDF_PAGE_Y_OFFSET;
 
     const pageFonts = new Map<string, PdfFont>();
     const fontSection = resourcesObject.body.match(/\/Font <<([\s\S]*?)>>/);
@@ -311,6 +333,7 @@ const extractPdfTextSegments = async (bytes: Uint8Array) => {
       const contentObject = objects.get(contentId);
       if (!contentObject?.stream) continue;
       const content = new TextDecoder('latin1').decode(contentObject.stream);
+      rowSeparators.push(...extractPdfRowSeparators(content, pageYOffset));
       const tokenRegex =
         /\/(F\d+)\s+([0-9.]+)\s+Tf|([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+Tm|\[([\s\S]*?)\]\s*TJ|<([0-9A-Fa-f]+)>\s*Tj/g;
       let currentFont: PdfFont | null = null;
@@ -358,10 +381,10 @@ const extractPdfTextSegments = async (bytes: Uint8Array) => {
     }
   }
 
-  return segments;
+  return { segments, rowSeparators: [...new Set(rowSeparators)].sort((a, b) => a - b) };
 };
 
-const buildPdfSnapshotRows = (segments: PdfTextSegment[]) => {
+const buildPdfSnapshotRows = (segments: PdfTextSegment[], rowSeparators: number[]) => {
   const rowAnchors = segments
     .filter(
       (segment) =>
@@ -379,10 +402,22 @@ const buildPdfSnapshotRows = (segments: PdfTextSegment[]) => {
     }, []);
 
   return rowAnchors.map((anchorY, index) => {
+    const pageIndex = Math.floor(anchorY / PDF_PAGE_Y_OFFSET);
+    const pageSeparators = rowSeparators.filter(
+      (y) => Math.floor(y / PDF_PAGE_Y_OFFSET) === pageIndex
+    );
+    const top = pageSeparators.findLast((y) => y < anchorY);
+    const bottom = pageSeparators.find((y) => y > anchorY);
     const nextAnchorY = rowAnchors[index + 1] ?? Number.POSITIVE_INFINITY;
-    const rowMaxY = Math.min(nextAnchorY - 0.5, anchorY + 40);
+    const previousAnchorY = rowAnchors[index - 1] ?? Number.NEGATIVE_INFINITY;
+    // Codes can be vertically centered in multiline rows. The table rules, not
+    // the next code's baseline, separate the names of different materials.
+    const hasRowBounds = top !== undefined && bottom !== undefined &&
+      top > previousAnchorY && bottom < nextAnchorY;
+    const rowMinY = hasRowBounds ? top : anchorY - 0.5;
+    const rowMaxY = hasRowBounds ? bottom : Math.min(nextAnchorY - 0.5, anchorY + 40);
     const rowSegments = segments
-      .filter((segment) => segment.y >= anchorY - 0.5 && segment.y < rowMaxY)
+      .filter((segment) => segment.y >= rowMinY && segment.y < rowMaxY)
       .sort((left, right) => (left.y === right.y ? left.x - right.x : left.y - right.y));
     const numericSegments = rowSegments.filter((segment) => isQtyText(segment.text));
 
@@ -440,8 +475,8 @@ export const parseOriginalInventoryErpSnapshotPdfFile = async (
   file: File
 ): Promise<OriginalInventoryErpPdfItem[]> => {
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const segments = await extractPdfTextSegments(bytes);
-  const rows = buildPdfSnapshotRows(segments);
+  const { segments, rowSeparators } = await extractPdfTextSegments(bytes);
+  const rows = buildPdfSnapshotRows(segments, rowSeparators);
   const merged = new Map<string, OriginalInventoryErpPdfItem>();
 
   rows.forEach((row) => {
