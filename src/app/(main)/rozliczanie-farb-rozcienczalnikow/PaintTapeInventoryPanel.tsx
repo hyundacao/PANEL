@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Boxes,
@@ -11,10 +11,12 @@ import {
   ClipboardCheck,
   Clock3,
   FlaskConical,
+  FileDown,
   History,
   Layers3,
   LayoutGrid,
   ListChecks,
+  LoaderCircle,
   LockKeyhole,
   Package,
   PackagePlus,
@@ -169,6 +171,8 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
   const [activeInventorySuggestion, setActiveInventorySuggestion] = useState(0);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(() => new Set());
+  const [exporting, setExporting] = useState(false);
+  const exportBusy = useRef(false);
 
   const inventoryQuery = useQuery({
     queryKey: ['paint-tape-inventory', selectedDate],
@@ -518,6 +522,37 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
   };
 
   const progress = catalog.length > 0 ? Math.round((checkedItemCount / catalog.length) * 100) : 0;
+  const handleExportHistory = async () => {
+    if (exportBusy.current || !data || !session || session.inventoryDate !== selectedDate || !entries.length) return;
+    exportBusy.current = true;
+    setExporting(true);
+    try {
+      let snapshots = erpSnapshotQuery.data ?? [];
+      if (!isComparisonFrozen && !erpSnapshotQuery.isSuccess) {
+        const result = await erpSnapshotQuery.refetch();
+        if (result.isError) throw result.error;
+        snapshots = result.data ?? [];
+      }
+      const { createPaintTapeInventoryWorkbook } = await import('@/lib/utils/paintTapeInventoryWorkbook');
+      const workbook = await createPaintTapeInventoryWorkbook(data, snapshots, selectedDate);
+      const buffer = await workbook.xlsx.writeBuffer();
+      const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `spis-farb-i-tasm-${selectedDate}.xlsx`;
+      document.body.appendChild(anchor);
+      try { anchor.click(); } finally {
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+      toast({ title: `Wyeksportowano spis z dnia ${formatDate(selectedDate)}`, tone: 'success' });
+    } catch {
+      toast({ title: 'Nie udało się wyeksportować spisu', description: 'Sprawdź, czy spis i dane ERP zostały wczytane, i spróbuj ponownie.', tone: 'error' });
+    } finally {
+      exportBusy.current = false;
+      setExporting(false);
+    }
+  };
   const migrationRequired =
     inventoryQuery.error instanceof Error &&
     inventoryQuery.error.message === 'MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY';
@@ -852,29 +887,37 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
                   Zapisane pozycje: {checkedItemCount} · pomiary: {entries.length}
                 </p>
               </div>
-              {session?.status === 'CLOSED' && !readOnly ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => reopenMutation.mutate(selectedDate)}
-                  disabled={reopenMutation.isPending}
-                  className="paint-inventory-button paint-inventory-button-purple paint-inventory-button-active min-h-[44px] border-purple-500/35 px-4 text-title hover:border-purple-400/55"
-                >
-                  <RotateCcw className="mr-2 h-4 w-4" />
-                  Otwórz ponownie
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" onClick={() => void handleExportHistory()}
+                  disabled={exporting || inventoryQuery.isFetching || !inventoryQuery.isSuccess || !session || session.inventoryDate !== selectedDate || !entries.length || (!isComparisonFrozen && erpSnapshotQuery.isFetching)}
+                  aria-busy={exporting} className="min-h-[44px]">
+                  {exporting ? <LoaderCircle className="mr-2 h-4 w-4 shrink-0 animate-spin" aria-hidden="true" /> : <FileDown className="mr-2 h-4 w-4 shrink-0" aria-hidden="true" />}
+                  {exporting ? 'Eksportowanie...' : 'Eksportuj do Excela'}
                 </Button>
-              ) : session?.status === 'OPEN' && !readOnly ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleClose}
-                  disabled={closeMutation.isPending}
-                  className="paint-inventory-button paint-inventory-button-amber paint-inventory-button-active min-h-[44px] border-amber-500/35 px-4 text-title hover:border-amber-400/55"
-                >
-                  <LockKeyhole className="mr-2 h-4 w-4" />
-                  Zamknij ponownie
-                </Button>
-              ) : null}
+                {session?.status === 'CLOSED' && !readOnly ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => reopenMutation.mutate(selectedDate)}
+                    disabled={reopenMutation.isPending}
+                    className="paint-inventory-button paint-inventory-button-purple paint-inventory-button-active min-h-[44px] border-purple-500/35 px-4 text-title hover:border-purple-400/55"
+                  >
+                    <RotateCcw className="mr-2 h-4 w-4" />
+                    Otwórz ponownie
+                  </Button>
+                ) : session?.status === 'OPEN' && !readOnly ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleClose}
+                    disabled={closeMutation.isPending}
+                    className="paint-inventory-button paint-inventory-button-amber paint-inventory-button-active min-h-[44px] border-amber-500/35 px-4 text-title hover:border-amber-400/55"
+                  >
+                    <LockKeyhole className="mr-2 h-4 w-4" />
+                    Zamknij ponownie
+                  </Button>
+                ) : null}
+              </div>
             </div>
             <div className={cn('hidden gap-3 border-b border-border bg-[rgba(255,255,255,0.035)] px-4 py-3 text-[10px] font-black uppercase text-dim lg:grid', locked ? 'grid-cols-[minmax(260px,1.25fr)_130px_130px_minmax(190px,0.9fr)]' : 'grid-cols-[minmax(240px,1.25fr)_120px_120px_minmax(170px,0.9fr)_130px_52px]')}>
               <span>Nazwa</span>

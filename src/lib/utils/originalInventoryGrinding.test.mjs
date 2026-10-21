@@ -1,6 +1,51 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import vm from 'node:vm';
 import test from 'node:test';
 import { applyPieceGrindingReservations, getPendingGrindingQuantities, grindingMaterialKey, groupGrindingTasksByMaterial, isPieceGrindingUnit } from './originalInventoryGrinding.ts';
+import { grindingTargetSuggestionKey, normalizeRemovedGrindingTargetSuggestions } from './grindingTargetSuggestions.ts';
+
+test('removed suggestions have stable keys and retain independent full catalog names', () => {
+  assert.equal(grindingTargetSuggestionKey(' PP '), grindingTargetSuggestionKey('pp'));
+  assert.equal(grindingTargetSuggestionKey('Elix +grafika'), grindingTargetSuggestionKey('ELIX + GRAFIKA'));
+  assert.notEqual(grindingTargetSuggestionKey('pp'), grindingTargetSuggestionKey('PRZEMIAL PP'));
+  assert.deepEqual(normalizeRemovedGrindingTargetSuggestions([null, { name: '' }, { name: 'pp' }, { name: ' PP ', createdBy: 'operator' }]),
+    [{ name: 'PP', createdAt: '', createdBy: 'operator' }]);
+});
+
+test('grinding dropdown removes the two historical suggestions without changing tasks or active catalogs', () => {
+  const ts = createRequire(import.meta.url)('typescript');
+  const source = readFileSync(new URL('../../components/planowanie-zapotrzebowania/SpisRzeczywisty.tsx', import.meta.url), 'utf8');
+  const ast = ts.createSourceFile('SpisRzeczywisty.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let initializer;
+  const visit = (node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'grindTargetOptions') initializer = node.initializer.getText(ast);
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  assert.ok(initializer);
+  const materials = [{ code: 'PRZEMIAL PP MIX', isActive: true }, { code: 'PRZEMIAL ABS ELIX Z GRAFIKA', isActive: true }, { code: 'INACTIVE', isActive: false }];
+  const tasks = ['pp', 'Elix +grafika', 'PRZEMIAL PP', 'PRZEMIAL PP MIX'].map((targetMaterialName, i) => ({
+    id: `task-${i}`, materialName: 'MATERIAL', targetMaterialName, qty: 20, unit: 'kg', status: 'DONE'
+  }));
+  const before = JSON.stringify({ materials, tasks });
+  const run = (grindTargetSourceMaterials, removedGrindTargetSuggestions) => {
+    const mod = { exports: null };
+    vm.runInNewContext(ts.transpileModule(`module.exports = ${initializer};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+      module: mod, useMemo: (calculate) => calculate(), grindTargetSourceMaterials, grindTasks: tasks,
+      normalizeCatalogNameKey: (name) => name.trim().toLowerCase(),
+      removedGrindTargetSuggestions, grindingTargetSuggestionKey, collator: new Intl.Collator('pl')
+    });
+    return [...mod.exports];
+  };
+  const removed = [{ name: 'pp' }, { name: 'Elix +grafika' }];
+  assert.deepEqual(run(materials, removed), ['PRZEMIAL ABS ELIX Z GRAFIKA', 'PRZEMIAL PP', 'PRZEMIAL PP MIX']);
+  assert.equal(JSON.stringify({ materials, tasks }), before);
+  assert.ok(run(materials, [{ name: 'Elix +grafika' }]).includes('pp'), 'restoring a suggestion makes it selectable again');
+  assert.ok(!run(materials, [...removed, { name: 'PRZEMIAL PP MIX' }]).includes('PRZEMIAL PP MIX'), 'removing a catalog suggestion hides it only in this picker');
+  assert.equal(materials[0].isActive, true);
+});
 
 const normalize = (name) => name.trim().toLowerCase();
 const entry = (name, unit, availableQty, importedAt = '2026-09-17T07:00:00.000Z') => ({

@@ -135,6 +135,18 @@ export type MaterialCatalog = {
   isActive: boolean;
 };
 
+export type RegrindCatalogErpStock = {
+  catalog: string;
+  erpQty: number | null;
+  indexCode: string | null;
+};
+
+export type RegrindCatalogErpComparison = {
+  snapshotDate: string | null;
+  importedAt: string | null;
+  items: RegrindCatalogErpStock[];
+};
+
 export type MaterialCatalogImportResult = {
   total: number;
   inserted: number;

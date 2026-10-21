@@ -4,6 +4,23 @@ export const isPieceGrindingUnit = (unit: string | null | undefined) =>
 export const isKilogramGrindingUnit = (unit: string | null | undefined) =>
   /^kg\.?$/i.test(String(unit ?? '').trim());
 
+export const GRIND_DOCUMENT_KG_LIMIT = 500;
+export const GRIND_DOCUMENT_BATCH_LIMIT = 1000;
+
+export const splitGrindingQuantity = (qty: number, unit: string): number[] => {
+  if (!Number.isFinite(qty) || qty <= 0) throw new Error('QTY_REQUIRED');
+  if (isPieceGrindingUnit(unit) && !Number.isSafeInteger(qty)) throw new Error('QTY_INTEGER_REQUIRED');
+  if (!isKilogramGrindingUnit(unit) || qty <= GRIND_DOCUMENT_KG_LIMIT) return [qty];
+  if (Math.ceil(qty / GRIND_DOCUMENT_KG_LIMIT) > GRIND_DOCUMENT_BATCH_LIMIT) throw new Error('TOO_MANY_GRIND_DOCUMENTS');
+  const fullDocuments = Math.floor(qty / GRIND_DOCUMENT_KG_LIMIT);
+  const parts = Array<number>(fullDocuments).fill(GRIND_DOCUMENT_KG_LIMIT);
+  // Keep the entered decimal precision instead of exposing binary subtraction noise.
+  const decimals = String(qty).split('.')[1]?.length ?? 0;
+  const remainder = Number((qty - fullDocuments * GRIND_DOCUMENT_KG_LIMIT).toFixed(decimals));
+  if (remainder > 0) parts.push(remainder);
+  return parts;
+};
+
 /** Combines repeated visible lines while retaining every saved task for actions. */
 export const groupGrindingTasksByMaterial = <T extends { materialName: string; unit: string; qty: number }>(
   tasks: readonly T[],

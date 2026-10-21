@@ -12,15 +12,18 @@ const unitKey = (value: string) => isPieceGrindingUnit(value)
 
 export const findOriginalInventoryCatalogMaterial = <T extends MaterialIdentity>(
   catalog: readonly T[],
-  material: Pick<MaterialIdentity, 'name' | 'unit'>
+  material: MaterialIdentity
 ): T | null => {
   const name = normalizeOriginalInventoryNameKey(material.name);
   const unit = unitKey(material.unit);
   if (!name || !unit) return null;
+  const index = indexKey(material.indexCode);
   // Inspect all exact matches before choosing an index, not a truncated suggestion list.
-  const matches = catalog.filter((item) => [item.name, ...item.previousNames ?? []].some((value) => normalizeOriginalInventoryNameKey(value) === name) &&
+  const matches = catalog.filter((item) => (index
+    ? indexKey(item.indexCode) === index
+    : [item.name, ...item.previousNames ?? []].some((value) => normalizeOriginalInventoryNameKey(value) === name)) &&
     unitKey(item.unit) === unit && indexKey(item.indexCode));
-  if (!matches.length || new Set(matches.map((item) => indexKey(item.indexCode))).size !== 1) return null;
+  if (!matches.length || new Set(matches.map((item) => `${indexKey(item.indexCode)}|${normalizeOriginalInventoryNameKey(item.name)}`)).size !== 1) return null;
   return matches[0];
 };
 

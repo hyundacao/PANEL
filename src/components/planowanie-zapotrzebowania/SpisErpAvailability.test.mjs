@@ -155,17 +155,20 @@ test('an already counted suggestion without an index resolves the grate without 
   }
 });
 
-test('catalog resolution requires a full name, compatible unit and one unambiguous ERP index', () => {
+test('catalog resolution requires an exact name or full index, compatible unit and one unambiguous identity', () => {
   const item = { name: grateName, unit: 'szt.', indexCode: '1598-7' };
   assert.equal(findOriginalInventoryCatalogMaterial([item], { name: `  ${grateName.toLowerCase()}  `, unit: 'szt' }), item);
   assert.equal(findOriginalInventoryCatalogMaterial([item, { ...item }], item), item);
-  assert.equal(findOriginalInventoryCatalogMaterial([item], { ...item, name: 'KRATA STALOWA' }), null);
+  assert.equal(findOriginalInventoryCatalogMaterial([item], { name: 'KRATA STALOWA', unit: item.unit }), null);
+  assert.equal(findOriginalInventoryCatalogMaterial([item], { ...item, name: 'OLD NAME' }), item);
+  assert.equal(findOriginalInventoryCatalogMaterial([item], { ...item, indexCode: '1598-70' }), null);
   assert.equal(findOriginalInventoryCatalogMaterial([item], { ...item, unit: 'kg' }), null);
   assert.equal(findOriginalInventoryCatalogMaterial([item], { ...item, name: '' }), null);
   assert.equal(findOriginalInventoryCatalogMaterial([{ ...item, indexCode: null }], item), null);
   assert.equal(findOriginalInventoryCatalogMaterial([
     ...Array.from({ length: 40 }, () => item), { ...item, indexCode: '1700' }
-  ], item), null, 'a different index after the suggestion limit must still prevent guessing');
+  ], { name: item.name, unit: item.unit }), null, 'a different index after the suggestion limit must still prevent guessing');
+  assert.equal(findOriginalInventoryCatalogMaterial([item, { ...item, name: 'CONFLICTING NAME' }], item), null);
 });
 
 const identityOptions = (name, unit, fetcher, selectedErpIndex = null, tab = 'spis', hasStock = true) => {
@@ -177,7 +180,7 @@ const identityOptions = (name, unit, fetcher, selectedErpIndex = null, tab = 'sp
   return mod.exports;
 };
 
-test('exact identity requests are cached, cancellable and disabled for indexed choices or empty forms', async () => {
+test('identity requests refresh canonical names even for indexed choices and without ERP stock', async () => {
   let calls = 0;
   const fetcher = async (name, unit, signal) => {
     calls++;
@@ -188,10 +191,10 @@ test('exact identity requests are cached, cancellable and disabled for indexed c
   };
   const options = identityOptions(grateName, 'szt.', fetcher);
   assert.equal(options.enabled, true);
-  assert.equal(identityOptions(grateName, 'szt.', fetcher, '1598-7').enabled, false);
+  assert.equal(identityOptions(grateName, 'szt.', fetcher, '1598-7').enabled, true);
   assert.equal(identityOptions('', 'szt.', fetcher).enabled, false);
   assert.equal(identityOptions(grateName, 'szt.', fetcher, null, 'kartoteki').enabled, false);
-  assert.equal(identityOptions(grateName, 'szt.', fetcher, null, 'spis', false).enabled, false);
+  assert.equal(identityOptions(grateName, 'szt.', fetcher, null, 'spis', false).enabled, true);
   const client = new QueryClient();
   try {
     assert.equal((await client.fetchQuery(options)).indexCode, '1598-7');

@@ -15,6 +15,7 @@ import type {
   LocationOverview,
   Material,
   MaterialCatalog,
+  RegrindCatalogErpComparison,
   MaterialCatalogImportResult,
   MaterialImportResult,
   MaterialLocationsMap,
@@ -193,6 +194,9 @@ export const closeSpis = async () => appRequest('closeSpis');
 export const getReports = async (): Promise<ReportRow[]> => appRequest('getReports');
 
 export const getCatalog = async (): Promise<Material[]> => appRequest('getCatalog');
+
+export const getRegrindCatalogErpComparison = async (): Promise<RegrindCatalogErpComparison> =>
+  appRequest('getRegrindCatalogErpComparison');
 
 export const getCatalogs = async (): Promise<MaterialCatalog[]> => appRequest('getCatalogs');
 
@@ -638,9 +642,10 @@ export const searchOriginalInventoryCatalog = async (
 export const resolveOriginalInventoryCatalogMaterial = async (
   name: string,
   unit: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  indexCode?: string | null
 ): Promise<OriginalInventoryCatalogEntry | null> =>
-  appRequest('resolveOriginalInventoryCatalogMaterial', { name, unit, catalogRefreshToken: originalInventoryCatalogRefreshToken }, signal);
+  appRequest('resolveOriginalInventoryCatalogMaterial', { name, unit, indexCode, catalogRefreshToken: originalInventoryCatalogRefreshToken }, signal);
 
 export const getOriginalInventorySilosConfig = async (): Promise<OriginalInventorySiloConfig[]> =>
   appRequest('getOriginalInventorySilosConfig', { catalogRefreshToken: originalInventoryCatalogRefreshToken });
@@ -686,7 +691,7 @@ export const addOriginalInventoryGrindTask = async (payload: {
   qty: number;
   unit?: string;
   sourceReportDate?: string;
-}): Promise<OriginalInventoryGrindTask> => appRequest('addOriginalInventoryGrindTask', payload);
+}): Promise<OriginalInventoryGrindTask[]> => appRequest('addOriginalInventoryGrindTask', payload);
 
 export const removeOriginalInventoryGrindTask = async (id: string): Promise<string> =>
   appRequest('removeOriginalInventoryGrindTask', { id });

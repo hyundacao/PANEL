@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown } from 'lucide-react';
-import { getCatalog, getCurrentMaterialTotals, getMaterialLocations, getTodayKey } from '@/lib/api';
+import { ChevronDown, RefreshCw } from 'lucide-react';
+import { getCatalog, getCurrentMaterialTotals, getMaterialLocations, getRegrindCatalogErpComparison, getTodayKey } from '@/lib/api';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
 import { SearchInput } from '@/components/ui/SearchInput';
@@ -17,7 +17,7 @@ const normalizeSearch = (value: string) => value.trim().toLowerCase();
 export default function CatalogPage() {
   const today = getTodayKey();
   const { data } = useQuery({ queryKey: ['catalog'], queryFn: getCatalog });
-  const { data: currentTotals } = useQuery({
+  const { data: currentTotals, isPending: isTotalsPending, isError: isTotalsError } = useQuery({
     queryKey: ['material-totals', today, 'all'],
     queryFn: () => getCurrentMaterialTotals('all')
   });
@@ -33,6 +33,18 @@ export default function CatalogPage() {
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [expandedCatalogs, setExpandedCatalogs] = useState<Record<string, boolean>>({});
+  const { data: erpComparison, isPending: isErpPending, isError: isErpError, isFetching: isErpFetching, refetch: refetchErp } = useQuery({
+    queryKey: ['regrind-catalog-erp-comparison'],
+    queryFn: getRegrindCatalogErpComparison,
+    enabled: view === 'catalogs',
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    retry: 1
+  });
+  const erpByCatalog = useMemo(() => new Map((erpComparison?.items ?? []).map((item) => [item.catalog, item])), [erpComparison]);
+  const erpDateLabel = erpComparison?.snapshotDate
+    ? new Intl.DateTimeFormat('pl-PL', { timeZone: 'Europe/Warsaw' }).format(new Date(`${erpComparison.snapshotDate}T12:00:00Z`))
+    : null;
   const searchQuery = normalizeSearch(search);
 
   useEffect(() => {
@@ -237,41 +249,72 @@ export default function CatalogPage() {
           </TabsContent>
 
           <TabsContent value="catalogs" className="mt-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm text-dim">
+              <p role="status">
+                {isErpError ? 'Nie udało się wczytać stanów ERP.'
+                  : isErpPending ? 'Wczytywanie stanów ERP...'
+                  : erpDateLabel ? `Stan rzeczywisty ERP: ${erpDateLabel}` : 'Brak importu stanów ERP.'}
+                {isTotalsError && ' Nie udało się wczytać stanu spisanego.'}
+              </p>
+              <button type="button" onClick={() => { void refetchErp(); }} disabled={isErpFetching}
+                aria-label="Odśwież stany ERP" title="Odśwież stany ERP"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border text-dim transition hover:text-title disabled:opacity-50">
+                <RefreshCw className={`h-4 w-4 ${isErpFetching ? 'animate-spin' : ''}`} aria-hidden="true" />
+              </button>
+            </div>
             <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-[inset_0_1px_0_var(--inner-highlight)]">
-              <div className="hidden gap-4 bg-surface2 px-4 py-3 text-sm font-semibold text-dim sm:grid sm:grid-cols-[minmax(0,1fr)_160px]">
+              <div className="hidden gap-4 bg-surface2 px-4 py-3 text-sm font-semibold text-dim lg:grid lg:grid-cols-[minmax(0,1fr)_450px]">
                 <span>Kartoteka</span>
-                <span className="text-right">Suma (kg)</span>
+                <div className="grid grid-cols-3 gap-3 text-right">
+                  <span>Stan spisany (kg)</span>
+                  <span>Stan ERP (kg)</span>
+                  <span>Różnica (spis − ERP)</span>
+                </div>
               </div>
               {filteredCatalogTotals.map((row) => {
                 const isExpanded = !!expandedCatalogs[row.catalog];
                 const items = getVisibleCatalogItems(row.catalog);
+                const erp = erpByCatalog.get(row.catalog);
+                const erpQty = !isErpError && !isErpPending ? erp?.erpQty ?? null : null;
+                const difference = erpQty !== null && !isTotalsPending && !isTotalsError
+                  ? Math.round((row.total - erpQty) * 1000) / 1000 : null;
                 return (
                   <div key={row.catalog} className="border-t border-border">
                     <button
                       type="button"
                       onClick={() => toggleCatalogExpanded(row.catalog)}
                       aria-expanded={isExpanded}
-                      className="grid w-full gap-2 px-4 py-3 text-left transition hover:bg-[rgba(255,255,255,0.03)] sm:grid-cols-[minmax(0,1fr)_160px] sm:items-center sm:gap-4"
+                      className="grid w-full gap-3 px-4 py-3 text-left transition hover:bg-[rgba(255,255,255,0.03)] lg:grid-cols-[minmax(0,1fr)_450px] lg:items-center lg:gap-4"
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex min-w-0 items-center gap-3">
                         <ChevronDown
-                          className={`h-4 w-4 transition ${
+                          className={`h-4 w-4 shrink-0 transition ${
                             isExpanded ? 'rotate-180 text-brand' : 'text-dim'
                           }`}
                         />
-                        <div>
-                          <p className="catalog-label text-base font-semibold">
+                        <div className="min-w-0">
+                          <p className="catalog-label break-words text-base font-semibold">
                             KARTOTEKA WEDŁUG ERP {row.catalog}
                           </p>
                           <p className="text-sm text-dim">{row.count} przemiałów</p>
                         </div>
                       </div>
-                      <span
-                        className="text-left text-base font-semibold tabular-nums sm:text-right"
-                        style={{ color: 'var(--value-purple)' }}
-                      >
-                        {formatKg(row.total)}
-                      </span>
+                      <div className="grid min-w-0 grid-cols-3 gap-3 text-right text-sm font-semibold tabular-nums sm:text-base">
+                        <div className="min-w-0">
+                          <span className="mb-1 block text-xs font-medium text-dim lg:hidden">Stan spisany</span>
+                          <span style={{ color: 'var(--value-purple)' }}>{isTotalsPending || isTotalsError ? '—' : formatKg(row.total)}</span>
+                        </div>
+                        <div className="min-w-0" title={erp?.indexCode ? `Indeks ERP: ${erp.indexCode}` : undefined}>
+                          <span className="mb-1 block text-xs font-medium text-dim lg:hidden">Stan ERP</span>
+                          <span className="text-title">{isErpPending ? '…' : isErpError ? 'Błąd ERP' : erpQty === null ? 'Brak danych' : formatKg(erpQty)}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <span className="mb-1 block text-xs font-medium text-dim lg:hidden">Spis − ERP</span>
+                          <span className={difference === null ? 'text-dim' : difference < 0 ? 'text-danger' : difference > 0 ? 'text-warning' : 'text-success'}>
+                            {difference === null ? '—' : `${difference > 0 ? '+' : ''}${formatKg(difference)}`}
+                          </span>
+                        </div>
+                      </div>
                     </button>
                     {isExpanded && (
                       <div className="px-4 pb-4">

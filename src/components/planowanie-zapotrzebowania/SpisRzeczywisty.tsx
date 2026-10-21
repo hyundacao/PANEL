@@ -1,6 +1,8 @@
 'use client';
 import PalletInventoryEditor from '@/components/planowanie-zapotrzebowania/PalletInventoryEditor';
 import { SpisErpAvailability } from '@/components/planowanie-zapotrzebowania/SpisErpAvailability';
+import { GrindingTargetInput } from '@/components/planowanie-zapotrzebowania/GrindingTargetInput';
+import { GRIND_TARGET_EXCLUSIONS_QUERY_KEY, grindingTargetSuggestionKey, normalizeRemovedGrindingTargetSuggestions } from '@/lib/utils/grindingTargetSuggestions';
 import { matchOriginalInventoryErpStock } from '@/lib/utils/originalInventoryErpMatch';
 import { ErpCatalogImportNotice } from '@/components/planowanie-zapotrzebowania/ErpCatalogImportNotice';
 import { getOriginalInventoryPalletSets, addOriginalInventoryPalletSet } from '@/lib/api';
@@ -56,7 +58,10 @@ import {
   grindingMaterialKey,
   groupGrindingTasksByMaterial,
   isKilogramGrindingUnit,
-  isPieceGrindingUnit
+  isPieceGrindingUnit,
+  GRIND_DOCUMENT_KG_LIMIT,
+  GRIND_DOCUMENT_BATCH_LIMIT,
+  splitGrindingQuantity
 } from '@/lib/utils/originalInventoryGrinding';
 import {
   matchGrindingTechnologyMass,
@@ -645,7 +650,8 @@ const OriginalInventoryNameSearch = ({
   const [previousValue, setPreviousValue] = useState(value);
   if (previousValue !== value) {
     setPreviousValue(value);
-    setQuery(value);
+    // A late catalog rename must not replace a different material being typed.
+    if (query === previousValue) setQuery(value);
   }
   const queryRef = useRef(value);
   const closeSuggestionsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -657,8 +663,8 @@ const OriginalInventoryNameSearch = ({
   const remoteSearchEnabled = normalizedQuery.replace(/\s/g, '').length >= SPIS_SEARCH_MIN_LENGTH;
 
   useEffect(() => {
-    queryRef.current = value;
-  }, [value]);
+    queryRef.current = query;
+  }, [query]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => setDebouncedQuery(query), SPIS_SEARCH_DEBOUNCE_MS);
@@ -710,6 +716,7 @@ const OriginalInventoryNameSearch = ({
       <Input
         ref={inputRef}
         value={query}
+        title={query}
         onChange={(event) => {
           cancelSuggestionsClose();
           queryRef.current = event.target.value;
@@ -863,7 +870,6 @@ export default function SpisRzeczywisty() {
   const [editingGrindDocumentKeys, setEditingGrindDocumentKeys] = useState<Record<string, boolean>>({});
   const [grindKind, setGrindKind] = useState<'materials' | 'details'>('materials');
   const [expandedGrindDocumentKeys, setExpandedGrindDocumentKeys] = useState<Record<string, boolean>>({});
-  const [showGrindTargetSuggestions, setShowGrindTargetSuggestions] = useState(false);
   const [spisDate, setSpisDate] = useState(getLocalDateValue());
   const [catalogSearch, setCatalogSearch] = useState('');
   const deferredCatalogSearch = useDeferredValue(catalogSearch);
@@ -996,6 +1002,20 @@ export default function SpisRzeczywisty() {
     queryKey: ['catalog'],
     queryFn: getCatalog,
     enabled: activeTab === 'do-zmielenia' || (activeTab === 'raporty' && Boolean(grindDialogMaterial))
+  });
+  const {
+    data: removedGrindTargetSuggestions = [], isPending: isGrindTargetSuggestionsPending,
+    isError: isGrindTargetSuggestionsError, refetch: refetchGrindTargetSuggestions
+  } = useQuery({
+    queryKey: GRIND_TARGET_EXCLUSIONS_QUERY_KEY,
+    queryFn: async ({ signal }) => {
+      const response = await fetch('/api/original-inventory-grind-target-exclusions', { cache: 'no-store', signal });
+      if (!response.ok) throw new Error('GRIND_TARGET_EXCLUSIONS_LOAD_FAILED');
+      const payload = await response.json() as { items?: unknown };
+      return normalizeRemovedGrindingTargetSuggestions(payload.items);
+    },
+    enabled: activeTab === 'do-zmielenia' || (activeTab === 'raporty' && Boolean(grindDialogMaterial)),
+    staleTime: 0, refetchInterval: 30_000, retry: false
   });
   const {
     data: grindingTechnologies = [],
@@ -1383,20 +1403,21 @@ export default function SpisRzeczywisty() {
   });
   const addGrindTaskMutation = useMutation({
     mutationFn: addOriginalInventoryGrindTask,
-    onSuccess: (_task, variables) => {
+    onSuccess: (tasks, variables) => {
       queryClient.invalidateQueries({ queryKey: ['original-inventory-grind-tasks'] });
       setGrindKind(isPieceGrindingUnit(variables.unit) ? 'details' : 'materials');
       setGrindDialogMaterial(null);
       setGrindQty('');
       setGrindTargetMaterial('');
-      setShowGrindTargetSuggestions(false);
-      toast({ title: 'Dodano do zmielenia', tone: 'success' });
+      toast({ title: 'Dodano do zmielenia', description: tasks.length > 1
+        ? `Podział ilości: ${tasks.length} części, maksymalnie ${GRIND_DOCUMENT_KG_LIMIT} kg na dokument.` : undefined, tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
         MATERIAL_REQUIRED: 'Nie wybrano materialu.',
         QTY_REQUIRED: 'Wpisz poprawną ilość.',
         QTY_INTEGER_REQUIRED: 'Dla detali wpisz pełną liczbę sztuk.',
+        TOO_MANY_GRIND_DOCUMENTS: `Jednorazowo można dodać maksymalnie ${GRIND_DOCUMENT_BATCH_LIMIT} dokumentów.`,
         MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS:
           'Brakuje migracji bazy dla listy do zmielenia.'
       };
@@ -2071,22 +2092,32 @@ export default function SpisRzeczywisty() {
     return existingByName.get(needle) ?? null;
   }, [existingByName, form.name]);
   const selectedErpIndex = selectedErpMaterial?.name === form.name ? selectedErpMaterial.indexCode : null;
-  const needsErpCatalogIdentity = activeTab === 'spis' && Boolean(form.name.trim()) &&
-    !selectedErpIndex && erpSnapshotEntries.length > 0;
+  const needsErpCatalogIdentity = activeTab === 'spis' && Boolean(form.name.trim());
   const {
     data: resolvedErpMaterial,
     isPending: isErpMaterialPending,
     isError: isErpMaterialError,
     refetch: refetchErpMaterial
   } = useQuery({
-    queryKey: ['spis-oryginalow-catalog-material', form.name.trim(), form.unit],
-    queryFn: ({ signal }) => resolveOriginalInventoryCatalogMaterial(form.name, form.unit, signal),
+    queryKey: ['spis-oryginalow-catalog-material', form.name.trim(), form.unit, selectedErpIndex],
+    queryFn: ({ signal }) => resolveOriginalInventoryCatalogMaterial(form.name, form.unit, signal, selectedErpIndex),
     enabled: needsErpCatalogIdentity,
     staleTime: 5 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false,
     retry: false
   });
+  useEffect(() => {
+    if (!resolvedErpMaterial || resolvedErpMaterial.name === form.name) return;
+    const name = resolvedErpMaterial.name;
+    selectedCatalogRef.current = { id: resolvedErpMaterial.id, name };
+    setSelectedCatalogId(resolvedErpMaterial.id);
+    setSelectedErpMaterial({ name, indexCode: resolvedErpMaterial.indexCode ?? null });
+    setForm((current) => current.name === form.name && current.unit === form.unit
+      ? { ...current, name }
+      : current);
+    void queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] });
+  }, [resolvedErpMaterial, form.name, form.unit, queryClient]);
   const matchedErpSnapshot = useMemo(() => {
     return matchOriginalInventoryErpStock(effectiveErpSnapshotEntries, {
       name: form.name,
@@ -3275,6 +3306,7 @@ export default function SpisRzeczywisty() {
 
   const grindTargetOptions = useMemo(() => {
     const options = new Map<string, string>();
+    const removed = new Set(removedGrindTargetSuggestions.map((item) => grindingTargetSuggestionKey(item.name)));
     grindTargetSourceMaterials
       .filter((material) => material.isActive)
       .forEach((material) => {
@@ -3287,8 +3319,9 @@ export default function SpisRzeczywisty() {
       const key = normalizeCatalogNameKey(value);
       if (key && key !== normalizeCatalogNameKey(task.materialName) && !options.has(key)) options.set(key, value);
     });
-    return [...options.values()].sort((a, b) => collator.compare(a, b));
-  }, [grindTargetSourceMaterials, grindTasks]);
+    return [...options.values()].filter((name) => !removed.has(grindingTargetSuggestionKey(name)))
+      .sort((a, b) => collator.compare(a, b));
+  }, [grindTargetSourceMaterials, grindTasks, removedGrindTargetSuggestions]);
   const grindIdentifiersByName = useMemo(() => {
     const byName = new Map<string, Map<string, { indexCode2: string | null; code: string | null }>>();
     catalog.forEach((item) => {
@@ -3372,7 +3405,7 @@ export default function SpisRzeczywisty() {
       completedAt?: string | null;
       completedBy?: string | null;
     }> = [];
-    const sorted = [...tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const sorted = [...tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || b.qty - a.qty);
 
     sorted.forEach((task) => {
       const savedTarget = task.targetMaterialName?.trim() ?? '';
@@ -3389,7 +3422,7 @@ export default function SpisRzeczywisty() {
               .find(
                 (document) =>
                   normalizeCatalogNameKey(document.targetMaterialName) === targetKey &&
-                  (grindKind === 'details' || document.totalQty + task.qty <= 500)
+                  (grindKind === 'details' || document.totalQty + task.qty <= GRIND_DOCUMENT_KG_LIMIT)
               )
           : documents.find(
               (document) =>
@@ -3433,9 +3466,13 @@ export default function SpisRzeczywisty() {
   const grindQtyLimitMessage =
     isGrindDialogDetail && parsedGrindQty !== null && !Number.isSafeInteger(parsedGrindQty)
       ? 'Dla detalu wpisz pełną liczbę sztuk.'
-      : parsedGrindQty !== null && Number.isFinite(parsedGrindQty) && isKilogramGrindingUnit(grindDialogMaterial?.unit) && parsedGrindQty > 500
-        ? `Maksymalna mo\u017cliwa ilo\u015b\u0107 do wpisania: ${formatQty(500)} kg`
+      : parsedGrindQty !== null && isKilogramGrindingUnit(grindDialogMaterial?.unit) && parsedGrindQty > GRIND_DOCUMENT_KG_LIMIT * GRIND_DOCUMENT_BATCH_LIMIT
+        ? `Jednorazowo można dodać maksymalnie ${GRIND_DOCUMENT_BATCH_LIMIT} dokumentów.`
         : '';
+  const grindQuantityParts = parsedGrindQty !== null && Number.isFinite(parsedGrindQty) && parsedGrindQty > 0 && !grindQtyLimitMessage
+    ? splitGrindingQuantity(parsedGrindQty, grindDialogMaterial?.unit ?? 'kg') : [];
+  const grindSplitSummary = grindQuantityParts.length > 1
+    ? `Podział: ${grindQuantityParts.slice(0, 4).map((qty) => `${formatQty(qty)} kg`).join(' + ')}${grindQuantityParts.length > 4 ? ` + … (${grindQuantityParts.length} części)` : ''}` : '';
   const openGrindDialog = (row: (typeof reportRows)[number]) => {
     if (!isKilogramGrindingUnit(row.unit) && !isPieceGrindingUnit(row.unit)) {
       toast({ title: `Mielenie obsługuje tylko kg i sztuki (ta pozycja ma jednostkę ${row.unit || 'brak'}).`, tone: 'error' });
@@ -3448,14 +3485,12 @@ export default function SpisRzeczywisty() {
     });
     setGrindQty('');
     setGrindTargetMaterial('');
-    setShowGrindTargetSuggestions(false);
   };
   const closeGrindDialog = () => {
     if (addGrindTaskMutation.isPending) return;
     setGrindDialogMaterial(null);
     setGrindQty('');
     setGrindTargetMaterial('');
-    setShowGrindTargetSuggestions(false);
   };
   const handleAddGrindTask = () => {
     if (!grindDialogMaterial) return;
@@ -3470,8 +3505,8 @@ export default function SpisRzeczywisty() {
       toast({ title: 'Dla detalu wpisz pełną liczbę sztuk.', tone: 'error' });
       return;
     }
-    if (!isDetail && qty > 500) {
-      toast({ title: 'Jeden dokument moze miec maksymalnie 500 kg.', tone: 'error' });
+    if (grindQtyLimitMessage) {
+      toast({ title: grindQtyLimitMessage, tone: 'error' });
       return;
     }
     const targetMaterialName = grindTargetMaterial.trim();
@@ -4680,6 +4715,7 @@ export default function SpisRzeczywisty() {
                                 {grindQtyLimitMessage}
                               </p>
                             )}
+                            {grindSplitSummary && <p className="mt-2 text-sm font-semibold text-brand" role="status">{grindSplitSummary}</p>}
                             <Button
                               type="button"
                               onClick={() => {
@@ -4734,39 +4770,10 @@ export default function SpisRzeczywisty() {
                             <label className="text-xs uppercase tracking-wide text-dim">
                               {isGrindDialogDetail ? 'Na jaki przemiał zmielić detal' : 'Na jaką kartotekę zmielić'}
                             </label>
-                            <div className="relative mt-1">
-                              <Input
-                                value={grindTargetMaterial}
-                                onChange={(event) => {
-                                  setGrindTargetMaterial(event.target.value);
-                                  setShowGrindTargetSuggestions(true);
-                                }}
-                                onFocus={() => setShowGrindTargetSuggestions(true)}
-                                onBlur={() => {
-                                  setTimeout(() => setShowGrindTargetSuggestions(false), 120);
-                                }}
-                                placeholder="np. PRZEMIAŁ PP MIX"
-                                className="min-h-[54px] font-semibold"
-                              />
-                              {showGrindTargetSuggestions && grindTargetSuggestions.length > 0 && (
-                                <div className="absolute z-30 mt-2 max-h-60 w-full overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.45)]">
-                                  {grindTargetSuggestions.map((option) => (
-                                    <button
-                                      key={option}
-                                      type="button"
-                                      onMouseDown={(event) => {
-                                        event.preventDefault();
-                                        setGrindTargetMaterial(option);
-                                        setShowGrindTargetSuggestions(false);
-                                      }}
-                                      className="block w-full px-3 py-2 text-left text-sm font-semibold text-body transition hover:bg-[rgba(255,255,255,0.06)]"
-                                    >
-                                      {option}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
+                            <GrindingTargetInput value={grindTargetMaterial} onChange={setGrindTargetMaterial}
+                              suggestions={grindTargetSuggestions} removed={removedGrindTargetSuggestions} readOnly={readOnly}
+                              loading={isGrindTargetSuggestionsPending} loadError={isGrindTargetSuggestionsError}
+                              onRetry={() => { void refetchGrindTargetSuggestions(); }} />
                           </div>
                           <div className="grid grid-cols-2 gap-3">
                             <Button variant="outline" onClick={closeGrindDialog}>
@@ -5374,6 +5381,7 @@ export default function SpisRzeczywisty() {
                     {grindQtyLimitMessage}
                   </p>
                 )}
+                {grindSplitSummary && <p className="mt-2 text-sm font-semibold text-brand" role="status">{grindSplitSummary}</p>}
                 <Button
                   type="button"
                   onClick={() => {
@@ -5428,39 +5436,10 @@ export default function SpisRzeczywisty() {
                 <label className="text-xs uppercase tracking-wide text-dim">
                   {isGrindDialogDetail ? 'Na jaki przemiał zmielić detal' : 'Na jaką kartotekę zmielić'}
                 </label>
-                <div className="relative mt-1">
-                  <Input
-                    value={grindTargetMaterial}
-                    onChange={(event) => {
-                      setGrindTargetMaterial(event.target.value);
-                      setShowGrindTargetSuggestions(true);
-                    }}
-                    onFocus={() => setShowGrindTargetSuggestions(true)}
-                    onBlur={() => {
-                      setTimeout(() => setShowGrindTargetSuggestions(false), 120);
-                    }}
-                    placeholder="np. PRZEMIAŁ PP MIX"
-                    className="min-h-[54px] font-semibold"
-                  />
-                  {showGrindTargetSuggestions && grindTargetSuggestions.length > 0 && (
-                    <div className="absolute z-30 mt-2 max-h-60 w-full overflow-y-auto rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.45)]">
-                      {grindTargetSuggestions.map((option) => (
-                        <button
-                          key={option}
-                          type="button"
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            setGrindTargetMaterial(option);
-                            setShowGrindTargetSuggestions(false);
-                          }}
-                          className="block w-full px-3 py-2 text-left text-sm font-semibold text-body transition hover:bg-[rgba(255,255,255,0.06)]"
-                        >
-                          {option}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <GrindingTargetInput value={grindTargetMaterial} onChange={setGrindTargetMaterial}
+                  suggestions={grindTargetSuggestions} removed={removedGrindTargetSuggestions} readOnly={readOnly}
+                  loading={isGrindTargetSuggestionsPending} loadError={isGrindTargetSuggestionsError}
+                  onRetry={() => { void refetchGrindTargetSuggestions(); }} />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <Button variant="outline" onClick={closeGrindDialog}>

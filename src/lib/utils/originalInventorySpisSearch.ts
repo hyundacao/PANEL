@@ -60,6 +60,16 @@ const getOriginalInventorySpisIndexedMaterialKey = (item: OriginalInventorySpisS
 export const dedupeOriginalInventorySpisSuggestions = <T extends OriginalInventorySpisSuggestion>(
   suggestions: readonly T[]
 ) => {
+  const currentNamesByAlias = new Map<string, Set<string>>();
+  for (const item of suggestions) {
+    if (!item.indexCode) continue;
+    for (const alias of item.previousNames ?? []) {
+      const key = normalizeSearchText(alias);
+      const identities = currentNamesByAlias.get(key) ?? new Set<string>();
+      identities.add(`${item.indexCode.trim().toUpperCase()}|${normalizeSearchText(item.name)}`);
+      currentNamesByAlias.set(key, identities);
+    }
+  }
   const deduped = new Map<string, T>();
   const score = (item: T) =>
     compactSearchCode(item.indexCode2).length * 8 +
@@ -68,6 +78,8 @@ export const dedupeOriginalInventorySpisSuggestions = <T extends OriginalInvento
     Number(Boolean(item.warehouseCode));
 
   suggestions.forEach((item) => {
+    // Old counted names are aliases, not additional catalog choices. Keep ambiguous ones.
+    if (!item.indexCode && currentNamesByAlias.get(normalizeSearchText(item.name))?.size === 1) return;
     const key = getOriginalInventorySpisIdentityKey(item);
     const current = deduped.get(key);
     if (!current || score(item) > score(current)) deduped.set(key, item);
@@ -86,7 +98,9 @@ export const prioritizeOriginalInventorySpisSuggestions = <T extends OriginalInv
   const ordered = [...suggestions].sort((left, right) => {
     const leftName = normalizeSearchText(left.name);
     const rightName = normalizeSearchText(right.name);
-    const inventoriedOrder = Number(!inventoried.has(leftName)) - Number(!inventoried.has(rightName));
+    const wasInventoried = (item: T, name: string) => inventoried.has(name) ||
+      (item.previousNames ?? []).some((alias) => inventoried.has(normalizeSearchText(alias)));
+    const inventoriedOrder = Number(!wasInventoried(left, leftName)) - Number(!wasInventoried(right, rightName));
     if (inventoriedOrder !== 0) return inventoriedOrder;
 
     const warehouseOrder = getOriginalInventorySpisWarehousePriority(left.warehouseCode, left.indexCode) -

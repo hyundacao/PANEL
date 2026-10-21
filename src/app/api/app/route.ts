@@ -19,6 +19,8 @@ import {
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { normalizeOriginalInventoryCatalogIdentityKey } from '@/lib/utils/originalInventoryCatalog';
 import { buildOriginalInventoryNameResolver, findOriginalInventoryCatalogMaterial } from '@/lib/utils/originalInventoryErpMatch';
+import { splitGrindingQuantity } from '@/lib/utils/originalInventoryGrinding';
+import { matchRegrindCatalogErpStocks } from '@/lib/utils/regrindCatalogErp';
 import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
 import {
   getOriginalInventorySpisIndex2,
@@ -1028,6 +1030,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       }
       return;
     case 'getMaterialLocations':
+    case 'getRegrindCatalogErpComparison':
       requireAnyTabAccess(user, 'PRZEMIALY', ['kartoteka']);
       return;
     case 'getLocationsOverview':
@@ -4039,6 +4042,25 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const materials = await fetchMaterials();
       return materials.filter((mat) => mat.isActive);
     }
+    case 'getRegrindCatalogErpComparison': {
+      const { data: latest, error } = await supabaseAdmin
+        .from('original_inventory_erp_snapshots')
+        .select('snapshot_date, imported_at')
+        .order('snapshot_date', { ascending: false })
+        .order('imported_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      if (!latest) return { snapshotDate: null, importedAt: null, items: [] };
+      const materials = await fetchMaterials();
+      const snapshots = await fetchOriginalInventoryErpSnapshot(String(latest.snapshot_date));
+      const inventoryCatalog = await loadOriginalCatalog();
+      return {
+        snapshotDate: String(latest.snapshot_date),
+        importedAt: latest.imported_at ?? null,
+        items: matchRegrindCatalogErpStocks(materials.filter((item) => item.isActive).map((item) => item.code), snapshots, inventoryCatalog)
+      };
+    }
     case 'getCatalogs': {
       const catalogs = await fetchCatalogs();
       return catalogs
@@ -6820,7 +6842,8 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const name = String(payload?.name ?? '').trim();
       const unit = String(payload?.unit ?? '').trim();
       if (!name || !unit) return null;
-      return findOriginalInventoryCatalogMaterial(await loadOriginalCatalog(), { name, unit });
+      const indexCode = String(payload?.indexCode ?? '').trim();
+      return findOriginalInventoryCatalogMaterial(await loadOriginalCatalog(), { name, unit, indexCode });
     }
     case 'getOriginalInventorySilosConfig': {
       const { data, error } = await supabaseAdmin
@@ -6953,29 +6976,30 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!materialName) throw new Error('MATERIAL_REQUIRED');
       if (!Number.isFinite(qty) || qty <= 0) throw new Error('QTY_REQUIRED');
       if (/^szt\.?$/i.test(unit) && !Number.isSafeInteger(qty)) throw new Error('QTY_INTEGER_REQUIRED');
+      const parts = splitGrindingQuantity(qty, unit);
+      const createdAt = new Date().toISOString();
       const { data, error } = await supabaseAdmin
         .from('original_inventory_grind_tasks')
-        .insert({
+        .insert(parts.map((partQty) => ({
           id: randomUUID(),
           material_name: materialName,
           target_material_name: targetMaterialName,
-          qty,
+          qty: partQty,
           unit,
           source_report_date: sourceReportDate,
           status: 'PENDING',
           created_by: getActorName(currentUser),
-          created_at: new Date().toISOString()
-        })
-        .select('*')
-        .maybeSingle();
+          created_at: createdAt
+        })))
+        .select('*');
       if (error) {
         if (isMissingOriginalInventoryGrindTasksTableError(error)) {
           throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_GRIND_TASKS');
         }
         throw error;
       }
-      if (!data) throw new Error('NOT_FOUND');
-      return mapOriginalInventoryGrindTask(data);
+      if (!data || data.length !== parts.length) throw new Error('NOT_FOUND');
+      return data.map(mapOriginalInventoryGrindTask);
     }
     case 'removeOriginalInventoryGrindTask': {
       const id = String(payload?.id ?? '').trim();
@@ -7199,20 +7223,25 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           }
         }
       }
-      let entryRows: any[] = [];
+      const entryRows: any[] = [];
       if (sessionRow?.id) {
-        const { data, error } = await supabaseAdmin
-          .from('paint_tape_inventory_entries')
-          .select('*')
-          .eq('session_id', sessionRow.id)
-          .order('checked_at', { ascending: true });
-        if (error) {
-          if (isMissingPaintTapeInventoryTableError(error)) {
-            throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY');
+        for (let from = 0; ; from += 1000) {
+          const { data, error } = await supabaseAdmin
+            .from('paint_tape_inventory_entries')
+            .select('*')
+            .eq('session_id', sessionRow.id)
+            .order('checked_at', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, from + 999);
+          if (error) {
+            if (isMissingPaintTapeInventoryTableError(error)) {
+              throw new Error('MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY');
+            }
+            throw error;
           }
-          throw error;
+          entryRows.push(...(data ?? []));
+          if (!data || data.length < 1000) break;
         }
-        entryRows = data ?? [];
       }
 
       const comparison = sessionRow?.erp_comparison as PaintTapeInventoryComparison | null;
