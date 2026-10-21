@@ -36,6 +36,7 @@ export const getOriginalInventorySpisWarehousePriority = (...values: unknown[]) 
 
 type OriginalInventorySpisSuggestion = {
   name: string;
+  previousNames?: readonly string[];
   warehouseCode?: string | null;
   indexCode?: string | null;
   indexCode2?: string | null;
@@ -118,7 +119,7 @@ export const searchOriginalInventorySpisSuggestions = <T extends OriginalInvento
   const safeLimit = Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 8));
   const matches = dedupeOriginalInventorySpisSuggestions(
     suggestions.filter((item) =>
-      !isFormSuggestion(item) && matchesOriginalInventorySpisSearch(query, item.name, item.indexCode2)
+      !isFormSuggestion(item) && [item.name, ...item.previousNames ?? []].some((name) => matchesOriginalInventorySpisSearch(query, name, item.indexCode2))
     )
   );
   const namesWithWarehouseVariant = new Set(

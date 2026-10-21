@@ -35,7 +35,7 @@ const ts = require('typescript');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 function fixture(user = candidate()) {
   const state = { user, writes: [], tables: {
-    app_users: structuredClone(identities), original_inventory_entries: [entry()], original_inventory_silo_entries: [], audit_logs: [],
+    app_users: structuredClone(identities), original_inventory_entries: [entry()], original_inventory_catalog: [], original_inventory_silo_entries: [], audit_logs: [],
     original_inventory_silos: [{ id: 'silo', name: 'Silos', chamber: '1', material_name: 'ABS', warehouse_id: 'hall-2', percent_kg: 100, hopper_kg: 400 }],
     warehouses: [{ id: 'hall-2', name: 'Hala 2', is_active: true }],
     material_planning_state: [{ id: 'main', state: { fixedDevices: [{ id: 'dryer', name: 'Suszarka', materialName: 'ABS', areaId: 'hala-2', active: true, fullQty: 400, type: 'dryer' }] } }]
@@ -126,6 +126,21 @@ for (const role of ['USER', 'ADMIN', 'HEAD_ADMIN']) {
     assert.equal(state.writes.length, 0);
   });
 }
+
+test('catalog rename joins old measurements to the current name without rewriting stored names, quantities or ownership', async () => {
+  const { state, post } = fixture();
+  state.tables.original_inventory_catalog.push({ id: 'catalog-abs', name: 'ABS FULL NAME', unit: 'kg', index_code: 'M-1-ABS', previous_names: ['ABS'] });
+  const before = structuredClone(state.tables.original_inventory_entries);
+  const response = await post('getOriginalInventory', { dateKey: today });
+  assert.equal(response.status, 200);
+  const entries = await response.json();
+  assert.equal(entries[0].name, 'ABS FULL NAME');
+  assert.equal(entries[0].qty, 300);
+  assert.equal(entries[0].id, 'entry');
+  assert.equal(entries[0].canModify, true);
+  assert.deepEqual(state.tables.original_inventory_entries, before);
+  assert.equal(state.writes.length, 0);
+});
 
 test('server ignores forged author on create and returns per-entry ownership for the UI', async () => {
   const { state, post } = fixture();

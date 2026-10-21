@@ -29,7 +29,7 @@ const load = (file) => {
   return mod.exports;
 };
 const { SpisErpAvailability } = load(path.join(directory, 'SpisErpAvailability.tsx'));
-const { matchOriginalInventoryErpStock } = load(path.join(root, 'src/lib/utils/originalInventoryErpMatch.ts'));
+const { matchOriginalInventoryErpStock, findOriginalInventoryCatalogMaterial } = load(path.join(root, 'src/lib/utils/originalInventoryErpMatch.ts'));
 const source = readFileSync(path.join(directory, 'SpisRzeczywisty.tsx'), 'utf8');
 const ast = ts.createSourceFile('SpisRzeczywisty.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const queryNodes = new Map();
@@ -66,10 +66,11 @@ const grateStock = (extra = {}) => ({
 
 test('Spis uses the selected exact index when the PDF contains a longer name', () => {
   const mod = { exports: {} };
-  vm.runInNewContext(compile(`module.exports = ${initializer('matchedErpSnapshot')};`), {
+  vm.runInNewContext(compile(`const selectedErpIndex = ${initializer('selectedErpIndex')}; module.exports = ${initializer('matchedErpSnapshot')};`), {
     module: mod, useMemo: (calculate) => calculate(), matchOriginalInventoryErpStock,
     normalizeCatalogNameKey, form: { name: grateName, unit: 'szt.' },
     selectedErpMaterial: { name: grateName, indexCode: '1598-7' },
+    resolvedErpMaterial: undefined,
     effectiveErpSnapshotEntries: [grateStock(), grateStock({ indexCode: '1700', availableQty: 999 })]
   });
   assert.equal(mod.exports.availableQty, 740);
@@ -127,14 +128,93 @@ test('selecting a suggestion retains its full ERP index and editing the name cle
 test('an old selected index cannot supply stock after the form name was cleared or changed', () => {
   for (const name of ['', 'OTHER MATERIAL']) {
     const mod = { exports: {} };
-    vm.runInNewContext(compile(`module.exports = ${initializer('matchedErpSnapshot')};`), {
+    vm.runInNewContext(compile(`const selectedErpIndex = ${initializer('selectedErpIndex')}; module.exports = ${initializer('matchedErpSnapshot')};`), {
       module: mod, useMemo: (calculate) => calculate(), matchOriginalInventoryErpStock,
       normalizeCatalogNameKey, form: { name, unit: 'szt.' },
       selectedErpMaterial: { name: grateName, indexCode: '1598-7' },
+      resolvedErpMaterial: undefined,
       effectiveErpSnapshotEntries: [grateStock()]
     });
     assert.equal(mod.exports, null);
   }
+});
+
+test('an already counted suggestion without an index resolves the grate without adding another SYSTEM stock', () => {
+  const catalog = [{ name: grateName, unit: 'szt.', indexCode: '1598-7' }];
+  for (const selectedErpMaterial of [null, { name: grateName, indexCode: null }]) {
+    const form = { name: grateName, unit: 'szt.' };
+    const mod = { exports: {} };
+    vm.runInNewContext(compile(`const selectedErpIndex = ${initializer('selectedErpIndex')}; module.exports = ${initializer('matchedErpSnapshot')};`), {
+      module: mod, useMemo: (calculate) => calculate(), matchOriginalInventoryErpStock,
+      normalizeCatalogNameKey, form, selectedErpMaterial,
+      resolvedErpMaterial: findOriginalInventoryCatalogMaterial(catalog, form),
+      effectiveErpSnapshotEntries: [grateStock(), grateStock({ name: 'SYSTEM 1000X63X98X148', indexCode: '1700', availableQty: 300 })]
+    });
+    assert.equal(mod.exports.availableQty, 740);
+    assert.match(render({ name: grateName, snapshot: mod.exports }), /740 szt\./);
+  }
+});
+
+test('catalog resolution requires a full name, compatible unit and one unambiguous ERP index', () => {
+  const item = { name: grateName, unit: 'szt.', indexCode: '1598-7' };
+  assert.equal(findOriginalInventoryCatalogMaterial([item], { name: `  ${grateName.toLowerCase()}  `, unit: 'szt' }), item);
+  assert.equal(findOriginalInventoryCatalogMaterial([item, { ...item }], item), item);
+  assert.equal(findOriginalInventoryCatalogMaterial([item], { ...item, name: 'KRATA STALOWA' }), null);
+  assert.equal(findOriginalInventoryCatalogMaterial([item], { ...item, unit: 'kg' }), null);
+  assert.equal(findOriginalInventoryCatalogMaterial([item], { ...item, name: '' }), null);
+  assert.equal(findOriginalInventoryCatalogMaterial([{ ...item, indexCode: null }], item), null);
+  assert.equal(findOriginalInventoryCatalogMaterial([
+    ...Array.from({ length: 40 }, () => item), { ...item, indexCode: '1700' }
+  ], item), null, 'a different index after the suggestion limit must still prevent guessing');
+});
+
+const identityOptions = (name, unit, fetcher, selectedErpIndex = null, tab = 'spis', hasStock = true) => {
+  const mod = { exports: {} };
+  vm.runInNewContext(compile(`const needsErpCatalogIdentity = ${initializer('needsErpCatalogIdentity')}; module.exports = (${queryNodes.get('spis-oryginalow-catalog-material')});`), {
+    module: mod, form: { name, unit }, selectedErpIndex, activeTab: tab,
+    erpSnapshotEntries: hasStock ? [grateStock()] : [], resolveOriginalInventoryCatalogMaterial: fetcher
+  });
+  return mod.exports;
+};
+
+test('exact identity requests are cached, cancellable and disabled for indexed choices or empty forms', async () => {
+  let calls = 0;
+  const fetcher = async (name, unit, signal) => {
+    calls++;
+    assert.equal(name, grateName);
+    assert.equal(unit, 'szt.');
+    assert.ok(signal instanceof AbortSignal);
+    return { name, unit, indexCode: '1598-7' };
+  };
+  const options = identityOptions(grateName, 'szt.', fetcher);
+  assert.equal(options.enabled, true);
+  assert.equal(identityOptions(grateName, 'szt.', fetcher, '1598-7').enabled, false);
+  assert.equal(identityOptions('', 'szt.', fetcher).enabled, false);
+  assert.equal(identityOptions(grateName, 'szt.', fetcher, null, 'kartoteki').enabled, false);
+  assert.equal(identityOptions(grateName, 'szt.', fetcher, null, 'spis', false).enabled, false);
+  const client = new QueryClient();
+  try {
+    assert.equal((await client.fetchQuery(options)).indexCode, '1598-7');
+    await client.fetchQuery(identityOptions(grateName, 'szt.', fetcher));
+    assert.equal(calls, 1);
+  } finally { client.clear(); }
+});
+
+test('changing the form name or unit cannot reuse an index resolved for the previous material', async () => {
+  const client = new QueryClient();
+  const first = identityOptions(grateName, 'szt.', async () => ({ indexCode: '1598-7' }));
+  const observer = new QueryObserver(client, first);
+  const unsubscribe = observer.subscribe(() => {});
+  try {
+    await client.fetchQuery(first);
+    assert.equal(observer.getCurrentResult().data.indexCode, '1598-7');
+    for (const [name, unit] of [['OTHER MATERIAL', 'szt.'], [grateName, 'kg']]) {
+      observer.setOptions(identityOptions(name, unit, async () => null));
+      assert.equal(observer.getCurrentResult().data, undefined);
+      assert.equal(observer.getCurrentResult().isPending, true);
+      await setImmediate();
+    }
+  } finally { unsubscribe(); client.clear(); }
 });
 
 const optionsFor = (key, tab = 'spis', date = '2026-09-28', fetcher = async () => []) => {
@@ -349,14 +429,17 @@ test('actual Spis JSX wires snapshot, date, loading states and both retry reques
   const mod = { exports: {} };
   let erpRetries = 0;
   let reservationRetries = 0;
+  let identityRetries = 0;
   vm.runInNewContext(compile(`module.exports = (${availabilityNode});`), {
     module: mod, exports: mod.exports, require, SpisErpAvailability,
     form: { name: baseProps.name }, spisDate: baseProps.date,
     matchedErpSnapshot: baseProps.snapshot, erpSnapshotEntries: [baseProps.snapshot],
     isErpSnapshotPending: false, isErpSnapshotError: true, erpSnapshotMigrationRequired: false,
     isGrindTasksPending: false, isGrindTasksError: false,
+    needsErpCatalogIdentity: true, isErpMaterialPending: false, isErpMaterialError: false,
     refetchErpSnapshot: () => { erpRetries++; },
-    refetchGrindTasks: () => { reservationRetries++; }
+    refetchGrindTasks: () => { reservationRetries++; },
+    refetchErpMaterial: () => { identityRetries++; }
   });
   assert.match(renderToStaticMarkup(mod.exports), /Spróbuj ponownie/);
   assert.equal(mod.exports.props.date, baseProps.date);
@@ -364,4 +447,22 @@ test('actual Spis JSX wires snapshot, date, loading states and both retry reques
   mod.exports.props.onRetry();
   assert.equal(erpRetries, 1);
   assert.equal(reservationRetries, 1);
+  assert.equal(identityRetries, 1);
+});
+
+test('the actual hint waits for identity resolution and offers retry when that lookup fails', () => {
+  for (const failed of [false, true]) {
+    const mod = { exports: {} };
+    vm.runInNewContext(compile(`module.exports = (${availabilityNode});`), {
+      module: mod, exports: mod.exports, require, SpisErpAvailability,
+      form: { name: grateName }, spisDate: baseProps.date,
+      matchedErpSnapshot: null, erpSnapshotEntries: [grateStock()],
+      isErpSnapshotPending: false, isErpSnapshotError: false, erpSnapshotMigrationRequired: false,
+      isGrindTasksPending: false, isGrindTasksError: false,
+      needsErpCatalogIdentity: true, isErpMaterialPending: !failed, isErpMaterialError: failed
+    });
+    const html = renderToStaticMarkup(mod.exports);
+    assert.match(html, failed ? /Spróbuj ponownie/ : /Wczytywanie danych ERP/);
+    assert.doesNotMatch(html, /Brak danych ERP/);
+  }
 });

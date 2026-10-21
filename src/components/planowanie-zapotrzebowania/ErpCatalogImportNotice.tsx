@@ -3,7 +3,7 @@ import type { OriginalInventoryCatalogSyncResult } from '@/lib/api/types';
 export function ErpCatalogImportNotice({ result, date }: { result: OriginalInventoryCatalogSyncResult; date: string }) {
   return (
     <div className="text-xs text-dim" role="status">
-      <p>Stany ERP wgrane ({date}). Nowe kartoteki zapisane na stałe: {result.added}.</p>
+      <p>Stany ERP wgrane ({date}). Nowe kartoteki zapisane na stałe: {result.added}. Zaktualizowane nazwy: {result.updated ?? 0}.</p>
       {result.warningCount > 0 && (
         <details className="mt-1">
           <summary className="cursor-pointer text-brandHover">

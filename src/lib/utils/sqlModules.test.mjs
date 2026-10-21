@@ -25,7 +25,8 @@ const data = async (db) => {
   const result = {};
   for (const { tablename } of tables) {
     const omit = tablename === 'paint_tape_inventory_sessions' ? " - 'erp_comparison'"
-      : tablename === 'paint_tape_settlements' ? " - 'erp_archive'" : '';
+      : tablename === 'paint_tape_settlements' ? " - 'erp_archive'"
+      : tablename === 'original_inventory_catalog' ? " - 'previous_names'" : '';
     result[tablename] = (await db.query(`select to_jsonb(t)${omit} value from public."${tablename}" t order by (to_jsonb(t)${omit})::text`)).rows;
   }
   return result;
@@ -142,7 +143,9 @@ test('rerunning all modules preserves populated data, existing function bodies, 
       assert.deepEqual(await security(db), securityBefore);
       const after = await functions(db);
       for (const f of functionsBefore) assert.deepEqual(after.find(x => x.proname === f.proname && x.args === f.args), f);
-      assert.deepEqual((await db.query("select conname,pg_get_constraintdef(oid) definition from pg_constraint where connamespace='public'::regnamespace order by conname")).rows, constraintsBefore);
+      const constraintsAfter = (await db.query("select conname,pg_get_constraintdef(oid) definition from pg_constraint where connamespace='public'::regnamespace order by conname")).rows;
+      assert.deepEqual(constraintsAfter.filter((constraint) => constraint.conname !== 'original_inventory_catalog_previous_names_not_null'), constraintsBefore);
+      assert.ok(constraintsAfter.some((constraint) => constraint.conname === 'original_inventory_catalog_previous_names_not_null'));
       const indexesAfter = (await db.query("select indexname,indexdef from pg_indexes where schemaname='public' order by indexname")).rows;
       for (const index of indexesBefore) assert.deepEqual(indexesAfter.find(x => x.indexname === index.indexname), index);
     }

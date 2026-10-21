@@ -607,7 +607,7 @@ export const getSparePartHistory = async (): Promise<SparePartHistory[]> =>
   appRequest('getSparePartHistory');
 
 export const getOriginalInventoryPalletSets = async (): Promise<import('@/lib/planowanie-zapotrzebowania/palletSets').PalletSet[]> =>
-  appRequest('getOriginalInventoryPalletSets');
+  appRequest('getOriginalInventoryPalletSets', { catalogRefreshToken: originalInventoryCatalogRefreshToken });
 
 export const addOriginalInventoryPalletSet = async (payload: {
   batchId: string; setId: string; fingerprint: string; count: number; dateKey: string; warehouseId: string;
@@ -621,7 +621,7 @@ export const removeOriginalInventoryPalletSet = async (batchId: string): Promise
   appRequest('removeOriginalInventoryPalletSet', { batchId });
 
 export const getOriginalInventory = async (dateKey?: string): Promise<OriginalInventoryEntry[]> =>
-  appRequest('getOriginalInventory', dateKey ? { dateKey } : undefined);
+  appRequest('getOriginalInventory', { dateKey, catalogRefreshToken: originalInventoryCatalogRefreshToken });
 
 let originalInventoryCatalogRefreshToken: string | undefined;
 
@@ -635,8 +635,15 @@ export const searchOriginalInventoryCatalog = async (
 ): Promise<OriginalInventoryCatalogEntry[]> =>
   appRequest('searchOriginalInventoryCatalog', { query, limit, catalogRefreshToken: originalInventoryCatalogRefreshToken }, signal);
 
+export const resolveOriginalInventoryCatalogMaterial = async (
+  name: string,
+  unit: string,
+  signal?: AbortSignal
+): Promise<OriginalInventoryCatalogEntry | null> =>
+  appRequest('resolveOriginalInventoryCatalogMaterial', { name, unit, catalogRefreshToken: originalInventoryCatalogRefreshToken }, signal);
+
 export const getOriginalInventorySilosConfig = async (): Promise<OriginalInventorySiloConfig[]> =>
-  appRequest('getOriginalInventorySilosConfig');
+  appRequest('getOriginalInventorySilosConfig', { catalogRefreshToken: originalInventoryCatalogRefreshToken });
 
 export const upsertOriginalInventorySiloConfig = async (payload: {
   id?: string;
@@ -671,7 +678,7 @@ export const saveOriginalInventoryFixedDeviceEntry = async (payload: {
 }): Promise<OriginalInventoryEntry> => appRequest('saveOriginalInventoryFixedDeviceEntry', payload);
 
 export const getOriginalInventoryGrindTasks = async (): Promise<OriginalInventoryGrindTask[]> =>
-  appRequest('getOriginalInventoryGrindTasks');
+  appRequest('getOriginalInventoryGrindTasks', { catalogRefreshToken: originalInventoryCatalogRefreshToken });
 
 export const addOriginalInventoryGrindTask = async (payload: {
   materialName: string;
@@ -713,12 +720,12 @@ export const getOriginalInventoryCatalogFromErp = async (): Promise<OriginalInve
 export const getOriginalInventoryErpSnapshot = async (
   snapshotDate: string
 ): Promise<OriginalInventoryErpSnapshotEntry[]> =>
-  appRequest('getOriginalInventoryErpSnapshot', { snapshotDate });
+  appRequest('getOriginalInventoryErpSnapshot', { snapshotDate, catalogRefreshToken: originalInventoryCatalogRefreshToken });
 
 export const getOriginalInventoryErpSnapshotsByDates = async (
   snapshotDates: string[]
 ): Promise<OriginalInventoryErpSnapshotEntry[]> =>
-  appRequest('getOriginalInventoryErpSnapshotsByDates', { snapshotDates });
+  appRequest('getOriginalInventoryErpSnapshotsByDates', { snapshotDates, catalogRefreshToken: originalInventoryCatalogRefreshToken });
 
 export const addOriginalInventory = async (payload: {
   warehouseId: string;
@@ -747,8 +754,11 @@ export const addOriginalInventoryCatalogBulk = async (payload: {
     indexCode?: string | null;
     warehouseCode?: string | null;
   }>;
-}): Promise<OriginalInventoryCatalogImportResult> =>
-  appRequest('addOriginalInventoryCatalogBulk', payload);
+}): Promise<OriginalInventoryCatalogImportResult> => {
+  const result = await appRequest<OriginalInventoryCatalogImportResult>('addOriginalInventoryCatalogBulk', payload);
+  originalInventoryCatalogRefreshToken = result.catalogRefreshToken;
+  return result;
+};
 
 export const importOriginalInventoryCatalogFile = async (
   file: File
@@ -779,7 +789,9 @@ export const importOriginalInventoryCatalogFile = async (
     throw new Error(code);
   }
 
-  return response.json() as Promise<OriginalInventoryCatalogImportResult>;
+  const result = await response.json() as OriginalInventoryCatalogImportResult;
+  originalInventoryCatalogRefreshToken = result.catalogRefreshToken;
+  return result;
 };
 
 export const importOriginalInventoryErpSnapshotFile = async (

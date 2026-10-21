@@ -4,13 +4,10 @@ import * as XLSX from 'xlsx';
 import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
-import {
-  normalizeOriginalInventoryCatalogIdentityKey,
-  parseOriginalInventoryCatalogRows
-} from '@/lib/utils/originalInventoryCatalog';
+import { parseOriginalInventoryCatalogRows } from '@/lib/utils/originalInventoryCatalog';
+import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
 
 export const dynamic = 'force-dynamic';
-const ORIGINAL_CATALOG_PAGE_SIZE = 1000;
 
 const parseCatalogImportFile = async (
   file: File
@@ -28,24 +25,6 @@ const parseCatalogImportFile = async (
   }) as unknown[][];
 
   return parseOriginalInventoryCatalogRows(rows);
-};
-
-const fetchAllOriginalCatalogRows = async () => {
-  const rows: Array<{ name: string | null; index_code: string | null }> = [];
-  for (let from = 0; ; from += ORIGINAL_CATALOG_PAGE_SIZE) {
-    const to = from + ORIGINAL_CATALOG_PAGE_SIZE - 1;
-    const { data, error } = await supabaseAdmin
-      .from('original_inventory_catalog')
-      .select('name, index_code')
-      .range(from, to);
-    if (error) throw error;
-    const page = data ?? [];
-    rows.push(...page);
-    if (page.length < ORIGINAL_CATALOG_PAGE_SIZE) {
-      break;
-    }
-  }
-  return rows;
 };
 
 export async function POST(request: Request) {
@@ -83,45 +62,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ code: 'EMPTY' }, { status: 400 });
     }
 
-    const existingSet = new Set(
-      (await fetchAllOriginalCatalogRows()).map((row) =>
-        normalizeOriginalInventoryCatalogIdentityKey(row.name ?? '', row.index_code ?? '')
-      )
-    );
-
-    const toInsert = normalized.filter(
-      (item) => !existingSet.has(normalizeOriginalInventoryCatalogIdentityKey(item.name, item.indexCode))
-    );
-    if (toInsert.length === 0) {
-      return NextResponse.json({
-        total: normalized.length,
-        inserted: 0,
-        skipped: normalized.length
-      });
-    }
-
-    const now = new Date().toISOString();
-    const chunkSize = 500;
-    let inserted = 0;
-
-    for (let i = 0; i < toInsert.length; i += chunkSize) {
-      const chunk = toInsert.slice(i, i + chunkSize).map((item) => ({
-        id: randomUUID(),
-        name: item.name,
-        unit: item.unit,
-        index_code: item.indexCode,
-        warehouse_code: item.warehouseCode,
-        created_at: now
-      }));
-      const { error } = await supabaseAdmin.from('original_inventory_catalog').insert(chunk);
-      if (error) throw error;
-      inserted += chunk.length;
-    }
-
+    const catalogSync = await syncOriginalInventoryCatalogFromSnapshot(supabaseAdmin, normalized);
     return NextResponse.json({
       total: normalized.length,
-      inserted,
-      skipped: normalized.length - inserted
+      inserted: catalogSync.added,
+      updated: catalogSync.updated,
+      skipped: normalized.length - catalogSync.added - catalogSync.updated,
+      catalogSync,
+      catalogRefreshToken: randomUUID()
     });
   } catch (error) {
     const code =

@@ -23,7 +23,7 @@ const profile = () => ({ id: 'test-set', name: 'Test only: container set', prima
 const request = (set = profile(), overrides = {}) => ({ batchId: BATCH, setId: set.id, fingerprint: domain.palletSetFingerprint(set), dateKey: '2026-09-19', warehouseId: 'hall-2', count: 3, ...overrides });
 
 function database() {
-  const state = { profile: profile(), rows: [], writes: [], failInsert: false, catalogMissing: false };
+  const state = { profile: profile(), rows: [], writes: [], failInsert: false, catalogMissing: false, catalogRename: false };
   class Query {
     constructor(table) { this.table = table; this.filters = []; this.mode = 'select'; }
     select() { return this; }
@@ -39,7 +39,7 @@ function database() {
       let rows;
       if (this.table === 'material_planning_state') rows = [{ id: 'main', pallet_sets: [state.profile] }];
       else if (this.table === 'warehouses') rows = [{ id: 'hall-2', name: 'Hala 2', is_active: true }, { id: 'hall-1', name: 'Hala 1', is_active: true }];
-      else if (this.table === 'original_inventory_catalog') rows = state.catalogMissing ? [] : state.profile.components.map((p) => ({ id: p.catalogId, name: p.name, unit: p.unit }));
+      else if (this.table === 'original_inventory_catalog') rows = state.catalogMissing ? [] : state.profile.components.map((p) => ({ id: p.catalogId, name: state.catalogRename ? p.name + ' FULL' : p.name, unit: p.unit }));
       else { assert.equal(this.table, 'original_inventory_entries'); rows = state.rows; }
       let result = rows.filter((row) => this.filters.every((filter) => filter(row)));
       if (this.mode !== 'select') {
@@ -96,6 +96,19 @@ test('one inventory operation atomically inserts all components into the selecte
   assert.equal(state.rows.length, 3);
   assert.deepEqual(state.rows.map((row) => row.qty), [120, 3, 3]);
   assert.ok(state.rows.every((row) => row.warehouse_id === 'hall-2' && row.at.startsWith('2026-09-19') && row.user_name === 'counter' && row.unit === 'szt.'));
+});
+
+test('renamed catalog components keep the same pallet ratios and IDs; stale previews cannot submit', async () => {
+  const { db, state } = database();
+  state.catalogRename = true;
+  await assert.rejects(api.addPalletInventory(db, request(), owner('counter')), /PALLET_SET_CHANGED/);
+  assert.equal(state.writes.length, 0);
+  const current = domain.refreshPalletSetCatalogNames([state.profile], state.profile.components.map((part) => ({ id: part.catalogId, name: part.name + ' FULL', unit: part.unit })))[0];
+  await api.addPalletInventory(db, request(current), owner('counter'));
+  assert.deepEqual(state.rows.map((row) => row.qty), [120, 3, 3]);
+  assert.deepEqual(state.rows.map((row) => row.name), ['container FULL', 'lid FULL', 'pallet FULL']);
+  assert.deepEqual(state.rows.map((row) => domain.parsePalletSource(row.source_id).catalogId), ['container', 'lid', 'pallet']);
+  assert.equal(state.profile.components[0].name, 'container');
 });
 
 test('lost-response retries and simultaneous duplicate submits do not double stock', async () => {

@@ -2,7 +2,7 @@
 
 import { randomUUID } from 'crypto';
 import { loadInventoryOwnership, INVENTORY_OWNER_ERROR } from '@/lib/utils/originalInventoryOwnership';
-import { PALLET_SET_SOURCE_TYPE, normalizePalletSets } from '@/lib/planowanie-zapotrzebowania/palletSets';
+import { PALLET_SET_SOURCE_TYPE, normalizePalletSets, refreshPalletSetCatalogNames } from '@/lib/planowanie-zapotrzebowania/palletSets';
 import { addPalletInventory, updatePalletInventory, removePalletInventory } from '@/lib/planowanie-zapotrzebowania/palletInventoryServer';
 import { after, NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
@@ -18,6 +18,8 @@ import {
 } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { normalizeOriginalInventoryCatalogIdentityKey } from '@/lib/utils/originalInventoryCatalog';
+import { buildOriginalInventoryNameResolver, findOriginalInventoryCatalogMaterial } from '@/lib/utils/originalInventoryErpMatch';
+import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
 import {
   getOriginalInventorySpisIndex2,
   searchOriginalInventorySpisSuggestions
@@ -495,7 +497,8 @@ const mapOriginalInventoryCatalogEntry = (row: any): OriginalInventoryCatalogEnt
   createdAt: row.created_at,
   indexCode: row.index_code ? String(row.index_code).trim() : null,
   indexCode2: row.index_code2 ? String(row.index_code2).trim() : null,
-  warehouseCode: row.warehouse_code ? String(row.warehouse_code).trim() : null
+  warehouseCode: row.warehouse_code ? String(row.warehouse_code).trim() : null,
+  previousNames: Array.isArray(row.previous_names) ? row.previous_names.filter((name: unknown) => typeof name === 'string') : []
 });
 
 const mapOriginalInventorySiloConfig = (row: any): OriginalInventorySiloConfig => ({
@@ -1110,6 +1113,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       return;
     case 'getOriginalInventoryCatalog':
     case 'searchOriginalInventoryCatalog':
+    case 'resolveOriginalInventoryCatalogMaterial':
     case 'getOriginalInventoryPalletSets':
     case 'getOriginalInventorySilosConfig':
     case 'getOriginalInventorySiloEntries':
@@ -2378,6 +2382,12 @@ const loadOriginalCatalog = async (): Promise<OriginalInventoryCatalogEntry[]> =
   }
 };
 
+const withCurrentInventoryNames = async <T extends { name: string; unit: string; indexCode?: string | null }>(items: T[]) => {
+  if (!items.length) return items;
+  const resolveName = buildOriginalInventoryNameResolver(await loadOriginalCatalog());
+  return items.map((item) => ({ ...item, name: resolveName(item) }));
+};
+
 const loadOriginalCatalogSpisSearchItems = async () => {
   const catalog = await loadOriginalCatalog();
   if (originalCatalogSpisSearchSource === catalog) return originalCatalogSpisSearchItems;
@@ -3429,6 +3439,7 @@ const upsertTransferEntry = async (
 };
 
 const handleAction = async (action: string, payload: any, currentUser: AppUser) => {
+  acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);
   let ownership: ReturnType<typeof loadInventoryOwnership> | undefined;
   const inventoryOwner = () => ownership ??= loadInventoryOwnership(supabaseAdmin, currentUser);
   switch (action) {
@@ -6793,7 +6804,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }
 
       const owner = await inventoryOwner();
-      return rows.map(row => ({ ...mapOriginalInventoryEntry(row), canModify: owner.owns(row) }));
+      return withCurrentInventoryNames(rows.map(row => ({ ...mapOriginalInventoryEntry(row), canModify: owner.owns(row) })));
     }
     case 'getOriginalInventoryCatalog': {
       acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);
@@ -6803,6 +6814,13 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     case 'searchOriginalInventoryCatalog': {
       acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);
       return searchOriginalCatalogForSpis(payload?.query, payload?.limit);
+    }
+    case 'resolveOriginalInventoryCatalogMaterial': {
+      acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);
+      const name = String(payload?.name ?? '').trim();
+      const unit = String(payload?.unit ?? '').trim();
+      if (!name || !unit) return null;
+      return findOriginalInventoryCatalogMaterial(await loadOriginalCatalog(), { name, unit });
     }
     case 'getOriginalInventorySilosConfig': {
       const { data, error } = await supabaseAdmin
@@ -6814,7 +6832,10 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         if (isMissingOriginalInventorySilosTableError(error)) return [];
         throw error;
       }
-      return (data ?? []).map(mapOriginalInventorySiloConfig);
+      const resolveName = buildOriginalInventoryNameResolver(await loadOriginalCatalog());
+      return (data ?? []).map(mapOriginalInventorySiloConfig).map((item) => ({
+        ...item, materialName: resolveName({ name: item.materialName, unit: 'kg' })
+      }));
     }
     case 'upsertOriginalInventorySiloConfig': {
       const id = String(payload?.id ?? '').trim() || randomUUID();
@@ -6917,7 +6938,11 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         if (isMissingOriginalInventoryGrindTasksTableError(error)) return [];
         throw error;
       }
-      return (data ?? []).map(mapOriginalInventoryGrindTask);
+      const resolveName = buildOriginalInventoryNameResolver(await loadOriginalCatalog());
+      return (data ?? []).map(mapOriginalInventoryGrindTask).map((item) => ({
+        ...item, materialName: resolveName({ name: item.materialName, unit: item.unit }),
+        targetMaterialName: item.targetMaterialName ? resolveName({ name: item.targetMaterialName, unit: 'kg' }) : item.targetMaterialName
+      }));
     }
     case 'addOriginalInventoryGrindTask': {
       const materialName = String(payload?.materialName ?? '').trim();
@@ -7916,17 +7941,17 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!snapshotDate) throw new Error('DATE_REQUIRED');
       const snapshot = await fetchOriginalInventoryErpSnapshot(snapshotDate);
       scheduleOriginalErpHistoryPurge();
-      return snapshot;
+      return withCurrentInventoryNames(snapshot);
     }
     case 'getOriginalInventoryErpSnapshotsByDates': {
       const snapshotDates = Array.isArray(payload?.snapshotDates) ? payload.snapshotDates : [];
-      return fetchOriginalInventoryErpSnapshotsByDates(snapshotDates);
+      return withCurrentInventoryNames(await fetchOriginalInventoryErpSnapshotsByDates(snapshotDates));
     }
     case 'getOriginalInventoryPalletSets': {
       const { data, error } = await supabaseAdmin.from('material_planning_state')
         .select('pallet_sets:state->palletSets').eq('id', 'main').maybeSingle();
       if (error) throw error;
-      return normalizePalletSets(data?.pallet_sets);
+      return refreshPalletSetCatalogNames(normalizePalletSets(data?.pallet_sets), await loadOriginalCatalog());
     }
     case 'addOriginalInventoryPalletSet': {
       const owner = await inventoryOwner();
@@ -8268,46 +8293,15 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
 
       if (normalized.length === 0) throw new Error('EMPTY');
 
-      const { data: existingRows, error: existingError } = await supabaseAdmin
-        .from('original_inventory_catalog')
-        .select('name, index_code');
-      if (existingError) throw existingError;
-      const existingSet = new Set(
-        (existingRows ?? []).map((row: any) =>
-          normalizeOriginalInventoryCatalogIdentityKey(row.name ?? '', row.index_code ?? '')
-        )
-      );
-      const toInsert = normalized.filter(
-        (item) => !existingSet.has(normalizeOriginalInventoryCatalogIdentityKey(item.name, item.indexCode))
-      );
-      if (toInsert.length === 0) {
-        return { total: normalized.length, inserted: 0, skipped: normalized.length };
-      }
-
-      const now = new Date().toISOString();
-      let inserted = 0;
-      const chunkSize = 500;
-      for (let i = 0; i < toInsert.length; i += chunkSize) {
-        const chunk = toInsert.slice(i, i + chunkSize).map((item) => ({
-          id: randomUUID(),
-          name: item.name,
-          unit: item.unit,
-          index_code: item.indexCode,
-          warehouse_code: item.warehouseCode,
-          created_at: now
-        }));
-        const { error: insertError } = await supabaseAdmin
-          .from('original_inventory_catalog')
-          .insert(chunk);
-        if (insertError) throw insertError;
-        inserted += chunk.length;
-      }
+      const catalogSync = await syncOriginalInventoryCatalogFromSnapshot(supabaseAdmin, normalized);
       invalidateOriginalCatalogCache();
-
       return {
         total: normalized.length,
-        inserted,
-        skipped: normalized.length - inserted
+        inserted: catalogSync.added,
+        updated: catalogSync.updated,
+        skipped: normalized.length - catalogSync.added - catalogSync.updated,
+        catalogSync,
+        catalogRefreshToken: randomUUID()
       };
     }
     case 'updateOriginalInventory': {

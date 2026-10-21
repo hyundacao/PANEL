@@ -213,6 +213,7 @@ export type OriginalInventoryCatalogEntry = {
   indexCode?: string | null;
   indexCode2?: string | null;
   warehouseCode?: string | null;
+  previousNames?: string[];
 };
 
 export type OriginalInventorySiloConfig = {
@@ -261,6 +262,9 @@ export type OriginalInventoryCatalogImportResult = {
   total: number;
   inserted: number;
   skipped: number;
+  updated?: number;
+  catalogSync?: OriginalInventoryCatalogSyncResult;
+  catalogRefreshToken?: string;
 };
 
 export type OriginalInventoryErpSnapshotEntry = {
@@ -289,6 +293,7 @@ export type OriginalInventoryErpSnapshotImportResult = {
 
 export type OriginalInventoryCatalogSyncResult = {
   added: number;
+  updated: number;
   existing: number;
   failed: boolean;
   warningCount: number;

@@ -1,6 +1,6 @@
 -- 04. Spis rzeczywisty i stany ERP
 -- Wklej CALY plik do SQL Editor i uruchom Run. Kolejnosc pierwszego uruchomienia: 01-09.
--- Istniejace tabele, indeksy, funkcje, RLS i uprawnienia pozostaja bez zmian.
+-- Zachowuje istniejace dane i zabezpieczenia. Dodaje historie nazw kartotek oraz bezpieczna funkcje aktualizacji nazw.
 -- Nie resetuje danych, magazynow, kont, grup, zadan, raportow ani stanow.
 -- Powtorne uruchomienie nie powiela danych. Jeden plik = jedna transakcja.
 
@@ -175,6 +175,49 @@ end
 $install$;
 
 -- SQL_SOURCE_END: tabela/original_inventory_grind_tasks
+
+-- SQL_SOURCE_BEGIN: aktualizacja/nazwy_kartotek
+-- Poprzednie nazwy lacza historyczne spisy z aktualna kartoteka bez zmiany ilosci.
+alter table public.original_inventory_catalog
+  add column if not exists previous_names text[] not null default '{}';
+
+create or replace function public.rename_original_inventory_catalog_items(p_changes jsonb)
+returns table(id uuid, updated boolean)
+language plpgsql
+security definer
+set search_path = public, pg_catalog
+as $rename$
+declare
+  change jsonb;
+  changed_id uuid;
+begin
+  if p_changes is null or jsonb_typeof(p_changes) <> 'array' then
+    raise exception 'CHANGES_ARRAY_REQUIRED';
+  end if;
+  if jsonb_array_length(p_changes) > 500 then raise exception 'TOO_MANY_CHANGES'; end if;
+  for change in select value from jsonb_array_elements(p_changes)
+  loop
+    changed_id := null;
+    begin
+      update public.original_inventory_catalog c
+      set name = btrim(change ->> 'name'),
+          previous_names = array(select distinct n from unnest(c.previous_names || array[c.name]) n where btrim(n) <> '')
+      where c.id = (change ->> 'id')::uuid
+        and c.name = change ->> 'previousName'
+        and c.index_code = change ->> 'indexCode'
+        and btrim(coalesce(change ->> 'name', '')) <> ''
+        and btrim(coalesce(change ->> 'indexCode', '')) <> ''
+      returning c.id into changed_id;
+    exception when unique_violation then
+      changed_id := null;
+    end;
+    return query select (change ->> 'id')::uuid, changed_id is not null;
+  end loop;
+end;
+$rename$;
+revoke all on function public.rename_original_inventory_catalog_items(jsonb) from public, anon, authenticated;
+grant execute on function public.rename_original_inventory_catalog_items(jsonb) to service_role;
+-- SQL_SOURCE_END: aktualizacja/nazwy_kartotek
 
 notify pgrst, 'reload schema';
 commit;

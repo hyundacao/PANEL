@@ -61,6 +61,14 @@ export const palletSetFingerprint = (set: PalletSet) => JSON.stringify({
   components: [...set.components].sort((a, b) => a.catalogId.localeCompare(b.catalogId))
 });
 
+export const refreshPalletSetCatalogNames = (sets: PalletSet[], catalog: readonly { id: string; name: string; unit: string }[]) => {
+  const byId = new Map(catalog.map((item) => [item.id, item]));
+  return sets.map((set) => ({ ...set, components: set.components.map((part) => {
+    const item = byId.get(part.catalogId);
+    return item && item.unit === part.unit ? { ...part, name: item.name } : part;
+  }) }));
+};
+
 export const palletSetTotals = (set: PalletSet, count: number) => {
   if (palletSetError(set) || !isPalletCount(count)) return [];
   return set.components.map((item) => ({ ...item, total: item.qty * count }));

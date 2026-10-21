@@ -290,7 +290,7 @@ export async function POST(request: Request) {
 
     // The daily stock is already saved; catalog issues are non-blocking warnings.
     const catalogSync = await syncOriginalInventoryCatalogFromSnapshot(supabaseAdmin, items).catch(() => ({
-      added: 0, existing: 0, failed: true, warningCount: 1,
+      added: 0, updated: 0, existing: 0, failed: true, warningCount: 1,
       warnings: [{ name: '', indexCode: '', reason: 'Stany ERP zostały wgrane. Nie udało się zakończyć dopisywania kartotek; ponów import, aby spróbować ponownie.' }]
     }));
     after(async () => {

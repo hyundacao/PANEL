@@ -14,13 +14,14 @@ const compile = (code) => ts.transpileModule(code, { compilerOptions: { module: 
 const noticeModule = { exports: {} };
 vm.runInNewContext(compile(readFileSync(new URL('./ErpCatalogImportNotice.tsx', import.meta.url), 'utf8')), { module: noticeModule, exports: noticeModule.exports, require });
 const { ErpCatalogImportNotice } = noticeModule.exports;
-const result = { added: 5, existing: 200, failed: false, warningCount: 0, warnings: [] };
+const result = { added: 5, updated: 3, existing: 200, failed: false, warningCount: 0, warnings: [] };
 const render = (overrides = {}) => renderToStaticMarkup(React.createElement(ErpCatalogImportNotice, { result: { ...result, ...overrides }, date: '2026-09-28' }));
 
 test('successful import has a compact permanent-catalog count and no blocking alert', () => {
   const html = render();
   assert.match(html, /Stany ERP wgrane \(2026-09-28\)/);
   assert.match(html, /Nowe kartoteki zapisane na stałe: 5/);
+  assert.match(html, /Zaktualizowane nazwy: 3/);
   assert.doesNotMatch(html, /<details|role="alert"|<dialog/);
 });
 
@@ -61,7 +62,9 @@ test('actual import handler invalidates catalog suggestions and shows warnings w
   assert.equal(resetCount, 1);
   assert.deepEqual(invalidated, [
     ['spis-oryginalow-erp-snapshot', '2026-09-28'],
-    ['spis-oryginalow-catalog-local'], ['spis-oryginalow-catalog-search']
+    ['spis-oryginalow-catalog-local'], ['spis-oryginalow-catalog-search'],
+    ['spis-oryginalow-catalog-material'], ['spis-oryginalow'], ['original-inventory-grind-tasks'],
+    ['original-inventory-pallet-sets'], ['original-inventory-silos-config']
   ]);
 });
 
@@ -81,6 +84,10 @@ test('browser API forwards import freshness token to later searches and catalog 
   await mod.exports.importOriginalInventoryErpSnapshotFile(new File(['fixture'], 'stock.xlsx'), '2026-09-28');
   await mod.exports.searchOriginalInventoryCatalog('metal box');
   await mod.exports.getOriginalInventoryCatalog();
-  assert.equal(requests.length, 3);
+  const signal = new AbortController().signal;
+  await mod.exports.resolveOriginalInventoryCatalogMaterial('metal box', 'szt.', signal);
+  assert.equal(requests.length, 4);
+  assert.equal(requests[3].options.signal, signal);
+  assert.equal(JSON.parse(requests[3].options.body).payload.unit, 'szt.');
   for (const request of requests.slice(1)) assert.equal(JSON.parse(request.options.body).payload.catalogRefreshToken, token);
 });

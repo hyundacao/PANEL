@@ -17,7 +17,7 @@ function fixture() {
     user: { id: 'test', username: 'counter', name: 'Counter', role: 'USER', access: { warehouses: { PLANOWANIE_ZAPOTRZEBOWANIA: { readOnly: false, tabs: ['planowanie-zapotrzebowania'] } } } },
     tables: { original_inventory_catalog: [], original_inventory_erp_snapshots: [], paint_tape_inventory_sessions: [], audit_logs: [] },
     operations: [], failCatalogRead: false, failCatalogWriteFrom: Infinity, catalogWrites: 0,
-    beforeCatalogWrite: null, pdfItems: [], holdCatalogRead: null, afterWork: [], purgeError: null
+    beforeCatalogWrite: null, pdfItems: [], holdCatalogRead: null, afterWork: [], purgeError: null, renameError: null
   };
   class Query {
     constructor(table) { this.table = table; this.filters = []; this.mode = 'select'; }
@@ -65,9 +65,18 @@ function fixture() {
   }
   const db = {
     from: (table) => new Query(table),
-    async rpc(name, payload) {
+    rpc(name, payload) {
       state.operations.push({ rpc: name, payload });
-      return { data: 0, error: state.purgeError };
+      const result = name === 'rename_original_inventory_catalog_items'
+        ? { data: state.renameError ? null : payload.p_changes.map((change) => {
+          const item = state.tables.original_inventory_catalog.find((row) => row.id === change.id && row.name === change.previousName && row.index_code === change.indexCode);
+          if (item) { item.previous_names = [...new Set([...(item.previous_names ?? []), item.name])]; item.name = change.name; }
+          return { id: change.id, updated: Boolean(item) };
+        }), error: state.renameError }
+        : { data: 0, error: state.purgeError };
+      const promise = Promise.resolve(result);
+      promise.abortSignal = () => promise;
+      return promise;
     }
   };
   const mocks = {
@@ -92,21 +101,26 @@ function fixture() {
   };
   const importRoute = load(join(root, 'app/api/original-inventory-erp-snapshot/import/route.ts'));
   const sync = (items) => load(join(root, 'lib/utils/originalInventoryCatalogSync.ts')).syncOriginalInventoryCatalogFromSnapshot(db, items);
-  const importFile = async (items, date = '2026-09-28', pdf = false) => {
+  const importFile = async (items, date = '2026-09-28', pdf = false, catalogOnly = false) => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
-      ['Nazwa', 'Stan do dyspozycji ERP', 'Stan rzeczywisty ERP', 'Jednostka', 'Indeks'],
-      ...items.map((item) => [item.name, item.availableQty ?? 250, item.realQty ?? 300, item.unit, item.indexCode ?? ''])
+      ...(catalogOnly ? [
+        ['Nazwa', 'Jednostka', 'Indeks'], ...items.map((item) => [item.name, item.unit, item.indexCode ?? ''])
+      ] : [
+        ['Nazwa', 'Stan do dyspozycji ERP', 'Stan rzeczywisty ERP', 'Jednostka', 'Indeks'],
+        ...items.map((item) => [item.name, item.availableQty ?? 250, item.realQty ?? 300, item.unit, item.indexCode ?? ''])
+      ])
     ]), 'Stany');
     const file = pdf ? new File(['PDF fixture'], 'stany.pdf') : new File([XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })], 'stany.xlsx');
     const form = new FormData(); form.append('file', file); form.append('snapshotDate', date);
-    const response = await importRoute.POST(new Request('http://test/api/import', { method: 'POST', body: form }));
+    const route = catalogOnly ? load(join(root, 'app/api/original-inventory-catalog/import/route.ts')) : importRoute;
+    const response = await route.POST(new Request('http://test/api/import', { method: 'POST', body: form }));
     return { status: response.status, result: await response.json() };
   };
-  const app = async (action, payload = {}) => {
+  const app = async (action, payload = {}, expectedStatus = 200) => {
     const route = load(join(root, 'app/api/app/route.ts'));
     const response = await route.POST(new Request('http://test/api/app', { method: 'POST', body: JSON.stringify({ action, payload }) }));
-    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(response.status, expectedStatus, await response.clone().text());
     return response.json();
   };
   return { state, sync, importFile, app };
@@ -180,17 +194,75 @@ test('missing codes do not block stocks and produce a non-blocking catalog warni
   assert.match(result.catalogSync.warnings[0].reason, /Brak indeksu/);
 });
 
-test('same code with changed name or unit never overwrites an existing catalog row', async () => {
+test('same code updates its name in place, retains the old name and never changes units', async () => {
   const f = fixture();
   f.state.tables.original_inventory_catalog.push(row(material()));
-  const original = structuredClone(f.state.tables.original_inventory_catalog);
-  for (const candidate of [material({ name: 'RENAMED' }), material({ unit: 'kg' })]) {
-    const response = await f.importFile([candidate]);
+  const renamed = await f.importFile([material({ name: 'RENAMED' })]);
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.result.catalogSync.added, 0);
+  assert.equal(renamed.result.catalogSync.updated, 1);
+  assert.equal(renamed.result.catalogSync.warningCount, 0);
+  assert.equal(f.state.tables.original_inventory_catalog.length, 1);
+  assert.deepEqual(f.state.tables.original_inventory_catalog[0], { ...row(material({ name: 'RENAMED' })), previous_names: [material().name] });
+  const unchanged = await f.importFile([material({ name: 'RENAMED' })]);
+  assert.equal(unchanged.result.catalogSync.updated, 0);
+  assert.equal(unchanged.result.catalogSync.existing, 1);
+  const unitChanged = await f.importFile([material({ name: 'RENAMED', unit: 'kg' })]);
+  assert.equal(unitChanged.result.catalogSync.warningCount, 1);
+  assert.equal(f.state.tables.original_inventory_catalog[0].unit, 'szt.');
+});
+
+test('PDF and spreadsheet catalog imports use the same indexed rename and refresh old cached searches', async () => {
+  for (const source of ['pdf', 'catalog']) {
+    const f = fixture();
+    const oldName = 'KRATA STALOWA 1M IMPORT Z LOGO DOMELO';
+    const name = oldName + ' SYSTEM 1000X63X98X148';
+    const item = material({ name: oldName, indexCode: '1598-7', warehouseCode: null });
+    f.state.tables.original_inventory_catalog.push(row(item));
+    assert.equal((await f.app('searchOriginalInventoryCatalog', { query: oldName }))[0].name, oldName);
+    f.state.pdfItems = [{ ...item, name, realQty: 740, availableQty: 740 }];
+    const response = await f.importFile([{ ...item, name }], '2026-10-21', source === 'pdf', source === 'catalog');
     assert.equal(response.status, 200);
+    assert.equal(response.result.catalogSync.updated, 1);
     assert.equal(response.result.catalogSync.added, 0);
-    assert.equal(response.result.catalogSync.warningCount, 1);
+    const payload = { query: oldName, catalogRefreshToken: response.result.catalogRefreshToken };
+    const suggestions = await f.app('searchOriginalInventoryCatalog', payload);
+    assert.equal(suggestions.length, 1);
+    assert.equal(suggestions[0].name, name);
+    assert.equal(suggestions[0].id, 'old');
+    assert.equal((await f.app('resolveOriginalInventoryCatalogMaterial', { name: oldName, unit: 'szt.' })).name, name);
+    assert.equal(f.state.tables.original_inventory_catalog.length, 1);
   }
+});
+
+test('missing rename migration leaves names intact and reports the required SQL without losing ERP quantities', async () => {
+  const f = fixture();
+  f.state.tables.original_inventory_catalog.push(row(material()));
+  f.state.renameError = { code: 'PGRST202' };
+  const response = await f.importFile([material({ name: 'NEW NAME', availableQty: 740 })]);
+  assert.equal(response.status, 200);
+  assert.equal(response.result.catalogSync.failed, true);
+  assert.match(response.result.catalogSync.warnings[0].reason, /04_spis_rzeczywisty_i_stany_erp.sql/);
+  assert.equal(f.state.tables.original_inventory_catalog[0].name, material().name);
+  assert.equal(f.state.tables.original_inventory_erp_snapshots[0].available_qty, 740);
+});
+
+test('two contradictory names in one import and duplicate catalog indices are not resolved arbitrarily', async () => {
+  const f = fixture();
+  f.state.tables.original_inventory_catalog.push(row(material()), row(material({ name: 'DUPLICATE' }), 'duplicate'));
+  const original = structuredClone(f.state.tables.original_inventory_catalog);
+  assert.equal((await f.sync([material({ name: 'NEW' })])).updated, 0);
+  assert.equal((await f.sync([material({ name: 'ONE' }), material({ name: 'TWO' })])).updated, 0);
   assert.deepEqual(f.state.tables.original_inventory_catalog, original);
+});
+
+test('full ERP index is identity even when the warehouse label differs, without changing warehouse metadata', async () => {
+  const f = fixture();
+  f.state.tables.original_inventory_catalog.push(row(material()));
+  const result = await f.sync([material({ name: 'UPDATED', warehouseCode: 'M-40' })]);
+  assert.equal(result.updated, 1);
+  assert.equal(result.added, 0);
+  assert.equal(f.state.tables.original_inventory_catalog[0].warehouse_code, 'M-4');
 });
 
 test('conflicts inside one file are isolated and valid new materials still get permanent catalog entries', async () => {
@@ -268,7 +340,7 @@ test('partial catalog failure keeps imported stocks and retry inserts only the m
   assert.equal(f.state.tables.original_inventory_catalog.length, 501);
 });
 
-test('concurrent ERP imports use stable insert-only IDs and detect conflicting descriptions', async () => {
+test('concurrent ERP imports use stable IDs and update a renamed index without inserting a second row', async () => {
   const f = fixture();
   const results = await Promise.all([f.sync([material()]), f.sync([material()])]);
   assert.equal(results.reduce((sum, result) => sum + result.added, 0), 1);
@@ -276,7 +348,8 @@ test('concurrent ERP imports use stable insert-only IDs and detect conflicting d
   const g = fixture();
   const conflicts = await Promise.all([g.sync([material()]), g.sync([material({ name: 'CHANGED' })])]);
   assert.equal(g.state.tables.original_inventory_catalog.length, 1);
-  assert.equal(conflicts.reduce((sum, result) => sum + result.warningCount, 0), 1);
+  assert.equal(conflicts.reduce((sum, result) => sum + result.warningCount, 0), 0);
+  assert.equal(conflicts.reduce((sum, result) => sum + result.updated, 0), 1);
 });
 
 test('a simultaneous manual catalog insert with a different UUID is rechecked without losing other new rows', async () => {
@@ -343,4 +416,33 @@ test('a stale in-flight catalog read cannot repopulate cache after import invali
   releaseRead();
   assert.equal((await oldSearch).length, 1);
   assert.equal((await f.app('searchOriginalInventoryCatalog', payload)).length, 1);
+});
+
+test('exact material resolution reads cached catalog without writes and does not merge different indices', async () => {
+  const f = fixture();
+  const name = 'KRATA STALOWA 1M IMPORT Z LOGO DOMELO';
+  const item = material({ name, indexCode: '1598-7', warehouseCode: null });
+  f.state.tables.original_inventory_catalog.push(row(item));
+  const payload = { name, unit: 'szt.' };
+  assert.equal((await f.app('resolveOriginalInventoryCatalogMaterial', payload)).indexCode, '1598-7');
+  const reads = f.state.operations.length;
+  assert.equal((await f.app('resolveOriginalInventoryCatalogMaterial', payload)).indexCode, '1598-7');
+  assert.equal(f.state.operations.length, reads, 'uses the existing server catalog cache');
+  assert.equal(await f.app('resolveOriginalInventoryCatalogMaterial', { ...payload, unit: 'kg' }), null);
+  assert.equal(await f.app('resolveOriginalInventoryCatalogMaterial', { ...payload, name: 'KRATA STALOWA' }), null);
+  f.state.tables.original_inventory_catalog.push(row({ ...item, indexCode: '1700' }, 'other'));
+  assert.equal(await f.app('resolveOriginalInventoryCatalogMaterial', {
+    ...payload, catalogRefreshToken: '00000000-0000-4000-8000-000000000001'
+  }), null);
+  assert.ok(f.state.operations.every((operation) => operation.mode === 'select'));
+});
+
+test('exact material resolution requires the existing catalog read permission', async () => {
+  const f = fixture();
+  const payload = { name: 'KRATA', unit: 'szt.' };
+  f.state.user.access = { warehouses: {} };
+  await f.app('resolveOriginalInventoryCatalogMaterial', payload, 403);
+  f.state.user = null;
+  await f.app('resolveOriginalInventoryCatalogMaterial', payload, 401);
+  assert.equal(f.state.operations.length, 0);
 });

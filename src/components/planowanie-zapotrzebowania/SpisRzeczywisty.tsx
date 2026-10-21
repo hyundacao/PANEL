@@ -18,6 +18,7 @@ import {
   getOriginalInventoryCatalog,
   getOriginalInventoryCatalogFromErp,
   searchOriginalInventoryCatalog,
+  resolveOriginalInventoryCatalogMaterial,
   getOriginalInventoryErpSnapshot,
   getOriginalInventoryErpSnapshotsByDates,
   getOriginalInventoryGrindTasks,
@@ -595,6 +596,7 @@ type OriginalInventoryNameSuggestion = {
   indexCode: string | null;
   indexCode2: string | null;
   isMag55: boolean;
+  previousNames?: string[];
 };
 
 const SPIS_SEARCH_DEBOUNCE_MS = 160;
@@ -608,6 +610,7 @@ const toOriginalInventoryNameSuggestion = (item: {
   warehouseCode?: string | null;
   indexCode?: string | null;
   indexCode2?: string | null;
+  previousNames?: string[];
 }): OriginalInventoryNameSuggestion => {
   const warehouseCode = item.warehouseCode ? String(item.warehouseCode).trim().toUpperCase() : null;
   const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
@@ -615,6 +618,7 @@ const toOriginalInventoryNameSuggestion = (item: {
     catalogId: item.id,
     name: item.name,
     unit: item.unit,
+    previousNames: item.previousNames,
     warehouseCode,
     indexCode,
     indexCode2: getOriginalInventorySpisIndex2(indexCode, item.indexCode2) || null,
@@ -1516,11 +1520,18 @@ export default function SpisRzeczywisty() {
     try {
       const result = await importCatalogMutation.mutateAsync(file);
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-local'] });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-material'] });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-search'] });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-erp-snapshot'] });
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-grind-tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-pallet-sets'] });
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-silos-config'] });
       resetCatalogImportState();
       toast({
-        title: 'Wgrano kartoteki',
-        description: `Dodano: ${result.inserted}, pominieto: ${result.skipped}.`,
-        tone: 'success'
+        title: result.catalogSync?.failed ? 'Import kartotek wymaga uwagi' : 'Wgrano kartoteki',
+        description: `Dodano: ${result.inserted}, zaktualizowano nazwy: ${result.updated ?? 0}, pominieto: ${result.skipped}. ${result.catalogSync?.warnings.map((warning) => warning.reason).slice(0, 2).join(' ') ?? ''}`,
+        tone: result.catalogSync?.failed ? 'error' : 'success'
       });
     } catch (err) {
       const messageMap: Record<string, string> = {
@@ -1606,6 +1617,11 @@ export default function SpisRzeczywisty() {
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-erp-snapshot', spisDate] });
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-local'] });
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-search'] });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-material'] });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] });
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-grind-tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-pallet-sets'] });
+      queryClient.invalidateQueries({ queryKey: ['original-inventory-silos-config'] });
       resetErpSnapshotImportState();
       setLastErpCatalogSync(result.catalogSync ? { date: result.snapshotDate, result: result.catalogSync } : null);
       toast({
@@ -2054,13 +2070,30 @@ export default function SpisRzeczywisty() {
     if (!needle) return null;
     return existingByName.get(needle) ?? null;
   }, [existingByName, form.name]);
+  const selectedErpIndex = selectedErpMaterial?.name === form.name ? selectedErpMaterial.indexCode : null;
+  const needsErpCatalogIdentity = activeTab === 'spis' && Boolean(form.name.trim()) &&
+    !selectedErpIndex && erpSnapshotEntries.length > 0;
+  const {
+    data: resolvedErpMaterial,
+    isPending: isErpMaterialPending,
+    isError: isErpMaterialError,
+    refetch: refetchErpMaterial
+  } = useQuery({
+    queryKey: ['spis-oryginalow-catalog-material', form.name.trim(), form.unit],
+    queryFn: ({ signal }) => resolveOriginalInventoryCatalogMaterial(form.name, form.unit, signal),
+    enabled: needsErpCatalogIdentity,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: false
+  });
   const matchedErpSnapshot = useMemo(() => {
     return matchOriginalInventoryErpStock(effectiveErpSnapshotEntries, {
       name: form.name,
       unit: form.unit,
-      indexCode: selectedErpMaterial?.name === form.name ? selectedErpMaterial.indexCode : null
+      indexCode: selectedErpIndex || resolvedErpMaterial?.indexCode
     }, normalizeCatalogNameKey);
-  }, [effectiveErpSnapshotEntries, form.name, form.unit, selectedErpMaterial]);
+  }, [effectiveErpSnapshotEntries, form.name, form.unit, selectedErpIndex, resolvedErpMaterial]);
   const existingNameSuggestions = useMemo<OriginalInventoryNameSuggestion[]>(
     () =>
       [...palletSets.filter((set) => set.active && !palletSetError(set)).flatMap((set) => {
@@ -3610,14 +3643,15 @@ export default function SpisRzeczywisty() {
                   date={spisDate}
                   snapshot={matchedErpSnapshot}
                   hasSnapshot={erpSnapshotEntries.length > 0}
-                  loading={isErpSnapshotPending}
-                  error={isErpSnapshotError}
+                  loading={isErpSnapshotPending || (needsErpCatalogIdentity && isErpMaterialPending)}
+                  error={isErpSnapshotError || (needsErpCatalogIdentity && isErpMaterialError)}
                   migrationRequired={erpSnapshotMigrationRequired}
                   reservationsLoading={isGrindTasksPending}
                   reservationsError={isGrindTasksError}
                   onRetry={() => {
                     void refetchErpSnapshot();
                     void refetchGrindTasks();
+                    if (needsErpCatalogIdentity) void refetchErpMaterial();
                   }}
                 />
               </div>
