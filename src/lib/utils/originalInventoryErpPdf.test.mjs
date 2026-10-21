@@ -105,6 +105,22 @@ test('reads the whole bounded row including long names and wrapped indices', asy
   assert.equal(items[1].indexCode, 'SECOND-INDEX');
 });
 
+test('preserves SYSTEM when it is a continuation inside the grate row as in the 21 October report', async () => {
+  const items = await parsePdf(pdfFile([[
+    separator(175),
+    ...cells(185, '9417', '1598-7', 'KRATA STALOWA 1M IMPORT Z LOGO DOMELO', '740,000', '740,000'),
+    text(182, 197, 'SYSTEM 1000X63X98X148'), separator(205),
+    ...cells(215, '10906', 'M-1-KAR-BSHTR-', 'KRATOWNICA 1118X764X670 3W SZARY', '6,000', '6,000'),
+    text(74, 227, '10906'), text(182, 227, 'KOMPLETNA'), separator(235)
+  ]]));
+  assert.equal(items.length, 2);
+  assert.equal(items[0].indexCode, '1598-7');
+  assert.equal(items[0].name, 'KRATA STALOWA 1M IMPORT Z LOGO DOMELO SYSTEM 1000X63X98X148');
+  assert.equal(items[0].availableQty, 740);
+  assert.equal(items[1].name, 'KRATOWNICA 1118X764X670 3W SZARY KOMPLETNA');
+  assert.equal(items[1].availableQty, 6);
+});
+
 test('keeps table bounds separate between PDF pages', async () => {
   const items = await parsePdf(pdfFile([
     [separator(175), ...cells(185, '1', 'A', 'LAST ON PAGE ONE', '10', '9'), separator(195)],

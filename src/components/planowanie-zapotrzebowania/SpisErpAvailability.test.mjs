@@ -29,6 +29,7 @@ const load = (file) => {
   return mod.exports;
 };
 const { SpisErpAvailability } = load(path.join(directory, 'SpisErpAvailability.tsx'));
+const { matchOriginalInventoryErpStock } = load(path.join(root, 'src/lib/utils/originalInventoryErpMatch.ts'));
 const source = readFileSync(path.join(directory, 'SpisRzeczywisty.tsx'), 'utf8');
 const ast = ts.createSourceFile('SpisRzeczywisty.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const queryNodes = new Map();
@@ -45,6 +46,96 @@ const visit = (node) => {
   ts.forEachChild(node, visit);
 };
 visit(ast);
+
+const initializer = (name) => {
+  let result;
+  const find = (node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === name) result = node.initializer.getText(ast);
+    ts.forEachChild(node, find);
+  };
+  find(ast);
+  assert.ok(result, name);
+  return result;
+};
+const normalizeCatalogNameKey = (value) => value.trim().toLowerCase();
+const grateName = 'KRATA STALOWA 1M IMPORT Z LOGO DOMELO';
+const grateStock = (extra = {}) => ({
+  name: `${grateName} SYSTEM 1000X63X98X148`, indexCode: '1598-7',
+  unit: 'szt.', realQty: 740, availableQty: 740, ...extra
+});
+
+test('Spis uses the selected exact index when the PDF contains a longer name', () => {
+  const mod = { exports: {} };
+  vm.runInNewContext(compile(`module.exports = ${initializer('matchedErpSnapshot')};`), {
+    module: mod, useMemo: (calculate) => calculate(), matchOriginalInventoryErpStock,
+    normalizeCatalogNameKey, form: { name: grateName, unit: 'szt.' },
+    selectedErpMaterial: { name: grateName, indexCode: '1598-7' },
+    effectiveErpSnapshotEntries: [grateStock(), grateStock({ indexCode: '1700', availableQty: 999 })]
+  });
+  assert.equal(mod.exports.availableQty, 740);
+  assert.match(render({ name: grateName, snapshot: mod.exports }), /740 szt\./);
+});
+
+test('known different indices never fall back to the same or similar name', () => {
+  const material = { name: grateName, unit: 'szt.', indexCode: '1598-7' };
+  assert.equal(matchOriginalInventoryErpStock([
+    grateStock({ name: grateName, indexCode: '1598-70' }),
+    grateStock({ name: grateName, indexCode: '1700' })
+  ], material, normalizeCatalogNameKey), null);
+});
+
+test('legacy names still work only when the stock identity and unit are unambiguous', () => {
+  const material = { name: grateName, unit: 'szt.' };
+  const legacy = grateStock({ name: grateName, indexCode: null });
+  assert.equal(matchOriginalInventoryErpStock([legacy], material, normalizeCatalogNameKey).availableQty, 740);
+  assert.equal(matchOriginalInventoryErpStock([legacy], { ...material, indexCode: '1598-7' }, normalizeCatalogNameKey).availableQty, 740);
+  assert.equal(matchOriginalInventoryErpStock([
+    grateStock({ name: grateName }), grateStock({ name: grateName, indexCode: '1700' })
+  ], material, normalizeCatalogNameKey), null);
+  assert.equal(matchOriginalInventoryErpStock([legacy], { ...material, unit: 'kg' }, normalizeCatalogNameKey), null);
+});
+
+test('indexed matching preserves zero, negatives and already deducted grinding reservations', () => {
+  const material = { name: grateName, unit: 'szt', indexCode: '1598-7' };
+  for (const availableQty of [0, -5, 700]) {
+    assert.equal(matchOriginalInventoryErpStock([grateStock({ availableQty })], material, normalizeCatalogNameKey).availableQty, availableQty);
+  }
+  const result = matchOriginalInventoryErpStock([
+    grateStock({ availableQty: 700 }), grateStock({ availableQty: 30 }),
+    grateStock({ indexCode: '1700', availableQty: 900 })
+  ], material, normalizeCatalogNameKey);
+  assert.equal(result.availableQty, 730);
+});
+
+test('selecting a suggestion retains its full ERP index and editing the name clears it', () => {
+  let selected = null;
+  const context = {
+    module: { exports: {} }, selectedCatalogRef: { current: { id: '', name: '' } },
+    setSelectedErpMaterial: (value) => { selected = value; },
+    setSelectedCatalogId() {}, setSelectedPalletSetId() {}, setInventoryMode() {}, setForm() {},
+    qtyInputRef: { current: null }
+  };
+  vm.runInNewContext(compile(`module.exports = { select: ${initializer('applyNameSuggestionToForm')}, commit: ${initializer('applyNameToForm')} };`), context);
+  context.module.exports.select({ name: grateName, indexCode: '1598-7', catalogId: 'catalog-grate', unit: 'szt.' });
+  assert.equal(selected.indexCode, '1598-7');
+  context.module.exports.commit(grateName);
+  assert.equal(selected.indexCode, '1598-7');
+  context.module.exports.commit('OTHER MATERIAL');
+  assert.equal(selected, null);
+});
+
+test('an old selected index cannot supply stock after the form name was cleared or changed', () => {
+  for (const name of ['', 'OTHER MATERIAL']) {
+    const mod = { exports: {} };
+    vm.runInNewContext(compile(`module.exports = ${initializer('matchedErpSnapshot')};`), {
+      module: mod, useMemo: (calculate) => calculate(), matchOriginalInventoryErpStock,
+      normalizeCatalogNameKey, form: { name, unit: 'szt.' },
+      selectedErpMaterial: { name: grateName, indexCode: '1598-7' },
+      effectiveErpSnapshotEntries: [grateStock()]
+    });
+    assert.equal(mod.exports, null);
+  }
+});
 
 const optionsFor = (key, tab = 'spis', date = '2026-09-28', fetcher = async () => []) => {
   assert.ok(queryNodes.has(key));

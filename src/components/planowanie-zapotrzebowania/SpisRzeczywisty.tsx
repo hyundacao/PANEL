@@ -1,6 +1,7 @@
 'use client';
 import PalletInventoryEditor from '@/components/planowanie-zapotrzebowania/PalletInventoryEditor';
 import { SpisErpAvailability } from '@/components/planowanie-zapotrzebowania/SpisErpAvailability';
+import { matchOriginalInventoryErpStock } from '@/lib/utils/originalInventoryErpMatch';
 import { ErpCatalogImportNotice } from '@/components/planowanie-zapotrzebowania/ErpCatalogImportNotice';
 import { getOriginalInventoryPalletSets, addOriginalInventoryPalletSet } from '@/lib/api';
 import { isPalletCount, palletSetError, palletSetFingerprint, palletSetTotals, palletInventoryError, parsePalletSource } from '@/lib/planowanie-zapotrzebowania/palletSets';
@@ -893,6 +894,7 @@ export default function SpisRzeczywisty() {
   });
   const [inventoryMode, setInventoryMode] = useState<'pieces' | 'pallets'>('pieces');
   const [selectedCatalogId, setSelectedCatalogId] = useState('');
+  const [selectedErpMaterial, setSelectedErpMaterial] = useState<{ name: string; indexCode: string | null } | null>(null);
   const selectedCatalogRef = useRef({ id: '', name: '' });
   const [selectedPalletSetId, setSelectedPalletSetId] = useState('');
   const [editingPalletBatchId, setEditingPalletBatchId] = useState<string | null>(null);
@@ -2053,10 +2055,12 @@ export default function SpisRzeczywisty() {
     return existingByName.get(needle) ?? null;
   }, [existingByName, form.name]);
   const matchedErpSnapshot = useMemo(() => {
-    const needle = normalizeCatalogNameKey(form.name);
-    if (!needle) return null;
-    return erpSnapshotMap.get(needle) ?? null;
-  }, [erpSnapshotMap, form.name]);
+    return matchOriginalInventoryErpStock(effectiveErpSnapshotEntries, {
+      name: form.name,
+      unit: form.unit,
+      indexCode: selectedErpMaterial?.name === form.name ? selectedErpMaterial.indexCode : null
+    }, normalizeCatalogNameKey);
+  }, [effectiveErpSnapshotEntries, form.name, form.unit, selectedErpMaterial]);
   const existingNameSuggestions = useMemo<OriginalInventoryNameSuggestion[]>(
     () =>
       [...palletSets.filter((set) => set.active && !palletSetError(set)).flatMap((set) => {
@@ -2107,11 +2111,13 @@ export default function SpisRzeczywisty() {
   const applyNameToForm = (rawName: string) => {
     if (selectedCatalogRef.current.name !== rawName) {
       selectedCatalogRef.current = { id: '', name: '' };
+      setSelectedErpMaterial(null);
       setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryMode('pieces');
     }
     setForm((prev) => ({ ...prev, name: rawName }));
   };
   const applyNameSuggestionToForm = (suggestion: OriginalInventoryNameSuggestion) => {
+    setSelectedErpMaterial({ name: suggestion.name, indexCode: suggestion.indexCode });
     selectedCatalogRef.current = { id: suggestion.catalogId ?? '', name: suggestion.name };
     setSelectedCatalogId(suggestion.catalogId ?? '');
     setSelectedPalletSetId(''); setInventoryMode('pieces');
