@@ -1,5 +1,5 @@
 import type { CellValue, Workbook } from 'exceljs';
-import type { OriginalInventoryErpSnapshotEntry, PaintTapeInventoryCategory, PaintTapeInventoryData } from '@/lib/api/types';
+import type { OriginalInventoryErpSnapshotEntry, PaintTapeInventoryCategory, PaintTapeInventoryComment, PaintTapeInventoryData } from '@/lib/api/types';
 import { buildPaintTapeInventoryErpLookup, findPaintTapeInventoryErpSnapshot } from './paintTapeInventoryErp';
 
 const categoryLabels: Record<PaintTapeInventoryCategory, string> = {
@@ -123,7 +123,8 @@ const addInventoryTable = (workbook: Workbook, sheetName: string, tableName: str
         if (i === 0) cell.font = { ...cell.font, color: { argb: colors.orange } };
         if (i === 1 || i === 2) cell.font = { ...cell.font, color: { argb: colors.purple } };
       }
-      if (typeof cell.value === 'string') lines = Math.max(lines, ...cell.value.split('\n').map((line) => Math.ceil(line.length / Math.max(8, column.width - 5))));
+      if (typeof cell.value === 'string') lines = Math.max(lines, cell.value.split('\n')
+        .reduce((total, line) => total + Math.max(1, Math.ceil(line.length / Math.max(8, column.width - 5))), 0));
     });
     if (!isHeader) row.height = Math.min(409, Math.max(28, lines * 16 + 8));
   }
@@ -142,8 +143,15 @@ const warsawExcelDate = (timestamp: string) => {
   return new Date(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}Z`);
 };
 
-export const createPaintTapeInventoryWorkbook = async (inventory: PaintTapeInventoryData, snapshots: readonly OriginalInventoryErpSnapshotEntry[], dateKey: string) => {
+export const createPaintTapeInventoryWorkbook = async (inventory: PaintTapeInventoryData, snapshots: readonly OriginalInventoryErpSnapshotEntry[], dateKey: string,
+  comments?: readonly PaintTapeInventoryComment[]) => {
   const data = buildPaintTapeInventoryExport(inventory, snapshots, dateKey);
+  // Omit the column entirely unless the caller has fetched comments through the permission-checked API.
+  const includeComments = comments !== undefined;
+  if (comments?.some((comment) => comment.sessionId !== inventory.session!.id)) {
+    throw new Error('INVENTORY_EXPORT_COMMENTS_SESSION_MISMATCH');
+  }
+  const commentsByItem = new Map(comments?.map((comment) => [comment.catalogItemId, comment.text]));
   const ExcelJSModule = await import('exceljs');
   const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
   const workbook = new ExcelJS.Workbook();
@@ -156,11 +164,12 @@ export const createPaintTapeInventoryWorkbook = async (inventory: PaintTapeInven
     { name: 'Stan fizyczny', width: 17, format: qtyFormat }, { name: 'J.m.', width: 8, align: 'center' },
     { name: 'Stan ERP', width: 17, format: qtyFormat }, { name: 'J.m. ERP', width: 9, align: 'center' },
     { name: 'Różnica (fizyczny - ERP)', width: 18, format: differenceFormat }, { name: 'Porównanie', width: 25 },
-    { name: 'Pomiary', width: 11, format: '0', align: 'center' }
+    { name: 'Pomiary', width: 11, format: '0', align: 'center' },
+    ...(includeComments ? [{ name: 'Komentarz do rozliczenia', width: 52 }] : [])
   ], data.rows.map((row, index) => [
     row.item.name, row.item.itemIndex, row.item.itemCode ?? '', categoryLabels[row.item.category], row.physicalQty, row.item.unit,
     row.erpQty, row.erpUnit, row.difference === null ? null : { formula: `ROUND(E${index + firstDataRow}-G${index + firstDataRow},3)`, result: row.difference },
-    row.status, row.measurements
+    row.status, row.measurements, ...(includeComments ? [commentsByItem.get(row.item.id) ?? ''] : [])
   ]), ...metadata);
   for (let row = headerRowNumber; row < firstDataRow + data.rows.length; row++) {
     for (const [column, color, fill] of [[5, colors.physical, colors.physicalFill], [6, colors.physical, colors.physicalFill],

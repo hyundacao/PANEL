@@ -19,7 +19,7 @@ import {
   removePaintTapeInventorySession,
   setPaintTapeInventoryCatalogItemActive
 } from '@/lib/api';
-import { isWarehouseAdmin } from '@/lib/auth/access';
+import { isHeadAdmin, isWarehouseAdmin } from '@/lib/auth/access';
 import { useUiStore } from '@/lib/store/ui';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -61,6 +61,7 @@ export default function PaintTapeInventoryManagementPage() {
   const [status, setStatus] = useState<CatalogStatus>('ACTIVE');
   const [managementView, setManagementView] = useState<ManagementView>('CATALOG');
   const canManage = isWarehouseAdmin(user, 'FARBY_TASMY');
+  const canRemoveSessions = isHeadAdmin(user);
 
   const catalogQuery = useQuery({
     queryKey: ['paint-tape-inventory-catalog-admin'],
@@ -140,6 +141,7 @@ export default function PaintTapeInventoryManagementPage() {
   };
 
   const handleRemoveSession = (id: string, inventoryDate: string, checkedCount: number) => {
+    if (!canRemoveSessions) return;
     if (
       !window.confirm(
         `Trwale usunąć cały spis z ${formatDate(inventoryDate)} wraz z ${checkedCount} zapisanymi pozycjami? Tej operacji nie można cofnąć.`
@@ -171,7 +173,7 @@ export default function PaintTapeInventoryManagementPage() {
             <p className="mt-1 text-sm text-dim">
               {managementView === 'CATALOG'
                 ? 'Zarządzaj listą pozycji dostępnych podczas spisu.'
-                : 'Przeglądaj i usuwaj zapisane spisy.'}
+                : canRemoveSessions ? 'Przeglądaj i usuwaj zapisane spisy.' : 'Przeglądaj zapisane spisy.'}
             </p>
           </div>
           {managementView === 'CATALOG' && <Button asChild variant="secondary" className="min-h-[44px] px-4">
@@ -352,7 +354,7 @@ export default function PaintTapeInventoryManagementPage() {
                     <span>Utworzył: {inventorySession.createdBy}</span>
                   </div>
                 </div>
-                <Button
+                {canRemoveSessions && <Button
                   type="button"
                   variant="outline"
                   onClick={() =>
@@ -367,7 +369,7 @@ export default function PaintTapeInventoryManagementPage() {
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   Usuń cały spis
-                </Button>
+                </Button>}
               </div>
             );
           })

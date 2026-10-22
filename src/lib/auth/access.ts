@@ -46,7 +46,8 @@ export const PAINT_TAPE_PERMISSION_KEYS: PaintTapePermissionKey[] = [
   'details',
   'accounting',
   'accounted',
-  'celebration'
+  'celebration',
+  'inventoryComments'
 ];
 export const DEFAULT_PAINT_TAPE_PERMISSIONS: PaintTapePermissions = {
   create: true,
@@ -54,7 +55,8 @@ export const DEFAULT_PAINT_TAPE_PERMISSIONS: PaintTapePermissions = {
   details: true,
   accounting: true,
   accounted: true,
-  celebration: true
+  celebration: true,
+  inventoryComments: false
 };
 export const ERP_TRANSFERS_TABS: WarehouseTab[] = [
   'erp-magazynier',
@@ -262,11 +264,15 @@ export const getPaintTapePermissions = (
       details: false,
       accounting: false,
       accounted: false,
-      celebration: false
+      celebration: false,
+      inventoryComments: false
     };
   }
   if (isHeadAdmin(user) || isWarehouseAdmin(user, 'FARBY_TASMY')) {
-    return { ...DEFAULT_PAINT_TAPE_PERMISSIONS };
+    return {
+      ...DEFAULT_PAINT_TAPE_PERMISSIONS,
+      inventoryComments: isHeadAdmin(user) || user.access?.paintTapePermissions?.inventoryComments === true
+    };
   }
   if (!canSeeTab(user, 'FARBY_TASMY', 'rozliczanie-farb-tasm')) {
     return {
@@ -275,7 +281,8 @@ export const getPaintTapePermissions = (
       details: false,
       accounting: false,
       accounted: false,
-      celebration: false
+      celebration: false,
+      inventoryComments: false
     };
   }
   const raw = user.access?.paintTapePermissions;
@@ -286,7 +293,8 @@ export const getPaintTapePermissions = (
     details: raw.details !== false,
     accounting: raw.accounting !== false,
     accounted: raw.accounted ?? raw.accounting !== false,
-    celebration: raw.celebration !== false
+    celebration: raw.celebration !== false,
+    inventoryComments: raw.inventoryComments === true
   };
 };
 

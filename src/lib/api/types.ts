@@ -74,7 +74,8 @@ export type PaintTapePermissionKey =
   | 'details'
   | 'accounting'
   | 'accounted'
-  | 'celebration';
+  | 'celebration'
+  | 'inventoryComments';
 
 export type PaintTapePermissions = Record<PaintTapePermissionKey, boolean>;
 
@@ -391,6 +392,22 @@ export type PaintTapeInventoryData = {
   session: PaintTapeInventorySession | null;
   entries: PaintTapeInventoryEntry[];
   comparison?: PaintTapeInventoryComparison | null;
+};
+
+export type PaintTapeInventoryComment = {
+  sessionId: string;
+  catalogItemId: string;
+  text: string;
+  revision: number;
+  updatedAt: string;
+  updatedBy: string;
+};
+
+export type SavePaintTapeInventoryComment = {
+  sessionId: string;
+  catalogItemId: string;
+  text: string;
+  expectedRevision: number;
 };
 
 export type PaintTapeSettlement = {

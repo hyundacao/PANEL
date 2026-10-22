@@ -34,6 +34,8 @@ import type {
   PaintTapeInventoryCatalogItem,
   PaintTapeInventoryCategory,
   PaintTapeInventoryData,
+  PaintTapeInventoryComment,
+  SavePaintTapeInventoryComment,
   PaintTapeInventoryEntry,
   PaintTapeInventorySession,
   PaintTapeSettlement,
@@ -905,6 +907,12 @@ export const removePaintTapeInventorySession = async (
   sessionId: string
 ): Promise<{ id: string; inventoryDate: string }> =>
   appRequest('removePaintTapeInventorySession', { sessionId });
+
+export const getPaintTapeInventoryComments = async (sessionId: string): Promise<PaintTapeInventoryComment[]> =>
+  appRequest('getPaintTapeInventoryComments', { sessionId });
+
+export const savePaintTapeInventoryComment = async (input: SavePaintTapeInventoryComment): Promise<PaintTapeInventoryComment> =>
+  appRequest('savePaintTapeInventoryComment', input);
 
 export const closePaintTapeInventorySession = async (
   dateKey: string

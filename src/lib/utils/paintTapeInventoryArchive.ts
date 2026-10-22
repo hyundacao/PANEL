@@ -1,3 +1,4 @@
+import Decimal from 'decimal.js-light';
 import type {
   OriginalInventoryErpSnapshotEntry,
   PaintTapeInventoryCatalogItem,
@@ -5,6 +6,8 @@ import type {
   PaintTapeInventoryEntry
 } from '@/lib/api/types';
 import { buildPaintTapeInventoryErpLookup, findPaintTapeInventoryErpSnapshot } from './paintTapeInventoryErp';
+
+const InventoryDecimal = Decimal.clone({ precision: 40 });
 
 export const ORIGINAL_ERP_RETENTION_DAYS = 90;
 
@@ -24,9 +27,10 @@ export const buildPaintTapeInventoryComparison = (
 ): PaintTapeInventoryComparison => {
   const lookup = buildPaintTapeInventoryErpLookup(snapshots);
   const previousById = new Map(previous?.rows.map((row) => [row.item.id, row.erp]) ?? []);
-  const quantities = new Map<string, number>();
+  const quantities = new Map<string, Decimal>();
+  // PostgreSQL validates these totals as exact numeric sums, not binary floating point.
   entries.forEach((entry) => quantities.set(
-    entry.catalogItemId, (quantities.get(entry.catalogItemId) ?? 0) + entry.qty
+    entry.catalogItemId, (quantities.get(entry.catalogItemId) ?? new InventoryDecimal(0)).plus(entry.qty)
   ));
   return {
     version: 1, inventoryDate, capturedAt,
@@ -36,7 +40,7 @@ export const buildPaintTapeInventoryComparison = (
         ? findPaintTapeInventoryErpSnapshot(lookup, item) ?? null
         : previousById.get(item.id) ?? null;
       return {
-        item: { ...item }, physicalQty: quantities.get(item.id) ?? null,
+        item: { ...item }, physicalQty: quantities.get(item.id)?.toNumber() ?? null,
         erp: erp ? { ...erp } : null
       };
     })

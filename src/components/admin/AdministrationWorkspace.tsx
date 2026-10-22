@@ -207,7 +207,8 @@ const paintTapePermissionOptions: Array<{ key: PaintTapePermissionKey; label: st
   { key: 'details', label: 'Wpis ilosci wykonanych sztuk' },
   { key: 'accounting', label: 'Rozliczanie zakonczonych zlecen' },
   { key: 'accounted', label: 'Dostep do rozliczonych zlecen' },
-  { key: 'celebration', label: 'Easter egg po rozliczeniu' }
+  { key: 'celebration', label: 'Easter egg po rozliczeniu' },
+  { key: 'inventoryComments', label: 'Komentarze do spisów - widoczność i edycja' }
 ];
 const warehouseLabels: Record<WarehouseKey, string> = {
   PRZEMIALY: 'Zarządzanie przemiałami i przygotowaniem produkcji',
@@ -370,7 +371,7 @@ const accessKey = (access: UserAccess) => {
     })
     .join('|');
   const paintTapeKey = PAINT_TAPE_PERMISSION_KEYS.map(
-    (key) => `${key}:${access.paintTapePermissions?.[key] === false ? 0 : 1}`
+    (key) => `${key}:${key === 'inventoryComments' ? (access.paintTapePermissions?.[key] === true ? 1 : 0) : (access.paintTapePermissions?.[key] === false ? 0 : 1)}`
   ).join(',');
   return `${access.admin ? 1 : 0}|${warehouseKey}|paintTape:${paintTapeKey}`;
 };
@@ -1295,7 +1296,7 @@ function AdministrationContent({ scope }: { scope: AdministrationScope }) {
               {paintTapePermissionOptions.map((permission) => (
                 <AdminToggle
                   key={`paint-tape-${permission.key}`}
-                  checked={permissions[permission.key] !== false}
+                  checked={blockEditing || permissions[permission.key] !== false}
                   onCheckedChange={(value) =>
                     onChange((current) => {
                       const next = cloneAccess(current);
@@ -1309,7 +1310,7 @@ function AdministrationContent({ scope }: { scope: AdministrationScope }) {
                     })
                   }
                   label={permission.label}
-                  disabled={blockEditing || !enabled || readOnlyValue}
+                  disabled={blockEditing || !enabled || (readOnlyValue && permission.key !== 'inventoryComments')}
                 />
               ))}
             </div>

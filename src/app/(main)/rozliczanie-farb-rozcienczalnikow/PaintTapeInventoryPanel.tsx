@@ -32,7 +32,9 @@ import {
   getOriginalInventoryCatalog,
   getOriginalInventoryErpSnapshot,
   getPaintTapeInventory,
+  getPaintTapeInventoryComments,
   removePaintTapeInventoryEntry,
+  removePaintTapeInventorySession,
   reopenPaintTapeInventorySession,
   savePaintTapeInventoryEntry,
   updatePaintTapeInventoryEntry
@@ -40,7 +42,9 @@ import {
 import type {
   PaintTapeInventoryCategory,
   PaintTapeInventoryCatalogItem,
+  PaintTapeInventoryData,
   PaintTapeInventoryEntry,
+  PaintTapeInventorySession,
   OriginalInventoryCatalogEntry
 } from '@/lib/api/types';
 import { Badge } from '@/components/ui/Badge';
@@ -50,6 +54,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { useToastStore } from '@/components/ui/Toast';
+import { getPaintTapePermissions, isHeadAdmin } from '@/lib/auth/access';
+import { PaintTapeInventoryComment } from './PaintTapeInventoryComment';
+import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
 import { buildPaintTapeInventoryErpLookup, findPaintTapeInventoryErpSnapshot } from '@/lib/utils/paintTapeInventoryErp';
 
@@ -154,11 +161,15 @@ const normalizeUnit = (value: string) => {
 };
 
 export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
+  const user = useUiStore((state) => state.user);
+  const canRemoveSessions = !readOnly && isHeadAdmin(user);
+  const canViewComments = getPaintTapePermissions(user).inventoryComments;
   const toast = useToastStore((state) => state.push);
   const queryClient = useQueryClient();
   const today = getLocalDateValue();
   const [view, setView] = useState<InventoryView>('CURRENT');
   const [selectedDate, setSelectedDate] = useState(today);
+  const [lastHistorySessions, setLastHistorySessions] = useState<PaintTapeInventorySession[]>([]);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<'ALL' | PaintTapeInventoryCategory>('ALL');
   const [completion, setCompletion] = useState<CompletionFilter>('ALL');
@@ -193,11 +204,62 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
     retry: false
   });
   const data = inventoryQuery.data;
+  const historySessions = data?.sessions ?? lastHistorySessions;
+  const selectInventoryDate = (date: string) => {
+    if (data?.sessions) setLastHistorySessions(data.sessions);
+    setSelectedDate(date);
+  };
   const entries = useMemo(() => data?.entries ?? [], [data?.entries]);
   const catalog = useMemo(() => data?.catalog ?? [], [data?.catalog]);
   const session = data?.session ?? null;
   const comparison = data?.comparison;
-  const locked = readOnly || session?.status === 'CLOSED' || (view === 'HISTORY' && !session);
+  const showInventoryComments = view === 'HISTORY' && canViewComments && Boolean(session);
+  const commentsQueryKey = ['paint-tape-inventory-comments', user?.id ?? '', session?.id ?? ''];
+  const commentsQuery = useQuery({
+    queryKey: commentsQueryKey,
+    queryFn: () => getPaintTapeInventoryComments(session!.id),
+    enabled: showInventoryComments && inventoryQuery.isSuccess,
+    retry: false
+  });
+  const commentsByItem = new Map((commentsQuery.data ?? []).map((comment) => [comment.catalogItemId, comment]));
+  const removeSessionMutation = useMutation({
+    mutationFn: removePaintTapeInventorySession,
+    onSuccess: async (removed) => {
+      await queryClient.cancelQueries({ queryKey: ['paint-tape-inventory'] });
+      // Remove the deleted day from every cached history before switching dates.
+      queryClient.setQueriesData<PaintTapeInventoryData>({ queryKey: ['paint-tape-inventory'] }, (cached) => {
+        if (!cached) return cached;
+        return {
+          ...cached,
+          sessions: cached.sessions.filter((item) => item.id !== removed.id),
+          ...(cached.session?.id === removed.id ? { session: null, entries: [], comparison: null } : {})
+        };
+      });
+      const remaining = historySessions.filter((item) => item.id !== removed.id);
+      setLastHistorySessions(remaining);
+      setSelectedDate((current) => current === removed.inventoryDate ? remaining[0]?.inventoryDate ?? today : current);
+      setDrafts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${removed.inventoryDate}:`))));
+      setEntryEditDrafts({});
+      setExpandedItems(new Set());
+      queryClient.removeQueries({ queryKey: ['paint-tape-inventory-comments', user?.id ?? '', removed.id] });
+      void queryClient.invalidateQueries({ queryKey: ['paint-tape-inventory-sessions-admin'] });
+      await queryClient.invalidateQueries({ queryKey: ['paint-tape-inventory'] });
+      toast({ title: `Usunięto spis z dnia ${formatDate(removed.inventoryDate)}`, tone: 'success' });
+    },
+    onError: () => toast({
+      title: 'Nie udało się usunąć spisu',
+      description: 'Sprawdź uprawnienia administratora i połączenie z bazą.',
+      tone: 'error'
+    })
+  });
+  const locked = readOnly || removeSessionMutation.isPending || session?.status === 'CLOSED' || (view === 'HISTORY' && !session);
+  const historyGridClass = showInventoryComments
+    ? locked
+      ? 'lg:grid-cols-[minmax(200px,1fr)_110px_110px_minmax(150px,0.8fr)] 2xl:grid-cols-[minmax(200px,1fr)_100px_100px_minmax(150px,0.8fr)_minmax(200px,0.9fr)]'
+      : 'lg:grid-cols-[minmax(160px,1fr)_90px_90px_minmax(120px,0.8fr)_90px_52px] 2xl:grid-cols-[minmax(160px,1fr)_80px_80px_minmax(120px,0.8fr)_90px_52px_minmax(180px,0.9fr)]'
+    : locked
+      ? 'lg:grid-cols-[minmax(260px,1.25fr)_130px_130px_minmax(190px,0.9fr)]'
+      : 'lg:grid-cols-[minmax(240px,1.25fr)_120px_120px_minmax(170px,0.9fr)_130px_52px]';
   const showErpComparison = view === 'HISTORY';
   const isComparisonFrozen = session?.status === 'CLOSED' && Boolean(comparison);
   const isLiveErpMissing = erpSnapshotQuery.isSuccess && erpSnapshotQuery.data.length === 0;
@@ -521,6 +583,18 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
     closeMutation.mutate(selectedDate);
   };
 
+  const sessionActionPending = removeSessionMutation.isPending || closeMutation.isPending || reopenMutation.isPending ||
+    saveMutation.isPending || updateEntryMutation.isPending || removeEntryMutation.isPending;
+  const handleRemoveSession = () => {
+    if (!canRemoveSessions || !session || session.inventoryDate !== selectedDate ||
+      !inventoryQuery.isSuccess || inventoryQuery.isFetching || sessionActionPending || exporting) return;
+    if (!window.confirm(
+      `Trwale usunąć spis z dnia ${formatDate(session.inventoryDate)}? Zapisane pozycje: ${checkedItemCount}, pomiary: ${entries.length}. ` +
+      'Zostaną usunięte wszystkie pomiary tego dnia oraz zapisane porównanie ERP. Katalog materiałów, źródłowe stany ERP i pozostałe spisy pozostaną bez zmian. Tej operacji nie można cofnąć.'
+    )) return;
+    removeSessionMutation.mutate(session.id);
+  };
+
   const progress = catalog.length > 0 ? Math.round((checkedItemCount / catalog.length) * 100) : 0;
   const handleExportHistory = async () => {
     if (exportBusy.current || !data || !session || session.inventoryDate !== selectedDate || !entries.length) return;
@@ -533,8 +607,12 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
         if (result.isError) throw result.error;
         snapshots = result.data ?? [];
       }
+      const commentsResult = canViewComments ? await commentsQuery.refetch() : undefined;
+      if (commentsResult && (commentsResult.isError || !commentsResult.data)) {
+        throw new Error('INVENTORY_EXPORT_COMMENTS_UNAVAILABLE', { cause: commentsResult.error });
+      }
       const { createPaintTapeInventoryWorkbook } = await import('@/lib/utils/paintTapeInventoryWorkbook');
-      const workbook = await createPaintTapeInventoryWorkbook(data, snapshots, selectedDate);
+      const workbook = await createPaintTapeInventoryWorkbook(data, snapshots, selectedDate, commentsResult?.data);
       const buffer = await workbook.xlsx.writeBuffer();
       const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
       const anchor = document.createElement('a');
@@ -546,8 +624,14 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
       toast({ title: `Wyeksportowano spis z dnia ${formatDate(selectedDate)}`, tone: 'success' });
-    } catch {
-      toast({ title: 'Nie udało się wyeksportować spisu', description: 'Sprawdź, czy spis i dane ERP zostały wczytane, i spróbuj ponownie.', tone: 'error' });
+    } catch (error) {
+      const commentsUnavailable = error instanceof Error && error.message === 'INVENTORY_EXPORT_COMMENTS_UNAVAILABLE';
+      const migrationMissing = error instanceof Error && error.cause instanceof Error &&
+        error.cause.message === 'MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY_COMMENTS';
+      toast({ title: 'Nie udało się wyeksportować spisu', description: migrationMissing
+        ? 'Komentarze wymagają aktualizacji bazy: 05_farby_i_tasmy.sql.'
+        : commentsUnavailable ? 'Nie udało się pobrać zapisanych komentarzy. Sprawdź dostęp i połączenie, a następnie ponów eksport.'
+          : 'Sprawdź, czy spis i dane ERP zostały wczytane, i spróbuj ponownie.', tone: 'error' });
     } finally {
       exportBusy.current = false;
       setExporting(false);
@@ -556,6 +640,16 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
   const migrationRequired =
     inventoryQuery.error instanceof Error &&
     inventoryQuery.error.message === 'MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY';
+  const loadError = (
+    <div role="alert" className="space-y-3 p-4">
+      <p className="font-black text-danger">Nie udało się wczytać spisu.</p>
+      <p className="text-sm text-dim">Błąd pobierania danych. Spróbuj ponownie lub wybierz inny dzień z historii.</p>
+      <Button type="button" variant="outline" disabled={inventoryQuery.isFetching} onClick={() => void inventoryQuery.refetch()}>
+        <RotateCcw className="mr-2 h-4 w-4" aria-hidden="true" />
+        Spróbuj ponownie
+      </Button>
+    </div>
+  );
 
   const renderInventoryRow = (item: PaintTapeInventoryCatalogItem) => {
     const itemEntries = entriesByItem.get(item.id) ?? [];
@@ -594,9 +688,7 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
         className={cn(
           'grid scroll-mt-24 gap-3 border-b border-[rgba(255,255,255,0.09)] px-2 py-4 transition last:border-b-0 sm:px-4',
           showErpComparison
-            ? locked
-              ? 'lg:grid-cols-[minmax(260px,1.25fr)_130px_130px_minmax(190px,0.9fr)] lg:items-center'
-              : 'lg:grid-cols-[minmax(240px,1.25fr)_120px_120px_minmax(170px,0.9fr)_130px_52px] lg:items-center'
+            ? `${historyGridClass} lg:items-center`
             : locked
               ? 'lg:grid-cols-[minmax(280px,1fr)_160px] lg:items-center'
               : 'lg:grid-cols-[minmax(280px,1fr)_160px_150px_52px] lg:items-center',
@@ -729,6 +821,12 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
             </Button>
           </>
         )}
+        {showInventoryComments && session && <PaintTapeInventoryComment
+          key={`${session.id}:${item.id}`}
+          sessionId={session.id} itemId={item.id} itemName={item.name}
+          comment={commentsByItem.get(item.id)} queryKey={commentsQueryKey}
+          readOnly={readOnly} unavailable={!commentsQuery.isSuccess || removeSessionMutation.isPending}
+        />}
         {hasEntries && isExpanded && (
           <div className="space-y-1.5 border-t border-[rgba(255,255,255,0.08)] pt-3 lg:col-span-full">
             <p className="pb-1 text-[10px] font-black uppercase text-dim">Pomiary składowe</p>
@@ -800,9 +898,10 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
       <div className="grid grid-cols-2 gap-1 rounded-xl border border-border bg-[rgba(255,255,255,0.025)] p-1 max-md:rounded-none max-md:border-x-0">
         <button
           type="button"
+          disabled={removeSessionMutation.isPending}
           onClick={() => {
             setView('CURRENT');
-            setSelectedDate(today);
+            selectInventoryDate(today);
           }}
           className={cn(
             'paint-inventory-button flex min-h-[44px] items-center justify-center gap-2 rounded-lg border px-3 text-sm font-bold transition',
@@ -816,10 +915,11 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
         </button>
         <button
           type="button"
+          disabled={removeSessionMutation.isPending}
           onClick={() => {
             setView('HISTORY');
-            const latest = data?.sessions[0]?.inventoryDate;
-            if (latest) setSelectedDate(latest);
+            const latest = historySessions[0]?.inventoryDate;
+            if (latest) selectInventoryDate(latest);
           }}
           className={cn(
             'paint-inventory-button paint-inventory-button-purple flex min-h-[44px] items-center justify-center gap-2 rounded-lg border px-3 text-sm font-bold transition',
@@ -847,13 +947,14 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
               <p className="font-black text-title">Historia spisów</p>
               <p className="mt-1 text-xs text-dim">Każdy dzień zachowuje własne ilości i osoby.</p>
             </div>
-            {data?.sessions.length ? (
+            {historySessions.length ? (
               <div className="max-h-[70vh] overflow-y-auto">
-                {data.sessions.map((item) => (
+                {historySessions.map((item) => (
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => setSelectedDate(item.inventoryDate)}
+                    disabled={removeSessionMutation.isPending}
+                    onClick={() => selectInventoryDate(item.inventoryDate)}
                     className={cn(
                       'flex w-full items-center justify-between gap-3 border-b border-border px-4 py-3 text-left transition last:border-b-0 hover:bg-[rgba(255,255,255,0.045)]',
                       selectedDate === item.inventoryDate && 'bg-[rgba(255,122,26,0.10)]'
@@ -874,6 +975,10 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
                   </button>
                 ))}
               </div>
+            ) : inventoryQuery.isLoading ? (
+              <p className="p-4 text-sm text-dim">Wczytywanie historii...</p>
+            ) : inventoryQuery.isError ? (
+              <p className="p-4 text-sm text-danger">Nie udało się wczytać historii.</p>
             ) : (
               <EmptyState title="Brak historii" description="Historia pojawi się po zapisaniu pierwszej pozycji." />
             )}
@@ -884,49 +989,75 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
               <div>
                 <p className="font-black text-title">Spis z dnia {formatDate(selectedDate)}</p>
                 <p className="text-xs text-dim">
-                  Zapisane pozycje: {checkedItemCount} · pomiary: {entries.length}
+                  {inventoryQuery.isError ? 'Odczyt spisu nie powiódł się.' : inventoryQuery.isLoading ? 'Wczytywanie spisu...'
+                    : <>Zapisane pozycje: {checkedItemCount} · pomiary: {entries.length}</>}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="outline" onClick={() => void handleExportHistory()}
-                  disabled={exporting || inventoryQuery.isFetching || !inventoryQuery.isSuccess || !session || session.inventoryDate !== selectedDate || !entries.length || (!isComparisonFrozen && erpSnapshotQuery.isFetching)}
+                  disabled={exporting || removeSessionMutation.isPending || inventoryQuery.isFetching || !inventoryQuery.isSuccess || !session || session.inventoryDate !== selectedDate || !entries.length || (!isComparisonFrozen && erpSnapshotQuery.isFetching)}
                   aria-busy={exporting} className="min-h-[44px]">
                   {exporting ? <LoaderCircle className="mr-2 h-4 w-4 shrink-0 animate-spin" aria-hidden="true" /> : <FileDown className="mr-2 h-4 w-4 shrink-0" aria-hidden="true" />}
                   {exporting ? 'Eksportowanie...' : 'Eksportuj do Excela'}
                 </Button>
-                {session?.status === 'CLOSED' && !readOnly ? (
+                {session?.status === 'CLOSED' && !readOnly && !inventoryQuery.isError ? (
                   <Button
                     type="button"
                     variant="outline"
                     onClick={() => reopenMutation.mutate(selectedDate)}
-                    disabled={reopenMutation.isPending}
+                    disabled={reopenMutation.isPending || removeSessionMutation.isPending}
                     className="paint-inventory-button paint-inventory-button-purple paint-inventory-button-active min-h-[44px] border-purple-500/35 px-4 text-title hover:border-purple-400/55"
                   >
                     <RotateCcw className="mr-2 h-4 w-4" />
                     Otwórz ponownie
                   </Button>
-                ) : session?.status === 'OPEN' && !readOnly ? (
+                ) : session?.status === 'OPEN' && !readOnly && !inventoryQuery.isError ? (
                   <Button
                     type="button"
                     variant="outline"
                     onClick={handleClose}
-                    disabled={closeMutation.isPending}
+                    disabled={closeMutation.isPending || removeSessionMutation.isPending}
                     className="paint-inventory-button paint-inventory-button-amber paint-inventory-button-active min-h-[44px] border-amber-500/35 px-4 text-title hover:border-amber-400/55"
                   >
                     <LockKeyhole className="mr-2 h-4 w-4" />
                     Zamknij ponownie
                   </Button>
                 ) : null}
+                {canRemoveSessions && session && inventoryQuery.isSuccess && session.inventoryDate === selectedDate && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleRemoveSession}
+                    disabled={sessionActionPending || inventoryQuery.isFetching || exporting}
+                    title={`Usuń spis z dnia ${formatDate(selectedDate)}`}
+                    aria-label={`Usuń spis z dnia ${formatDate(selectedDate)}`}
+                    aria-busy={removeSessionMutation.isPending}
+                    className="h-11 w-11 shrink-0 border-red-500/35 p-0 text-danger hover:border-red-400/60 hover:bg-red-500/10"
+                  >
+                    {removeSessionMutation.isPending
+                      ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+                  </Button>
+                )}
               </div>
             </div>
-            <div className={cn('hidden gap-3 border-b border-border bg-[rgba(255,255,255,0.035)] px-4 py-3 text-[10px] font-black uppercase text-dim lg:grid', locked ? 'grid-cols-[minmax(260px,1.25fr)_130px_130px_minmax(190px,0.9fr)]' : 'grid-cols-[minmax(240px,1.25fr)_120px_120px_minmax(170px,0.9fr)_130px_52px]')}>
+            {showInventoryComments && commentsQuery.isError && <div role="alert" className="flex flex-wrap items-center gap-3 border-b border-border p-3 text-xs text-danger">
+              <span>{commentsQuery.error.message === 'MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY_COMMENTS'
+                ? 'Komentarze wymagają aktualizacji bazy: 05_farby_i_tasmy.sql.'
+                : 'Nie udało się wczytać komentarzy. Sprawdź dostęp i połączenie.'}</span>
+              <Button type="button" variant="outline" disabled={commentsQuery.isFetching} onClick={() => void commentsQuery.refetch()}>
+                <RotateCcw className="mr-2 h-4 w-4" aria-hidden="true" />Ponów
+              </Button>
+            </div>}
+            <div className={cn('hidden gap-3 border-b border-border bg-[rgba(255,255,255,0.035)] px-4 py-3 text-[10px] font-black uppercase text-dim lg:grid', historyGridClass)}>
               <span>Nazwa</span>
               <span>Stan fizyczny</span>
               <span>ERP</span>
               <span>Różnica / korekta</span>
               {!locked && <><span>Dopisz ilość</span><span /></>}
+              {showInventoryComments && <span className="hidden 2xl:block">Komentarz do rozliczenia</span>}
             </div>
-            {inventoryQuery.isLoading ? (
+            {inventoryQuery.isError ? loadError : inventoryQuery.isLoading ? (
               <p className="p-4 text-sm text-dim">Wczytywanie...</p>
             ) : entries.length === 0 ? (
               <EmptyState title="Brak zapisanych pozycji" description="Tego dnia nie rozpoczęto spisu." />
@@ -935,6 +1066,8 @@ export function PaintTapeInventoryPanel({ readOnly }: { readOnly: boolean }) {
             )}
           </Card>
         </div>
+      ) : inventoryQuery.isError ? (
+        <Card className="p-0">{loadError}</Card>
       ) : (
         <>
           <Card className="space-y-4 max-md:rounded-none max-md:border-x-0 max-md:px-2">

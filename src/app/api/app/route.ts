@@ -13,6 +13,8 @@ import {
   canAccessWarehouse,
   canUsePaintTapePermission,
   canSeeTab,
+  getPaintTapePermissions,
+  isHeadAdmin,
   isReadOnly,
   isWarehouseAdmin
 } from '@/lib/auth/access';
@@ -34,6 +36,7 @@ import {
   planningAreaIdForWarehouse
 } from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
 import { PAINT_TAPE_INVENTORY_SEED } from '@/lib/data/paintTapeInventorySeed';
+import { fetchPaintTapeInventoryComments, savePaintTapeInventoryComment } from '@/lib/utils/paintTapeInventoryCommentsServer';
 import {
   archivePaintTapeInventorySession,
   purgeOriginalErpHistory
@@ -846,6 +849,8 @@ const statusCodeFromError = (code: string) => {
   if (code === 'MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENTS') return 503;
   if (code === 'MIGRATION_REQUIRED_PAINT_TAPE_SETTLEMENT_ACCOUNTING') return 503;
   if (code === 'SETTLEMENT_DONE_LOCKED') return 409;
+  if (code === 'INVENTORY_COMMENT_CONFLICT') return 409;
+  if (code === 'MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY_COMMENTS') return 503;
   if (
     code === 'ERP_ORIGINALS_PROXY_UNAVAILABLE' ||
     code === 'ERP_ORIGINALS_PROXY_TIMEOUT' ||
@@ -1139,8 +1144,17 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
     case 'getPaintTapeInventoryCatalogAdmin':
     case 'getPaintTapeInventorySessionsAdmin':
     case 'setPaintTapeInventoryCatalogItemActive':
-    case 'removePaintTapeInventorySession':
       requireWarehouseAdminAccess(user, 'FARBY_TASMY');
+      return;
+    case 'removePaintTapeInventorySession':
+      if (!isHeadAdmin(user)) throw new Error('FORBIDDEN');
+      return;
+    case 'getPaintTapeInventoryComments':
+      requireAnyTabAccess(user, 'FARBY_TASMY', ['rozliczanie-farb-tasm']);
+      if (!getPaintTapePermissions(user).inventoryComments) throw new Error('FORBIDDEN');
+      return;
+    case 'savePaintTapeInventoryComment':
+      requirePaintTapeWriteAccess('inventoryComments');
       return;
     case 'getOriginalInventoryErpSnapshot':
       requireOriginalInventoryOrPaintTapeReadAccess(user);
@@ -1351,6 +1365,7 @@ const AUDITABLE_ACTIONS = new Set<string>([
   'removePaintTapeSettlement',
   'upsertPaintTapeTechnologyUsages',
   'savePaintTapeInventoryEntry',
+  'savePaintTapeInventoryComment',
   'removePaintTapeInventoryEntry',
   'addPaintTapeInventoryCatalogItem',
   'setPaintTapeInventoryCatalogItemActive',
@@ -1390,6 +1405,7 @@ const RAPORT_ZMIANOWY_AUDIT_ACTIONS = new Set<string>([
 ]);
 
 const PAINT_TAPE_AUDIT_ACTIONS = new Set<string>([
+  'savePaintTapeInventoryComment',
   'createPaintTapeSettlement',
   'updatePaintTapeSettlement',
   'addPaintTapeSettlementIssue',
@@ -1486,6 +1502,7 @@ const AUDIT_ACTION_LABELS: Partial<Record<string, string>> = {
   removePaintTapeSettlement: 'Rozliczanie farb i rozcienczalnikow: usuniecie zlecenia',
   upsertPaintTapeTechnologyUsages: 'Rozliczanie farb i rozcienczalnikow: import norm technologicznych',
   savePaintTapeInventoryEntry: 'Spis farb i tasm: zapis pozycji',
+  savePaintTapeInventoryComment: 'Spis farb i tasm: zapis komentarza',
   updatePaintTapeInventoryEntry: 'Spis farb i tasm: korekta pomiaru',
   removePaintTapeInventoryEntry: 'Spis farb i tasm: usuniecie pomiaru',
   addPaintTapeInventoryCatalogItem: 'Spis farb i tasm: nowa kartoteka',
@@ -7179,6 +7196,10 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }
       return { imported: entries.length };
     }
+    case 'getPaintTapeInventoryComments':
+      return fetchPaintTapeInventoryComments(supabaseAdmin, String(payload?.sessionId ?? ''));
+    case 'savePaintTapeInventoryComment':
+      return savePaintTapeInventoryComment(supabaseAdmin, payload, getActorName(currentUser));
     case 'getPaintTapeInventory': {
       const dateKey = String(payload?.dateKey ?? '').trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) throw new Error('DATE_REQUIRED');

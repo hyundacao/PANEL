@@ -116,6 +116,120 @@ test('saved Excel contains two filterable native tables, typed numbers, text ind
   assert.equal(details.getCell('D5').value, 2);
 });
 
+const comment = (catalogItemId, text, sessionId = 'session') => ({
+  sessionId, catalogItemId, text, revision: 1, updatedAt: '2026-10-22T10:00:00Z', updatedBy: 'Accountant'
+});
+
+test('authorized Excel export includes saved comments once per item, with multiline text and literal formula-like content', async () => {
+  const text = '=1+1\nSecond line\n\nFourth line';
+  const workbook = await createPaintTapeInventoryWorkbook(fixture(), snapshots(), date, [
+    comment('1', text), comment('2', '+10'), comment('3', '@SUM(A1)'), comment('4', ''),
+    comment('5', 'NOT COUNTED'), comment('unknown', 'ORPHAN COMMENT')
+  ]);
+  const saved = new ExcelJS.Workbook();
+  await saved.xlsx.load(await workbook.xlsx.writeBuffer());
+  const main = saved.getWorksheet('Spis');
+  assert.equal(main.getTable('SpisFarbITasm').table.tableRef, 'A4:L8');
+  assert.equal(main.getCell('L4').value, 'Komentarz do rozliczenia');
+  assert.equal(main.getCell('L5').value, text);
+  assert.equal(main.getCell('L6').value, '+10');
+  assert.equal(main.getCell('L7').value, '@SUM(A1)');
+  assert.equal(main.getCell('L5').type, ExcelJS.ValueType.String);
+  assert.equal(main.getCell('L5').numFmt, '@');
+  assert.equal(main.getCell('L5').alignment.wrapText, true);
+  assert.equal(main.getColumn('L').width, 52);
+  assert.ok(main.getRow(5).height >= 72, 'explicit line breaks and blank lines must increase row height');
+  assert.equal(main.pageSetup.printArea, 'A1:L8');
+  assert.equal(main.views[0].topLeftCell, 'A5');
+  assert.equal(main.getTable('SpisFarbITasm').table.columns.at(-1).filterButton, true);
+  const allCells = saved.worksheets.flatMap(sheet => sheet.getSheetValues()).flat(2);
+  assert.ok(!allCells.includes('NOT COUNTED'));
+  assert.ok(!allCells.includes('ORPHAN COMMENT'));
+  assert.equal(allCells.filter(value => value === text).length, 1, 'do not repeat private comments for each measurement');
+  assert.equal(saved.getWorksheet('Pomiary').getTable('PomiarySpisu').table.tableRef, 'A4:I9');
+});
+
+test('comment column is opt-in, supports empty authorized comments and refuses comments from a different count', async () => {
+  const f = fixture();
+  f.comments = [comment('1', 'PRIVATE')]; // Extra cached data must never opt the export in.
+  const plain = await createPaintTapeInventoryWorkbook(f, snapshots(), date);
+  assert.equal(plain.getWorksheet('Spis').columnCount, 11);
+  assert.doesNotMatch(JSON.stringify(plain.model), /PRIVATE|Komentarz do rozliczenia/);
+  const empty = await createPaintTapeInventoryWorkbook(f, snapshots(), date, []);
+  assert.equal(empty.getWorksheet('Spis').getCell('L4').value, 'Komentarz do rozliczenia');
+  assert.equal(empty.getWorksheet('Spis').getCell('L5').value, '');
+  await assert.rejects(createPaintTapeInventoryWorkbook(f, snapshots(), date, [comment('1', 'WRONG DAY', 'other-session')]), /COMMENTS_SESSION_MISMATCH/);
+  const long = 'x'.repeat(4000);
+  const full = await createPaintTapeInventoryWorkbook(f, snapshots(), date, [comment('1', long)]);
+  const saved = new ExcelJS.Workbook();
+  await saved.xlsx.load(await full.xlsx.writeBuffer());
+  assert.equal(saved.getWorksheet('Spis').getCell('L5').value, long, 'long comments must not be truncated');
+  assert.ok(saved.getWorksheet('Spis').getRow(5).height <= 409);
+});
+
+function exportHandlerHarness(canViewComments, commentsResult) {
+  const file = resolve(root, 'app/(main)/rozliczanie-farb-rozcienczalnikow/PaintTapeInventoryPanel.tsx');
+  const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let handler;
+  const visit = node => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'handleExportHistory') handler = node.initializer.getText(source);
+    ts.forEachChild(node, visit);
+  };
+  visit(source); assert.ok(handler);
+  const calls = { comments: 0, workbook: [], downloads: 0, toasts: [], exporting: [] };
+  const data = fixture();
+  const context = {
+    exports: {}, Error, Blob, URL: { createObjectURL: () => 'blob:export', revokeObjectURL() {} }, setTimeout() {},
+    canViewComments, data, session: data.session, entries: data.entries, selectedDate: date,
+    isComparisonFrozen: true, exportBusy: { current: false },
+    setExporting: value => calls.exporting.push(value),
+    erpSnapshotQuery: { data: [], isSuccess: false },
+    commentsQuery: { data: [comment('1', 'STALE CACHE')], refetch: async () => { calls.comments++; return commentsResult; } },
+    document: { body: { appendChild() {} }, createElement: () => ({ click: () => calls.downloads++, remove() {} }) },
+    toast: value => calls.toasts.push(value), formatDate: value => value,
+    require: name => {
+      assert.equal(name, '@/lib/utils/paintTapeInventoryWorkbook');
+      return { createPaintTapeInventoryWorkbook: async (...args) => {
+        calls.workbook.push(args);
+        return { xlsx: { writeBuffer: async () => new Uint8Array([1, 2]) } };
+      } };
+    }
+  };
+  vm.runInNewContext(ts.transpileModule(`exports.run = ${handler};`, { compilerOptions }).outputText, context);
+  return { calls, context, run: context.exports.run };
+}
+
+test('export action fetches current comments only with permission and never uses a stale cached version', async () => {
+  for (const allowed of [true, false]) {
+    const current = [comment('1', 'LATEST SAVED')];
+    const h = exportHandlerHarness(allowed, { isError: false, data: current });
+    await h.run();
+    assert.equal(h.calls.comments, allowed ? 1 : 0);
+    assert.equal(h.calls.workbook[0][3], allowed ? current : undefined);
+    assert.equal(h.calls.downloads, 1);
+    assert.equal(h.calls.toasts[0].tone, 'success');
+    assert.deepEqual(h.calls.exporting, [true, false]);
+    assert.equal(h.context.exportBusy.current, false);
+  }
+});
+
+test('failed or unavailable comments block export instead of silently producing an incomplete file', async () => {
+  for (const result of [
+    { isError: true, error: new Error('FORBIDDEN'), data: [comment('1', 'STALE CACHE')] },
+    { isError: true, error: new Error('MIGRATION_REQUIRED_PAINT_TAPE_INVENTORY_COMMENTS') },
+    { isError: false, data: undefined }
+  ]) {
+    const h = exportHandlerHarness(true, result);
+    await h.run();
+    assert.equal(h.calls.workbook.length, 0);
+    assert.equal(h.calls.downloads, 0);
+    assert.equal(h.calls.toasts[0].tone, 'error');
+    assert.match(h.calls.toasts[0].description, /komentarzy|05_farby_i_tasmy.sql/);
+    assert.deepEqual(h.calls.exporting, [true, false]);
+    assert.equal(h.context.exportBusy.current, false);
+  }
+});
+
 test('inventory history reads all measurement pages for export, not only the first thousand', async () => {
   const file = resolve(root, 'app/api/app/route.ts');
   const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);

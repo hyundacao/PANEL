@@ -139,12 +139,16 @@ test('rerunning all modules preserves populated data, existing function bodies, 
     const indexesBefore = (await db.query("select indexname,indexdef from pg_indexes where schemaname='public' order by indexname")).rows;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       await runModules(db);
-      assert.deepEqual(await data(db), before, `data changed on attempt ${attempt}`);
-      assert.deepEqual(await security(db), securityBefore);
+      const { paint_tape_inventory_comments: comments, ...existingData } = await data(db);
+      assert.deepEqual(existingData, before, `data changed on attempt ${attempt}`);
+      assert.deepEqual(comments, [], 'new private comments table starts empty');
+      const securityAfter = await security(db);
+      assert.deepEqual(securityAfter.filter(row => row.relname !== 'paint_tape_inventory_comments'), securityBefore);
+      assert.equal(securityAfter.find(row => row.relname === 'paint_tape_inventory_comments').relrowsecurity, true);
       const after = await functions(db);
       for (const f of functionsBefore) assert.deepEqual(after.find(x => x.proname === f.proname && x.args === f.args), f);
       const constraintsAfter = (await db.query("select conname,pg_get_constraintdef(oid) definition from pg_constraint where connamespace='public'::regnamespace order by conname")).rows;
-      assert.deepEqual(constraintsAfter.filter((constraint) => constraint.conname !== 'original_inventory_catalog_previous_names_not_null'), constraintsBefore);
+      assert.deepEqual(constraintsAfter.filter((constraint) => constraint.conname !== 'original_inventory_catalog_previous_names_not_null' && !constraint.conname.startsWith('paint_tape_inventory_comments_')), constraintsBefore);
       assert.ok(constraintsAfter.some((constraint) => constraint.conname === 'original_inventory_catalog_previous_names_not_null'));
       const indexesAfter = (await db.query("select indexname,indexdef from pg_indexes where schemaname='public' order by indexname")).rows;
       for (const index of indexesBefore) assert.deepEqual(indexesAfter.find(x => x.indexname === index.indexname), index);

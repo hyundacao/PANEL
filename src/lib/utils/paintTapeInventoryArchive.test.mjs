@@ -68,6 +68,14 @@ test('missing ERP stays missing, recorded zero is not confused with an uncounted
   assert.equal(result.rows[1].physicalQty, null);
 });
 
+test('archive sums fractional measurements exactly like PostgreSQL numeric', () => {
+  for (const [values, expected] of [[[0.51, 1.92], 2.43], [[4.59, 0.6], 5.19], [[0.73, 4, 0.57], 5.3], [[0.1, 0.2], 0.3]]) {
+    const result = build('2026-08-21', [item], values.map((qty, i) => ({ ...entry, id: String(i), qty })), []);
+    assert.equal(result.rows[0].physicalQty, expected);
+    assert.notEqual(values.reduce((sum, qty) => sum + qty, 0), expected, 'fixture reproduces the binary rounding bug');
+  }
+});
+
 test('reclosing after retention preserves archived ERP, but uses newly edited physical quantity', () => {
   const archive = build('2026-09-24', [item], [entry], [snapshot]);
   const result = build('2026-09-24', [item], [{ ...entry, qty: 20 }], [], archive);
@@ -220,6 +228,22 @@ test('SQL archive and retention are transactional, guarded and idempotent', asyn
       await assert.rejects(archive(bad), /INVENTORY_ARCHIVE_INVALID/);
       await assert.rejects(archive({ ...comparison(), inventoryDate: dates.today }), /INVENTORY_ARCHIVE_INVALID/);
       assert.equal(await purge(), 0);
+    });
+    await t.test('legacy fractional counts pass the exact SQL total check without changing measurements', async () => {
+      for (const [quantities, total] of [[[0.51, 1.92], 2.43], [[4.59, 0.6], 5.19], [[0.73, 4, 0.57], 5.3]]) {
+        await reset();
+        await db.exec('delete from paint_tape_inventory_entries');
+        const inputs = quantities.map((qty, i) => ({ ...entry, id: `00000000-0000-0000-0000-${String(i + 10).padStart(12, '0')}`, qty }));
+        for (const input of inputs) await db.query('insert into paint_tape_inventory_entries(id,session_id,catalog_item_id,qty) values($1,$2,$3,$4)',
+          [input.id, sessionId, itemId, input.qty]);
+        await db.exec("update paint_tape_inventory_sessions set status='CLOSED'");
+        const comparison = build(dates.old, [item], inputs, [snapshot]);
+        const result = await archive(comparison, inputs.map(row => ({ id: row.id, catalog_item_id: itemId, qty: row.qty })), false);
+        assert.equal(result.erp_comparison.rows[0].physicalQty, total);
+        assert.equal(result.status, 'CLOSED');
+        const saved = (await db.query('select qty from paint_tape_inventory_entries order by id')).rows;
+        assert.deepEqual(saved.map(row => Number(row.qty)), quantities);
+      }
     });
     await t.test('legacy closed counts are protected; backfill preserves who and when closed them', async () => {
       await reset();

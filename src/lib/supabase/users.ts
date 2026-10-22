@@ -218,7 +218,9 @@ const normalizeAccessFromDb = (access: UserAccess | null | undefined): UserAcces
     ? Object.fromEntries(
         PAINT_TAPE_PERMISSION_KEYS.map((key) => [
           key,
-          key === 'accounted' && paintTapePermissionsRaw.accounted === undefined
+          key === 'inventoryComments'
+            ? paintTapePermissionsRaw[key] === true
+            : key === 'accounted' && paintTapePermissionsRaw.accounted === undefined
             ? paintTapePermissionsRaw.accounting !== false
             : paintTapePermissionsRaw[key] !== false
         ])

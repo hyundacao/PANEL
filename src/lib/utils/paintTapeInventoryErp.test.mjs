@@ -38,6 +38,13 @@ const match = (entries, item = foil) => findPaintTapeInventoryErpSnapshot(
   buildPaintTapeInventoryErpLookup(entries), item
 );
 
+test('PLT 15 RAL 7021 uses ERP kilograms without changing the other RAL 7021 index', () => {
+  const paint = PAINT_TAPE_INVENTORY_SEED.find((item) => item.itemIndex === 'M-51-FA-CO-9961');
+  assert.equal(paint.unit, 'kg');
+  assert.equal(PAINT_TAPE_INVENTORY_SEED.find((item) => item.itemIndex === 'M-51-FA-SE-0002').unit, 'litr');
+  assert.equal(match([{ name: paint.name, indexCode: paint.itemIndex, unit: 'kg', realQty: 1.3, availableQty: 1.3 }], paint).unit, paint.unit);
+});
+
 test('paint inventory links the September 24 seed index to the full ERP foil code', () => {
   const result = match([erp]);
   assert.equal(result?.realQty, 28.549);
@@ -100,23 +107,35 @@ const ui = {
   ...load(resolve(root, 'components/ui/Badge.tsx')),
   ...load(resolve(root, 'lib/utils/cn.ts'))
 };
-const renderRow = (snapshots, qty = 17.2, archiveRow = null) => {
+const renderRow = (snapshots, qty = 17.2, archiveRow = null, item = foil) => {
   const context = {
     ...ui, exports: {}, require,
     findPaintTapeInventoryErpSnapshot,
     erpSnapshotLookup: buildPaintTapeInventoryErpLookup(snapshots),
-    archivedComparisonByItem: archiveRow ? new Map([[foil.id, archiveRow]]) : null,
+    archivedComparisonByItem: archiveRow ? new Map([[item.id, archiveRow]]) : null,
     isComparisonFrozen: Boolean(archiveRow),
     erpSnapshotQuery: { isLoading: false },
-    entriesByItem: new Map([[foil.id, [{ qty }]]]),
+    entriesByItem: new Map([[item.id, [{ qty }]]]),
     selectedDate: '2026-09-24', drafts: {}, saveMutation: { isPending: false },
     expandedItems: new Set(), highlightedItemId: null,
-    showErpComparison: true, locked: true, categoryLabels: { FOLIE: 'Folia' },
+    showErpComparison: true, locked: true, categoryLabels: { FOLIE: 'Folia', FARBY: 'Farba' },
+    showInventoryComments: false, historyGridClass: '',
     setExpandedItems() {}
   };
   vm.runInNewContext(compiledRow, context);
-  return ReactDOM.renderToStaticMarkup(context.exports.renderRow(foil));
+  return ReactDOM.renderToStaticMarkup(context.exports.renderRow(item));
 };
+
+test('corrected PLT 15 RAL 7021 archive displays kilograms and the physical surplus', () => {
+  const item = { ...PAINT_TAPE_INVENTORY_SEED.find((item) => item.itemIndex === 'M-51-FA-CO-9961'), id: 'paint-9961' };
+  const html = renderRow([], 1.52, {
+    physicalQty: 1.52, erp: { realQty: 1.3, availableQty: 1.3, unit: 'kg' }
+  }, item);
+  assert.match(html, /1,52 kg/);
+  assert.match(html, /1,3 kg/);
+  assert.match(html, /Mamy wi\u0119cej fizycznie: \+0,22 kg/);
+  assert.doesNotMatch(html, /Niezgodna jednostka|litr/);
+});
 
 test('the real history row shows the correct ERP and discrepancy for September 24', () => {
   const html = renderRow([erp]);

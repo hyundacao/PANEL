@@ -463,6 +463,22 @@ $install$;
 
 -- SQL_SOURCE_END: migrate_paint_tape_inventory_archive.sql
 
+-- SQL_SOURCE_BEGIN: paint_tape_inventory_comments
+-- Prywatne komentarze do pozycji spisu. Dostep tylko przez uprawnione API aplikacji.
+create table if not exists public.paint_tape_inventory_comments (
+  session_id uuid not null references public.paint_tape_inventory_sessions(id) on delete cascade,
+  catalog_item_id uuid not null references public.paint_tape_inventory_catalog(id) on delete restrict,
+  comment_text text not null default '' check (char_length(comment_text) <= 4000),
+  revision integer not null default 1 check (revision > 0),
+  updated_at timestamptz not null default now(),
+  updated_by text not null,
+  primary key (session_id, catalog_item_id)
+);
+alter table public.paint_tape_inventory_comments enable row level security;
+revoke all on table public.paint_tape_inventory_comments from anon, authenticated;
+grant all on table public.paint_tape_inventory_comments to service_role;
+-- SQL_SOURCE_END: paint_tape_inventory_comments
+
 notify pgrst, 'reload schema';
 commit;
 
