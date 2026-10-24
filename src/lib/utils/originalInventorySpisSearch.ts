@@ -40,6 +40,7 @@ type OriginalInventorySpisSuggestion = {
   warehouseCode?: string | null;
   indexCode?: string | null;
   indexCode2?: string | null;
+  inErp?: boolean;
 };
 
 const isFormSuggestion = (item: OriginalInventorySpisSuggestion) =>
@@ -47,8 +48,11 @@ const isFormSuggestion = (item: OriginalInventorySpisSuggestion) =>
     /(^|[\s(/_-])fwp?(?=$|[\s/_-]|\d)/i.test(String(value ?? ''))
   );
 
-const getOriginalInventorySpisIdentityKey = (item: OriginalInventorySpisSuggestion) =>
-  `${normalizeSearchText(item.name)}|${String(item.warehouseCode ?? '').trim().toUpperCase()}`;
+const getOriginalInventorySpisIdentityKey = (item: OriginalInventorySpisSuggestion) => {
+  const index = String(item.indexCode || item.indexCode2 || '').trim().toUpperCase()
+    .replace(/\s*([-\/])\s*/g, '$1');
+  return `${normalizeSearchText(item.name)}|${String(item.warehouseCode ?? '').trim().toUpperCase()}|${index}`;
+};
 
 const getOriginalInventorySpisIndexedMaterialKey = (item: OriginalInventorySpisSuggestion) => {
   const index2 = normalizeSearchText(getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2));
@@ -109,33 +113,24 @@ export const prioritizeOriginalInventorySpisSuggestions = <T extends OriginalInv
 
     const nameOrder = left.name.localeCompare(right.name, 'pl', { sensitivity: 'base' });
     if (nameOrder !== 0) return nameOrder;
+    const erpOrder = Number(Boolean(right.inErp)) - Number(Boolean(left.inErp));
+    if (erpOrder !== 0) return erpOrder;
     return String(left.warehouseCode ?? '').localeCompare(String(right.warehouseCode ?? ''), 'pl');
   });
 
-  const emittedInventoriedNames = new Set<string>();
-  return ordered.filter((suggestion) => {
-    const name = normalizeSearchText(suggestion.name);
-    if (!inventoried.has(name)) return true;
-    if (emittedInventoriedNames.has(name)) return false;
-    emittedInventoriedNames.add(name);
-    return true;
-  });
+  // An old count has only a name. Hide that generic choice, not its distinct catalog indices.
+  const indexedNames = new Set(ordered
+    .filter(item => Boolean(item.indexCode || item.indexCode2))
+    .map(item => normalizeSearchText(item.name)));
+  return ordered.filter(item => Boolean(item.indexCode || item.indexCode2) ||
+    !indexedNames.has(normalizeSearchText(item.name)));
 };
 
-export const searchOriginalInventorySpisSuggestions = <T extends OriginalInventorySpisSuggestion>(
+export const rankOriginalInventorySpisSuggestions = <T extends OriginalInventorySpisSuggestion>(
   suggestions: readonly T[],
-  query: unknown,
-  inventoriedNames: Iterable<unknown>,
-  limit = 8
+  inventoriedNames: Iterable<unknown> = []
 ) => {
-  const normalizedQuery = normalizeSearchText(query);
-  if (!normalizedQuery) return [];
-  const safeLimit = Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 8));
-  const matches = dedupeOriginalInventorySpisSuggestions(
-    suggestions.filter((item) =>
-      !isFormSuggestion(item) && [item.name, ...item.previousNames ?? []].some((name) => matchesOriginalInventorySpisSearch(query, name, item.indexCode2))
-    )
-  );
+  const matches = dedupeOriginalInventorySpisSuggestions(suggestions.filter(item => !isFormSuggestion(item)));
   const namesWithWarehouseVariant = new Set(
     matches
       .filter((item) => Boolean(item.warehouseCode))
@@ -148,13 +143,26 @@ export const searchOriginalInventorySpisSuggestions = <T extends OriginalInvento
       .filter(Boolean)
   );
   const uniqueMatches = matches.filter(
-    (item) => Boolean(item.warehouseCode) || (
-      !namesWithWarehouseVariant.has(normalizeSearchText(item.name)) &&
-      !indexedMaterialsWithWarehouseVariant.has(getOriginalInventorySpisIndexedMaterialKey(item))
+    (item) => Boolean(item.warehouseCode) || /^m[-\s]?\d+(?:[-\s]|$)/i.test(item.indexCode ?? '') || (
+      getOriginalInventorySpisIndexedMaterialKey(item)
+        ? !indexedMaterialsWithWarehouseVariant.has(getOriginalInventorySpisIndexedMaterialKey(item))
+        : !namesWithWarehouseVariant.has(normalizeSearchText(item.name))
     )
   );
-  return prioritizeOriginalInventorySpisSuggestions(
-    uniqueMatches,
+  return prioritizeOriginalInventorySpisSuggestions(uniqueMatches, inventoriedNames);
+};
+
+export const searchOriginalInventorySpisSuggestions = <T extends OriginalInventorySpisSuggestion>(
+  suggestions: readonly T[],
+  query: unknown,
+  inventoriedNames: Iterable<unknown>,
+  limit = 8
+) => {
+  if (!normalizeSearchText(query)) return [];
+  const safeLimit = Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 8));
+  return rankOriginalInventorySpisSuggestions(
+    suggestions.filter(item => [item.name, ...item.previousNames ?? []].some(name =>
+      matchesOriginalInventorySpisSearch(query, name, item.indexCode2))),
     inventoriedNames
   ).slice(0, safeLimit);
 };

@@ -4,8 +4,14 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 import vm from 'node:vm';
 import ExcelJS from 'exceljs';
-import { getOriginalInventorySpisIndex2 } from '../../lib/utils/originalInventorySpisSearch.ts';
+import {
+  getOriginalInventorySpisIndex2,
+  rankOriginalInventorySpisSuggestions,
+  searchOriginalInventorySpisSuggestions
+} from '../../lib/utils/originalInventorySpisSearch.ts';
 import { normalizeOriginalInventoryName } from '../../lib/utils/originalInventoryName.ts';
+import { normalizeOriginalInventoryIndex } from '../../lib/utils/originalInventoryIndex.ts';
+import { isPieceGrindingUnit } from '../../lib/utils/originalInventoryGrinding.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -20,7 +26,7 @@ const visit = (node) => {
 };
 visit(ast);
 const compiled = ts.transpileModule(
-  ['exportCatalogCollator', 'normalizeCatalogNameKey', 'buildInventoryIndex2ByName', 'handleExportInventoryByLocation']
+  ['normalizeCatalogNameKey', 'buildInventoryIndex2Resolver', 'handleExportInventoryByLocation']
     .map(name => {
       assert.ok(initializers.has(name), name);
       return `const ${name} = ${initializers.get(name)};`;
@@ -40,6 +46,7 @@ const runExport = async ({
   vm.runInNewContext(compiled, {
     module: mod, require, Blob,
     getOriginalInventorySpisIndex2, normalizeOriginalInventoryName,
+    rankOriginalInventorySpisSuggestions, normalizeOriginalInventoryIndex, isPieceGrindingUnit,
     spisDate: date, inventoryExportRows: rows, isExportingInventory: busy,
     setIsExportingInventory: value => calls.saving.push(value),
     erpCatalogItems: erpCatalog, erpSnapshotEntries: erpSnapshot,
@@ -90,7 +97,7 @@ test('inventory XLSX replaces the date with index 2 and keeps all other columns'
   assert.deepEqual(calls.toasts, []);
 });
 
-test('index 2 uses catalog and ERP values, deduplicates codes and preserves long and slash identifiers as text', async () => {
+test('index 2 selects one ERP-backed code and preserves long and slash identifiers as text', async () => {
   const { sheet } = await runExport({
     catalog: [
       { name: 'KARTON', indexCode: 'M-1-KAR-001-00', indexCode2: '001-00' },
@@ -103,9 +110,73 @@ test('index 2 uses catalog and ERP values, deduplicates codes and preserves long
       { materialName: 'DETAL', areaName: 'H2', qty: 5, unit: 'szt.' }
     ]
   });
-  assert.equal(sheet.getCell('A2').value, '001-00 / 002/03');
+  assert.equal(sheet.getCell('A2').value, '002/03');
   assert.equal(sheet.getCell('A3').value, '00012345678901234567');
   assert.equal(sheet.getCell('A3').numFmt, '@');
+});
+
+test('IRIS exports only the index preferred by search for the selected ERP day', async () => {
+  const catalog = [
+    { name: 'IRIS LR WHEEL', indexCode: 'A22154703', unit: 'szt.' },
+    { name: 'IRIS LR WHEEL', indexCode: 'A22154704', unit: 'szt.' }
+  ];
+  for (const indexCode of ['A22154704', 'A22154703']) {
+    const erpSnapshot = [{ name: 'IRIS LR WHEEL', indexCode, unit: 'szt.' }];
+    const suggestions = catalog.map(item => ({
+      ...item,
+      indexCode2: getOriginalInventorySpisIndex2(item.indexCode),
+      inErp: item.indexCode === indexCode
+    }));
+    const firstSuggestion = searchOriginalInventorySpisSuggestions(suggestions, 'IRIS LR WHEEL', [])[0];
+    const { sheet } = await runExport({ catalog, erpSnapshot,
+      rows: [{ materialName: 'IRIS LR WHEEL', areaName: 'Bakoma', qty: 19444, unit: 'szt.' }]
+    });
+    assert.equal(sheet.getCell('A2').value, firstSuggestion.indexCode2);
+    assert.equal(sheet.getCell('A2').value, indexCode);
+    assert.equal(sheet.getCell('H2').value, 19444);
+  }
+});
+
+test('lid indices match the single index 2 shown by search, not other warehouse aliases', async () => {
+  const catalog = [
+    { name: 'POKRYWA 1200X800 S99', indexCode: 'M-4-OP-786-002-01', warehouseCode: 'M-4' },
+    { name: 'POKRYWA 1200X800 S99', indexCode2: '786-002-01' },
+    { name: 'POKRYWA PALETY PLASTIKOWEJ 1200X800 ZWROTNA ELUX', indexCode: 'M-4-OP-8900', warehouseCode: 'M-4' },
+    { name: 'POKRYWA WYMIENNIKOW CIEPLA T27SC0', indexCode: '8001312050', warehouseCode: 'M-10', indexCode2: '2050' },
+    { name: 'POKRYWA 176.8001', indexCode: 'M-1-OP-006-00', warehouseCode: 'M-1' },
+    { name: 'POKRYWA 176.8001', indexCode: 'M-40-OP-9900', warehouseCode: 'M-40' }
+  ];
+  const names = [...new Set(catalog.map(item => item.name))];
+  const { sheet } = await runExport({ catalog,
+    rows: names.map(materialName => ({ materialName, areaName: 'H1', qty: 12, unit: 'szt.' }))
+  });
+  const expected = ['786-002-01', '8900', '8001312050', '006-00'];
+  const suggestions = catalog.map(item => ({ ...item,
+    indexCode2: getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2)
+  }));
+  names.forEach((name, i) => {
+    const firstSuggestion = searchOriginalInventorySpisSuggestions(suggestions, name, [])[0];
+    assert.equal(sheet.getCell(`A${i + 2}`).value, expected[i]);
+    assert.equal(sheet.getCell(`A${i + 2}`).value, firstSuggestion.indexCode2);
+    assert.equal(sheet.getCell(`H${i + 2}`).value, 12);
+  });
+});
+
+test('equal names with incompatible units do not receive each others indices', async () => {
+  const { sheet } = await runExport({
+    catalog: [
+      { name: 'MATERIAL', indexCode: 'M-1-OP-001', unit: 'kg' },
+      { name: 'MATERIAL', indexCode: 'M-4-OP-002', unit: 'szt.' }
+    ],
+    rows: [
+      { materialName: 'MATERIAL', areaName: 'H1', qty: 20, unit: 'szt' },
+      { materialName: 'MATERIAL', areaName: 'H2', qty: 7, unit: 'kg' },
+      { materialName: 'MATERIAL', areaName: 'H3', qty: 3, unit: 'litr' }
+    ]
+  });
+  assert.equal(sheet.getCell('A2').value, '002');
+  assert.equal(sheet.getCell('A3').value, '001');
+  assert.ok(!sheet.getCell('A4').value);
 });
 
 test('unmatched materials remain blank instead of receiving a similar material index', async () => {

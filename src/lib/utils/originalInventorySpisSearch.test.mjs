@@ -23,6 +23,56 @@ test('spis cache keys keep each inventory day separate', () => {
   );
 });
 
+const irisSuggestions = [
+  { name: 'IRIS LR WHEEL', indexCode: 'A22154703', indexCode2: 'A22154703', warehouseCode: null },
+  { name: 'IRIS LR WHEEL', indexCode: 'A22154704', indexCode2: 'A22154704', warehouseCode: null }
+];
+
+test('same-name IRIS indices both survive server search and an already counted name', () => {
+  const serverResults = searchOriginalInventorySpisSuggestions(irisSuggestions, 'iris lr wheel', [], 24);
+  assert.deepEqual(serverResults.map(item => item.indexCode), ['A22154703', 'A22154704']);
+  const clientResults = searchOriginalInventorySpisSuggestions([
+    { name: 'IRIS LR WHEEL', indexCode: null, indexCode2: null }, ...serverResults
+  ], 'iris lr wheel', ['IRIS LR WHEEL'], 8);
+  assert.deepEqual(clientResults.map(item => item.indexCode), ['A22154703', 'A22154704']);
+});
+
+test('ERP presence ranks same-name indices first without hiding absent indices or hardcoding 704', () => {
+  for (const activeCode of ['A22154704', 'A22154703']) {
+    const candidates = irisSuggestions.map(item => ({ ...item, inErp: item.indexCode === activeCode }));
+    const results = searchOriginalInventorySpisSuggestions(candidates, 'iris', ['IRIS LR WHEEL'], 8);
+    assert.equal(results.length, 2);
+    assert.equal(results[0].indexCode, activeCode);
+    assert.equal(results[0].inErp, true);
+    const explicit = searchOriginalInventorySpisSuggestions(candidates, 'A22154703', [], 8);
+    assert.deepEqual(explicit.map(item => item.indexCode), ['A22154703']);
+  }
+});
+
+test('ERP presence does not reorder unrelated inventoried names', () => {
+  const results = searchOriginalInventorySpisSuggestions([
+    { name: 'IRIS ANOTHER', indexCode: '123', indexCode2: '123', inErp: true },
+    ...irisSuggestions
+  ], 'iris', ['IRIS LR WHEEL'], 8);
+  assert.deepEqual(results.map(item => item.indexCode), ['A22154703', 'A22154704', '123']);
+});
+
+test('warehouse variants do not suppress a same-name different index', () => {
+  const assigned = { ...irisSuggestions[1], indexCode: 'M-10-A22154704', warehouseCode: 'M-10' };
+  const results = searchOriginalInventorySpisSuggestions([irisSuggestions[0], assigned], 'iris', [], 8);
+  assert.equal(results.length, 2);
+  assert.ok(results.some(item => item.indexCode === 'A22154703'));
+});
+
+test('different full indices sharing a name and suffix are never deduplicated', () => {
+  const candidates = [
+    { name: 'MATERIAL', indexCode: 'M-1-AAA-123', indexCode2: '123', warehouseCode: 'M-1' },
+    { name: 'MATERIAL', indexCode: 'M-1-BBB-123', indexCode2: '123', warehouseCode: 'M-1' }
+  ];
+  assert.equal(dedupeOriginalInventorySpisSuggestions(candidates).length, 2);
+  assert.equal(searchOriginalInventorySpisSuggestions(candidates, 'material', ['MATERIAL'], 8).length, 2);
+});
+
 test('spis search uses the explicit second index and ignores the first index', () => {
   const index1 = 'M-1-TW-RSHWR-8178';
   const index2 = getOriginalInventorySpisIndex2(index1, '8178');

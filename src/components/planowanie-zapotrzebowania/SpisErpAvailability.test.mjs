@@ -8,6 +8,8 @@ import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import { applyPieceGrindingReservations } from '../../lib/utils/originalInventoryGrinding.ts';
+import { searchOriginalInventorySpisSuggestions } from '../../lib/utils/originalInventorySpisSearch.ts';
+import { normalizeOriginalInventoryIndex } from '../../lib/utils/originalInventoryIndex.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -62,6 +64,53 @@ const grateName = 'KRATA STALOWA 1M IMPORT Z LOGO DOMELO';
 const grateStock = (extra = {}) => ({
   name: `${grateName} SYSTEM 1000X63X98X148`, indexCode: '1598-7',
   unit: 'szt.', realQty: 740, availableQty: 740, ...extra
+});
+
+test('actual Spis suggestions prefer the selected day ERP index while retaining both IRIS catalog choices', () => {
+  for (const activeCode of ['A22154704', 'A22154703', null]) {
+    const mod = { exports: {} };
+    vm.runInNewContext(compile(`
+      const erpSuggestionIndexKeys = ${initializer('erpSuggestionIndexKeys')};
+      const erpIndexKeys = erpSuggestionIndexKeys;
+      const toOriginalInventoryNameSuggestion = ${initializer('toOriginalInventoryNameSuggestion')};
+      module.exports = ${initializer('suggestions')};
+    `), {
+      module: mod, useMemo: calculate => calculate(), normalizeOriginalInventoryIndex,
+      searchOriginalInventorySpisSuggestions,
+      getOriginalInventorySpisIndex2: (index, explicit) => explicit || index || '',
+      erpSnapshotEntries: activeCode ? [{ indexCode: activeCode }] : [],
+      existingSuggestions: [{ name: 'IRIS LR WHEEL', unit: 'szt.', indexCode: null }],
+      remoteCatalogSuggestions: ['A22154703', 'A22154704'].map(indexCode => ({
+        id: indexCode, name: 'IRIS LR WHEEL', unit: 'szt.', indexCode
+      })),
+      inventoriedNames: ['IRIS LR WHEEL'],
+      query: 'iris', normalizedQuery: 'iris', normalizedDebouncedQuery: 'iris'
+    });
+    assert.equal(mod.exports.length, 2);
+    assert.equal(mod.exports[0].indexCode, activeCode || 'A22154703');
+    assert.equal(mod.exports[0].catalogId, activeCode || 'A22154703');
+    assert.equal(mod.exports.filter(item => item.inErp).length, activeCode ? 1 : 0);
+  }
+});
+
+test('ERP priority keeps meaningful index characters and normalizes PDF separator spaces', () => {
+  const mod = { exports: {} };
+  vm.runInNewContext(compile(`const erpIndexKeys = new Set(['M-1-KAR-001-00']);
+    const toOriginalInventoryNameSuggestion = ${initializer('toOriginalInventoryNameSuggestion')};
+    module.exports = ${initializer('suggestions')};`), {
+    module: mod, useMemo: calculate => calculate(), normalizeOriginalInventoryIndex,
+    searchOriginalInventorySpisSuggestions,
+    getOriginalInventorySpisIndex2: index => index || '',
+    existingSuggestions: [], inventoriedNames: [],
+    remoteCatalogSuggestions: ['M-1-KAR-001-01', 'M-1-KAR- 001 - 00'].map(indexCode => ({
+      name: 'KARTON', unit: 'szt.', indexCode
+    })),
+    query: 'karton', normalizedQuery: 'karton', normalizedDebouncedQuery: 'karton'
+  });
+  assert.equal(mod.exports.length, 2);
+  assert.equal(mod.exports[0].indexCode, 'M-1-KAR- 001 - 00');
+  assert.equal(mod.exports[0].inErp, true);
+  assert.equal(mod.exports[1].inErp, false);
 });
 
 test('Spis uses the selected exact index when the PDF contains a longer name', () => {

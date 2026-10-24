@@ -4,6 +4,7 @@ import { SpisErpAvailability } from '@/components/planowanie-zapotrzebowania/Spi
 import { GrindingTargetInput } from '@/components/planowanie-zapotrzebowania/GrindingTargetInput';
 import { GRIND_TARGET_EXCLUSIONS_QUERY_KEY, grindingTargetSuggestionKey, normalizeRemovedGrindingTargetSuggestions } from '@/lib/utils/grindingTargetSuggestions';
 import { matchOriginalInventoryErpStock } from '@/lib/utils/originalInventoryErpMatch';
+import { normalizeOriginalInventoryIndex } from '@/lib/utils/originalInventoryIndex';
 import { ErpCatalogImportNotice } from '@/components/planowanie-zapotrzebowania/ErpCatalogImportNotice';
 import { getOriginalInventoryPalletSets, addOriginalInventoryPalletSet } from '@/lib/api';
 import { isPalletCount, palletSetError, palletSetFingerprint, palletSetTotals, palletInventoryError, parsePalletSource } from '@/lib/planowanie-zapotrzebowania/palletSets';
@@ -73,6 +74,7 @@ import {
   getOriginalInventorySpisEntriesQueryKey,
   getOriginalInventorySpisWarehousePriority,
   getOriginalInventorySpisIndex2,
+  rankOriginalInventorySpisSuggestions,
   searchOriginalInventorySpisSuggestions
 } from '@/lib/utils/originalInventorySpisSearch';
 import {
@@ -403,24 +405,42 @@ const normalizeCatalogNameKey = (value: unknown) =>
     .trim()
     .toLowerCase();
 
-const buildInventoryIndex2ByName = (items: ReadonlyArray<{
+type InventoryIndex2Candidate = {
   name: string;
+  unit?: string;
+  warehouseCode?: string | null;
   indexCode?: string | null;
   indexCode2?: string | null;
-}>) => {
-  const codesByName = new Map<string, Set<string>>();
-  items.forEach((item) => {
+};
+
+const buildInventoryIndex2Resolver = (
+  items: readonly InventoryIndex2Candidate[],
+  erpEntries: readonly InventoryIndex2Candidate[]
+) => {
+  const erpIndices = new Set(erpEntries.map(item => normalizeOriginalInventoryIndex(item.indexCode)).filter(Boolean));
+  const byName = new Map<string, Array<InventoryIndex2Candidate & { indexCode2: string; inErp: boolean }>>();
+  [...items, ...erpEntries].forEach((item) => {
     const key = normalizeCatalogNameKey(item.name);
-    const code = getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2).trim();
-    if (!key || !code) return;
-    const codes = codesByName.get(key) ?? new Set<string>();
-    codes.add(code);
-    codesByName.set(key, codes);
+    const indexCode2 = getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2).trim();
+    if (!key || !indexCode2) return;
+    const candidates = byName.get(key) ?? [];
+    candidates.push({ ...item, indexCode2, inErp: erpIndices.has(normalizeOriginalInventoryIndex(item.indexCode)) });
+    byName.set(key, candidates);
   });
-  return new Map([...codesByName].map(([key, codes]) => [
-    key,
-    [...codes].sort((a, b) => exportCatalogCollator.compare(a, b)).join(' / ')
-  ]));
+  const unitKey = (unit: string) => isPieceGrindingUnit(unit) ? 'szt' : unit.trim().toLowerCase().replace(/\.$/, '');
+  const resolved = new Map<string, string>();
+  return (name: string, unit: string) => {
+    const nameKey = normalizeCatalogNameKey(name);
+    const cacheKey = `${nameKey}|${unitKey(unit)}`;
+    if (!resolved.has(cacheKey)) {
+      const candidates = (byName.get(nameKey) ?? []).filter(item => !item.unit || unitKey(item.unit) === unitKey(unit));
+      const preferred = rankOriginalInventorySpisSuggestions(
+        candidates.map(item => ({ ...item, name }))
+      )[0];
+      resolved.set(cacheKey, preferred?.indexCode2 ?? '');
+    }
+    return resolved.get(cacheKey) ?? '';
+  };
 };
 
 const isMissingDetailGrindTarget = (task: Pick<OriginalInventoryGrindTask, 'unit' | 'materialName' | 'targetMaterialName'>) =>
@@ -655,6 +675,7 @@ const OriginalInventoryNameSearch = ({
   value,
   existingSuggestions,
   inventoriedNames,
+  erpIndexKeys,
   inputRef,
   onCommit,
   onSelect
@@ -662,6 +683,7 @@ const OriginalInventoryNameSearch = ({
   value: string;
   existingSuggestions: OriginalInventoryNameSuggestion[];
   inventoriedNames: string[];
+  erpIndexKeys: ReadonlySet<string>;
   inputRef: RefObject<HTMLInputElement | null>;
   onCommit: (value: string) => void;
   onSelect: (suggestion: OriginalInventoryNameSuggestion) => void;
@@ -713,12 +735,15 @@ const OriginalInventoryNameSearch = ({
       ? remoteCatalogSuggestions.map(toOriginalInventoryNameSuggestion)
       : [];
     return searchOriginalInventorySpisSuggestions(
-      [...existingSuggestions, ...remoteSuggestions],
+      [...existingSuggestions, ...remoteSuggestions].map((suggestion) => ({
+        ...suggestion,
+        inErp: erpIndexKeys.has(normalizeOriginalInventoryIndex(suggestion.indexCode))
+      })),
       query,
       inventoriedNames,
       8
     );
-  }, [existingSuggestions, inventoriedNames, normalizedDebouncedQuery, normalizedQuery, query, remoteCatalogSuggestions]);
+  }, [existingSuggestions, inventoriedNames, erpIndexKeys, normalizedDebouncedQuery, normalizedQuery, query, remoteCatalogSuggestions]);
 
   const remoteResultsPending = remoteSearchEnabled && (
     normalizedDebouncedQuery !== normalizedQuery || isFetching
@@ -782,7 +807,7 @@ const OriginalInventoryNameSearch = ({
         <div className="absolute z-20 mt-2 max-h-64 w-full touch-pan-y overflow-y-auto overscroll-contain rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
           {suggestions.map((suggestion) => (
             <button
-              key={`${suggestion.name}|${suggestion.warehouseCode ?? ''}|${suggestion.indexCode2 ?? ''}`}
+              key={`${suggestion.name}|${suggestion.warehouseCode ?? ''}|${suggestion.indexCode ?? suggestion.indexCode2 ?? ''}`}
               type="button"
               onMouseDown={(event) => {
                 event.preventDefault();
@@ -806,6 +831,7 @@ const OriginalInventoryNameSearch = ({
                     )}
                   >
                     Indeks 2: {suggestion.indexCode2}
+                    {suggestion.inErp && <span className="ml-2 text-success">W ERP</span>}
                   </span>
                 )}
               </span>
@@ -2162,6 +2188,10 @@ export default function SpisRzeczywisty() {
     [existingList, palletSets]
   );
   const inventoriedNameKeys = useMemo(() => [...existingByName.keys()], [existingByName]);
+  const erpSuggestionIndexKeys = useMemo(
+    () => new Set(erpSnapshotEntries.map(item => normalizeOriginalInventoryIndex(item.indexCode)).filter(Boolean)),
+    [erpSnapshotEntries]
+  );
   const filteredCatalog = useMemo(() => {
     if (activeTab !== 'kartoteki') return [];
     if (!normalizeCatalogNameKey(deferredCatalogSearch)) return catalog;
@@ -2617,8 +2647,8 @@ export default function SpisRzeczywisty() {
         return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
       });
   }, [erpSnapshotByDateAndMaterial, erpSnapshotMap, inventoryHistoryByMaterial, reportHistoryDatesForExport, reportSourceEntries, spisDate]);
-  const reportIndex2ByName = useMemo(
-    () => buildInventoryIndex2ByName([...localCatalog, ...erpCatalogItems, ...erpSnapshotEntries]),
+  const resolveReportIndex2 = useMemo(
+    () => buildInventoryIndex2Resolver([...localCatalog, ...erpCatalogItems], erpSnapshotEntries),
     [localCatalog, erpCatalogItems, erpSnapshotEntries]
   );
   const dailyComparison = useMemo(
@@ -2824,7 +2854,7 @@ export default function SpisRzeczywisty() {
           align: 'left' as const,
           minWidth: 12,
           maxWidth: 30,
-          getValue: (row: (typeof reportRowsForExport)[number]) => reportIndex2ByName.get(row.key) ?? ''
+          getValue: (row: (typeof reportRowsForExport)[number]) => resolveReportIndex2(row.name, row.unit)
         }] : []),
         {
           key: 'name',
@@ -3060,9 +3090,7 @@ export default function SpisRzeczywisty() {
         queryFn: getOriginalInventoryCatalog,
         staleTime: 5 * 60 * 1000
       });
-      const index2ByName = buildInventoryIndex2ByName([
-        ...exportCatalog, ...erpCatalogItems, ...erpSnapshotEntries
-      ]);
+      const resolveIndex2 = buildInventoryIndex2Resolver([...exportCatalog, ...erpCatalogItems], erpSnapshotEntries);
       const ExcelJSModule = await import('exceljs');
       const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
       const workbook = new ExcelJS.Workbook();
@@ -3092,7 +3120,7 @@ export default function SpisRzeczywisty() {
       });
       inventoryExportRows.forEach((row) => {
         const excelRow = worksheet.addRow({
-          index2: index2ByName.get(normalizeCatalogNameKey(row.materialName)) ?? '',
+          index2: resolveIndex2(row.materialName, row.unit),
           material: row.materialName,
           area: row.areaName,
           siloChamber: row.siloChamber ?? null,
@@ -3240,7 +3268,7 @@ export default function SpisRzeczywisty() {
     const materialName = showReportIndex2 ? (
       <span className="flex min-w-0 items-baseline gap-3">
         <span className="w-[100px] shrink-0 break-all text-xs font-semibold text-dim" title="Indeks 2">
-          {reportIndex2ByName.get(row.key) || '—'}
+          {resolveReportIndex2(row.name, row.unit) || '—'}
         </span>
         <span className="min-w-0 break-words">{row.name}</span>
       </span>
@@ -3677,6 +3705,7 @@ export default function SpisRzeczywisty() {
                   value={form.name}
                   existingSuggestions={existingNameSuggestions}
                   inventoriedNames={inventoriedNameKeys}
+                  erpIndexKeys={erpSuggestionIndexKeys}
                   inputRef={nameInputRef}
                   onCommit={applyNameToForm}
                   onSelect={applyNameSuggestionToForm}
