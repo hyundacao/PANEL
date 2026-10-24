@@ -138,6 +138,40 @@ test('preserves the previous fallback for reports without table rules', async ()
   assert.deepEqual(items.map((item) => item.name), ['FIRST CONTINUATION', 'SECOND']);
 });
 
+test('a nearby timestamp footer cannot become part of an index when PDF table rules are missing', async () => {
+  for (const compressed of [false, true]) {
+    const items = await parsePdf(pdfFile([[
+      ...cells(185, '1', '618', 'PP MOPLEN HP548R', '1023,378', '1023,378', 'kg'),
+      text(74, 205, '16.10.2026 6:58')
+    ], [
+      ...cells(185, '2', 'M-1-TW-BSHL-', 'HOSTACOM M2 N01 L304698', '100', '90', 'kg'),
+      text(74, 197, '5607-00'), text(74, 215, '9.10.2026 6:59')
+    ]], compressed));
+    assert.deepEqual(items.map(item => [item.indexCode, item.realQty, item.availableQty]), [
+      ['618', 1023.378, 1023.378], ['M-1-TW-BSHL- 5607-00', 100, 90]
+    ]);
+  }
+});
+
+test('split footer label, date and time are excluded before columns are parsed on every page', async () => {
+  for (const compressed of [false, true]) {
+    const items = await parsePdf(pdfFile([[
+      ...cells(1046, '1', 'A22154801', 'IRIS LR WHEEL HOLDER', '32555', '32555'),
+      text(43, 1070, 'Wydrukowano:'), text(108, 1070, '21.10.2026'), text(156, 1070, '7:45'),
+      text(217, 1070, 'Graffiti.ERP wersja: 7.7.42T'), text(739, 1070, '1')
+    ], [
+      ...cells(1040, '2', 'M-1-TW-BSHL-', 'HOSTACOM M2 N01 L304698', '100', '90', 'kg'),
+      text(74, 1052, '5607-00'),
+      text(43, 1070, 'Wydrukowano:'), text(108, 1070, '9.10.2026'), text(156, 1070, '6:59'),
+      text(217, 1070, 'Graffiti.ERP wersja: 7.7.42T')
+    ]], compressed));
+    assert.deepEqual(items.map(item => [item.name, item.indexCode, item.realQty, item.availableQty]), [
+      ['IRIS LR WHEEL HOLDER', 'A22154801', 32555, 32555],
+      ['HOSTACOM M2 N01 L304698', 'M-1-TW-BSHL- 5607-00', 100, 90]
+    ]);
+  }
+});
+
 test('different indices with identical names remain separate', async () => {
   const items = await parsePdf(pdfFile([[
     separator(175), ...cells(185, '1', 'A', 'SAME NAME', '10', '9'), separator(195),

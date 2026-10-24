@@ -4,7 +4,11 @@ import { SpisErpAvailability } from '@/components/planowanie-zapotrzebowania/Spi
 import { GrindingTargetInput } from '@/components/planowanie-zapotrzebowania/GrindingTargetInput';
 import { GRIND_TARGET_EXCLUSIONS_QUERY_KEY, grindingTargetSuggestionKey, normalizeRemovedGrindingTargetSuggestions } from '@/lib/utils/grindingTargetSuggestions';
 import { matchOriginalInventoryErpStock } from '@/lib/utils/originalInventoryErpMatch';
-import { normalizeOriginalInventoryIndex } from '@/lib/utils/originalInventoryIndex';
+import {
+  normalizeOriginalInventoryIndex,
+  ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR,
+  ORIGINAL_INVENTORY_INDEX_TIMESTAMP_MESSAGE
+} from '@/lib/utils/originalInventoryIndex';
 import { ErpCatalogImportNotice } from '@/components/planowanie-zapotrzebowania/ErpCatalogImportNotice';
 import { getOriginalInventoryPalletSets, addOriginalInventoryPalletSet } from '@/lib/api';
 import { isPalletCount, palletSetError, palletSetFingerprint, palletSetTotals, palletInventoryError, parsePalletSource } from '@/lib/planowanie-zapotrzebowania/palletSets';
@@ -1604,6 +1608,7 @@ export default function SpisRzeczywisty() {
     } catch (err) {
       const messageMap: Record<string, string> = {
         EMPTY: 'Plik nie zawiera poprawnych nazw kartotek.',
+        [ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR]: ORIGINAL_INVENTORY_INDEX_TIMESTAMP_MESSAGE,
         FORBIDDEN: 'Brak uprawnien do importu kartotek.'
       };
       const errorCode = err instanceof Error ? err.message : '';
@@ -1702,6 +1707,7 @@ export default function SpisRzeczywisty() {
         DATE_REQUIRED: 'Wybierz poprawny dzien snapshotu.',
         FILE_REQUIRED: 'Wybierz plik do importu.',
         EMPTY: 'Plik nie zawiera poprawnych stanow ERP.',
+        [ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR]: ORIGINAL_INVENTORY_INDEX_TIMESTAMP_MESSAGE,
         FORBIDDEN: 'Brak uprawnien do importu stanow ERP.',
         ERP_SNAPSHOT_ARCHIVE_REQUIRED:
           'Otworz historie spisu farb i tasm dla tego dnia, aby zabezpieczyc porownanie przed ponownym importem.',

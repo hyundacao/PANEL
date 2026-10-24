@@ -6,6 +6,7 @@ import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { parseOriginalInventoryCatalogRows } from '@/lib/utils/originalInventoryCatalog';
 import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
+import { assertOriginalInventoryImportIndices, ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR } from '@/lib/utils/originalInventoryIndex';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,6 +63,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ code: 'EMPTY' }, { status: 400 });
     }
 
+    assertOriginalInventoryImportIndices(normalized);
     const catalogSync = await syncOriginalInventoryCatalogFromSnapshot(supabaseAdmin, normalized);
     return NextResponse.json({
       total: normalized.length,
@@ -79,7 +81,7 @@ export async function POST(request: Request) {
     const status =
       code === 'FORBIDDEN'
         ? 403
-        : code === 'EMPTY' || code === 'FILE_REQUIRED'
+        : code === 'EMPTY' || code === 'FILE_REQUIRED' || code === ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR
         ? 400
         : 500;
     return NextResponse.json({ code }, { status });

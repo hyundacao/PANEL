@@ -2,6 +2,7 @@ import {
   normalizeOriginalInventoryName,
   normalizeOriginalInventoryNameKey
 } from '@/lib/utils/originalInventoryName';
+import { isOriginalInventoryReportTimestamp } from '@/lib/utils/originalInventoryIndex';
 
 export type OriginalInventoryErpPdfItem = {
   name: string;
@@ -385,7 +386,17 @@ const extractPdfTextSegments = async (bytes: Uint8Array) => {
 };
 
 const buildPdfSnapshotRows = (segments: PdfTextSegment[], rowSeparators: number[]) => {
-  const rowAnchors = segments
+  // A footer can be split into separate label, date and time text objects.
+  // End each page's table at the footer instead of treating it as a wrapped index.
+  const footerYByPage = new Map<number, number>();
+  segments.forEach((segment) => {
+    if (!/^(?:Wydrukowano\s*:|Graffiti\.ERP\s+wersja\s*:)/i.test(segment.text.trim())) return;
+    const page = Math.floor(segment.y / PDF_PAGE_Y_OFFSET);
+    footerYByPage.set(page, Math.min(footerYByPage.get(page) ?? Infinity, segment.y - 0.5));
+  });
+  const tableSegments = segments.filter(segment =>
+    segment.y < (footerYByPage.get(Math.floor(segment.y / PDF_PAGE_Y_OFFSET)) ?? Infinity));
+  const rowAnchors = tableSegments
     .filter(
       (segment) =>
         segment.x <= PDF_ROW_CODE_MAX_X &&
@@ -416,7 +427,7 @@ const buildPdfSnapshotRows = (segments: PdfTextSegment[], rowSeparators: number[
       top > previousAnchorY && bottom < nextAnchorY;
     const rowMinY = hasRowBounds ? top : anchorY - 0.5;
     const rowMaxY = hasRowBounds ? bottom : Math.min(nextAnchorY - 0.5, anchorY + 40);
-    const rowSegments = segments
+    const rowSegments = tableSegments
       .filter((segment) => segment.y >= rowMinY && segment.y < rowMaxY)
       .sort((left, right) => (left.y === right.y ? left.x - right.x : left.y - right.y));
     const numericSegments = rowSegments.filter((segment) => isQtyText(segment.text));
@@ -429,7 +440,8 @@ const buildPdfSnapshotRows = (segments: PdfTextSegment[], rowSeparators: number[
     );
     const indexCode = normalizeImportCell(
       rowSegments
-        .filter((segment) => segment.x >= PDF_INDEX_MIN_X && segment.x < PDF_INDEX_MAX_X)
+        .filter((segment) => segment.x >= PDF_INDEX_MIN_X && segment.x < PDF_INDEX_MAX_X &&
+          !isOriginalInventoryReportTimestamp(segment.text))
         .map((segment) => segment.text)
         .join(' ')
     );

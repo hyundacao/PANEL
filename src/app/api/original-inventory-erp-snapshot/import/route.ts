@@ -5,6 +5,7 @@ import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
+import { assertOriginalInventoryImportIndices, ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR } from '@/lib/utils/originalInventoryIndex';
 import { originalErpRetentionCutoff } from '@/lib/utils/paintTapeInventoryArchive';
 import {
   normalizeOriginalInventoryName,
@@ -239,6 +240,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ code: 'EMPTY' }, { status: 400 });
     }
 
+    // Validate the whole file before removing any previously imported stock.
+    assertOriginalInventoryImportIndices(items);
     const replaced = await countExistingSnapshotRows(snapshotDate);
 
     const { error: deleteError } = await supabaseAdmin
@@ -313,7 +316,7 @@ export async function POST(request: Request) {
     const status =
       code === 'FORBIDDEN'
         ? 403
-        : code === 'FILE_REQUIRED' || code === 'DATE_REQUIRED' || code === 'EMPTY'
+        : code === 'FILE_REQUIRED' || code === 'DATE_REQUIRED' || code === 'EMPTY' || code === ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR
           ? 400
           : code === 'ERP_SNAPSHOT_ARCHIVE_REQUIRED'
             ? 409

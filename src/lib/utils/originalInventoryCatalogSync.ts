@@ -2,7 +2,10 @@ import { createHash } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { OriginalInventoryCatalogSyncResult } from '@/lib/api/types';
 import { normalizeOriginalInventoryName, normalizeOriginalInventoryNameKey } from './originalInventoryName';
-import { normalizeOriginalInventoryIndex as indexKey } from './originalInventoryIndex';
+import {
+  normalizeOriginalInventoryIndex as indexKey,
+  hasOriginalInventoryReportTimestamp
+} from './originalInventoryIndex';
 
 type Item = { id?: string; name: string; unit: string; indexCode?: string | null; warehouseCode?: string | null; catalogIssue?: string };
 type CatalogRow = { id: string; name: string; unit: string; index_code: string | null; warehouse_code: string | null };
@@ -40,6 +43,10 @@ export async function syncOriginalInventoryCatalogFromSnapshot(
   };
   const groups = new Map<string, Item[]>();
   for (const raw of items) {
+    if (hasOriginalInventoryReportTimestamp(raw.indexCode)) {
+      warn(raw, 'Indeks zawiera datę i godzinę wydruku — nie dodano tej kartoteki.');
+      continue;
+    }
     const item = { ...raw, name: normalizeOriginalInventoryName(raw.name), unit: clean(raw.unit), indexCode: indexKey(raw.indexCode), warehouseCode: warehouseKey(raw) || null };
     if (item.catalogIssue) {
       warn(item, item.catalogIssue);

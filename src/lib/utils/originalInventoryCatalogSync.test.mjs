@@ -140,6 +140,61 @@ test('successful ERP import schedules guarded retention after responding, not du
   assert.equal(operation.payload.p_cutoff_date, date.toISOString().slice(0, 10));
 });
 
+test('ERP XLSX and parsed PDF imports reject timestamp indices before replacing any existing stock', async () => {
+  for (const pdf of [false, true]) {
+    const f = fixture();
+    const existingCatalog = row(material());
+    const existingStock = { id: 'existing-stock', snapshot_date: '2026-09-28', name: 'PP MOPLEN HP548R',
+      index_code: '618', real_qty: 300, available_qty: 200, unit: 'kg' };
+    f.state.tables.original_inventory_catalog.push(existingCatalog);
+    f.state.tables.original_inventory_erp_snapshots.push(existingStock);
+    const items = [material(), material({ name: 'PP MOPLEN HP548R', indexCode: '618 16.10.2026 6:58', unit: 'kg' })];
+    f.state.pdfItems = items;
+    const response = await f.importFile(items, '2026-09-28', pdf);
+    assert.equal(response.status, 400);
+    assert.equal(response.result.code, 'INDEX_CONTAINS_REPORT_TIMESTAMP');
+    assert.deepEqual(f.state.tables.original_inventory_catalog, [existingCatalog]);
+    assert.deepEqual(f.state.tables.original_inventory_erp_snapshots, [existingStock]);
+    assert.deepEqual(f.state.operations, []);
+    assert.deepEqual(f.state.afterWork, []);
+  }
+});
+
+test('catalog file import rejects the whole contaminated batch without renames or partial inserts', async () => {
+  const f = fixture();
+  const existing = row(material());
+  f.state.tables.original_inventory_catalog.push(existing);
+  const response = await f.importFile([
+    material({ name: 'RENAMED' }), material({ name: 'BAD', indexCode: 'A22154801 13.10.2026 6:55' })
+  ], '2026-09-28', false, true);
+  assert.equal(response.status, 400);
+  assert.equal(response.result.code, 'INDEX_CONTAINS_REPORT_TIMESTAMP');
+  assert.deepEqual(f.state.tables.original_inventory_catalog, [existing]);
+  assert.deepEqual(f.state.operations, []);
+});
+
+test('single and bulk catalog API writes cannot bypass the report timestamp guard', async () => {
+  for (const bulk of [false, true]) {
+    const f = fixture();
+    const item = material({ indexCode: 'M-1-TW-BSHL-5607-00 9.10.2026 6:59' });
+    const result = await f.app(bulk ? 'addOriginalInventoryCatalogBulk' : 'addOriginalInventoryCatalog',
+      bulk ? { items: [material(), item] } : item, 400);
+    assert.equal(result.code, 'INDEX_CONTAINS_REPORT_TIMESTAMP');
+    assert.equal(f.state.tables.original_inventory_catalog.length, 0);
+    assert.equal(f.state.operations.some(op => op.table === 'original_inventory_catalog' || op.rpc), false);
+  }
+});
+
+test('direct catalog synchronization warns and never persists a timestamp identity', async () => {
+  const f = fixture();
+  const result = await f.sync([material({ indexCode: '618 16.10.2026 6:58' }), material()]);
+  assert.equal(result.added, 1);
+  assert.equal(result.warningCount, 1);
+  assert.equal(result.warnings[0].indexCode, '618 16.10.2026 6:58');
+  assert.equal(f.state.tables.original_inventory_catalog.length, 1);
+  assert.equal(f.state.tables.original_inventory_catalog[0].index_code, material().indexCode);
+});
+
 test('missing retention migration cannot change a successful import into a failure', async () => {
   const f = fixture(); f.state.purgeError = { code: 'PGRST202', message: 'missing RPC' };
   const response = await f.importFile([material()]);

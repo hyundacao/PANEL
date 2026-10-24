@@ -24,6 +24,7 @@ import { buildOriginalInventoryNameResolver, findOriginalInventoryCatalogMateria
 import { splitGrindingQuantity } from '@/lib/utils/originalInventoryGrinding';
 import { matchRegrindCatalogErpStocks } from '@/lib/utils/regrindCatalogErp';
 import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
+import { assertOriginalInventoryImportIndices } from '@/lib/utils/originalInventoryIndex';
 import {
   getOriginalInventorySpisIndex2,
   searchOriginalInventorySpisSuggestions
@@ -8277,6 +8278,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         String(payload?.warehouseCode ?? '').trim().toUpperCase() || extractOriginalInventoryWarehouseCode(indexCode);
       if (!name) throw new Error('NAME_REQUIRED');
       if (!indexCode) throw new Error('INDEX_REQUIRED');
+      assertOriginalInventoryImportIndices([{ indexCode }]);
       const { data: existing, error } = await supabaseAdmin
         .from('original_inventory_catalog')
         .select('id, name, index_code');
@@ -8315,6 +8317,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       }> =
         Array.isArray(payload?.items) ? payload.items : [];
       if (items.length === 0) throw new Error('EMPTY');
+      assertOriginalInventoryImportIndices(items);
 
       const normalized: Array<{
         name: string;
