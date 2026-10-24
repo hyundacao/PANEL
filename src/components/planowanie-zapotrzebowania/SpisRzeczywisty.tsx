@@ -403,6 +403,26 @@ const normalizeCatalogNameKey = (value: unknown) =>
     .trim()
     .toLowerCase();
 
+const buildInventoryIndex2ByName = (items: ReadonlyArray<{
+  name: string;
+  indexCode?: string | null;
+  indexCode2?: string | null;
+}>) => {
+  const codesByName = new Map<string, Set<string>>();
+  items.forEach((item) => {
+    const key = normalizeCatalogNameKey(item.name);
+    const code = getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2).trim();
+    if (!key || !code) return;
+    const codes = codesByName.get(key) ?? new Set<string>();
+    codes.add(code);
+    codesByName.set(key, codes);
+  });
+  return new Map([...codesByName].map(([key, codes]) => [
+    key,
+    [...codes].sort((a, b) => exportCatalogCollator.compare(a, b)).join(' / ')
+  ]));
+};
+
 const isMissingDetailGrindTarget = (task: Pick<OriginalInventoryGrindTask, 'unit' | 'materialName' | 'targetMaterialName'>) =>
   isPieceGrindingUnit(task.unit) && (
     !task.targetMaterialName?.trim() ||
@@ -856,6 +876,7 @@ export default function SpisRzeczywisty() {
   const [reportQuantityMode, setReportQuantityMode] = useState<'real' | 'available'>('real');
   const [showReportUncountedItems, setShowReportUncountedItems] = useState(false);
   const [showReportIndex2, setShowReportIndex2] = useState(false);
+  const [isExportingInventory, setIsExportingInventory] = useState(false);
   const reportFullscreenRef = useRef<HTMLDivElement | null>(null);
   const [isReportFullscreen, setIsReportFullscreen] = useState(false);
   const [isReportFullscreenFallback, setIsReportFullscreenFallback] = useState(false);
@@ -2596,21 +2617,10 @@ export default function SpisRzeczywisty() {
         return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
       });
   }, [erpSnapshotByDateAndMaterial, erpSnapshotMap, inventoryHistoryByMaterial, reportHistoryDatesForExport, reportSourceEntries, spisDate]);
-  const reportIndex2ByName = useMemo(() => {
-    const codesByName = new Map<string, Set<string>>();
-    [...localCatalog, ...erpCatalogItems, ...erpSnapshotEntries].forEach((item) => {
-      const key = normalizeCatalogNameKey(item.name);
-      const code = getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2).trim();
-      if (!key || !code) return;
-      const codes = codesByName.get(key) ?? new Set<string>();
-      codes.add(code);
-      codesByName.set(key, codes);
-    });
-    return new Map([...codesByName].map(([key, codes]) => [
-      key,
-      [...codes].sort((a, b) => exportCatalogCollator.compare(a, b)).join(' / ')
-    ]));
-  }, [localCatalog, erpCatalogItems, erpSnapshotEntries]);
+  const reportIndex2ByName = useMemo(
+    () => buildInventoryIndex2ByName([...localCatalog, ...erpCatalogItems, ...erpSnapshotEntries]),
+    [localCatalog, erpCatalogItems, erpSnapshotEntries]
+  );
   const dailyComparison = useMemo(
     () =>
       reportRows.map((row) => ({
@@ -3041,8 +3051,18 @@ export default function SpisRzeczywisty() {
     }
   };
   const handleExportInventoryByLocation = async () => {
-    if (!spisDate || inventoryExportRows.length === 0) return;
+    if (!spisDate || inventoryExportRows.length === 0 || isExportingInventory) return;
+    setIsExportingInventory(true);
     try {
+      // The full catalog is not loaded on the inventory tab until it is needed.
+      const exportCatalog = await queryClient.fetchQuery({
+        queryKey: ['spis-oryginalow-catalog-local'],
+        queryFn: getOriginalInventoryCatalog,
+        staleTime: 5 * 60 * 1000
+      });
+      const index2ByName = buildInventoryIndex2ByName([
+        ...exportCatalog, ...erpCatalogItems, ...erpSnapshotEntries
+      ]);
       const ExcelJSModule = await import('exceljs');
       const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
       const workbook = new ExcelJS.Workbook();
@@ -3052,7 +3072,7 @@ export default function SpisRzeczywisty() {
         views: [{ state: 'frozen', ySplit: 1 }]
       });
       worksheet.columns = [
-        { header: 'Data spisu', key: 'date', width: 14 },
+        { header: 'Indeks 2', key: 'index2', width: 24 },
         { header: 'Tworzywo', key: 'material', width: 48 },
         { header: 'Obszar', key: 'area', width: 14 },
         { header: 'Komora', key: 'siloChamber', width: 16 },
@@ -3072,7 +3092,7 @@ export default function SpisRzeczywisty() {
       });
       inventoryExportRows.forEach((row) => {
         const excelRow = worksheet.addRow({
-          date: spisDate,
+          index2: index2ByName.get(normalizeCatalogNameKey(row.materialName)) ?? '',
           material: row.materialName,
           area: row.areaName,
           siloChamber: row.siloChamber ?? null,
@@ -3082,6 +3102,8 @@ export default function SpisRzeczywisty() {
           qty: Math.round(row.qty * 1000) / 1000,
           unit: row.unit
         });
+        excelRow.getCell('index2').numFmt = '@';
+        excelRow.getCell('index2').alignment = { vertical: 'middle', wrapText: true };
         excelRow.getCell('siloPercent').numFmt = '0.##%';
         excelRow.getCell('siloPercentKg').numFmt = '0.###';
         excelRow.getCell('siloHopperKg').numFmt = '0.###';
@@ -3100,6 +3122,8 @@ export default function SpisRzeczywisty() {
       URL.revokeObjectURL(url);
     } catch {
       toast({ title: 'Nie udalo sie wyeksportowac spisu XLSX.', tone: 'error' });
+    } finally {
+      setIsExportingInventory(false);
     }
   };
   const materialGroupList = useMemo(() => {
@@ -3948,7 +3972,7 @@ export default function SpisRzeczywisty() {
                   onClick={() => {
                     void handleExportInventoryByLocation();
                   }}
-                  disabled={inventoryExportRows.length === 0}
+                  disabled={inventoryExportRows.length === 0 || isExportingInventory}
                 >
                   <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
                   <span>Eksportuj spis do Excel</span>
