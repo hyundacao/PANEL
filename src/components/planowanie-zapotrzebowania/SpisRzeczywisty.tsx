@@ -835,7 +835,6 @@ const OriginalInventoryNameSearch = ({
                     )}
                   >
                     Indeks 2: {suggestion.indexCode2}
-                    {suggestion.inErp && <span className="ml-2 text-success">W ERP</span>}
                   </span>
                 )}
               </span>

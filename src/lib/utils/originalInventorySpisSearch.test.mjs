@@ -312,6 +312,8 @@ test('spis suggestions commit the full name on selection and allow touch scrolli
   assert.match(search, /const chooseSuggestion = [\s\S]*?queryRef\.current = suggestion\.name;[\s\S]*?onSelect\(suggestion\)/);
   assert.match(search, /onBlur=\{\(\) => \{\s*onCommit\(queryRef\.current\)/);
   const suggestionRow = search.slice(search.indexOf('suggestions.map((suggestion)'), search.indexOf('{remoteResultsPending && ('));
+  assert.match(suggestionRow, /Indeks 2: \{suggestion\.indexCode2\}/);
+  assert.doesNotMatch(suggestionRow, /W ERP/);
   assert.match(search, /max-h-64[^"\n]*touch-pan-y[^"\n]*overflow-y-auto/);
   assert.match(suggestionRow, /onMouseDown=\{\(event\) => \{\s*event\.preventDefault\(\);\s*chooseSuggestion\(suggestion\)/);
   assert.match(suggestionRow, /onClick=\{\(\) => chooseSuggestion\(suggestion\)\}/);
