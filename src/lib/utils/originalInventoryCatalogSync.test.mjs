@@ -444,6 +444,20 @@ test('missing metadata warnings are capped without blocking any stock row', asyn
   assert.equal(f.state.tables.original_inventory_catalog.length, 0);
 });
 
+test('catalog API finds M2 name fragments in any order without writing or merging distinct indices', async () => {
+  const f = fixture();
+  f.state.tables.original_inventory_catalog.push(
+    row(material({ name: 'HOSTACOM M2 N01 L304698', unit: 'kg', indexCode: 'M-1-TW-BSHL-5607-00', warehouseCode: 'M-1' }), 'hostacom-1'),
+    row(material({ name: 'HOSTACOM M2 N01 L304698', unit: 'kg', indexCode: '527-002', warehouseCode: null }), 'hostacom-2'),
+    row(material({ name: 'HOSTACOM OTHER', unit: 'kg', indexCode: 'M-2-TW-123', warehouseCode: 'M-2' }), 'other')
+  );
+  for (const query of ['M2 h', 'h M2', 'm2 host', 'M2 h']) {
+    const results = await f.app('searchOriginalInventoryCatalog', { query, limit: 24 });
+    assert.deepEqual(results.map(item => item.indexCode).sort(), ['527-002', 'M-1-TW-BSHL-5607-00']);
+  }
+  assert.ok(f.state.operations.every(operation => operation.mode === 'select'));
+});
+
 test('previously cached empty search immediately finds newly imported catalog rows on each server read', async () => {
   const f = fixture();
   assert.deepEqual(await f.app('searchOriginalInventoryCatalog', { query: 'metal box' }), []);

@@ -169,6 +169,30 @@ test('spis search still matches names and normalized index 2 formatting', () => 
   assert.equal(matchesOriginalInventorySpisSearch('m-1-tw', 'TARNOFORM 300', '5032-00'), false);
 });
 
+test('M2 in a material name is searchable in either fragment order, not treated as a warehouse', () => {
+  const suggestions = [
+    { name: 'HOSTACOM M2 N01 L304698', indexCode: 'M-1-TW-BSHL-5607-00', indexCode2: '5607-00' },
+    { name: 'HOSTACOM M2 N01 L304698', indexCode: '527-002', indexCode2: '527-002' },
+    { name: 'HOSTACOM OTHER', indexCode: 'M-2-TW-123', indexCode2: '123' },
+    { name: 'ABS M2', indexCode: '456', indexCode2: '456' }
+  ];
+  for (const query of ['M2 h', 'h m2', 'M2 HOST', '  m2   H  ']) {
+    const results = searchOriginalInventorySpisSuggestions(suggestions, query, [], 8);
+    assert.deepEqual(results.map(item => item.indexCode).sort(), ['527-002', 'M-1-TW-BSHL-5607-00']);
+  }
+  assert.equal(matchesOriginalInventorySpisSearch('m2', suggestions[0].name, '5607-00'), true);
+  assert.equal(matchesOriginalInventorySpisSearch('m2 5607', suggestions[0].name, '5607-00'), true);
+});
+
+test('legacy index 1 values never become searchable codes, while material names remain searchable', () => {
+  for (const index1 of ['M-2-TW-123', 'M2-TW-123', 'M2 TW 123']) {
+    for (const query of [index1, 'm2', 'tw', '123']) {
+      assert.equal(matchesOriginalInventorySpisSearch(query, 'OTHER MATERIAL', index1), false);
+    }
+    assert.equal(matchesOriginalInventorySpisSearch('M2 h', 'HOSTACOM M2 N01 L304698', index1), true);
+  }
+});
+
 test('spis suggestions exclude FW forms without losing material matches by index 2', () => {
   const suggestions = [
     { name: 'FW - ABS STAREX', indexCode: 'FW-8178', indexCode2: '8178' },

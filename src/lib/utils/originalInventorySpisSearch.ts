@@ -197,12 +197,11 @@ export const matchesOriginalInventorySpisSearch = (
   const normalizedQuery = normalizeSearchText(query);
   if (!normalizedQuery) return true;
 
-  // Index 1 values start with an M-* warehouse prefix. They may still occur in
-  // legacy rows, but the Spis search must not match them as a code.
-  if (/^m[-\s]?\d+(?:[-\s]|$)/i.test(String(query ?? '').trim())) return false;
-
   const normalizedName = normalizeSearchText(name);
-  const normalizedIndex2 = normalizeSearchText(indexCode2);
+  // Ignore legacy index 1 values, not queries: M2 can be part of a material name.
+  const normalizedIndex2 = /^m[-\s]?\d+(?:[-\s]|$)/i.test(String(indexCode2 ?? '').trim())
+    ? ''
+    : normalizeSearchText(indexCode2);
   const searchableValues = [normalizedName, normalizedIndex2];
   const queryParts = normalizedQuery.split(' ').filter(Boolean);
   if (queryParts.length === 1) {
