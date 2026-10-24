@@ -2,11 +2,11 @@ import { createHash } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { OriginalInventoryCatalogSyncResult } from '@/lib/api/types';
 import { normalizeOriginalInventoryName, normalizeOriginalInventoryNameKey } from './originalInventoryName';
+import { normalizeOriginalInventoryIndex as indexKey } from './originalInventoryIndex';
 
 type Item = { id?: string; name: string; unit: string; indexCode?: string | null; warehouseCode?: string | null; catalogIssue?: string };
 type CatalogRow = { id: string; name: string; unit: string; index_code: string | null; warehouse_code: string | null };
 const clean = (value: unknown) => String(value ?? '').replace(/\s+/g, ' ').trim();
-const indexKey = (value: unknown) => clean(value).replace(/\s*([-\/])\s*/g, '$1').replace(/^M\s*-?\s*(\d+)/i, 'M-$1').toUpperCase();
 const warehouseKey = (item: Item) => {
   const raw = indexKey(item.warehouseCode || item.indexCode);
   return raw.match(/^M-\d+(?=-|$)/)?.[0] ?? '';

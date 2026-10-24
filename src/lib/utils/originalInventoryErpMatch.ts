@@ -1,11 +1,10 @@
 import { isPieceGrindingUnit } from '@/lib/utils/originalInventoryGrinding';
 import { normalizeOriginalInventoryNameKey } from '@/lib/utils/originalInventoryName';
+import { normalizeOriginalInventoryIndex as indexKey } from '@/lib/utils/originalInventoryIndex';
 
 type MaterialIdentity = { name: string; unit: string; indexCode?: string | null; previousNames?: readonly string[] };
 type StockEntry = MaterialIdentity & { realQty: number; availableQty: number };
 
-const indexKey = (value: string | null | undefined) =>
-  String(value ?? '').replace(/\s+/g, ' ').trim().toUpperCase();
 const unitKey = (value: string) => isPieceGrindingUnit(value)
   ? 'szt'
   : value.trim().toLowerCase().replace(/\.$/, '');

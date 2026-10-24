@@ -29,7 +29,7 @@ const load = (file) => {
   return mod.exports;
 };
 const { SpisErpAvailability } = load(path.join(directory, 'SpisErpAvailability.tsx'));
-const { matchOriginalInventoryErpStock, findOriginalInventoryCatalogMaterial } = load(path.join(root, 'src/lib/utils/originalInventoryErpMatch.ts'));
+const { matchOriginalInventoryErpStock, findOriginalInventoryCatalogMaterial, buildOriginalInventoryNameResolver } = load(path.join(root, 'src/lib/utils/originalInventoryErpMatch.ts'));
 const source = readFileSync(path.join(directory, 'SpisRzeczywisty.tsx'), 'utf8');
 const ast = ts.createSourceFile('SpisRzeczywisty.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const queryNodes = new Map();
@@ -83,6 +83,60 @@ test('known different indices never fall back to the same or similar name', () =
     grateStock({ name: grateName, indexCode: '1598-70' }),
     grateStock({ name: grateName, indexCode: '1700' })
   ], material, normalizeCatalogNameKey), null);
+});
+
+test('Spis matches catalog indices to existing ERP imports with PDF spacing around separators', () => {
+  const name = 'PRZEKŁADKA 380X400';
+  const indexCode = 'M-1-KAR-BSHŁ-10081';
+  for (const importedIndex of ['M-1-KAR-BSHŁ- 10081', ' m - 1 - kar - bshł - 10081 ', 'M-1-KAR-BSHŁ-\n10081', 'M-1-KAR-BSHŁ-\u00a010081', 'M1-KAR-BSHŁ-10081']) {
+    const stock = { name, unit: 'szt.', indexCode: importedIndex, realQty: 1713.6, availableQty: 1713.6 };
+    const mod = { exports: {} };
+    vm.runInNewContext(compile(`const selectedErpIndex = ${initializer('selectedErpIndex')}; module.exports = ${initializer('matchedErpSnapshot')};`), {
+      module: mod, useMemo: calculate => calculate(), matchOriginalInventoryErpStock,
+      normalizeCatalogNameKey, form: { name, unit: 'szt.' },
+      selectedErpMaterial: { name, indexCode }, resolvedErpMaterial: undefined,
+      effectiveErpSnapshotEntries: [stock, { ...stock, indexCode: 'M-4-KAR-BSHŁ-10081', availableQty: 9000 }]
+    });
+    assert.equal(mod.exports?.availableQty, 1713.6, importedIndex);
+    assert.match(render({ name, snapshot: mod.exports }), /1[\s\u00a0]?713,6 szt\./);
+    assert.equal(stock.indexCode, importedIndex, 'lookup must not rewrite saved data');
+  }
+});
+
+test('spacing normalization never merges different warehouses, suffixes, index segments or meaningful spaces', () => {
+  const name = 'PRZEKŁADKA 380X400';
+  const material = { name, unit: 'szt.', indexCode: 'M-1-KAR-BSHŁ-10081' };
+  for (const indexCode of ['M-4-KAR-BSHŁ- 10081', 'M-1-KAR-BSHŁ- 100810', 'M-1-KAR-BSHŁ- 10081-01', 'M-1-KAR-BSHL- 10081', '10081']) {
+    const stock = { ...material, indexCode, realQty: 5, availableQty: 5 };
+    assert.equal(matchOriginalInventoryErpStock([stock], material, normalizeCatalogNameKey), null, indexCode);
+  }
+  assert.equal(matchOriginalInventoryErpStock([{ name, unit: 'szt.', indexCode: 'AB12', realQty: 5, availableQty: 5 }],
+    { ...material, indexCode: 'AB 12' }, normalizeCatalogNameKey), null);
+  const stock = { ...material, indexCode: 'M-1-KAR-BSHŁ- 10081', unit: 'kg', realQty: 5, availableQty: 5 };
+  assert.equal(matchOriginalInventoryErpStock([stock], material, normalizeCatalogNameKey), null, 'unit mismatch remains blocked');
+});
+
+test('catalog identity and current-name resolution use the same separator normalization as ERP matching', () => {
+  const item = { name: 'PRZEKŁADKA 380X400', unit: 'szt.', indexCode: 'M-1-KAR-BSHŁ-10081', previousNames: ['OLD NAME'] };
+  const selected = { name: 'OLD NAME', unit: 'szt.', indexCode: 'M-1-KAR-BSHŁ- 10081' };
+  assert.equal(findOriginalInventoryCatalogMaterial([item], selected), item);
+  assert.equal(buildOriginalInventoryNameResolver([item])(selected), item.name);
+  assert.equal(buildOriginalInventoryNameResolver([item])({ ...selected, indexCode: 'M-4-KAR-BSHŁ- 10081' }), 'OLD NAME');
+  const duplicates = [item, { ...item, indexCode: selected.indexCode }];
+  assert.equal(findOriginalInventoryCatalogMaterial(duplicates, { name: item.name, unit: item.unit }), item);
+  assert.equal(findOriginalInventoryCatalogMaterial([...duplicates, { ...item, indexCode: 'M-4-KAR-BSHŁ-10081' }],
+    { name: item.name, unit: item.unit }), null, 'genuinely ambiguous names must not guess an index');
+});
+
+test('unindexed ERP fallback tolerates formatting variants of one index but not different indices', () => {
+  const material = { name: 'PRZEKŁADKA 380X400', unit: 'szt.' };
+  const first = { ...material, indexCode: 'M-1-KAR-BSHŁ-10081', realQty: 10, availableQty: 8 };
+  const second = { ...first, indexCode: 'M - 1 - KAR - BSHŁ - 10081', realQty: 20, availableQty: 17 };
+  assert.equal(matchOriginalInventoryErpStock([first, second], material, normalizeCatalogNameKey)?.availableQty, 25);
+  assert.equal(matchOriginalInventoryErpStock([first, { ...second, indexCode: 'M-4-KAR-BSHŁ-10081' }], material, normalizeCatalogNameKey), null);
+  const slash = { ...first, indexCode: 'ABC-01 / 02' };
+  assert.equal(matchOriginalInventoryErpStock([slash], { ...material, indexCode: 'ABC-01/02' }, normalizeCatalogNameKey)?.availableQty, 8);
+  assert.equal(matchOriginalInventoryErpStock([slash], { ...material, indexCode: 'ABC-01/2' }, normalizeCatalogNameKey), null);
 });
 
 test('legacy names still work only when the stock identity and unit are unambiguous', () => {
