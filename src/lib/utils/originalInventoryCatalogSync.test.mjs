@@ -67,6 +67,15 @@ function fixture() {
     from: (table) => new Query(table),
     rpc(name, payload) {
       state.operations.push({ rpc: name, payload });
+      if (name === 'replace_original_inventory_erp_snapshot') {
+        const before = state.tables.original_inventory_erp_snapshots;
+        const replaced = before.filter(row => row.snapshot_date === payload.p_date).length;
+        state.tables.original_inventory_erp_snapshots = [
+          ...before.filter(row => row.snapshot_date !== payload.p_date),
+          ...payload.p_rows.map((row, i) => ({ ...row, id: `snapshot-${i}`, snapshot_date: payload.p_date }))
+        ];
+        return Promise.resolve({ data: [{ inserted: payload.p_rows.length, replaced }], error: null });
+      }
       const result = name === 'rename_original_inventory_catalog_items'
         ? { data: state.renameError ? null : payload.p_changes.map((change) => {
           const item = state.tables.original_inventory_catalog.find((row) => row.id === change.id && row.name === change.previousName && row.index_code === change.indexCode);
@@ -111,7 +120,7 @@ function fixture() {
         ...items.map((item) => [item.name, item.availableQty ?? 250, item.realQty ?? 300, item.unit, item.indexCode ?? ''])
       ])
     ]), 'Stany');
-    const file = pdf ? new File(['PDF fixture'], 'stany.pdf') : new File([XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })], 'stany.xlsx');
+    const file = pdf ? new File(['%PDF-1.7 fixture'], 'stany.pdf') : new File([XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })], 'stany.xlsx');
     const form = new FormData(); form.append('file', file); form.append('snapshotDate', date);
     const route = catalogOnly ? load(join(root, 'app/api/original-inventory-catalog/import/route.ts')) : importRoute;
     const response = await route.POST(new Request('http://test/api/import', { method: 'POST', body: form }));
@@ -131,9 +140,9 @@ test('successful ERP import schedules guarded retention after responding, not du
   const response = await f.importFile([material()]);
   assert.equal(response.status, 200);
   assert.equal(f.state.afterWork.length, 1);
-  assert.equal(f.state.operations.some((op) => op.rpc), false);
+  assert.equal(f.state.operations.some((op) => op.rpc === 'purge_original_inventory_erp_snapshots'), false);
   await f.state.afterWork[0]();
-  const operation = f.state.operations.find((op) => op.rpc);
+  const operation = f.state.operations.find((op) => op.rpc === 'purge_original_inventory_erp_snapshots');
   assert.equal(operation.rpc, 'purge_original_inventory_erp_snapshots');
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Warsaw' }).format(new Date());
   const date = new Date(`${today}T12:00:00Z`); date.setUTCDate(date.getUTCDate() - 90);

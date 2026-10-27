@@ -418,9 +418,11 @@ const sendWarehouseTransferPush = async ({
       const endpointHost = getEndpointHost(row.endpoint);
       const platform = isAndroidUserAgent(row.user_agent) ? 'android' : 'desktop';
       try {
+        if (!isAllowedPushEndpoint(row.endpoint)) throw new Error('INVALID_PUSH_ENDPOINT');
         await webpush.sendNotification(toWebPushSubscription(row), message, {
           TTL: 60 * 60,
-          urgency: 'high'
+          urgency: 'high',
+          timeout: 10000
         });
         console.warn('[push] Send accepted', {
           endpointHost,
@@ -442,7 +444,7 @@ const sendWarehouseTransferPush = async ({
           return { accepted: 0, removed: 1, failed: 0 };
         }
         console.error('[push] Send failed', {
-          endpoint: row.endpoint,
+          endpointHost,
           statusCode,
           message: pushError?.message ?? 'UNKNOWN'
         });
@@ -482,6 +484,15 @@ export const getWebPushPublicKey = () => {
   return publicKey || null;
 };
 
+export const isAllowedPushEndpoint = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash) return false;
+    return url.hostname === 'fcm.googleapis.com' || url.hostname === 'updates.push.services.mozilla.com' ||
+      url.hostname === 'web.push.apple.com' || /^[a-z0-9-]+\.notify\.windows\.com$/.test(url.hostname);
+  } catch { return false; }
+};
+
 export const normalizePushSubscription = (value: unknown): PushSubscriptionInput | null => {
   if (!value || typeof value !== 'object') return null;
   const rawEndpoint = (value as { endpoint?: unknown }).endpoint;
@@ -490,7 +501,9 @@ export const normalizePushSubscription = (value: unknown): PushSubscriptionInput
   const endpoint = toCleanString(rawEndpoint);
   const p256dh = toCleanString((rawKeys as { p256dh?: unknown }).p256dh);
   const auth = toCleanString((rawKeys as { auth?: unknown }).auth);
-  if (!endpoint || !p256dh || !auth) return null;
+  if (!isAllowedPushEndpoint(endpoint) || !/^[A-Za-z0-9_-]+={0,2}$/.test(p256dh) ||
+      !/^[A-Za-z0-9_-]+={0,2}$/.test(auth) || Buffer.from(p256dh, 'base64url').length !== 65 ||
+      Buffer.from(auth, 'base64url').length !== 16) return null;
   return {
     endpoint,
     keys: { p256dh, auth }

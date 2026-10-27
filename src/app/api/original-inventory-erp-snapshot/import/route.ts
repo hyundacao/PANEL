@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import { assertImportFile, assertImportRequest } from '@/lib/security/import-limits';
+import { assertWorksheetLimits, IMPORT_SHEET_ROWS } from '@/lib/utils/spreadsheetLimits';
 import { after, NextResponse } from 'next/server';
 import * as XLSX from 'xlsx';
 import { canSeeTab, isReadOnly } from '@/lib/auth/access';
@@ -19,7 +21,6 @@ import {
 export const dynamic = 'force-dynamic';
 
 const SNAPSHOT_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
-const SNAPSHOT_PAGE_SIZE = 1000;
 
 const normalizeImportCell = (value: unknown) =>
   String(value ?? '')
@@ -100,11 +101,12 @@ const parseSnapshotImportFile = async (file: File) => {
     return parseOriginalInventoryErpSnapshotPdfFile(file);
   }
   const bytes = await file.arrayBuffer();
-  const workbook = XLSX.read(bytes, { type: 'array', raw: false });
+  const workbook = XLSX.read(bytes, { type: 'array', raw: false, sheetRows: IMPORT_SHEET_ROWS });
   const firstSheetName = workbook.SheetNames[0];
   if (!firstSheetName) return [];
 
   const sheet = workbook.Sheets[firstSheetName];
+  assertWorksheetLimits(sheet);
   const rows = XLSX.utils.sheet_to_json(sheet, {
     header: 1,
     blankrows: false,
@@ -177,29 +179,6 @@ const parseSnapshotImportFile = async (file: File) => {
   return [...merged.values()];
 };
 
-const countExistingSnapshotRows = async (snapshotDate: string) => {
-  let count = 0;
-  for (let from = 0; ; from += SNAPSHOT_PAGE_SIZE) {
-    const to = from + SNAPSHOT_PAGE_SIZE - 1;
-    const { data, error } = await supabaseAdmin
-      .from('original_inventory_erp_snapshots')
-      .select('id')
-      .eq('snapshot_date', snapshotDate)
-      .range(from, to);
-    if (error) {
-      if (isMissingSnapshotsTableError(error)) {
-        throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
-      }
-      throw error;
-    }
-    const page = data ?? [];
-    count += page.length;
-    if (page.length < SNAPSHOT_PAGE_SIZE) {
-      break;
-    }
-  }
-  return count;
-};
 
 export async function POST(request: Request) {
   try {
@@ -225,6 +204,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ code: 'FORBIDDEN' }, { status: 403 });
     }
 
+    assertImportRequest(request);
     const formData = await request.formData();
     const file = formData.get('file');
     const snapshotDate = String(formData.get('snapshotDate') ?? '').trim();
@@ -235,6 +215,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ code: 'DATE_REQUIRED' }, { status: 400 });
     }
 
+    await assertImportFile(file, ['pdf', 'xlsx', 'xls', 'csv']);
     const items = await parseSnapshotImportFile(file);
     if (items.length === 0) {
       return NextResponse.json({ code: 'EMPTY' }, { status: 400 });
@@ -242,54 +223,25 @@ export async function POST(request: Request) {
 
     // Validate the whole file before removing any previously imported stock.
     assertOriginalInventoryImportIndices(items);
-    const replaced = await countExistingSnapshotRows(snapshotDate);
-
-    const { error: deleteError } = await supabaseAdmin
-      .from('original_inventory_erp_snapshots')
-      .delete()
-      .eq('snapshot_date', snapshotDate);
-    if (deleteError) {
-      if (isMissingSnapshotsTableError(deleteError)) {
-        throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
-      }
-      if (deleteError.message?.includes('ERP_SNAPSHOT_ARCHIVE_REQUIRED')) {
-        throw new Error('ERP_SNAPSHOT_ARCHIVE_REQUIRED');
-      }
-      throw deleteError;
-    }
-
-    const importedAt = new Date().toISOString();
-    const importedBy = auth.user.username ?? auth.user.name ?? 'nieznany';
-    const sourceFileName = file.name?.trim() || null;
-
-    const chunkSize = 500;
-    let inserted = 0;
-    for (let i = 0; i < items.length; i += chunkSize) {
-      const chunk = items.slice(i, i + chunkSize).map((item) => ({
-        id: randomUUID(),
-        snapshot_date: snapshotDate,
-        name: item.name,
-        qty: item.availableQty,
-        real_qty: item.realQty,
-        available_qty: item.availableQty,
-        unit: item.unit,
+    const { data: importResult, error: importError } = await supabaseAdmin.rpc('replace_original_inventory_erp_snapshot', {
+      p_date: snapshotDate,
+      p_imported_by: auth.user.username ?? auth.user.name ?? 'nieznany',
+      p_source_file: file.name?.trim() || null,
+      p_rows: items.map(item => ({
+        name: item.name, real_qty: item.realQty, available_qty: item.availableQty, unit: item.unit,
         index_code: normalizeSnapshotIndexCode(item.indexCode),
-        warehouse_code: item.warehouseCode ?? extractSnapshotWarehouseCode(item.indexCode),
-        imported_at: importedAt,
-        imported_by: importedBy,
-        source_file_name: sourceFileName
-      }));
-      const { error } = await supabaseAdmin
-        .from('original_inventory_erp_snapshots')
-        .insert(chunk);
-      if (error) {
-        if (isMissingSnapshotsTableError(error)) {
-          throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
-        }
-        throw error;
-      }
-      inserted += chunk.length;
+        warehouse_code: item.warehouseCode ?? extractSnapshotWarehouseCode(item.indexCode)
+      }))
+    });
+    if (importError) {
+      if (importError.code === 'PGRST202') throw new Error('MIGRATION_REQUIRED_SECURITY');
+      if (isMissingSnapshotsTableError(importError)) throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
+      if (importError.message?.includes('ERP_SNAPSHOT_ARCHIVE_REQUIRED')) throw new Error('ERP_SNAPSHOT_ARCHIVE_REQUIRED');
+      throw new Error('IMPORT_FAILED');
     }
+    const result = Array.isArray(importResult) ? importResult[0] : importResult;
+    if (!result) throw new Error('IMPORT_FAILED');
+    const { inserted, replaced } = result;
 
     // The daily stock is already saved; catalog issues are non-blocking warnings.
     const catalogSync = await syncOriginalInventoryCatalogFromSnapshot(supabaseAdmin, items).catch(() => ({
@@ -320,7 +272,7 @@ export async function POST(request: Request) {
           ? 400
           : code === 'ERP_SNAPSHOT_ARCHIVE_REQUIRED'
             ? 409
-          : code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS'
+          : code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS' || code === 'MIGRATION_REQUIRED_SECURITY'
             ? 503
             : 500;
     return NextResponse.json({ code }, { status });

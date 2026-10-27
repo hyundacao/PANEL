@@ -43,7 +43,6 @@ export const Topbar = ({
     toggleSidebar,
     sidebarCollapsed,
     user,
-    setUser,
     logout,
     clearActiveWarehouse,
     activeWarehouse,
@@ -84,15 +83,15 @@ export const Topbar = ({
       setNewPassword('');
       setConfirmPassword('');
       setPasswordDialogOpen(false);
-      if (user) {
-        setUser({ ...user, mustChangePassword: false });
-      }
-      toast({ title: 'Haslo zostalo zmienione', tone: 'success' });
+      logout();
+      router.replace('/login');
+      toast({ title: 'Haslo zostalo zmienione. Zaloguj sie ponownie.', tone: 'success' });
     },
     onError: (err: Error) => {
       const messageMap: Record<string, string> = {
         CURRENT_PASSWORD_REQUIRED: 'Podaj aktualne haslo.',
         NEW_PASSWORD_REQUIRED: 'Podaj nowe haslo.',
+        PASSWORD_POLICY: 'Haslo musi miec minimum 12 znakow i maksymalnie 72 bajty.',
         SAME_PASSWORD: 'Nowe haslo musi byc inne niz aktualne.',
         INVALID_CURRENT_PASSWORD: 'Aktualne haslo jest nieprawidlowe.',
         INACTIVE: 'Twoje konto jest nieaktywne.'
@@ -109,11 +108,11 @@ export const Topbar = ({
     try {
       await logoutUser();
     } catch {
-      // ignore logout transport errors and clear local state anyway
-    } finally {
-      logout();
-      router.replace('/login');
+      toast({ title: 'Nie udalo sie zakonczyc sesji. Sprobuj ponownie.', tone: 'error' });
+      return;
     }
+    logout();
+    router.replace('/login');
   };
 
   const buildPushPreferencesPayload = useCallback(

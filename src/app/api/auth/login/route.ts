@@ -3,7 +3,6 @@ import { randomUUID } from 'crypto';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { getErrorCode, mapDbUser, type DbUserRow } from '@/lib/supabase/users';
 import { loadUserGroupsByUserIds } from '@/lib/supabase/permission-groups';
-import { DEFAULT_RESET_PASSWORD } from '@/lib/auth/password';
 import {
   buildLoginRateLimitKey,
   clearLoginFailures,
@@ -11,6 +10,7 @@ import {
   registerLoginFailure
 } from '@/lib/auth/rate-limit';
 import { setSessionCookie } from '@/lib/auth/session';
+import { consumeSharedLoginLimit } from '@/lib/auth/shared-rate-limit';
 
 type LoginPayload = {
   username?: string;
@@ -31,8 +31,8 @@ const getClientIp = (request: NextRequest) => {
 
 export async function POST(request: NextRequest) {
   const payload = (await request.json().catch(() => null)) as LoginPayload | null;
-  const username = payload?.username?.trim() ?? '';
-  const password = payload?.password?.trim() ?? '';
+  const username = typeof payload?.username === 'string' ? payload.username.trim() : '';
+  const password = typeof payload?.password === 'string' ? payload.password.trim() : '';
   const rememberMe = payload?.rememberMe === true;
 
   const rateLimitKey = buildLoginRateLimitKey(username, getClientIp(request));
@@ -47,6 +47,18 @@ export async function POST(request: NextRequest) {
   if (!username || !password) {
     registerLoginFailure(rateLimitKey);
     return NextResponse.json({ code: 'INVALID_CREDENTIALS' }, { status: 401 });
+  }
+
+  if (username.length > 200 || password.length > 1000) {
+    return NextResponse.json({ code: 'INVALID_CREDENTIALS' }, { status: 401 });
+  }
+  try {
+    const retryAfter = await consumeSharedLoginLimit(username, getClientIp(request));
+    if (retryAfter) return NextResponse.json({ code: 'RATE_LIMITED', retryAfter }, {
+      status: 429, headers: { 'Retry-After': String(retryAfter) }
+    });
+  } catch {
+    return NextResponse.json({ code: 'LOGIN_TEMPORARILY_UNAVAILABLE' }, { status: 503 });
   }
 
   const { data, error } = await supabaseAdmin.rpc('authenticate_user', {
@@ -69,7 +81,8 @@ export async function POST(request: NextRequest) {
 
   const groupsByUserId = await loadUserGroupsByUserIds([row.id]);
   const user = mapDbUser(row, groupsByUserId.get(row.id) ?? []);
-  if (user.mustChangePassword && password !== DEFAULT_RESET_PASSWORD) {
+  const resetExpiry = Date.parse(String((row.access as Record<string, unknown> | null)?.passwordResetExpiresAt ?? ''));
+  if (user.mustChangePassword && Number.isFinite(resetExpiry) && resetExpiry <= Date.now()) {
     registerLoginFailure(rateLimitKey);
     return NextResponse.json({ code: 'INVALID_CREDENTIALS' }, { status: 401 });
   }
@@ -80,6 +93,7 @@ export async function POST(request: NextRequest) {
     .update({ active_session_id: sessionId })
     .eq('id', user.id)
     .eq('is_active', true)
+    .eq('access', JSON.stringify(row.access ?? {}))
     .select('id')
     .maybeSingle();
 

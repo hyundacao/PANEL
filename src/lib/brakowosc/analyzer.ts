@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { assertWorksheetLimits, IMPORT_SHEET_ROWS } from '@/lib/utils/spreadsheetLimits';
 
 export type BrakowoscRow = {
   sheet: string;
@@ -317,7 +318,7 @@ export const extractMesMachines = (pdfText: string, thresholdPct = 2): Record<st
 };
 
 export const getWorkbookSheets = (excelBuffer: Buffer) => {
-  const workbook = XLSX.read(excelBuffer, { type: 'buffer' });
+  const workbook = XLSX.read(excelBuffer, { type: 'buffer', bookSheets: true });
   return workbook.SheetNames;
 };
 
@@ -331,13 +332,14 @@ export const analyzeBrakowosc = ({
   selectedSheet: string;
 }): BrakowoscAnalysis => {
   const mesMachines = extractMesMachines(pdfText);
-  const workbook = XLSX.read(excelBuffer, { type: 'buffer' });
+  const workbook = XLSX.read(excelBuffer, { type: 'buffer', sheetRows: IMPORT_SHEET_ROWS });
   const sheets = workbook.SheetNames;
   const sheet = workbook.Sheets[selectedSheet];
   if (!sheet) {
     throw new Error('Wybrany arkusz nie istnieje w raporcie brygadzisty.');
   }
 
+  assertWorksheetLimits(sheet);
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '' });
   const rows: BrakowoscRow[] = [];
   let reachedPlannedMoldChanges = false;

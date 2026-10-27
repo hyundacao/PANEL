@@ -3,7 +3,7 @@ import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await getAuthenticatedUser(request);
+    const auth = await getAuthenticatedUser(request, { allowPasswordChange: true });
     if (!auth.user) {
       const response = NextResponse.json({ code: auth.code }, { status: 401 });
       if (auth.code === 'SESSION_EXPIRED') {

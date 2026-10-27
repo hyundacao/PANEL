@@ -86,7 +86,6 @@ import {
   isHeadAdmin,
   isWarehouseAdmin
 } from '@/lib/auth/access';
-import { DEFAULT_RESET_PASSWORD } from '@/lib/auth/password';
 
 type WarehouseDraft = {
   name: string;
@@ -2034,12 +2033,12 @@ function AdministrationContent({ scope }: { scope: AdministrationScope }) {
         }
         throw new Error(code);
       }
-      return response.json() as Promise<{ ok: boolean; partial?: boolean; code?: string }>;
+      return response.json() as Promise<{ ok: boolean; temporaryPassword: string; expiresAt: string }>;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       toast({
-        title: `Haslo zresetowane do ${DEFAULT_RESET_PASSWORD}`,
+        title: `Haslo zresetowane do ${result.temporaryPassword}`,
         tone: 'success'
       });
     },
@@ -2719,7 +2718,7 @@ function AdministrationContent({ scope }: { scope: AdministrationScope }) {
     const suffix = isSelfTarget ? ' Twoja aktywna sesja zostanie wylogowana.' : '';
     if (
       !confirm(
-        `Zresetowac haslo uzytkownika ${name} do domyslnego ${DEFAULT_RESET_PASSWORD}?${suffix}`
+        `Zresetowac haslo uzytkownika ${name} do hasla domyslnego?${suffix}`
       )
     ) {
       return;

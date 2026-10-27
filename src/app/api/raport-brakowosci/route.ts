@@ -3,6 +3,9 @@ import { pathToFileURL } from 'node:url';
 import { NextRequest, NextResponse } from 'next/server';
 import { analyzeBrakowosc, getWorkbookSheets } from '@/lib/brakowosc/analyzer';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { getAuthenticatedUser } from '@/lib/auth/session';
+import { canSeeTab, isReadOnly } from '@/lib/auth/access';
+import { assertImportFile, assertImportRequest } from '@/lib/security/import-limits';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -197,8 +200,20 @@ const writeLatestReport = async (payload: unknown) => {
   }
 };
 
-export async function GET() {
+const authorizeReport = async (request: Request, write: boolean) => {
+  const auth = await getAuthenticatedUser(request);
+  if (!auth.user) return NextResponse.json({ code: auth.code }, { status: 401 });
+  if (!canSeeTab(auth.user, 'RAPORT_BRAKOWOSCI', 'raport-brakowosci') ||
+      (write && isReadOnly(auth.user, 'RAPORT_BRAKOWOSCI'))) {
+    return NextResponse.json({ code: 'FORBIDDEN' }, { status: 403 });
+  }
+  return null;
+};
+
+export async function GET(request: Request) {
   try {
+    const denied = await authorizeReport(request, false);
+    if (denied) return denied;
     const latest = await readLatestReport();
     return NextResponse.json({ latest });
   } catch (error) {
@@ -209,6 +224,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const denied = await authorizeReport(request, true);
+    if (denied) return denied;
+    assertImportRequest(request);
     const formData = await request.formData();
     const pdfFile = formData.get('mesPdf');
     const excelFile = formData.get('brigadierExcel');
@@ -220,6 +238,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    await assertImportFile(pdfFile, ['pdf']);
+    await assertImportFile(excelFile, ['xlsx', 'xls', 'csv']);
 
     const pdfBuffer = await readFileBuffer(pdfFile);
     const excelBuffer = await readFileBuffer(excelFile);

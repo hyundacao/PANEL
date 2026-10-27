@@ -1005,12 +1005,19 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       throw new Error('FORBIDDEN');
     }
   };
-  const getPaintTapeUpdatePermission = (): PaintTapePermissionKey => {
-    if (payload?.accounted !== undefined || payload?.reopen === true) return 'accounting';
-    if (payload?.orderNote !== undefined || payload?.usageCheckNote !== undefined) return 'accounting';
-    if (payload?.moveToOpen === true) return 'details';
-    if (payload?.producedQty !== undefined && payload?.endQty === undefined) return 'details';
-    return 'open';
+  const requirePaintTapeUpdatePermissions = () => {
+    const fields: Record<string, PaintTapePermissionKey> = {
+      accounted: 'accounting', reopen: 'accounting', orderNote: 'accounting', usageCheckNote: 'accounting',
+      producedQty: 'details', moveToOpen: 'details',
+      orderNumber: 'open', detailName: 'open', itemName: 'open', itemIndexCode: 'open', unit: 'open',
+      startQty: 'open', warehouseIssuedQty: 'open', endQty: 'open', completeProduction: 'open', productionCompletedAt: 'open'
+    };
+    const keys = Object.keys(payload ?? {}).filter(key => key !== 'id');
+    if (keys.length === 0) requirePaintTapeWriteAccess('open');
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(fields, key)) throw new Error('FORBIDDEN');
+      requirePaintTapeWriteAccess(fields[key]);
+    }
   };
 
   switch (action) {
@@ -1182,7 +1189,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requirePaintTapeWriteAccess('create');
       return;
     case 'updatePaintTapeSettlement':
-      requirePaintTapeWriteAccess(getPaintTapeUpdatePermission());
+      requirePaintTapeUpdatePermissions();
       return;
     case 'addPaintTapeSettlementIssue':
     case 'removePaintTapeSettlement':

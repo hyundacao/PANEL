@@ -54,18 +54,6 @@ const isFunctionResolutionError = (
   );
 };
 
-const isMissingColumnError = (error: { code?: string | null; message?: string | null } | null) => {
-  if (!error) return false;
-  const code = String(error.code ?? '');
-  const message = String(error.message ?? '').toLowerCase();
-  return (
-    code === '42703' ||
-    message.includes('column') ||
-    message.includes('does not exist') ||
-    message.includes('active_session_id')
-  );
-};
-
 const requireHeadAdmin = async (request: Request) => {
   let auth: Awaited<ReturnType<typeof getAuthenticatedUser>>;
   try {
@@ -129,48 +117,26 @@ export async function PATCH(
     }
 
     if (password) {
-    const minimalRpcPayload: Record<string, unknown> = {
-      p_id: userId,
-      p_password: password
-    };
-    if (name !== undefined) {
-      minimalRpcPayload.p_name = name;
-    }
-    if (username !== undefined) {
-      minimalRpcPayload.p_username = username;
-    }
-    if (normalizedRole !== null) {
-      minimalRpcPayload.p_role = normalizedRole;
-    }
-    if (normalizedAccess !== undefined) {
-      minimalRpcPayload.p_access = normalizedAccess;
-    }
-    if (typeof payload?.isActive === 'boolean') {
-      minimalRpcPayload.p_is_active = payload.isActive;
-    }
-
-    let passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', minimalRpcPayload);
-    if (passwordUpdateResult.error && isFunctionResolutionError(passwordUpdateResult.error)) {
-      passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', {
+      const { data: currentRow, error: readError } = await supabaseAdmin
+        .from('app_users').select('access').eq('id', userId).maybeSingle();
+      if (readError) return NextResponse.json({ code: 'UNKNOWN' }, { status: 500 });
+      if (!currentRow) return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
+      const accessWithResetFlag = {
+        ...(normalizedAccess ?? currentRow.access ?? {}),
+        mustChangePassword: true,
+        passwordChangedAt: new Date().toISOString(),
+        passwordResetExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      };
+      // Save the reset requirement in the same transaction as the password.
+      const passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', {
         p_id: userId,
         p_name: name ?? null,
         p_username: username ?? null,
         p_password: password,
         p_role: normalizedRole,
-        p_access: normalizedAccess ?? null,
+        p_access: accessWithResetFlag,
         p_is_active: typeof payload?.isActive === 'boolean' ? payload.isActive : null
       });
-    }
-    if (passwordUpdateResult.error && isFunctionResolutionError(passwordUpdateResult.error)) {
-      passwordUpdateResult = await supabaseAdmin.rpc('update_app_user', {
-        p_id: userId,
-        p_name: name ?? null,
-        p_username: username ?? null,
-        p_password: password,
-        p_role: normalizedRole,
-        p_access: normalizedAccess ?? null
-      });
-    }
 
     const { data, error } = passwordUpdateResult;
 
@@ -191,39 +157,7 @@ export async function PATCH(
       return NextResponse.json({ code: 'NOT_FOUND' }, { status: 404 });
     }
 
-    const currentAccess =
-      row.access && typeof row.access === 'object'
-        ? (row.access as Record<string, unknown>)
-        : ({ admin: false, warehouses: {} } as Record<string, unknown>);
-    const accessWithResetFlag = {
-      ...currentAccess,
-      mustChangePassword: true
-    };
-    let syncResult = await supabaseAdmin
-      .from('app_users')
-      .update({
-        active_session_id: null,
-        access: accessWithResetFlag
-      })
-      .eq('id', userId)
-      .select('*')
-      .maybeSingle();
-    if (syncResult.error && isMissingColumnError(syncResult.error)) {
-      syncResult = await supabaseAdmin
-        .from('app_users')
-        .update({
-          access: accessWithResetFlag
-        })
-        .eq('id', userId)
-        .select('*')
-        .maybeSingle();
-    }
-    const rowForResponse = syncResult.error
-      ? row
-      : ((syncResult.data as DbUserRow | null) ?? {
-          ...row,
-          access: accessWithResetFlag as DbUserRow['access']
-        });
+    const rowForResponse = row;
 
     if (shouldUpdateGroups) {
       try {
@@ -296,7 +230,9 @@ export async function PATCH(
           : ({ admin: false, warehouses: {} } as Record<string, unknown>);
       updatePayload.access = {
         ...nextAccess,
-        mustChangePassword: currentMustChangePassword
+        mustChangePassword: currentMustChangePassword,
+        passwordChangedAt: currentAccessRow?.access?.passwordChangedAt ?? null,
+        passwordResetExpiresAt: currentAccessRow?.access?.passwordResetExpiresAt ?? null
       };
     }
 

@@ -12,11 +12,11 @@ const backup = async () => JSZip.loadAsync(
   { checkCRC32: true }
 );
 
-test('SQL has one flat authoritative directory with nine module files', () => {
+test('SQL has nine base modules and the explicit security upgrade in one directory', () => {
   const entries = readdirSync(path.join(projectRoot, 'supabase'), { withFileTypes: true });
   assert.ok(entries.every((entry) => entry.isFile()));
   assert.deepEqual(entries.map((entry) => entry.name).sort(),
-    [...sqlModuleFiles, '.gitattributes', 'CZYTAJ_NAJPIERW.md'].sort());
+    [...sqlModuleFiles, '10_zabezpieczenia.sql', '.gitattributes', 'CZYTAJ_NAJPIERW.md'].sort());
 });
 
 test('SQL module lookup rejects unknown files and section names', () => {

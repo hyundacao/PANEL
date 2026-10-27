@@ -9,6 +9,7 @@ declare module 'web-push' {
   };
 
   export type WebPushSendOptions = {
+    timeout?: number;
     TTL?: number;
     urgency?: 'very-low' | 'low' | 'normal' | 'high';
     topic?: string;
