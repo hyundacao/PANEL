@@ -129,13 +129,14 @@ const warsawDateKey = (value = new Date()) =>
     day: '2-digit'
   }).format(value);
 
-const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
+const queryProductCatalogRows = async () => {
   const rows: Array<{ id: string; name: string; index_code: string | null; warehouse_code: string | null; unit: string | null }> = [];
   const fields = 'id, name, index_code, warehouse_code, unit';
   const firstResult = await supabaseAdmin
     .from('original_inventory_catalog')
     .select(fields, { count: 'exact' })
     .order('name', { ascending: true })
+    .order('id', { ascending: true })
     .range(0, PRODUCT_CATALOG_PAGE_SIZE - 1);
   if (firstResult.error) throw firstResult.error;
   rows.push(...(firstResult.data ?? []));
@@ -147,6 +148,7 @@ const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
         .from('original_inventory_catalog')
         .select(fields)
         .order('name', { ascending: true })
+        .order('id', { ascending: true })
         .range(from, from + PRODUCT_CATALOG_PAGE_SIZE - 1);
       if (error) throw error;
       rows.push(...(data ?? []));
@@ -162,6 +164,7 @@ const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
             .from('original_inventory_catalog')
             .select(fields)
             .order('name', { ascending: true })
+            .order('id', { ascending: true })
             .range(from, from + PRODUCT_CATALOG_PAGE_SIZE - 1);
           if (error) throw error;
           return data ?? [];
@@ -171,6 +174,11 @@ const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
     }
   }
 
+  return rows;
+};
+
+const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
+  const rows = await queryProductCatalogRows();
   const unique = new Map<string, ProductCatalogItem>();
   rows.forEach((row) => {
     const name = String(row.name ?? '').replace(/\s+/g, ' ').trim();
@@ -220,19 +228,29 @@ const inventoryAreaId = (warehouseId: unknown, warehouseName: unknown, sourceTyp
   return '';
 };
 
+const queryOriginalInventoryEntries = async (from: string, to: string) => {
+  const rows: Array<{ id: string; at: string; warehouse_id: string; name: string; qty: number; unit: string | null; source_type: string | null }> = [];
+  for (let offset = 0; ; offset += PRODUCT_CATALOG_PAGE_SIZE) {
+    const { data, error } = await supabaseAdmin.from('original_inventory_entries')
+      .select('id, at, warehouse_id, name, qty, unit, source_type').gte('at', from).lte('at', to)
+      .order('id', { ascending: true }).range(offset, offset + PRODUCT_CATALOG_PAGE_SIZE - 1);
+    if (error) throw error;
+    rows.push(...(data ?? []));
+    if (!data || data.length < PRODUCT_CATALOG_PAGE_SIZE) return rows;
+  }
+};
+
 const loadOriginalInventory = async (dateKey: string) => {
   const requestedDate = /^\d{4}-\d{2}-\d{2}$/.test(dateKey) ? dateKey : warsawDateKey();
   const center = new Date(`${requestedDate}T12:00:00.000Z`);
   const from = new Date(center.getTime() - 36 * 60 * 60 * 1000).toISOString();
   const to = new Date(center.getTime() + 36 * 60 * 60 * 1000).toISOString();
-  const [{ data: warehouses, error: warehouseError }, { data: entries, error: entryError }, { data: catalog, error: catalogError }] = await Promise.all([
+  const [{ data: warehouses, error: warehouseError }, entries, catalog] = await Promise.all([
     supabaseAdmin.from('warehouses').select('id, name').eq('is_active', true),
-    supabaseAdmin.from('original_inventory_entries').select('id, at, warehouse_id, name, qty, unit, source_type').gte('at', from).lte('at', to),
-    supabaseAdmin.from('original_inventory_catalog').select('name, index_code, warehouse_code')
+    queryOriginalInventoryEntries(from, to),
+    queryProductCatalogRows()
   ]);
   if (warehouseError) throw warehouseError;
-  if (entryError) throw entryError;
-  if (catalogError) throw catalogError;
   const warehouseNames = new Map((warehouses ?? []).map((row) => [String(row.id), String(row.name ?? '')]));
   const catalogCodes = new Map<string, { code: string; warehouseCode: string }>();
   (catalog ?? []).forEach((row) => {
@@ -252,7 +270,7 @@ const loadOriginalInventory = async (dateKey: string) => {
     const name = String(row.name ?? '').trim();
     const code = catalogCodes.get(normalizeName(name))?.code ?? '';
     const unit = String(row.unit ?? '').trim() || 'kg';
-    const key = `${areaId}|${normalizeName(code || name)}|${normalizeName(unit)}`;
+    const key = `${areaId}|${normalizeName(name)}|${normalizeName(unit)}`;
     const current = grouped.get(key);
     const qty = Number(row.qty ?? 0);
     const protectedQty = String(row.source_type ?? '').toUpperCase() === FIXED_INVENTORY_DEVICE_SOURCE_TYPE ? qty : 0;
@@ -266,7 +284,9 @@ const loadOriginalInventory = async (dateKey: string) => {
   return {
     dateKey: requestedDate,
     syncedAt: new Date().toISOString(),
-    rows: [...grouped.values()].sort((left, right) => left.areaId.localeCompare(right.areaId) || left.name.localeCompare(right.name, 'pl'))
+    // Entries store a name, not a catalog index. The inferred code is only a hint.
+    rows: [...grouped.values()].map((row) => ({ ...row, identitySource: 'name' as const }))
+      .sort((left, right) => left.areaId.localeCompare(right.areaId) || left.name.localeCompare(right.name, 'pl'))
   };
 };
 

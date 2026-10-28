@@ -44,6 +44,7 @@ names.push('returnMaterialKey');
 names.push('manualIssueForItem', 'updateIssueQuantity');
 names.push('materialIdentityMatches');
 names.push('sharedAreaIds');
+names.push('renderDocumentV2', 'documentStatusLabel', 'documentTone', 'inferPickingWarehouseCode', 'pickingWarehouseCode', 'sortPickingDocumentRows', 'PICKING_WAREHOUSE_OPTIONS', 'MATERIAL_WAREHOUSE_PRIORITY');
 names.push('planNormNeedsReview', 'normIssuePlanItemIds', 'missingNormActiveCount', 'calculationBlockedCount', 'calculationBlockLabel', 'calculationBlockTitle');
 const definitions = new Map();
 const visit = (node) => {
@@ -54,7 +55,7 @@ const visit = (node) => {
 };
 visit(ast);
 for (const name of names) if (!definitions.has(name)) throw new Error('Missing fixture function: ' + name);
-const compiled = compile('{\n' + [...definitions.values()].join('\n') + '\nObject.assign(exports, { renderPlan, renderCalculationDetails, renderReturnsV2, ProductCatalogField, emptyTechnologyDraft, selectedTechnologyForEditor, cloneTechnologyForEditor, sameTechnologyEditorValue, createAlternativeTechnologyFromWorkingCopy, technologyLabel, technologySelectLabel });\n}', 'fixture.tsx');
+const compiled = compile('{\n' + [...definitions.values()].join('\n') + '\nObject.assign(exports, { renderPlan, renderCalculationDetails, renderReturnsV2, renderDocumentV2, ProductCatalogField, emptyTechnologyDraft, selectedTechnologyForEditor, cloneTechnologyForEditor, sameTechnologyEditorValue, createAlternativeTechnologyFromWorkingCopy, technologyLabel, technologySelectLabel });\n}', 'fixture.tsx');
 
 export const createHeaderFixture = (overrides = {}) => {
   const plan = ['MAX CP+TH PRINTED F1_WQ35G2D0ES_A', 'MAX CP+TH PRINTED F1_WQ33G2D00', 'MAINT. DOOR CUBIC POPIEL'].map((name, index) => ({
@@ -90,6 +91,8 @@ export const createHeaderFixture = (overrides = {}) => {
     ...load('@/components/planowanie-zapotrzebowania/PlanningSaveStatus'),
     ...load('@/components/planowanie-zapotrzebowania/PlanQuantity'),
     ...load('@/components/planowanie-zapotrzebowania/ZoneStockCell'),
+    ...load('@/components/planowanie-zapotrzebowania/ZonePlanSummary'),
+    ...load('@/components/planowanie-zapotrzebowania/WarehouseCodeInput'),
     ...load('@/components/planowanie-zapotrzebowania/IssueQuantityField'),
     ...load('@/lib/planowanie-zapotrzebowania/manualIssueQuantities'),
     ...load('@/lib/planowanie-zapotrzebowania/zoneStock'),
@@ -106,6 +109,8 @@ export const createHeaderFixture = (overrides = {}) => {
     closeCalculationEditorIfAllowed: () => true,
     fileInputRef: { current: null }, expandedPlan: '', expandedCalculation: '',
     editablePickingDocumentExists: false, createPickingDocumentFromPlan: () => {},
+    linkedSourceIssuesForArea: () => [], createOrRefreshPickingDocument: () => {},
+    expandedDocument: '', expandedMaterial: '', documentWarehouseFilter: 'all', documentSort: 'warehouse',
     pending: null, sheetName: '', lastPlanWorkbook: null, planUploadModeRef: { current: 'plan' }, importSelectedSheet: () => {},
     renderPendingImport: () => null, technologiesFor: () => [], technologyForItem: () => undefined,
     materialsForItem: () => [], itemProductionQty: () => 0,
@@ -139,7 +144,7 @@ export const createHeaderFixture = (overrides = {}) => {
   const render = (view = 'plan') => {
     ctx.calculationEditorOpen = Boolean(ctx.expandedPlan || ctx.expandedCalculation);
     vm.runInContext('{\n' + compiled + '\n}', ctx);
-    return view === 'zwroty' ? ctx.exports.renderReturnsV2() : ctx.exports.renderPlan();
+    return view === 'zwroty' ? ctx.exports.renderReturnsV2() : view === 'dokument' ? ctx.exports.renderDocumentV2() : ctx.exports.renderPlan();
   };
   const productCatalogField = (props) => {
     loadFixtureExports();

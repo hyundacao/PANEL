@@ -45,9 +45,10 @@ import { SelectField } from '@/components/ui/Select';
 import { WarningTriangle } from '@/components/ui/WarningTriangle';
 import { WarehouseCodeInput } from '@/components/planowanie-zapotrzebowania/WarehouseCodeInput';
 import { ZoneStockCell } from '@/components/planowanie-zapotrzebowania/ZoneStockCell';
+import { ZonePlanSummary } from '@/components/planowanie-zapotrzebowania/ZonePlanSummary';
 import { IssueQuantityField } from '@/components/planowanie-zapotrzebowania/IssueQuantityField';
 import { allocateIssueQuantities, committedIssueQuantity, normalizeManualIssueQuantities, remainingManualIssueQuantity, type ManualIssueQuantities } from '@/lib/planowanie-zapotrzebowania/manualIssueQuantities';
-import { buildZoneStockSummary } from '@/lib/planowanie-zapotrzebowania/zoneStock';
+import { buildZonePlanSummary, buildZoneStockSummary } from '@/lib/planowanie-zapotrzebowania/zoneStock';
 import { canonicalPlanningUnit, canonicalPlanningMaterialKey, groupPickingDocumentRows, mergePickingSources } from '@/lib/planowanie-zapotrzebowania/pickingDocumentRows';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { PlanningSaveNotice, PlanningSaveStatus } from '@/components/planowanie-zapotrzebowania/PlanningSaveStatus';
@@ -322,6 +323,7 @@ type InventoryItem = {
   areaId: string;
   code: string;
   name: string;
+  identitySource?: 'name';
   category: MaterialCategory;
   qty: number;
   protectedQty?: number;
@@ -5040,6 +5042,27 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     const documents = state.documents
       .filter((document) => document.planDate === state.selectedPlanDate && document.areaId === state.selectedAreaId)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt, 'pl'));
+    const zonePlan = state.plan.filter((item) => item.included && (!item.areaId || item.areaId === state.selectedAreaId));
+    const zonePlanIssues = [...zonePlan.flatMap((item) => {
+      const reasons = [
+        !item.areaId && 'brak strefy',
+        !technologyForItem(item) && 'brak technologii',
+        planQuantityNeedsReview(item) && 'ilość do wyjaśnienia',
+        planNormNeedsReview(item) && 'brak normy na zmianę'
+      ].filter(Boolean);
+      const label = [item.index, item.name, item.station].filter(Boolean).join(' · ');
+      return reasons.length ? [`${label}: ${reasons.join(', ')}.`] : [];
+    }), ...linkedSourceIssuesForArea(state.selectedAreaId)];
+    const zoneSummary = buildZonePlanSummary({
+      areaId: state.selectedAreaId, inventory: state.inventory, sharedAreaIds,
+      stockReady: state.inventorySourceDate === state.selectedPlanDate, incompletePlan: zonePlanIssues.length > 0,
+      sources: zonePlan.map((item) => ({
+        id: item.id, index: item.index, name: item.name, station: item.station, areaId: item.areaId, included: item.included,
+        contributions: materialDemandContributionsForItem(item).map((contribution) => ({
+          ...contribution, demand: !technologyForItem(item) || planQuantityNeedsReview(item) || planNormNeedsReview(item) ? null : contribution.demand
+        }))
+      }))
+    });
     return <div className="space-y-5">
       {renderHeader('Dokument do wypisania', 'Każda strefa otrzymuje osobny dokument. Magazyn przypisujesz przy każdej pozycji, a po oznaczeniu dokumentu jako wydany jego ilości pozostają niezmienne.')}
       <PlanQuantityWarnings items={state.plan.filter((item) => item.included && (item.areaId === state.selectedAreaId || !item.areaId))} resolvedItemIds={quantityResolvedPlanItemIds} normIssueItemIds={normIssuePlanItemIds} calculations />
@@ -5134,6 +5157,10 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           </div> : null}
         </Card>;
       }) : <EmptyState title="Brak zapisanych dokumentów" description="Wybierz strefę i utwórz dokument z aktualnego planu. Jeżeli materiały są już pokryte, dokument nie będzie potrzebny." />}
+      <ZonePlanSummary key={`${state.selectedPlanDate}|${state.selectedAreaId}`} rows={zoneSummary}
+        areaName={areaName(state.selectedAreaId)} planDate={formatPlanDate(state.selectedPlanDate)}
+        inventoryDate={state.inventorySourceDate ? formatPlanDate(state.inventorySourceDate) : ''} inventorySyncedAt={state.inventorySyncedAt}
+        planIssues={zonePlanIssues} onRefresh={() => syncOriginalInventory(true)} />
     </div>;
   };
 
