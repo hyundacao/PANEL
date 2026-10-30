@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createOriginalInventoryFixture } from './originalInventory.fixture.mjs';
 import { buildZonePlanSummary } from './zoneStock.ts';
+import { searchProductCatalog } from './productCatalogSearch.ts';
 
 const black = { code: 'M-4-BSHŁ-786-014', name: 'BLACK BOX 200X400X265', unit: 'szt.' };
 const cam = { code: 'M-1-WTO-ELUX-8703', name: 'CAM PIN D0013497', unit: 'szt.' };
@@ -116,6 +117,39 @@ test('missing catalog count still loads every page and keeps catalog search enri
   const result = await createOriginalInventoryFixture(db).catalog();
   assert.equal(result.length, fillers.length + 1);
   assert.equal(result.find(row => row.name === cam.name).index, cam.code);
+});
+
+test('catalog choices preserve different indices with the same product name', async () => {
+  const name = 'MAX CP+TH PRINTED F1_WQ33G2D00';
+  for (const warehouse of [null, 'M-10']) {
+    const codes = ['9001970413', '9001972083'];
+    const { db } = database(codes.map(code => catalogRow(code, { name, code, unit: 'szt.' }, warehouse)), []);
+    const items = await createOriginalInventoryFixture(db).catalog();
+    assert.deepEqual(searchProductCatalog(items, name, 'product-name').map(row => row.index).sort(), codes);
+    for (const code of codes) {
+      assert.deepEqual(searchProductCatalog(items, code, 'product-index').map(row => row.index), [code]);
+    }
+  }
+});
+
+test('warehouse enrichment hides only the same indexed identity, not another same-named product', async () => {
+  const name = 'MAX CP+TH PRINTED F1_WQ33G2D00';
+  const { db } = database([
+    catalogRow('old', { name, code: '9001970413', unit: 'szt.' }, null),
+    catalogRow('new', { name, code: '9001972083', unit: 'szt.' }, null),
+    catalogRow('enriched', { name, code: '9001972083', unit: 'szt.' }, 'M-10'),
+    catalogRow('fallback', { name, code: '', unit: 'szt.' }, null)
+  ], []);
+  const items = await createOriginalInventoryFixture(db).catalog();
+  assert.deepEqual(items.map(row => row.id).sort(), ['enriched', 'old']);
+});
+
+test('catalog search still deduplicates identical name, index and warehouse rows', async () => {
+  const material = { name: 'MAX CP+TH PRINTED F1_WQ33G2D00', code: '9001972083', unit: 'szt.' };
+  const { db } = database([catalogRow('first', material, null), catalogRow('second', material, null)], []);
+  const items = await createOriginalInventoryFixture(db).catalog();
+  assert.equal(items.length, 1);
+  assert.equal(items[0].index, material.code);
 });
 
 test('later-page failures never return a misleading partial inventory', async () => {

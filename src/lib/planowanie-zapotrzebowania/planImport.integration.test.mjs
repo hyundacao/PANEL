@@ -105,6 +105,21 @@ test('product technologies match by index, not by a shared name',()=>{
   assert.equal(assigned[0].technologyId,'');
 });
 
+test('MAX products with identical names retain separate technology assignments by index',()=>{
+  const h=setup();
+  const name='MAX CP+TH PRINTED F1_WQ33G2D00';
+  const codes=['9001970413','9001972083'];
+  const technologies=codes.map(code=>({id:'tech-'+code,productIndex:code,productName:name,variant:'base',
+    alternativeNo:0,description:'',notes:'',shiftNorm:0,materials:[],archived:false}));
+  const plan=codes.map(code=>({id:'plan-'+code,index:code,name,technologyId:'',shiftNorm:380}));
+  const assigned=h.applyDefaultTechnologyAssignments(plan,technologies);
+  for(let i=0;i<codes.length;i++) {
+    assert.equal(assigned[i].technologyId,technologies[i].id);
+    assert.equal(assigned[i].shiftNorm,380);
+    assert.equal(h.technologyMatchesProduct(technologies[1-i],codes[i],name),false);
+  }
+});
+
 test('a continuation candidate still receives its base technology automatically',()=>{
   const h=setup();
   const material={id:'material-source',code:'MAT-1',name:'Material 1',category:'Tworzywo',usage:0.25,unit:'kg',logisticQty:1};

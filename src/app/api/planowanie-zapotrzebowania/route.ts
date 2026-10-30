@@ -186,7 +186,7 @@ const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
     const warehouseCode = String(row.warehouse_code ?? '').replace(/\s+/g, ' ').trim().toUpperCase();
     const unit = String(row.unit ?? '').replace(/\s+/g, ' ').trim();
     if (!name) return;
-    const key = `${normalizeName(name)}|${normalizeName(warehouseCode)}`;
+    const key = `${normalizeName(name)}|${normalizeName(index)}|${normalizeName(warehouseCode)}`;
     const next = { id: String(row.id), name, index, warehouseCode, unit };
     const current = unique.get(key);
     const score = (item: ProductCatalogItem) => (item.warehouseCode ? 4 : 0) + (item.index ? 2 : 0) + (item.unit ? 1 : 0);
@@ -197,9 +197,15 @@ const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
   const namesWithWarehouseVariant = new Set(
     values.filter((item) => Boolean(item.warehouseCode)).map((item) => normalizeName(item.name))
   );
+  const identitiesWithWarehouseVariant = new Set(
+    values.filter((item) => Boolean(item.warehouseCode))
+      .map((item) => `${normalizeName(item.name)}|${normalizeName(item.index)}`)
+  );
 
   return values.filter(
-    (item) => Boolean(item.warehouseCode) || !namesWithWarehouseVariant.has(normalizeName(item.name))
+    (item) => Boolean(item.warehouseCode) || (item.index
+      ? !identitiesWithWarehouseVariant.has(`${normalizeName(item.name)}|${normalizeName(item.index)}`)
+      : !namesWithWarehouseVariant.has(normalizeName(item.name)))
   );
 };
 

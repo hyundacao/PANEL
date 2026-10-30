@@ -109,6 +109,25 @@ test('product autocomplete selects the exact pressed suggestion', () => {
   assert.equal(selected, items[3]);
 });
 
+test('same-named MAX products expose both indices and select the clicked identity', () => {
+  const h = createHeaderFixture();
+  const name = 'MAX CP+TH PRINTED F1_WQ33G2D00';
+  const items = ['9001970413', '9001972083'].map(index => ({ id: index, index, name }));
+  let selected;
+  const field = h.productCatalogField({
+    label: 'Nazwa produktu', mode: 'name', value: name, items, loading: false,
+    onChange: () => {}, onSelect: item => { selected = item; }
+  });
+  const options = nodes(field).filter(node => node.type === 'button');
+  assert.equal(options.length, 2);
+  for (let i = 0; i < options.length; i++) {
+    assert.ok(JSON.stringify(options[i].props.children).includes(items[i].index));
+    options[i].props.onMouseDown({ preventDefault() {} });
+    assert.equal(selected.index, items[i].index);
+    assert.equal(selected.name, name);
+  }
+});
+
 test('technology editor starts with an empty unpersisted draft instead of the first library item', () => {
   const h = createHeaderFixture();
   const technologies = [{
