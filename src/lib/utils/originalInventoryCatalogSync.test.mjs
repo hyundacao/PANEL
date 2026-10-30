@@ -10,18 +10,18 @@ const ts = require('typescript');
 const XLSX = require('xlsx');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const material = (extra = {}) => ({ name: 'METAL BOX 1230X830X730', unit: 'szt.', indexCode: 'M-4-BSHL-786-015', warehouseCode: 'M-4', ...extra });
-const row = (item, id = 'old') => ({ id, name: item.name, unit: item.unit, index_code: item.indexCode, warehouse_code: item.warehouseCode });
+const row = (item, id = 'old') => ({ id, name: item.name, unit: item.unit, index_code: item.indexCode, ...(item.indexCode2 ? {index_code2:item.indexCode2} : {}), warehouse_code: item.warehouseCode });
 
 function fixture() {
   const state = {
     user: { id: 'test', username: 'counter', name: 'Counter', role: 'USER', access: { warehouses: { PLANOWANIE_ZAPOTRZEBOWANIA: { readOnly: false, tabs: ['planowanie-zapotrzebowania'] } } } },
     tables: { original_inventory_catalog: [], original_inventory_erp_snapshots: [], paint_tape_inventory_sessions: [], audit_logs: [] },
     operations: [], failCatalogRead: false, failCatalogWriteFrom: Infinity, catalogWrites: 0,
-    beforeCatalogWrite: null, pdfItems: [], holdCatalogRead: null, afterWork: [], purgeError: null, renameError: null
+    beforeCatalogWrite: null, pdfItems: [], holdCatalogRead: null, afterWork: [], purgeError: null, renameError: null, indicesMigrationMissing: false
   };
   class Query {
     constructor(table) { this.table = table; this.filters = []; this.mode = 'select'; }
-    select() { return this; }
+    select(fields) { this.fields = fields; return this; }
     order(column) { this.orderColumn = column; return this; }
     range(from, to) { this.page = [from, to]; return this; }
     eq(column, value) { this.filters.push((row) => row[column] === value); return this; }
@@ -35,6 +35,7 @@ function fixture() {
     async run(single = false) {
       state.operations.push({ table: this.table, mode: this.mode, size: this.rows?.length, page: this.page });
       const catalog = this.table === 'original_inventory_catalog';
+      if (catalog && this.fields === 'index_code2' && state.indicesMigrationMissing) return {data:null,error:{code:'42703'}};
       if (this.signal?.aborted || (catalog && this.mode === 'select' && state.failCatalogRead)) return { data: null, error: { code: 'CATALOG_UNAVAILABLE' } };
       const table = state.tables[this.table];
       assert.ok(table, `Unexpected table: ${this.table}`);
@@ -67,7 +68,8 @@ function fixture() {
     from: (table) => new Query(table),
     rpc(name, payload) {
       state.operations.push({ rpc: name, payload });
-      if (name === 'replace_original_inventory_erp_snapshot') {
+      if (name === 'replace_original_inventory_erp_snapshot_v2' && state.indicesMigrationMissing) return Promise.resolve({data:null,error:{code:'PGRST202'}});
+      if (name === 'replace_original_inventory_erp_snapshot' || name === 'replace_original_inventory_erp_snapshot_v2') {
         const before = state.tables.original_inventory_erp_snapshots;
         const replaced = before.filter(row => row.snapshot_date === payload.p_date).length;
         state.tables.original_inventory_erp_snapshots = [
@@ -76,10 +78,10 @@ function fixture() {
         ];
         return Promise.resolve({ data: [{ inserted: payload.p_rows.length, replaced }], error: null });
       }
-      const result = name === 'rename_original_inventory_catalog_items'
+      const result = name === 'rename_original_inventory_catalog_items' || name === 'update_original_inventory_catalog_items_v2'
         ? { data: state.renameError ? null : payload.p_changes.map((change) => {
-          const item = state.tables.original_inventory_catalog.find((row) => row.id === change.id && row.name === change.previousName && row.index_code === change.indexCode);
-          if (item) { item.previous_names = [...new Set([...(item.previous_names ?? []), item.name])]; item.name = change.name; }
+          const item = state.tables.original_inventory_catalog.find((row) => row.id === change.id && row.name === change.previousName && row.index_code === change.indexCode && (name !== 'update_original_inventory_catalog_items_v2' || (row.index_code2 ?? null) === change.previousIndexCode2));
+          if (item) { item.previous_names = [...new Set([...(item.previous_names ?? []), item.name])]; item.name = change.name; if (change.indexCode2) item.index_code2 = change.indexCode2; }
           return { id: change.id, updated: Boolean(item) };
         }), error: state.renameError }
         : { data: 0, error: state.purgeError };
@@ -110,14 +112,14 @@ function fixture() {
   };
   const importRoute = load(join(root, 'app/api/original-inventory-erp-snapshot/import/route.ts'));
   const sync = (items) => load(join(root, 'lib/utils/originalInventoryCatalogSync.ts')).syncOriginalInventoryCatalogFromSnapshot(db, items);
-  const importFile = async (items, date = '2026-09-28', pdf = false, catalogOnly = false) => {
+  const importFile = async (items, date = '2026-09-28', pdf = false, catalogOnly = false, customRows = null) => {
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(customRows ?? [
       ...(catalogOnly ? [
-        ['Nazwa', 'Jednostka', 'Indeks'], ...items.map((item) => [item.name, item.unit, item.indexCode ?? ''])
+        ['Nazwa', 'Jednostka', 'Indeks 1', 'Indeks 2'], ...items.map((item) => [item.name, item.unit, item.indexCode ?? '', item.indexCode2 ?? ''])
       ] : [
-        ['Nazwa', 'Stan do dyspozycji ERP', 'Stan rzeczywisty ERP', 'Jednostka', 'Indeks'],
-        ...items.map((item) => [item.name, item.availableQty ?? 250, item.realQty ?? 300, item.unit, item.indexCode ?? ''])
+        ['Nazwa', 'Stan do dyspozycji ERP', 'Stan rzeczywisty ERP', 'Jednostka', 'Indeks 1', 'Indeks 2'],
+        ...items.map((item) => [item.name, item.availableQty ?? 250, item.realQty ?? 300, item.unit, item.indexCode ?? '', item.indexCode2 ?? ''])
       ])
     ]), 'Stany');
     const file = pdf ? new File(['%PDF-1.7 fixture'], 'stany.pdf') : new File([XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })], 'stany.xlsx');
@@ -132,8 +134,86 @@ function fixture() {
     assert.equal(response.status, expectedStatus, await response.clone().text());
     return response.json();
   };
-  return { state, sync, importFile, app };
+  const parseCatalog = rows => load(join(root, 'lib/utils/originalInventoryCatalog.ts')).parseOriginalInventoryCatalogRows(rows);
+  return { state, sync, importFile, app, parseCatalog };
 }
+
+test('catalog columns, not value shape or warehouse, classify both indices', () => {
+  const f = fixture();
+  const pairs = [['M-10-PWY-BSHL-10012', '8001103471'], ['M-1-TW-111', '000023'], ['123456789', 'M-51-ABC'], ['M-4-KAR-111', 'ABC/12']];
+  const rows = f.parseCatalog([
+    ['Indeks 2', 'Kod', 'Nazwa', 'J.m.', 'Indeks 1'],
+    ...pairs.map(([one,two], i) => [two, 'INTERNAL-99', `Material ${i}`, 'szt.', one])
+  ]);
+  assert.deepEqual(rows.map(item => [item.indexCode,item.indexCode2]), pairs);
+  const legacy = f.parseCatalog([['Kod','Indeks','Nazwa','Jm.'], ['10012','M-10-PWY-BSHL-10012','TRAY','szt.']]);
+  assert.equal(legacy[0].indexCode, 'M-10-PWY-BSHL-10012');
+  assert.equal(legacy[0].indexCode2, undefined, 'Kod is not index 2');
+});
+
+test('both catalog and stock imports save two indices in one row and preserve index 2 on a later one-index import', async () => {
+  for (const catalogOnly of [false,true]) {
+    const f = fixture();
+    const item = material({indexCode2:'00008001103471'});
+    const response = await f.importFile([item], undefined, false, catalogOnly);
+    assert.equal(response.status,200);
+    assert.equal(f.state.tables.original_inventory_catalog.length,1);
+    assert.equal(f.state.tables.original_inventory_catalog[0].index_code2,item.indexCode2);
+    if (!catalogOnly) {
+      assert.equal(f.state.tables.original_inventory_erp_snapshots[0].index_code2,item.indexCode2);
+      assert.equal(f.state.tables.original_inventory_erp_snapshots[0].real_qty,300);
+    }
+    await f.importFile([material()], undefined, false, catalogOnly);
+    assert.equal(f.state.tables.original_inventory_catalog[0].index_code2,item.indexCode2);
+    await f.importFile([material({indexCode2:'ABC/NEW',name:'RENAMED'})], undefined, false, catalogOnly);
+    assert.equal(f.state.tables.original_inventory_catalog.length,1);
+    assert.equal(f.state.tables.original_inventory_catalog[0].index_code2,'ABC/NEW');
+    assert.equal(f.state.tables.original_inventory_catalog[0].name,'RENAMED');
+  }
+});
+
+test('snapshot header order may change without swapping the two indices or quantities', async () => {
+  const f = fixture();
+  const response = await f.importFile([], undefined, false, false, [
+    ['Indeks 2','Nazwa','Stan rzeczywisty','Indeks 1','Jm.','Stan do dyspozycji'],
+    ['8001103471','TRAY',5190,'M-10-PWY-BSHL-10012','szt.',5000]
+  ]);
+  assert.equal(response.status,200);
+  const saved = f.state.tables.original_inventory_erp_snapshots[0];
+  assert.equal(saved.index_code,'M-10-PWY-BSHL-10012');
+  assert.equal(saved.index_code2,'8001103471');
+  assert.equal(saved.real_qty,5190);
+  assert.equal(saved.available_qty,5000);
+});
+
+test('missing two-index migration rejects the import before any existing data changes', async () => {
+  for (const catalogOnly of [false,true]) {
+    const f = fixture(); f.state.indicesMigrationMissing = true;
+    f.state.tables.original_inventory_catalog.push(row(material()));
+    f.state.tables.original_inventory_erp_snapshots.push({id:'old',snapshot_date:'2026-09-28',real_qty:42});
+    const before = structuredClone(f.state.tables);
+    const response = await f.importFile([material({indexCode2:'8001103471'})], undefined, false, catalogOnly);
+    assert.equal(response.status,503);
+    assert.equal(response.result.code,'MIGRATION_REQUIRED_INVENTORY_INDICES');
+    assert.deepEqual(f.state.tables,before);
+  }
+});
+
+test('ambiguous or contaminated secondary indices cannot silently change stock', async () => {
+  const f = fixture();
+  const bad = await f.importFile([material({indexCode2:'8001103471 30.10.2026 6:58'})]);
+  assert.equal(bad.status,400);
+  assert.equal(f.state.operations.length,0);
+  const conflict = await f.importFile([material({indexCode2:'ONE'}),material({indexCode2:'TWO'})]);
+  assert.equal(conflict.status,400);
+  assert.equal(conflict.result.code,'CONFLICTING_INDEX_COLUMNS');
+  const headers = await f.importFile([], undefined, false, true, [
+    ['Nazwa','Indeks','Indeks 1','Indeks 2','Jednostka'], ['TRAY','A','B','C','szt.']
+  ]);
+  assert.equal(headers.status,400);
+  assert.equal(headers.result.code,'AMBIGUOUS_INDEX_COLUMNS');
+  assert.equal(f.state.operations.length,0);
+});
 
 test('successful ERP import schedules guarded retention after responding, not during the import', async () => {
   const f = fixture();

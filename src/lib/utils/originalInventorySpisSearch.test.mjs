@@ -73,22 +73,19 @@ test('different full indices sharing a name and suffix are never deduplicated', 
   assert.equal(searchOriginalInventorySpisSuggestions(candidates, 'material', ['MATERIAL'], 8).length, 2);
 });
 
-test('spis search uses the explicit second index and ignores the first index', () => {
+test('spis searches both imported indices and displays the explicit second index', () => {
   const index1 = 'M-1-TW-RSHWR-8178';
   const index2 = getOriginalInventorySpisIndex2(index1, '8178');
   assert.equal(index2, '8178');
   assert.equal(matchesOriginalInventorySpisSearch('8178', 'ABS STAREX', index2), true);
-  assert.equal(matchesOriginalInventorySpisSearch('RSHWR', 'ABS STAREX', index2), false);
-  assert.equal(matchesOriginalInventorySpisSearch(index1, 'ABS STAREX', index2), false);
+  assert.equal(matchesOriginalInventorySpisSearch('RSHWR', 'ABS STAREX', index2, index1), true);
+  assert.equal(matchesOriginalInventorySpisSearch(index1, 'ABS STAREX', index2, index1), true);
 });
 
-test('legacy catalog rows expose only the trailing index 2 instead of the warehouse index', () => {
-  assert.equal(getOriginalInventorySpisIndex2('M-1-TW-RSHWR-8178'), '8178');
-  assert.equal(getOriginalInventorySpisIndex2('M-1-TW-SID-5032-00'), '5032-00');
-  assert.equal(getOriginalInventorySpisIndex2('M-1-BA-BSHTR-001 -00'), '001-00');
-  assert.equal(getOriginalInventorySpisIndex2('M-1-BA-BSHTR- 001 - 00'), '001-00');
-  assert.equal(getOriginalInventorySpisIndex2('5949'), '5949');
-  assert.equal(getOriginalInventorySpisIndex2('M-10-8001228788'), '8001228788');
+test('a missing index 2 is never derived from index 1, its length or its warehouse prefix', () => {
+  for (const index of ['M-1-TW-RSHWR-8178', 'M-1-TW-SID-5032-00', 'M-10-8001228788', '5949']) {
+    assert.equal(getOriginalInventorySpisIndex2(index), '');
+  }
 });
 
 test('the full index wins for duplicate material and warehouse suggestions', () => {
@@ -111,10 +108,10 @@ test('the full index wins for duplicate material and warehouse suggestions', () 
   assert.equal(suggestions[0].indexCode2, '8001228788');
 });
 
-test('a long ERP index wins over a short secondary value', () => {
+test('the explicit index 2 wins regardless of the length of index 1', () => {
   assert.equal(
     getOriginalInventorySpisIndex2('M-10-8001103471', '10012'),
-    '8001103471'
+    '10012'
   );
 });
 
@@ -153,8 +150,8 @@ test('spis preserves unassigned materials without a matching warehouse catalog e
 test('spis keeps the warehouse catalog variants of the same foil', () => {
   const suggestions = [
     { name: 'FOLIA EXTERIOR GLC73725_05-20MMX305M', indexCode2: '10060', warehouseCode: null },
-    { name: 'FOLIA EXTERIOR GLC73725_05 - 20MMX305M', indexCode: 'M-51-FO-PCP-10060', warehouseCode: 'M-51' },
-    { name: 'FOLIA EXTERIOR GLC73725_05 - 20MMX305M', indexCode: 'M-52-FO-PCP-10060', warehouseCode: 'M-52' }
+    { name: 'FOLIA EXTERIOR GLC73725_05 - 20MMX305M', indexCode: 'M-51-FO-PCP-10060', indexCode2: '10060', warehouseCode: 'M-51' },
+    { name: 'FOLIA EXTERIOR GLC73725_05 - 20MMX305M', indexCode: 'M-52-FO-PCP-10060', indexCode2: '10060', warehouseCode: 'M-52' }
   ];
 
   assert.deepEqual(
@@ -184,10 +181,10 @@ test('M2 in a material name is searchable in either fragment order, not treated 
   assert.equal(matchesOriginalInventorySpisSearch('m2 5607', suggestions[0].name, '5607-00'), true);
 });
 
-test('legacy index 1 values never become searchable codes, while material names remain searchable', () => {
+test('the source column, not the prefix, defines whether a value is index 2', () => {
   for (const index1 of ['M-2-TW-123', 'M2-TW-123', 'M2 TW 123']) {
     for (const query of [index1, 'm2', 'tw', '123']) {
-      assert.equal(matchesOriginalInventorySpisSearch(query, 'OTHER MATERIAL', index1), false);
+      assert.equal(matchesOriginalInventorySpisSearch(query, 'OTHER MATERIAL', index1), index1.toLowerCase().includes(query.toLowerCase()));
     }
     assert.equal(matchesOriginalInventorySpisSearch('M2 h', 'HOSTACOM M2 N01 L304698', index1), true);
   }

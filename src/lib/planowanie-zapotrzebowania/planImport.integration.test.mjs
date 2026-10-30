@@ -9,6 +9,7 @@ import * as fixedDevices from './fixedInventoryDevices.ts';
 import * as palletSets from './palletSets.ts';
 import * as pickingRows from './pickingDocumentRows.ts';
 import * as manualIssues from './manualIssueQuantities.ts';
+import * as catalogSearch from './productCatalogSearch.ts';
 import { buildZoneStockSummary } from './zoneStock.ts';
 import { shouldInvalidatePlanDocument } from './stateScopes.ts';
 import { isMaterialPlanningDateRetained, MATERIAL_PLANNING_HISTORY_DAYS, pruneMaterialPlanningHistory } from './historyRetention.ts';
@@ -44,7 +45,7 @@ const rows=[['Lp.','','Ilość','ST.','Norma','','Uwagi'],['1','LEFT + RIGHT (A1
 
 function setup() {
   const messages=[];
-  const ctx=vm.createContext({exports:{},...imports,...fixedDevices,...palletSets,...pickingRows,...manualIssues,...domain.exports,shouldInvalidatePlanDocument,isMaterialPlanningDateRetained,MATERIAL_PLANNING_HISTORY_DAYS,
+  const ctx=vm.createContext({exports:{},...imports,...fixedDevices,...palletSets,...pickingRows,...manualIssues,...catalogSearch,...domain.exports,shouldInvalidatePlanDocument,isMaterialPlanningDateRetained,MATERIAL_PLANNING_HISTORY_DAYS,
     state:{plan:[],technologies:[],archive:[],planVersions:[],documents:[],quantityCorrections:[],stationMappings:[],selectedPlanDate:'2026-08-31',selectedAreaId:'hala-2',dailyPlans:{},returnStatuses:{},returnExclusions:[],inventory:[],areas:[],calculationMode:'all',horizonShifts:3.5,continuationBufferPercent:0},
     pending:{fileName:'test.xlsx',purpose:'plan',workbook:{SheetNames:['Plan'],Sheets:{Plan:{rows}}}},sheetName:'Plan',currentUserName:'Test',quantityInputs:{},readOnly:false,
     calculationEditorOpen:false,calculationEditorSaving:false,closeCalculationEditorIfAllowed:()=>true,inventorySyncRequestRef:{current:0},headAdmin:false,today:'2026-09-01',

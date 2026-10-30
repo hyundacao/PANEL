@@ -19,6 +19,7 @@ function planningApi() {
     '@/lib/auth/access': { canSeeTab: () => true, isReadOnly: () => false, isWarehouseAdmin: () => false },
     '@/lib/auth/session': { getAuthenticatedUser: async () => ({ user: { id: 'planner', username: 'planner', name: 'Planner' } }) },
     '@/lib/utils/productionTaskReference': reference,
+    '@/lib/utils/originalInventorySpisSearch': {},
     '@/lib/planowanie-zapotrzebowania/stateScopes': scopes,
     '@/lib/planowanie-zapotrzebowania/palletSets': {},
     '@/lib/planowanie-zapotrzebowania/productCatalogSearch': {},

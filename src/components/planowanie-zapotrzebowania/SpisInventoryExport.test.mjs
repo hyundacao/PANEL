@@ -104,7 +104,7 @@ test('index 2 selects one ERP-backed code and preserves long and slash identifie
       { name: 'DETAL', indexCode2: '00012345678901234567' }
     ],
     erpCatalog: [{ name: ' karton ', indexCode: 'M-1-KAR-001-00' }],
-    erpSnapshot: [{ name: 'KARTON', indexCode: 'M-1-KAR-002/03' }],
+    erpSnapshot: [{ name: 'KARTON', indexCode: 'M-1-KAR-002/03', indexCode2: '002/03' }],
     rows: [
       { materialName: 'KARTON', areaName: 'Bakoma', qty: 3, unit: 'szt.' },
       { materialName: 'DETAL', areaName: 'H2', qty: 5, unit: 'szt.' }
@@ -117,14 +117,14 @@ test('index 2 selects one ERP-backed code and preserves long and slash identifie
 
 test('IRIS exports only the index preferred by search for the selected ERP day', async () => {
   const catalog = [
-    { name: 'IRIS LR WHEEL', indexCode: 'A22154703', unit: 'szt.' },
-    { name: 'IRIS LR WHEEL', indexCode: 'A22154704', unit: 'szt.' }
+    { name: 'IRIS LR WHEEL', indexCode: 'A22154703', indexCode2: 'A22154703', unit: 'szt.' },
+    { name: 'IRIS LR WHEEL', indexCode: 'A22154704', indexCode2: 'A22154704', unit: 'szt.' }
   ];
   for (const indexCode of ['A22154704', 'A22154703']) {
     const erpSnapshot = [{ name: 'IRIS LR WHEEL', indexCode, unit: 'szt.' }];
     const suggestions = catalog.map(item => ({
       ...item,
-      indexCode2: getOriginalInventorySpisIndex2(item.indexCode),
+      indexCode2: getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2),
       inErp: item.indexCode === indexCode
     }));
     const firstSuggestion = searchOriginalInventorySpisSuggestions(suggestions, 'IRIS LR WHEEL', [])[0];
@@ -139,18 +139,18 @@ test('IRIS exports only the index preferred by search for the selected ERP day',
 
 test('lid indices match the single index 2 shown by search, not other warehouse aliases', async () => {
   const catalog = [
-    { name: 'POKRYWA 1200X800 S99', indexCode: 'M-4-OP-786-002-01', warehouseCode: 'M-4' },
+    { name: 'POKRYWA 1200X800 S99', indexCode: 'M-4-OP-786-002-01', indexCode2: '786-002-01', warehouseCode: 'M-4' },
     { name: 'POKRYWA 1200X800 S99', indexCode2: '786-002-01' },
-    { name: 'POKRYWA PALETY PLASTIKOWEJ 1200X800 ZWROTNA ELUX', indexCode: 'M-4-OP-8900', warehouseCode: 'M-4' },
+    { name: 'POKRYWA PALETY PLASTIKOWEJ 1200X800 ZWROTNA ELUX', indexCode: 'M-4-OP-8900', indexCode2: '8900', warehouseCode: 'M-4' },
     { name: 'POKRYWA WYMIENNIKOW CIEPLA T27SC0', indexCode: '8001312050', warehouseCode: 'M-10', indexCode2: '2050' },
-    { name: 'POKRYWA 176.8001', indexCode: 'M-1-OP-006-00', warehouseCode: 'M-1' },
-    { name: 'POKRYWA 176.8001', indexCode: 'M-40-OP-9900', warehouseCode: 'M-40' }
+    { name: 'POKRYWA 176.8001', indexCode: 'M-1-OP-006-00', indexCode2: '006-00', warehouseCode: 'M-1' },
+    { name: 'POKRYWA 176.8001', indexCode: 'M-40-OP-9900', indexCode2: '9900', warehouseCode: 'M-40' }
   ];
   const names = [...new Set(catalog.map(item => item.name))];
   const { sheet } = await runExport({ catalog,
     rows: names.map(materialName => ({ materialName, areaName: 'H1', qty: 12, unit: 'szt.' }))
   });
-  const expected = ['786-002-01', '8900', '8001312050', '006-00'];
+  const expected = ['786-002-01', '8900', '2050', '006-00'];
   const suggestions = catalog.map(item => ({ ...item,
     indexCode2: getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2)
   }));
@@ -165,8 +165,8 @@ test('lid indices match the single index 2 shown by search, not other warehouse 
 test('equal names with incompatible units do not receive each others indices', async () => {
   const { sheet } = await runExport({
     catalog: [
-      { name: 'MATERIAL', indexCode: 'M-1-OP-001', unit: 'kg' },
-      { name: 'MATERIAL', indexCode: 'M-4-OP-002', unit: 'szt.' }
+      { name: 'MATERIAL', indexCode: 'M-1-OP-001', indexCode2: '001', unit: 'kg' },
+      { name: 'MATERIAL', indexCode: 'M-4-OP-002', indexCode2: '002', unit: 'szt.' }
     ],
     rows: [
       { materialName: 'MATERIAL', areaName: 'H1', qty: 20, unit: 'szt' },
@@ -189,7 +189,7 @@ test('unmatched materials remain blank instead of receiving a similar material i
 
 test('silo export preserves its measurements and quantities alongside index 2', async () => {
   const { sheet } = await runExport({
-    catalog: [{ name: 'ABS', indexCode: 'M-1-TW-5949' }],
+    catalog: [{ name: 'ABS', indexCode: 'M-1-TW-5949', indexCode2: '5949' }],
     rows: [{ materialName: 'ABS', areaName: 'Silosy', qty: 15680.1234, unit: 'kg',
       siloChamber: 'E', siloPercent: 46, siloPercentKg: 330, siloHopperKg: 500 }]
   });
@@ -203,6 +203,14 @@ test('catalog failure aborts the export and releases the busy state', async () =
   assert.equal(calls.clicks, 0);
   assert.equal(calls.toasts[0]?.tone, 'error');
   assert.deepEqual(calls.saving, [true, false]);
+});
+
+test('export leaves a missing index 2 blank rather than relabeling any part of index 1', async () => {
+  for (const indexCode of ['M-10-PWY-BSHL-10012', '8001103471']) {
+    const { sheet } = await runExport({catalog:[{name:'KARTON',unit:'szt.',indexCode}]});
+    assert.equal(sheet.getCell('A2').value,'');
+    assert.equal(sheet.getCell('H2').value,200);
+  }
 });
 
 test('empty, undated and already running exports do not fetch or download', async () => {

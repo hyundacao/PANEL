@@ -9,6 +9,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin';
 import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
 import { assertOriginalInventoryImportIndices, ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR } from '@/lib/utils/originalInventoryIndex';
 import { originalErpRetentionCutoff } from '@/lib/utils/paintTapeInventoryArchive';
+import { getInventoryImportIndexColumns, normalizeInventoryImportHeader } from '@/lib/utils/originalInventoryImportColumns';
 import {
   normalizeOriginalInventoryName,
   normalizeOriginalInventoryNameKey
@@ -96,6 +97,16 @@ const isMissingSnapshotsTableError = (error: unknown) => {
   );
 };
 
+const snapshotHeaderLayout = (row: unknown[]) => {
+  const headers = row.map(normalizeInventoryImportHeader);
+  const find = (...names: string[]) => headers.findIndex(header => names.includes(header));
+  const name = find('nazwa', 'material', 'tworzywo', 'kartoteka', 'name');
+  const available = find('stan do dyspozycji erp', 'stan do dyspozycji', 'dostepne', 'available', 'available qty', 'stan dostepny', 'ilosc', 'qty', 'quantity', 'stan');
+  if (name < 0 || available < 0) return null;
+  return { name, available, real: find('stan rzeczywisty erp', 'stan rzeczywisty', 'real qty'),
+    unit: find('jednostka', 'jedn', 'jm', 'j m', 'unit'), ...getInventoryImportIndexColumns(row) };
+};
+
 const parseSnapshotImportFile = async (file: File) => {
   if (isOriginalInventoryErpSnapshotPdfFile(file)) {
     return parseOriginalInventoryErpSnapshotPdfFile(file);
@@ -121,32 +132,39 @@ const parseSnapshotImportFile = async (file: File) => {
       availableQty: number;
       unit: string;
       indexCode: string | null;
+      indexCode2?: string | null;
       warehouseCode: string | null;
       catalogIssue?: string;
     }
   >();
+  const layout = snapshotHeaderLayout(rows[0] ?? []);
 
   rows.forEach((row, index) => {
-    const name = normalizeOriginalInventoryName(row?.[0]);
-    const availableQty = parseSnapshotQty(row?.[1]);
+    if (layout && index === 0) return;
+    const name = normalizeOriginalInventoryName(row?.[layout?.name ?? 0]);
+    const availableQty = parseSnapshotQty(row?.[layout?.available ?? 1]);
     const thirdCell = row?.[2];
     const thirdCellText = normalizeImportCell(thirdCell);
     const parsedRealQty = parseSnapshotQty(thirdCell);
     const fourthCellText = normalizeImportCell(row?.[3]);
     const usesNewLayout = fourthCellText.length > 0;
-    const realQty = usesNewLayout ? parsedRealQty : parsedRealQty ?? availableQty;
-    const unitCell = usesNewLayout ? fourthCellText : thirdCellText;
+    const realQty = layout ? (layout.real >= 0 ? parseSnapshotQty(row[layout.real]) : availableQty)
+      : usesNewLayout ? parsedRealQty : parsedRealQty ?? availableQty;
+    const unitCell = layout ? normalizeImportCell(row[layout.unit]) : usesNewLayout ? fourthCellText : thirdCellText;
     const catalogIssue = /[\p{L}]/u.test(unitCell) ? undefined : 'Brak jednostki w pliku — nie dodano kartoteki.';
 
     if (!name) return;
     if (index === 0 && isSnapshotHeaderRow(name, row?.[1], row?.[2])) return;
     if (realQty === null || availableQty === null) return;
 
-    const indexCode = normalizeSnapshotIndexCode(row?.[4]);
+    const indexCode = normalizeSnapshotIndexCode(row?.[layout?.index1 ?? 4]);
+    const indexCode2 = layout && layout.index2 >= 0 ? normalizeSnapshotIndexCode(row[layout.index2]) : null;
     const warehouseCode = extractSnapshotWarehouseCode(indexCode);
     const key = `${normalizeNameKey(name)}|${indexCode ?? ''}`;
     const existing = merged.get(key);
     if (existing) {
+      if (existing.indexCode2 && indexCode2 && existing.indexCode2 !== indexCode2) throw new Error('CONFLICTING_INDEX_COLUMNS');
+      if (indexCode2) existing.indexCode2 = indexCode2;
       existing.realQty += realQty;
       existing.availableQty += availableQty;
       if (catalogIssue) existing.catalogIssue = catalogIssue;
@@ -172,6 +190,7 @@ const parseSnapshotImportFile = async (file: File) => {
       unit: unitCell || 'kg',
       catalogIssue,
       indexCode,
+      ...(indexCode2 ? { indexCode2 } : {}),
       warehouseCode
     });
   });
@@ -223,18 +242,20 @@ export async function POST(request: Request) {
 
     // Validate the whole file before removing any previously imported stock.
     assertOriginalInventoryImportIndices(items);
-    const { data: importResult, error: importError } = await supabaseAdmin.rpc('replace_original_inventory_erp_snapshot', {
+    const hasSecondaryIndex = items.some(item => 'indexCode2' in item && Boolean(item.indexCode2));
+    const { data: importResult, error: importError } = await supabaseAdmin.rpc(hasSecondaryIndex ? 'replace_original_inventory_erp_snapshot_v2' : 'replace_original_inventory_erp_snapshot', {
       p_date: snapshotDate,
       p_imported_by: auth.user.username ?? auth.user.name ?? 'nieznany',
       p_source_file: file.name?.trim() || null,
       p_rows: items.map(item => ({
         name: item.name, real_qty: item.realQty, available_qty: item.availableQty, unit: item.unit,
         index_code: normalizeSnapshotIndexCode(item.indexCode),
+        ...(hasSecondaryIndex ? { index_code2: 'indexCode2' in item ? normalizeSnapshotIndexCode(item.indexCode2) : null } : {}),
         warehouse_code: item.warehouseCode ?? extractSnapshotWarehouseCode(item.indexCode)
       }))
     });
     if (importError) {
-      if (importError.code === 'PGRST202') throw new Error('MIGRATION_REQUIRED_SECURITY');
+      if (importError.code === 'PGRST202') throw new Error(hasSecondaryIndex ? 'MIGRATION_REQUIRED_INVENTORY_INDICES' : 'MIGRATION_REQUIRED_SECURITY');
       if (isMissingSnapshotsTableError(importError)) throw new Error('MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS');
       if (importError.message?.includes('ERP_SNAPSHOT_ARCHIVE_REQUIRED')) throw new Error('ERP_SNAPSHOT_ARCHIVE_REQUIRED');
       throw new Error('IMPORT_FAILED');
@@ -268,11 +289,11 @@ export async function POST(request: Request) {
     const status =
       code === 'FORBIDDEN'
         ? 403
-        : code === 'FILE_REQUIRED' || code === 'DATE_REQUIRED' || code === 'EMPTY' || code === ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR
+        : code === 'FILE_REQUIRED' || code === 'DATE_REQUIRED' || code === 'EMPTY' || code === ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR || code === 'AMBIGUOUS_INDEX_COLUMNS' || code === 'CONFLICTING_INDEX_COLUMNS'
           ? 400
           : code === 'ERP_SNAPSHOT_ARCHIVE_REQUIRED'
             ? 409
-          : code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS' || code === 'MIGRATION_REQUIRED_SECURITY'
+          : code === 'MIGRATION_REQUIRED_ORIGINAL_INVENTORY_ERP_SNAPSHOTS' || code === 'MIGRATION_REQUIRED_SECURITY' || code === 'MIGRATION_REQUIRED_INVENTORY_INDICES'
             ? 503
             : 500;
     return NextResponse.json({ code }, { status });

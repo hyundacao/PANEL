@@ -76,7 +76,6 @@ export const dedupeOriginalInventorySpisSuggestions = <T extends OriginalInvento
   }
   const deduped = new Map<string, T>();
   const score = (item: T) =>
-    compactSearchCode(item.indexCode2).length * 8 +
     Number(Boolean(item.indexCode2)) * 4 +
     Number(Boolean(item.indexCode)) * 2 +
     Number(Boolean(item.warehouseCode));
@@ -143,7 +142,7 @@ export const rankOriginalInventorySpisSuggestions = <T extends OriginalInventory
       .filter(Boolean)
   );
   const uniqueMatches = matches.filter(
-    (item) => Boolean(item.warehouseCode) || /^m[-\s]?\d+(?:[-\s]|$)/i.test(item.indexCode ?? '') || (
+    (item) => Boolean(item.warehouseCode) || Boolean(item.indexCode && !item.indexCode2) || /^m[-\s]?\d+(?:[-\s]|$)/i.test(item.indexCode ?? '') || (
       getOriginalInventorySpisIndexedMaterialKey(item)
         ? !indexedMaterialsWithWarehouseVariant.has(getOriginalInventorySpisIndexedMaterialKey(item))
         : !namesWithWarehouseVariant.has(normalizeSearchText(item.name))
@@ -162,47 +161,30 @@ export const searchOriginalInventorySpisSuggestions = <T extends OriginalInvento
   const safeLimit = Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 8));
   return rankOriginalInventorySpisSuggestions(
     suggestions.filter(item => [item.name, ...item.previousNames ?? []].some(name =>
-      matchesOriginalInventorySpisSearch(query, name, item.indexCode2))),
+      matchesOriginalInventorySpisSearch(query, name, item.indexCode2, item.indexCode))),
     inventoriedNames
   ).slice(0, safeLimit);
 };
 
 export const getOriginalInventorySpisIndex2 = (
-  indexCode: unknown,
+  _indexCode: unknown,
   explicitIndexCode2?: unknown
 ) => {
-  const explicit = String(explicitIndexCode2 ?? '').trim();
-  const legacy = String(indexCode ?? '')
-    .trim()
-    .replace(/\s*([-\/])\s*/g, '$1');
-  if (!legacy) return explicit;
-
-  const derived = /^m[-\s]?\d+(?:[-\s]|$)/i.test(legacy)
-    ? legacy
-        .replace(/^m[-\s]?\d+(?:[-\s]|$)/i, '')
-        .match(/(\d+(?:[-/]\d+)*)$/)?.[1] ?? ''
-    : legacy;
-  if (!explicit) return derived;
-  if (!derived) return explicit;
-  return compactSearchCode(derived).length >= compactSearchCode(explicit).length
-    ? derived
-    : explicit;
+  // Only a value imported as index 2 is index 2, regardless of its format.
+  return String(explicitIndexCode2 ?? '').trim();
 };
 
 export const matchesOriginalInventorySpisSearch = (
   query: unknown,
   name: unknown,
-  indexCode2: unknown
+  indexCode2: unknown,
+  indexCode?: unknown
 ) => {
   const normalizedQuery = normalizeSearchText(query);
   if (!normalizedQuery) return true;
 
   const normalizedName = normalizeSearchText(name);
-  // Ignore legacy index 1 values, not queries: M2 can be part of a material name.
-  const normalizedIndex2 = /^m[-\s]?\d+(?:[-\s]|$)/i.test(String(indexCode2 ?? '').trim())
-    ? ''
-    : normalizeSearchText(indexCode2);
-  const searchableValues = [normalizedName, normalizedIndex2];
+  const searchableValues = [normalizedName, normalizeSearchText(indexCode2), normalizeSearchText(indexCode)];
   const queryParts = normalizedQuery.split(' ').filter(Boolean);
   if (queryParts.length === 1) {
     return searchableValues.some((value) => value.includes(queryParts[0]));

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { createHeaderFixture } from './planHeader.fixture.mjs';
+import { buildProductCatalogChoices } from './productCatalogSearch.ts';
 
 const nodes = (node) => {
   if (Array.isArray(node)) return node.flatMap(nodes);
@@ -125,6 +126,27 @@ test('same-named MAX products expose both indices and select the clicked identit
     options[i].props.onMouseDown({ preventDefault() {} });
     assert.equal(selected.index, items[i].index);
     assert.equal(selected.name, name);
+  }
+});
+
+test('product autocomplete displays only index 2 while keeping an index 1 query selectable', () => {
+  const h = createHeaderFixture();
+  const name = 'TRAY HANDLE INSERT BO CLIPPED + HS';
+  const items = buildProductCatalogChoices([
+    {id:'primary',name,index:'M-10-PWY-BSHL-10012',index2:'8001103471',warehouseCode:'M-10',unit:'szt.'}
+  ]);
+  for (const mode of ['name','index']) {
+    let selected;
+    const field = h.productCatalogField({label:'Produkt',mode,value:'M-10-PWY-BSHL-10012',items,loading:false,
+      onChange:()=>{},onSelect:item=>{selected=item;}});
+    const options = nodes(field).filter(node=>node.type==='button');
+    assert.equal(options.length,1);
+    const visible = nodes(options[0]).flatMap(node=>[].concat(node.props?.children??[])).filter(value=>typeof value==='string').join(' ');
+    assert.ok(visible.includes('8001103471'));
+    assert.ok(!visible.includes('10012'));
+    assert.ok(!visible.includes('M-10-8001103471'));
+    options[0].props.onMouseDown({preventDefault(){}});
+    assert.equal(selected.index,'M-10-PWY-BSHL-10012');
   }
 });
 

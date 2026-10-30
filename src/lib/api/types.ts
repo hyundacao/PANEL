@@ -223,8 +223,8 @@ export type OriginalInventoryCatalogEntry = {
   name: string;
   unit: string;
   createdAt: string;
-  indexCode?: string | null;
-  indexCode2?: string | null;
+  indexCode?: string | null; // Source column: Indeks / Indeks 1.
+  indexCode2?: string | null; // Source column: Indeks 2; never derived from indexCode.
   warehouseCode?: string | null;
   previousNames?: string[];
 };
@@ -287,8 +287,8 @@ export type OriginalInventoryErpSnapshotEntry = {
   realQty: number;
   availableQty: number;
   unit: string;
-  indexCode?: string | null;
-  indexCode2?: string | null;
+  indexCode?: string | null; // Source column: Indeks / Indeks 1.
+  indexCode2?: string | null; // Source column: Indeks 2.
   warehouseCode?: string | null;
   importedAt: string;
   importedBy: string;

@@ -8281,11 +8281,12 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       const name = String(payload?.name ?? '').trim();
       const unit = String(payload?.unit ?? '').trim() || 'kg';
       const indexCode = String(payload?.indexCode ?? '').trim() || null;
+      const indexCode2 = String(payload?.indexCode2 ?? '').trim() || null;
       const warehouseCode =
         String(payload?.warehouseCode ?? '').trim().toUpperCase() || extractOriginalInventoryWarehouseCode(indexCode);
       if (!name) throw new Error('NAME_REQUIRED');
       if (!indexCode) throw new Error('INDEX_REQUIRED');
-      assertOriginalInventoryImportIndices([{ indexCode }]);
+      assertOriginalInventoryImportIndices([{ indexCode, indexCode2 }]);
       const { data: existing, error } = await supabaseAdmin
         .from('original_inventory_catalog')
         .select('id, name, index_code');
@@ -8306,6 +8307,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           name,
           unit,
           index_code: indexCode,
+          ...(indexCode2 ? { index_code2: indexCode2 } : {}),
           warehouse_code: warehouseCode,
           created_at: new Date().toISOString()
         })
@@ -8320,6 +8322,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         name?: string;
         unit?: string;
         indexCode?: string | null;
+        indexCode2?: string | null;
         warehouseCode?: string | null;
       }> =
         Array.isArray(payload?.items) ? payload.items : [];
@@ -8330,6 +8333,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         name: string;
         unit: string;
         indexCode: string | null;
+        indexCode2?: string | null;
         warehouseCode: string | null;
       }> = [];
       const seen = new Set<string>();
@@ -8337,8 +8341,9 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         const name = String(item?.name ?? '').trim();
         if (!name) return;
         const indexCode = String(item?.indexCode ?? '').trim() || null;
+        const indexCode2 = String(item?.indexCode2 ?? '').trim() || null;
         if (!indexCode) return;
-        const key = normalizeOriginalInventoryCatalogIdentityKey(name, indexCode);
+        const key = `${normalizeOriginalInventoryCatalogIdentityKey(name, indexCode)}|${indexCode2 ?? ''}`;
         if (seen.has(key)) return;
         seen.add(key);
         const unit = String(item?.unit ?? '').trim() || 'kg';
@@ -8346,6 +8351,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
           name,
           unit,
           indexCode,
+          ...(indexCode2 ? { indexCode2 } : {}),
           warehouseCode:
             String(item?.warehouseCode ?? '').trim().toUpperCase() || extractOriginalInventoryWarehouseCode(indexCode)
         });

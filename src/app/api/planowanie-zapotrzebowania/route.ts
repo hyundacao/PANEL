@@ -5,10 +5,12 @@ import { getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { buildTechnologyPreviewProjection, TECHNOLOGY_PREVIEW_FIELD } from '@/lib/utils/productionTaskReference';
 import {
+  buildProductCatalogChoices,
   searchProductCatalog,
   type ProductCatalogItem,
   type ProductCatalogSearchMode
 } from '@/lib/planowanie-zapotrzebowania/productCatalogSearch';
+import { getOriginalInventorySpisIndex2 } from '@/lib/utils/originalInventorySpisSearch';
 import { FIXED_INVENTORY_DEVICE_SOURCE_TYPE } from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
 import {
   isSharedPlanningField,
@@ -130,8 +132,8 @@ const warsawDateKey = (value = new Date()) =>
   }).format(value);
 
 const queryProductCatalogRows = async () => {
-  const rows: Array<{ id: string; name: string; index_code: string | null; warehouse_code: string | null; unit: string | null }> = [];
-  const fields = 'id, name, index_code, warehouse_code, unit';
+  const rows: Array<{ id: string; name: string; index_code: string | null; index_code2?: string | null; warehouse_code: string | null; unit: string | null }> = [];
+  const fields = '*';
   const firstResult = await supabaseAdmin
     .from('original_inventory_catalog')
     .select(fields, { count: 'exact' })
@@ -187,7 +189,7 @@ const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
     const unit = String(row.unit ?? '').replace(/\s+/g, ' ').trim();
     if (!name) return;
     const key = `${normalizeName(name)}|${normalizeName(index)}|${normalizeName(warehouseCode)}`;
-    const next = { id: String(row.id), name, index, warehouseCode, unit };
+    const next = { id: String(row.id), name, index, index2: getOriginalInventorySpisIndex2(index, row.index_code2), warehouseCode, unit };
     const current = unique.get(key);
     const score = (item: ProductCatalogItem) => (item.warehouseCode ? 4 : 0) + (item.index ? 2 : 0) + (item.unit ? 1 : 0);
     if (!current || score(next) > score(current)) unique.set(key, next);
@@ -202,11 +204,11 @@ const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
       .map((item) => `${normalizeName(item.name)}|${normalizeName(item.index)}`)
   );
 
-  return values.filter(
+  return buildProductCatalogChoices(values.filter(
     (item) => Boolean(item.warehouseCode) || (item.index
       ? !identitiesWithWarehouseVariant.has(`${normalizeName(item.name)}|${normalizeName(item.index)}`)
       : !namesWithWarehouseVariant.has(normalizeName(item.name)))
-  );
+  ));
 };
 
 const loadProductCatalog = async () => {

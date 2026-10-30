@@ -2,6 +2,7 @@ import {
   normalizeOriginalInventoryName,
   normalizeOriginalInventoryNameKey
 } from '@/lib/utils/originalInventoryName';
+import { getInventoryImportIndexColumns, normalizeInventoryImportHeader } from './originalInventoryImportColumns';
 
 export const normalizeOriginalInventoryCatalogCell = (value: unknown) =>
   String(value ?? '')
@@ -22,14 +23,10 @@ export const normalizeOriginalInventoryCatalogIdentityKey = (
 ) =>
   `${normalizeOriginalInventoryNameKey(name)}|${normalizeOriginalInventoryCatalogCell(indexCode).toLowerCase()}`;
 
-const normalizeHeader = (value: unknown) =>
-  normalizeOriginalInventoryCatalogCell(value)
-    .toLowerCase()
-    .replace(/\./g, '');
+const normalizeHeader = normalizeInventoryImportHeader;
 
 const NAME_HEADERS = new Set(['nazwa', 'material', 'tworzywo', 'kartoteka', 'name']);
-const UNIT_HEADERS = new Set(['jedn', 'jm', 'jednostka', 'unit']);
-const INDEX_HEADERS = new Set(['indeks', 'index', 'index code', 'indeks erp', 'symbol']);
+const UNIT_HEADERS = new Set(['jedn', 'jm', 'j m', 'jednostka', 'unit']);
 
 const findHeaderIndex = (headers: string[], allowed: Set<string>) =>
   headers.findIndex((header) => allowed.has(header));
@@ -41,7 +38,7 @@ const detectHeaderLayout = (row: unknown[]) => {
   return {
     nameIndex,
     unitIndex: findHeaderIndex(headers, UNIT_HEADERS),
-    indexIndex: findHeaderIndex(headers, INDEX_HEADERS)
+    ...getInventoryImportIndexColumns(row)
   };
 };
 
@@ -76,6 +73,7 @@ export const parseOriginalInventoryCatalogRows = (rows: unknown[][]) => {
     name: string;
     unit: string;
     indexCode: string | null;
+    indexCode2?: string | null;
     warehouseCode: string | null;
   }> = [];
   const seen = new Set<string>();
@@ -90,9 +88,12 @@ export const parseOriginalInventoryCatalogRows = (rows: unknown[][]) => {
               ? normalizeOriginalInventoryCatalogCell(row?.[headerLayout.unitIndex]) || 'kg'
               : 'kg',
           indexCode:
-            headerLayout.indexIndex >= 0
-              ? normalizeOriginalInventoryCatalogCell(row?.[headerLayout.indexIndex]) || null
-              : null
+            headerLayout.index1 >= 0
+              ? normalizeOriginalInventoryCatalogCell(row?.[headerLayout.index1]) || null
+              : null,
+          indexCode2: headerLayout.index2 >= 0
+            ? normalizeOriginalInventoryCatalogCell(row?.[headerLayout.index2]) || null
+            : null
         }
       : parseFallbackCatalogRow(row);
 
@@ -100,7 +101,8 @@ export const parseOriginalInventoryCatalogRows = (rows: unknown[][]) => {
     if (headerLayout && index === 0) return;
     if (!parsed.indexCode) return;
 
-    const key = normalizeOriginalInventoryCatalogIdentityKey(parsed.name, parsed.indexCode);
+    const indexCode2 = 'indexCode2' in parsed ? parsed.indexCode2 as string | null : null;
+    const key = `${normalizeOriginalInventoryCatalogIdentityKey(parsed.name, parsed.indexCode)}|${indexCode2 ?? ''}`;
     if (seen.has(key)) return;
     seen.add(key);
 
@@ -108,6 +110,7 @@ export const parseOriginalInventoryCatalogRows = (rows: unknown[][]) => {
       name: parsed.name,
       unit: parsed.unit || 'kg',
       indexCode: parsed.indexCode,
+      ...(indexCode2 ? { indexCode2 } : {}),
       warehouseCode: extractOriginalInventoryWarehouseCode(parsed.indexCode)
     });
   });

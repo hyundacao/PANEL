@@ -96,6 +96,7 @@ export const createHeaderFixture = (overrides = {}) => {
     ...load('@/components/planowanie-zapotrzebowania/IssueQuantityField'),
     ...load('@/lib/planowanie-zapotrzebowania/manualIssueQuantities'),
     ...load('@/lib/planowanie-zapotrzebowania/zoneStock'),
+    ...load('@/lib/planowanie-zapotrzebowania/productCatalogSearch'),
     ...load('@/lib/planowanie-zapotrzebowania/pickingDocumentRows'),
     ...load('@/lib/planowanie-zapotrzebowania/planImport'), ...load('@/lib/utils/cn'),
     BaseInput: load('@/components/ui/Input').Input, Input: load('@/components/ui/Input').Input,

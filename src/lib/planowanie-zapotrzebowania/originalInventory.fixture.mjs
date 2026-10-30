@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import { FIXED_INVENTORY_DEVICE_SOURCE_TYPE } from './fixedInventoryDevices.ts';
+import { buildProductCatalogChoices } from './productCatalogSearch.ts';
+import { getOriginalInventorySpisIndex2 } from '../utils/originalInventorySpisSearch.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -22,7 +24,7 @@ const compiled = ts.transpileModule(definitions.join('\n') + '\nexports.loadOrig
 }).outputText;
 
 export function createOriginalInventoryFixture(supabaseAdmin) {
-  const context = { supabaseAdmin, FIXED_INVENTORY_DEVICE_SOURCE_TYPE, exports: {} };
+  const context = { supabaseAdmin, FIXED_INVENTORY_DEVICE_SOURCE_TYPE, buildProductCatalogChoices, getOriginalInventorySpisIndex2, exports: {} };
   vm.runInNewContext(compiled, context);
   return {
     load: async date => structuredClone(await context.exports.loadOriginalInventory(date)),

@@ -1,6 +1,5 @@
 import type { OriginalInventoryErpSnapshotEntry, PaintTapeInventoryCatalogItem } from '@/lib/api/types';
 import { normalizeOriginalInventoryName } from './originalInventoryName';
-import { getOriginalInventorySpisIndex2 } from './originalInventorySpisSearch';
 
 type SnapshotSource = Pick<OriginalInventoryErpSnapshotEntry,
   'name' | 'unit' | 'realQty' | 'availableQty' | 'indexCode' | 'indexCode2'>;
@@ -11,6 +10,13 @@ const normalizeName = (value: unknown) => normalizeOriginalInventoryName(value)
   .replace(/[\u0300-\u036f]/g, '')
   .toLowerCase();
 const normalizeIndex = (value: unknown) => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+// The paint module's historical itemCode is an ERP lookup alias, not an index 2 assignment.
+const legacyPaintItemCode = (value: unknown) => {
+  const index = String(value ?? '').trim().replace(/\s*([-\/])\s*/g, '$1');
+  return /^m[-\s]?\d+(?:[-\s]|$)/i.test(index)
+    ? index.replace(/^m[-\s]?\d+(?:[-\s]|$)/i, '').match(/(\d+(?:[-/]\d+)*)$/)?.[1] ?? ''
+    : index;
+};
 
 export const buildPaintTapeInventoryErpLookup = (entries: readonly SnapshotSource[]) => {
   const byName = new Map<string, SnapshotGroup>();
@@ -31,7 +37,7 @@ export const buildPaintTapeInventoryErpLookup = (entries: readonly SnapshotSourc
   entries.forEach((entry) => {
     const group = byName.get(normalizeName(entry.name));
     if (!group) return;
-    [entry.indexCode, entry.indexCode2, getOriginalInventorySpisIndex2(entry.indexCode, entry.indexCode2)]
+    [entry.indexCode, entry.indexCode2, legacyPaintItemCode(entry.indexCode)]
       .forEach((identifier) => {
         const key = normalizeIndex(identifier);
         if (!key) return;

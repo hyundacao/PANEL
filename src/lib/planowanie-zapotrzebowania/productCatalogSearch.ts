@@ -2,6 +2,8 @@ export type ProductCatalogItem = {
   id: string;
   name: string;
   index: string;
+  index2?: string;
+  searchIndices?: string[];
   warehouseCode?: string;
   unit?: string;
 };
@@ -25,6 +27,22 @@ export const normalizeProductCatalogSearch = (value: unknown) =>
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+
+const normalizedIndex = (value: string) => normalizeProductCatalogSearch(value).replace(/\s*([-\/])\s*/g, '$1');
+
+export const productCatalogSearchIndices = (item: ProductCatalogItem) =>
+  [...new Set([item.index, item.index2 ?? '', ...item.searchIndices ?? []].filter(Boolean))];
+
+export const productCatalogIndexMatches = (item: ProductCatalogItem, value: string) =>
+  productCatalogSearchIndices(item).some(index => normalizedIndex(index) === normalizedIndex(value));
+
+export const productCatalogSearchText = (item: ProductCatalogItem) =>
+  normalizeProductCatalogSearch([item.name, item.warehouseCode, ...productCatalogSearchIndices(item)].join(' '));
+
+/** Two source columns on one record, never a guessed pair of similarly named rows. */
+export const buildProductCatalogChoices = (items: ProductCatalogItem[]) => {
+  return items.map(item => ({ ...item, searchIndices: productCatalogSearchIndices(item) }));
+};
 
 const relevanceFor = (primary: string, secondary: string, query: string) => {
   if (primary === query) return 0;
@@ -52,20 +70,21 @@ export const searchProductCatalog = (
 
   return items
     .map((item, sourceOrder) => {
-      const code = normalizeProductCatalogSearch(item.index);
+      const codes = productCatalogSearchIndices(item).map(normalizeProductCatalogSearch);
       const name = normalizeProductCatalogSearch(item.name);
       const warehouseCode = normalizeProductCatalogSearch(item.warehouseCode);
       if (materialSearch && /(^|[\s(/_-])fw\s*-/.test(name)) return null;
-      if (!tokens.every((token) => `${code} ${name} ${warehouseCode}`.includes(token))) return null;
-      const primary = nameFirst ? name : code;
-      const secondary = nameFirst ? code : name;
+      if (!tokens.every((token) => `${codes.join(' ')} ${name} ${warehouseCode}`.includes(token))) return null;
+      const primary = nameFirst ? name : normalizeProductCatalogSearch(item.index2 || item.index);
+      const relevance = Math.min(...(codes.length ? codes : ['']).map(code => nameFirst
+        ? relevanceFor(name, code, query) : relevanceFor(code, name, query)));
       const warehouseRank = materialSearch
         ? MATERIAL_WAREHOUSE_RANK.get(String(item.warehouseCode ?? '').trim().toUpperCase()) ?? otherWarehouseRank
         : 0;
       return {
         item,
         sourceOrder,
-        relevance: relevanceFor(primary, secondary, query),
+        relevance,
         warehouseRank,
         primary
       };

@@ -7,8 +7,8 @@ import {
   hasOriginalInventoryReportTimestamp
 } from './originalInventoryIndex';
 
-type Item = { id?: string; name: string; unit: string; indexCode?: string | null; warehouseCode?: string | null; catalogIssue?: string };
-type CatalogRow = { id: string; name: string; unit: string; index_code: string | null; warehouse_code: string | null };
+type Item = { id?: string; name: string; unit: string; indexCode?: string | null; indexCode2?: string | null; warehouseCode?: string | null; catalogIssue?: string };
+type CatalogRow = { id: string; name: string; unit: string; index_code: string | null; index_code2?: string | null; warehouse_code: string | null };
 const clean = (value: unknown) => String(value ?? '').replace(/\s+/g, ' ').trim();
 const warehouseKey = (item: Item) => {
   const raw = indexKey(item.warehouseCode || item.indexCode);
@@ -23,7 +23,7 @@ const unitKey = (unit: string) => {
 };
 const sameDescription = (left: Item, right: Item) =>
   normalizeOriginalInventoryNameKey(left.name) === normalizeOriginalInventoryNameKey(right.name) && unitKey(left.unit) === unitKey(right.unit);
-const fromRow = (row: CatalogRow): Item => ({ id: row.id, name: row.name, unit: row.unit, indexCode: row.index_code, warehouseCode: row.warehouse_code });
+const fromRow = (row: CatalogRow): Item => ({ id: row.id, name: row.name, unit: row.unit, indexCode: row.index_code, indexCode2: row.index_code2, warehouseCode: row.warehouse_code });
 
 // Stable primary keys prevent duplicate inserts during concurrent imports.
 const catalogId = (key: string) => {
@@ -43,11 +43,11 @@ export async function syncOriginalInventoryCatalogFromSnapshot(
   };
   const groups = new Map<string, Item[]>();
   for (const raw of items) {
-    if (hasOriginalInventoryReportTimestamp(raw.indexCode)) {
+    if ([raw.indexCode, raw.indexCode2].some(hasOriginalInventoryReportTimestamp)) {
       warn(raw, 'Indeks zawiera datę i godzinę wydruku — nie dodano tej kartoteki.');
       continue;
     }
-    const item = { ...raw, name: normalizeOriginalInventoryName(raw.name), unit: clean(raw.unit), indexCode: indexKey(raw.indexCode), warehouseCode: warehouseKey(raw) || null };
+    const item = { ...raw, name: normalizeOriginalInventoryName(raw.name), unit: clean(raw.unit), indexCode: indexKey(raw.indexCode), indexCode2: clean(raw.indexCode2) || null, warehouseCode: warehouseKey(raw) || null };
     if (item.catalogIssue) {
       warn(item, item.catalogIssue);
       continue;
@@ -62,9 +62,10 @@ export async function syncOriginalInventoryCatalogFromSnapshot(
   }
   const candidates: Item[] = [];
   for (const group of groups.values()) {
-    if (group.some((item) => !sameDescription(group[0], item))) {
-      warn(group[0], 'Ten sam indeks ma różne nazwy lub jednostki w pliku — kartoteka wymaga sprawdzenia.');
-    } else candidates.push(group[0]);
+    const secondaryIndices = new Set(group.map(item => indexKey(item.indexCode2)).filter(Boolean));
+    if (secondaryIndices.size > 1 || group.some((item) => !sameDescription(group[0], item))) {
+      warn(group[0], 'Ten sam indeks 1 ma różne nazwy, jednostki lub indeksy 2 w pliku — kartoteka wymaga sprawdzenia.');
+    } else candidates.push(group.find(item => item.indexCode2) ?? group[0]);
   }
   if (!candidates.length) return result;
 
@@ -74,7 +75,7 @@ export async function syncOriginalInventoryCatalogFromSnapshot(
     const known = new Map<string, Item[]>();
     for (let offset = 0; ; offset += 1000) {
       const { data, error } = await db.from('original_inventory_catalog')
-        .select('id,name,unit,index_code,warehouse_code').order('id').range(offset, offset + 999).abortSignal(signal);
+        .select('*').order('id').range(offset, offset + 999).abortSignal(signal);
       if (error) throw error;
       const rows = (data ?? []) as CatalogRow[];
       for (const row of rows) {
@@ -93,7 +94,7 @@ export async function syncOriginalInventoryCatalogFromSnapshot(
     for (const item of batch) {
       const matches = known.get(identity(item));
       if (!matches) { pending.push(item); continue; }
-      if (matches.every((match) => sameDescription(item, match))) { result.existing++; continue; }
+      if (matches.every((match) => sameDescription(item, match) && (!item.indexCode2 || indexKey(item.indexCode2) === indexKey(match.indexCode2)))) { result.existing++; continue; }
       if (matches.some((match) => unitKey(match.unit) !== unitKey(item.unit))) {
         warn(item, 'Indeks ma inną jednostkę — nie zmieniono kartoteki ani przeliczników.');
       } else if (matches.length !== 1) {
@@ -102,15 +103,19 @@ export async function syncOriginalInventoryCatalogFromSnapshot(
     }
     for (let offset = 0; offset < renames.length; offset += 500) {
       const chunk = renames.slice(offset, offset + 500);
-      const { data, error } = await db.rpc('rename_original_inventory_catalog_items', {
+      const hasSecondaryIndex = chunk.some(({ item }) => Boolean(item.indexCode2));
+      const { data, error } = await db.rpc(hasSecondaryIndex ? 'update_original_inventory_catalog_items_v2' : 'rename_original_inventory_catalog_items', {
         p_changes: chunk.map(({ item, current }) => ({
-          id: current.id, name: item.name, previousName: current.name, indexCode: current.indexCode
+          id: current.id, name: item.name, previousName: current.name, indexCode: current.indexCode,
+          ...(hasSecondaryIndex ? { indexCode2: item.indexCode2 ?? null, previousIndexCode2: current.indexCode2 ?? null } : {})
         }))
       }).abortSignal(signal);
       if (error) {
         result.failed = true;
         warn(null, error.code === 'PGRST202' || error.code === '42883'
-          ? 'Aktualizacja nazw wymaga uruchomienia pliku 04_spis_rzeczywisty_i_stany_erp.sql. Dotychczasowe nazwy i spisy pozostawiono bez zmian.'
+          ? hasSecondaryIndex
+            ? 'Zapis indeksu 2 wymaga pliku 11_indeksy_kartotek.sql. Dotychczasowe kartoteki pozostawiono bez zmian.'
+            : 'Aktualizacja nazw wymaga uruchomienia pliku 04_spis_rzeczywisty_i_stany_erp.sql. Dotychczasowe nazwy i spisy pozostawiono bez zmian.'
           : 'Nie udało się zaktualizować nazw kartotek. Ponów import; zapisane ilości nie zostały zmienione.');
         break;
       }
@@ -128,7 +133,8 @@ export async function syncOriginalInventoryCatalogFromSnapshot(
       for (let attempt = 0; attempt < 2 && batch.length; attempt++) {
         const rows = batch.map((item) => ({
           id: catalogId(identity(item)), name: item.name, unit: item.unit,
-          index_code: item.indexCode, warehouse_code: item.warehouseCode
+          index_code: item.indexCode, warehouse_code: item.warehouseCode,
+          ...(item.indexCode2 ? { index_code2: item.indexCode2 } : {})
         }));
         const { data, error } = await db.from('original_inventory_catalog')
           .upsert(rows, { onConflict: 'id', ignoreDuplicates: true }).select('id').abortSignal(signal);

@@ -78,9 +78,11 @@ import PalletSetSettings from '@/components/planowanie-zapotrzebowania/PalletSet
 import { TechnologyLibraryExportButton } from '@/components/planowanie-zapotrzebowania/TechnologyLibraryExportButton';
 import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
-import type {
-  ProductCatalogItem,
-  ProductCatalogSearchMode
+import {
+  productCatalogIndexMatches,
+  productCatalogSearchText,
+  type ProductCatalogItem,
+  type ProductCatalogSearchMode
 } from '@/lib/planowanie-zapotrzebowania/productCatalogSearch';
 import {
   fixedInventoryDeviceTypeLabel,
@@ -861,7 +863,7 @@ const findExactCatalogItem = (items: ProductCatalogItem[], mode: 'code' | 'name'
   const query = normalize(value);
   if (!query) return undefined;
   return items
-    .filter((item) => normalize(mode === 'name' ? item.name : item.index) === query)
+    .filter((item) => mode === 'name' ? normalize(item.name) === query : productCatalogIndexMatches(item, value))
     .sort((left, right) => {
       const leftRank = MATERIAL_WAREHOUSE_RANK.get(String(left.warehouseCode ?? '').trim().toUpperCase()) ?? MATERIAL_WAREHOUSE_PRIORITY.length;
       const rightRank = MATERIAL_WAREHOUSE_RANK.get(String(right.warehouseCode ?? '').trim().toUpperCase()) ?? MATERIAL_WAREHOUSE_PRIORITY.length;
@@ -1572,8 +1574,8 @@ const ProductCatalogField = ({
     const tokens = query.split(/\s+/).filter(Boolean);
     return items
       .filter((item) => {
-        const mainValue = normalize(mode === 'name' ? item.name : item.index);
-        const searchable = normalize(`${item.name} ${item.index}`);
+        const mainValue = normalize(mode === 'name' ? item.name : item.index2 || item.index);
+        const searchable = productCatalogSearchText(item);
         return Boolean(mainValue) && tokens.every((token) => searchable.includes(token));
       })
       .sort((left, right) => {
@@ -1625,9 +1627,9 @@ const ProductCatalogField = ({
                   selectItem(item);
                 }}
               >
-                <span className={cn('block text-sm font-bold', mode === 'name' ? 'catalog-label' : 'text-title')}>{mode === 'name' ? item.name : item.index}</span>
+                <span className={cn('block text-sm font-bold', mode === 'name' ? 'catalog-label' : 'text-title')}>{mode === 'name' ? item.name : item.index2 || item.index}</span>
                 <span className={cn('mt-0.5 block text-xs font-medium', mode === 'index' ? 'catalog-label' : 'text-muted')}>
-                  {mode === 'name' ? `Indeks: ${item.index || 'brak w kartotece'}` : item.name}
+                  {mode === 'name' ? `Indeks ${item.index2 ? '2' : '1'}: ${item.index2 || item.index || 'brak w kartotece'}` : item.name}
                 </span>
               </button>
             ))}
@@ -1847,7 +1849,7 @@ const MaterialCatalogInput = forwardRef<HTMLInputElement, MaterialCatalogInputPr
         >
           <span className="catalog-label block whitespace-normal break-words text-sm font-bold">{item.name}</span>
           <span className="mt-0.5 flex items-center gap-2 text-xs text-dim">
-            <span>{item.index || 'Brak kodu / indeksu'}</span>
+            <span>Indeks {item.index2 ? '2' : '1'}: {item.index2 || item.index || 'brak w kartotece'}</span>
             {item.warehouseCode ? <span className="rounded-full border border-border px-1.5 py-0.5 font-bold text-body">{item.warehouseCode}</span> : null}
           </span>
         </button>) : <p className="px-3 py-3 text-sm text-muted">Brak pasującej pozycji w kartotece.</p>}

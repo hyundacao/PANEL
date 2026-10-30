@@ -837,6 +837,9 @@ const OriginalInventoryNameSearch = ({
                     Indeks 2: {suggestion.indexCode2}
                   </span>
                 )}
+                {!suggestion.indexCode2 && suggestion.indexCode && (
+                  <span className="block break-all text-xs font-semibold text-dim">Indeks 1: {suggestion.indexCode}</span>
+                )}
               </span>
               {suggestion.warehouseCode && (
                 <span
@@ -1601,12 +1604,14 @@ export default function SpisRzeczywisty() {
       resetCatalogImportState();
       toast({
         title: result.catalogSync?.failed ? 'Import kartotek wymaga uwagi' : 'Wgrano kartoteki',
-        description: `Dodano: ${result.inserted}, zaktualizowano nazwy: ${result.updated ?? 0}, pominieto: ${result.skipped}. ${result.catalogSync?.warnings.map((warning) => warning.reason).slice(0, 2).join(' ') ?? ''}`,
+        description: `Dodano: ${result.inserted}, zaktualizowano kartoteki: ${result.updated ?? 0}, pominieto: ${result.skipped}. ${result.catalogSync?.warnings.map((warning) => warning.reason).slice(0, 2).join(' ') ?? ''}`,
         tone: result.catalogSync?.failed ? 'error' : 'success'
       });
     } catch (err) {
       const messageMap: Record<string, string> = {
         EMPTY: 'Plik nie zawiera poprawnych nazw kartotek.',
+        AMBIGUOUS_INDEX_COLUMNS: 'Plik ma kilka kolumn oznaczonych jako ten sam indeks. Nie zmieniono danych.',
+        MIGRATION_REQUIRED_INVENTORY_INDICES: 'Zapis obu indeksów wymaga uruchomienia 11_indeksy_kartotek.sql. Nie zmieniono danych.',
         [ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR]: ORIGINAL_INVENTORY_INDEX_TIMESTAMP_MESSAGE,
         FORBIDDEN: 'Brak uprawnien do importu kartotek.'
       };
@@ -1706,6 +1711,9 @@ export default function SpisRzeczywisty() {
         DATE_REQUIRED: 'Wybierz poprawny dzien snapshotu.',
         FILE_REQUIRED: 'Wybierz plik do importu.',
         EMPTY: 'Plik nie zawiera poprawnych stanow ERP.',
+        AMBIGUOUS_INDEX_COLUMNS: 'Plik ma kilka kolumn oznaczonych jako ten sam indeks. Nie zmieniono danych.',
+        CONFLICTING_INDEX_COLUMNS: 'Ten sam indeks 1 ma różne indeksy 2 w pliku. Nie zmieniono stanów ERP.',
+        MIGRATION_REQUIRED_INVENTORY_INDICES: 'Zapis obu indeksów wymaga uruchomienia 11_indeksy_kartotek.sql. Nie zmieniono danych.',
         [ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR]: ORIGINAL_INVENTORY_INDEX_TIMESTAMP_MESSAGE,
         FORBIDDEN: 'Brak uprawnien do importu stanow ERP.',
         ERP_SNAPSHOT_ARCHIVE_REQUIRED:

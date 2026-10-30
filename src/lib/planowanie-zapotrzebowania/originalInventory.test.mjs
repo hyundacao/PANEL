@@ -152,6 +152,22 @@ test('catalog search still deduplicates identical name, index and warehouse rows
   assert.equal(items[0].index, material.code);
 });
 
+test('paged catalog presents a primary/secondary pair once without changing inventory matching', async () => {
+  const name = 'TRAY HANDLE INSERT BO CLIPPED + HS';
+  const primary = { name, code: 'M-10-PWY-BSHL-10012', unit: 'szt.' };
+  const { db } = database([...fillers, {...catalogRow('a', primary, 'M-10'), index_code2: '8001103471'}], [entry('count', primary, 2371)]);
+  const fixture = createOriginalInventoryFixture(db);
+  const catalog = await fixture.catalog();
+  const choices = searchProductCatalog(catalog, name, 'material-name');
+  assert.equal(choices.length, 1);
+  assert.equal(choices[0].index2, '8001103471');
+  assert.equal(searchProductCatalog(catalog, primary.code, 'material-code')[0].id, choices[0].id);
+  const { rows } = await fixture.load(date);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].code, primary.code);
+  assert.equal(rows[0].qty, 2371);
+});
+
 test('later-page failures never return a misleading partial inventory', async () => {
   for (const failTable of ['original_inventory_catalog', 'original_inventory_entries']) {
     const { db } = database([...fillers, catalogRow('c', cam)], Array.from({ length: 1002 }, (_, i) => entry(`entry-${i}`, cam, 1)), { failTable });

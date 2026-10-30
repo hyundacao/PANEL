@@ -23,8 +23,8 @@ export const isOriginalInventoryReportTimestamp = (value: unknown) => {
   return reportTimestampPattern.exec(text)?.[1] === text;
 };
 
-export const assertOriginalInventoryImportIndices = (items: readonly { indexCode?: unknown }[]) => {
-  if (items.some(item => hasOriginalInventoryReportTimestamp(item?.indexCode))) {
+export const assertOriginalInventoryImportIndices = (items: readonly { indexCode?: unknown; indexCode2?: unknown }[]) => {
+  if (items.some(item => [item?.indexCode, item?.indexCode2].some(hasOriginalInventoryReportTimestamp))) {
     throw new Error(ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR);
   }
 };

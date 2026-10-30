@@ -14,7 +14,7 @@ export const dynamic = 'force-dynamic';
 
 const parseCatalogImportFile = async (
   file: File
-): Promise<Array<{ name: string; unit: string; indexCode: string | null; warehouseCode: string | null }>> => {
+): Promise<Array<{ name: string; unit: string; indexCode: string | null; indexCode2?: string | null; warehouseCode: string | null }>> => {
   const bytes = await file.arrayBuffer();
   const workbook = XLSX.read(bytes, { type: 'array', raw: false, sheetRows: IMPORT_SHEET_ROWS });
   const firstSheetName = workbook.SheetNames[0];
@@ -69,6 +69,10 @@ export async function POST(request: Request) {
     }
 
     assertOriginalInventoryImportIndices(normalized);
+    if (normalized.some(item => item.indexCode2)) {
+      const { error } = await supabaseAdmin.from('original_inventory_catalog').select('index_code2').range(0, 0);
+      if (error) throw new Error(error.code === '42703' || error.code === 'PGRST204' ? 'MIGRATION_REQUIRED_INVENTORY_INDICES' : 'IMPORT_FAILED');
+    }
     const catalogSync = await syncOriginalInventoryCatalogFromSnapshot(supabaseAdmin, normalized);
     return NextResponse.json({
       total: normalized.length,
@@ -86,8 +90,9 @@ export async function POST(request: Request) {
     const status =
       code === 'FORBIDDEN'
         ? 403
-        : code === 'EMPTY' || code === 'FILE_REQUIRED' || code === ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR
+        : code === 'EMPTY' || code === 'FILE_REQUIRED' || code === ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR || code === 'AMBIGUOUS_INDEX_COLUMNS'
         ? 400
+        : code === 'MIGRATION_REQUIRED_INVENTORY_INDICES' ? 503
         : 500;
     return NextResponse.json({ code }, { status });
   }

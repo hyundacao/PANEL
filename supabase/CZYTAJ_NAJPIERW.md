@@ -4,6 +4,18 @@ To jedyny bieżący katalog SQL. Każdy plik można wkleić i uruchomić **w ca�
 
 ## Kolejność
 
+### Indeks 1 I Indeks 2 (30.10.2026)
+
+Po zainstalowanych plikach 04 i 10 uruchom **[11_indeksy_kartotek.sql](11_indeksy_kartotek.sql)**.
+Dodaje osobne pole indeksu 2 w kartotekach i stanach ERP oraz funkcje zapisu dostępne wyłącznie dla serwera.
+Nie usuwa ani nie scala kartotek, nie zmienia nazw, ilości, technologii ani dotychczasowych indeksów.
+Nie uzupełnia indeksu 2 na podstawie końcówki indeksu 1 lub podobnej nazwy.
+
+Import rozpoznaje kolumny `Indeks` / `Indeks 1` i `Indeks 2`, niezależnie od kolejności i formatu numerów.
+Kolumna `Kod` nie jest traktowana jako indeks 2. Dotychczasowe pliki z jednym indeksem nadal działają i nie kasują zapisanego indeksu 2 w kartotece.
+Bez pliku 11 import z dwiema kolumnami zostanie odrzucony przed zmianą stanów; import z jedną kolumną pozostaje zgodny ze starym schematem.
+Brakujących par starych kartotek nie należy odtwarzać po samej nazwie. Potrzebny jest eksport ERP z obiema kolumnami lub potwierdzone przypisania.
+
 ### Aktualizacja zabezpieczeń 27.10.2026
 
 Na działającej bazie z modułami 01–09 uruchom dodatkowo **[10_zabezpieczenia.sql](10_zabezpieczenia.sql)**, a dopiero potem wdrażaj kod aktualizacji bezpieczeństwa. Nie uruchamiaj ponownie starych instalatorów i nie usuwaj danych.
@@ -28,7 +40,7 @@ Weryfikacja kodu 27.10.2026: 892/892 testów, TypeScript i kompilacja produkcyjn
 8. [Raporty](08_raporty.sql)
 9. [Powiadomienia](09_powiadomienia.sql)
 
-W SQL Editor utwórz po jednej zakładce o powyższej nazwie. Wklej cały odpowiadający jej plik, wybierz **Save**, następnie **Run**. Przy instalacji podstawowej uruchamiaj po kolei 01–09, a następnie aktualizację 10 opisaną powyżej. Na końcu każdego pliku pojawia się nazwa modułu i wynik `OK`.
+W SQL Editor utwórz po jednej zakładce o powyższej nazwie. Wklej cały odpowiadający jej plik, wybierz **Save**, następnie **Run**. Przy instalacji podstawowej uruchamiaj po kolei 01–09, a następnie aktualizacje 10 i 11 opisane powyżej. Na końcu każdego pliku pojawia się nazwa modułu i wynik `OK`.
 
 Po udanym uruchomieniu nowych plików możesz usunąć **stare zapisane zapytania z SQL Editor**. Nie usuwaj tabel, funkcji, polityk ani danych w innych częściach Supabase. Usunięcie zakładki nie cofa wcześniej wykonanych zmian w bazie.
 
