@@ -227,6 +227,7 @@ export type OriginalInventoryCatalogEntry = {
   indexCode2?: string | null; // Source column: Indeks 2; never derived from indexCode.
   warehouseCode?: string | null;
   previousNames?: string[];
+  catalogIds?: string[];
 };
 
 export type OriginalInventorySiloConfig = {

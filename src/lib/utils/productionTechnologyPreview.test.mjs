@@ -20,6 +20,7 @@ function planningApi() {
     '@/lib/auth/session': { getAuthenticatedUser: async () => ({ user: { id: 'planner', username: 'planner', name: 'Planner' } }) },
     '@/lib/utils/productionTaskReference': reference,
     '@/lib/utils/originalInventorySpisSearch': {},
+    '@/lib/utils/originalInventoryM10Indices': {},
     '@/lib/planowanie-zapotrzebowania/stateScopes': scopes,
     '@/lib/planowanie-zapotrzebowania/palletSets': {},
     '@/lib/planowanie-zapotrzebowania/productCatalogSearch': {},

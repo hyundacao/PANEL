@@ -32,6 +32,38 @@ export type ExportTechnology = {
   archived: boolean;
 };
 
+export type TechnologyExportCatalogEntry = {
+  indexCode?: string | null;
+  indexCode2?: string | null;
+};
+
+export const buildTechnologyExportIndexResolver = (catalog: readonly TechnologyExportCatalogEntry[]) => {
+  const key = (value: string) => value.trim().replace(/\s*([-\/])\s*/g, '$1').toUpperCase();
+  const byIndex = new Map<string, Array<{ index1: string; index2: string }>>();
+  for (const item of catalog) {
+    const pair = { index1: String(item.indexCode ?? '').trim(), index2: String(item.indexCode2 ?? '').trim() };
+    if (!pair.index1) continue;
+    for (const code of new Set([key(pair.index1), key(pair.index2)].filter(Boolean))) {
+      byIndex.set(code, [...byIndex.get(code) ?? [], pair]);
+    }
+    // Older technologies store the confirmed M-10 secondary number without its warehouse prefix.
+    if (/^M-10-PWY-/.test(key(pair.index1)) && /^M-10-800\d+$/.test(key(pair.index2))) {
+      const alias = key(pair.index2).slice('M-10-'.length);
+      byIndex.set(alias, [...byIndex.get(alias) ?? [], pair]);
+    }
+  }
+  return (code: string) => {
+    const fallback = { index1: code.trim(), index2: '' };
+    const matches = byIndex.get(key(code));
+    if (!matches?.length) return fallback;
+    const primary = new Set(matches.map(item => key(item.index1)));
+    const secondary = new Set(matches.map(item => key(item.index2)).filter(Boolean));
+    // Exact stored pairs only: similar names, index suffixes and M-10 aliases do not define index 2.
+    if (primary.size !== 1 || secondary.size > 1) return fallback;
+    return matches.find(item => item.index2) ?? matches[0];
+  };
+};
+
 type Source = 'warehouse' | 'production' | 'select';
 type Component = {
   code: string;

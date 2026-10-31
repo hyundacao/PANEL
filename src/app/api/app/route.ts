@@ -24,6 +24,7 @@ import { buildOriginalInventoryNameResolver, findOriginalInventoryCatalogMateria
 import { splitGrindingQuantity } from '@/lib/utils/originalInventoryGrinding';
 import { matchRegrindCatalogErpStocks } from '@/lib/utils/regrindCatalogErp';
 import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
+import { linkOriginalInventoryM10Indices } from '@/lib/utils/originalInventoryM10Indices';
 import { assertOriginalInventoryImportIndices } from '@/lib/utils/originalInventoryIndex';
 import {
   getOriginalInventorySpisIndex2,
@@ -2388,9 +2389,9 @@ const fetchAllOriginalCatalogRows = async () => {
 
 const fetchOriginalCatalog = async () => {
   const data = await fetchAllOriginalCatalogRows();
-  return data
+  return linkOriginalInventoryM10Indices(data
     .filter((row) => String(row.index_code ?? '').trim().length > 0)
-    .map(mapOriginalInventoryCatalogEntry);
+    .map(mapOriginalInventoryCatalogEntry));
 };
 
 const loadOriginalCatalog = async (): Promise<OriginalInventoryCatalogEntry[]> => {

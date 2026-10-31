@@ -2,7 +2,7 @@ import { isPieceGrindingUnit } from '@/lib/utils/originalInventoryGrinding';
 import { normalizeOriginalInventoryNameKey } from '@/lib/utils/originalInventoryName';
 import { normalizeOriginalInventoryIndex as indexKey } from '@/lib/utils/originalInventoryIndex';
 
-type MaterialIdentity = { name: string; unit: string; indexCode?: string | null; previousNames?: readonly string[] };
+type MaterialIdentity = { name: string; unit: string; indexCode?: string | null; indexCode2?: string | null; previousNames?: readonly string[] };
 type StockEntry = MaterialIdentity & { realQty: number; availableQty: number };
 
 const unitKey = (value: string) => isPieceGrindingUnit(value)
@@ -19,7 +19,7 @@ export const findOriginalInventoryCatalogMaterial = <T extends MaterialIdentity>
   const index = indexKey(material.indexCode);
   // Inspect all exact matches before choosing an index, not a truncated suggestion list.
   const matches = catalog.filter((item) => (index
-    ? indexKey(item.indexCode) === index
+    ? [item.indexCode, item.indexCode2].some(code => indexKey(code) === index)
     : [item.name, ...item.previousNames ?? []].some((value) => normalizeOriginalInventoryNameKey(value) === name)) &&
     unitKey(item.unit) === unit && indexKey(item.indexCode));
   if (!matches.length || new Set(matches.map((item) => `${indexKey(item.indexCode)}|${normalizeOriginalInventoryNameKey(item.name)}`)).size !== 1) return null;
@@ -32,9 +32,11 @@ export const buildOriginalInventoryNameResolver = (catalog: readonly MaterialIde
   for (const item of catalog) {
     const index = indexKey(item.indexCode);
     if (!index) continue;
-    const indexed = indices.get(index) ?? [];
-    indexed.push(item);
-    indices.set(index, indexed);
+    for (const code of new Set([index, indexKey(item.indexCode2)].filter(Boolean))) {
+      const indexed = indices.get(code) ?? [];
+      indexed.push(item);
+      indices.set(code, indexed);
+    }
     for (const name of new Set([item.name, ...item.previousNames ?? []].map(normalizeOriginalInventoryNameKey))) {
       const key = `${name}|${unitKey(item.unit)}`;
       const matches = names.get(key) ?? [];

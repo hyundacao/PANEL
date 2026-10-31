@@ -113,7 +113,7 @@ test('product autocomplete selects the exact pressed suggestion', () => {
 test('same-named MAX products expose both indices and select the clicked identity', () => {
   const h = createHeaderFixture();
   const name = 'MAX CP+TH PRINTED F1_WQ33G2D00';
-  const items = ['9001970413', '9001972083'].map(index => ({ id: index, index, name }));
+  const items = ['9001970413', '9001972083'].map(index => ({ id: index, index, index2: index, name }));
   let selected;
   const field = h.productCatalogField({
     label: 'Nazwa produktu', mode: 'name', value: name, items, loading: false,
@@ -148,6 +148,29 @@ test('product autocomplete displays only index 2 while keeping an index 1 query 
     options[0].props.onMouseDown({preventDefault(){}});
     assert.equal(selected.index,'M-10-PWY-BSHL-10012');
   }
+});
+
+test('missing index 2 never exposes index 1 in product or material suggestions', () => {
+  const h = createHeaderFixture();
+  const item = {id:'primary-only',name:'TRAY HANDLE ASSEMBLY WELDED COST IRON',index:'M-10-PWY-BSHL-10008'};
+  for (const mode of ['name','index']) {
+    let selected;
+    const field = h.productCatalogField({label:'Produkt',mode,value:item.index,items:[item],loading:false,
+      onChange:()=>{},onSelect:value=>{selected=value;}});
+    const options = nodes(field).filter(node=>node.type==='button');
+    assert.equal(options.length,1);
+    const visible = nodes(options[0]).flatMap(node=>[].concat(node.props?.children??[])).filter(value=>typeof value==='string').join(' ');
+    assert.ok(visible.includes(item.name));
+    assert.ok(!visible.includes(item.index));
+    assert.ok(!visible.includes('Indeks 1'));
+    assert.ok(!visible.includes('Indeks 2'));
+    options[0].props.onMouseDown({preventDefault(){}});
+    assert.equal(selected.index,item.index);
+  }
+  const source = readFileSync(new URL('../../app/(main)/planowanie-zapotrzebowania/page.tsx', import.meta.url),'utf8');
+  const materialDropdown = source.slice(source.indexOf('data-material-suggestions'),source.indexOf('document.body',source.indexOf('data-material-suggestions')));
+  assert.match(materialDropdown,/Indeks 2: \{item\.index2\}/);
+  assert.doesNotMatch(materialDropdown,/Indeks 1|item\.index2 \|\| item\.index/);
 });
 
 test('technology editor starts with an empty unpersisted draft instead of the first library item', () => {

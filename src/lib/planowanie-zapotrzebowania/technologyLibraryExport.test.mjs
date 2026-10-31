@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildTechnologyLibraryExport, exportTechnologyLabel } from './technologyLibraryExport.ts';
+import { buildTechnologyExportIndexResolver, buildTechnologyLibraryExport, exportTechnologyLabel } from './technologyLibraryExport.ts';
 
 const material = (code, usage = 1, category = 'Półwyrób', unit = 'szt.') => ({ code, name: code, usage, category, unit, logisticQty: 1 });
 const tech = (productIndex, materials = [], patch = {}) => ({
@@ -160,4 +160,45 @@ test('deep graphs stop with a visible warning rather than silently truncating', 
 
 test('empty library has valid empty result', () => {
   assert.deepEqual(buildTechnologyLibraryExport([]), { entries: [], direct: [], tree: [], issues: [] });
+});
+
+test('export resolves both source indices by either identifier in every warehouse without modifying catalog data', () => {
+  const catalog = ['M-1','M-4','M-10','M-11','M-51'].map((warehouse,i) => ({
+    indexCode:`${warehouse}-CAT-${i}`, indexCode2:`0000800110347${i}`
+  }));
+  const before = JSON.stringify(catalog);
+  const resolve = buildTechnologyExportIndexResolver(catalog);
+  for (const item of catalog) {
+    const expected = {index1:item.indexCode,index2:item.indexCode2};
+    assert.deepEqual(resolve(item.indexCode),expected);
+    assert.deepEqual(resolve(item.indexCode2),expected);
+    assert.deepEqual(resolve(` ${item.indexCode.toLowerCase().replaceAll('-', ' - ')} `),expected);
+  }
+  assert.equal(JSON.stringify(catalog),before);
+});
+
+test('export does not infer missing pairs, remove leading zeros or merge ambiguous indices', () => {
+  const resolve = buildTechnologyExportIndexResolver([
+    {indexCode:'M-10-PWY-BSHL-10012'},
+    {indexCode:'M-10-8001103471'},
+    {indexCode:'M-1-ONE',indexCode2:'00123'},
+    {indexCode:'M-4-TWO',indexCode2:'00123'},
+    {indexCode:'M-51-ABC',indexCode2:'111'},
+    {indexCode:'M-51-ABC',indexCode2:'222'}
+  ]);
+  for (const code of ['M-10-PWY-BSHL-10012','8001103471','00123','123','M-51-ABC','', '999']) {
+    assert.deepEqual(resolve(code),{index1:code,index2:''});
+  }
+  const enriched = buildTechnologyExportIndexResolver([{indexCode:'A'},{indexCode:'A',indexCode2:'002/03'}]);
+  assert.deepEqual(enriched('A'),{index1:'A',index2:'002/03'});
+});
+
+test('confirmed M-10 secondary aliases resolve old technology numbers but retain both full exported indices', () => {
+  const pair={indexCode:'M-10-PWY-BSHL-10008',indexCode2:'M-10-8001236303'};
+  const resolve=buildTechnologyExportIndexResolver([pair]);
+  for(const code of [pair.indexCode,pair.indexCode2,'8001236303']) {
+    assert.deepEqual(resolve(code),{index1:pair.indexCode,index2:pair.indexCode2});
+  }
+  const ambiguous=buildTechnologyExportIndexResolver([pair,{indexCode:'8001236303',indexCode2:'OTHER'}]);
+  assert.deepEqual(ambiguous('8001236303'),{index1:'8001236303',index2:''});
 });

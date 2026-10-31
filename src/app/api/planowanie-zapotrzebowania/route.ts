@@ -11,6 +11,7 @@ import {
   type ProductCatalogSearchMode
 } from '@/lib/planowanie-zapotrzebowania/productCatalogSearch';
 import { getOriginalInventorySpisIndex2 } from '@/lib/utils/originalInventorySpisSearch';
+import { linkOriginalInventoryM10Indices } from '@/lib/utils/originalInventoryM10Indices';
 import { FIXED_INVENTORY_DEVICE_SOURCE_TYPE } from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
 import {
   isSharedPlanningField,
@@ -182,14 +183,18 @@ const queryProductCatalogRows = async () => {
 const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
   const rows = await queryProductCatalogRows();
   const unique = new Map<string, ProductCatalogItem>();
-  rows.forEach((row) => {
-    const name = String(row.name ?? '').replace(/\s+/g, ' ').trim();
-    const index = String(row.index_code ?? '').replace(/\s+/g, ' ').trim();
-    const warehouseCode = String(row.warehouse_code ?? '').replace(/\s+/g, ' ').trim().toUpperCase();
+  const linked = linkOriginalInventoryM10Indices(rows.map(row => ({
+    id: String(row.id), name: String(row.name ?? '').replace(/\s+/g, ' ').trim(),
+    indexCode: row.index_code, indexCode2: row.index_code2, warehouseCode: row.warehouse_code, unit: row.unit
+  })));
+  linked.forEach((row) => {
+    const name = row.name;
+    const index = String(row.indexCode ?? '').replace(/\s+/g, ' ').trim();
+    const warehouseCode = String(row.warehouseCode ?? '').replace(/\s+/g, ' ').trim().toUpperCase();
     const unit = String(row.unit ?? '').replace(/\s+/g, ' ').trim();
     if (!name) return;
     const key = `${normalizeName(name)}|${normalizeName(index)}|${normalizeName(warehouseCode)}`;
-    const next = { id: String(row.id), name, index, index2: getOriginalInventorySpisIndex2(index, row.index_code2), warehouseCode, unit };
+    const next = { id: String(row.id), name, index, index2: getOriginalInventorySpisIndex2(index, row.indexCode2), warehouseCode, unit };
     const current = unique.get(key);
     const score = (item: ProductCatalogItem) => (item.warehouseCode ? 4 : 0) + (item.index ? 2 : 0) + (item.unit ? 1 : 0);
     if (!current || score(next) > score(current)) unique.set(key, next);

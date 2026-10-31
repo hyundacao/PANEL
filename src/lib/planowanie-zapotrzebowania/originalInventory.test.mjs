@@ -174,3 +174,21 @@ test('later-page failures never return a misleading partial inventory', async ()
     await assert.rejects(createOriginalInventoryFixture(db).load(date), /LATER_PAGE_FAILED/);
   }
 });
+
+test('legacy M-10 rows become one planning choice with both full indices, without changing counted stock', async () => {
+  const name='TRAY HANDLE ASSEMBLY WELDED COST IRON';
+  const primary={name,code:'M-10-PWY-BSHL-10008',unit:'szt.'};
+  const secondary={...primary,code:'M-10-8001236303'};
+  const {db}=database([...fillers,catalogRow('primary',primary,'M-10'),catalogRow('secondary',secondary,'M-10')],[entry('count',primary,184)]);
+  const fixture=createOriginalInventoryFixture(db);
+  const catalog=await fixture.catalog();
+  for(const query of [name,primary.code,secondary.code]) {
+    const results=searchProductCatalog(catalog,query,'material-code');
+    assert.equal(results.length,1);
+    assert.equal(results[0].index,primary.code);
+    assert.equal(results[0].index2,secondary.code);
+  }
+  const {rows}=await fixture.load(date);
+  assert.equal(rows.length,1);
+  assert.equal(rows[0].qty,184);
+});

@@ -194,6 +194,7 @@ test('a batch with mixed authors cannot be partially deleted or taken over', asy
 test('no extra pallet counting panel is added; the existing search exposes set mode', () => {
   const source = readFileSync(new URL('../../components/planowanie-zapotrzebowania/SpisRzeczywisty.tsx', import.meta.url), 'utf8');
   assert.match(source, /aria-label="Sposób spisu"/);
-  assert.match(source, /set\.primaryCatalogId === selectedCatalogId/);
+  assert.match(source, /selectedCatalogIds\.has\(set\.primaryCatalogId\)/);
+  assert.match(source, /new Set\(\[selectedCatalogId, \.\.\.selectedCatalogAliases\]\)/);
   assert.doesNotMatch(source, /Stałe zestawy paletowe/);
 });

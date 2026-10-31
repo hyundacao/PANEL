@@ -639,6 +639,7 @@ const parseCatalogImportFile = async (
 
 type OriginalInventoryNameSuggestion = {
   catalogId?: string;
+  catalogIds?: string[];
   name: string;
   unit: string;
   warehouseCode: string | null;
@@ -654,6 +655,7 @@ const SPIS_SEARCH_SERVER_LIMIT = 24;
 
 const toOriginalInventoryNameSuggestion = (item: {
   id?: string;
+  catalogIds?: string[];
   name: string;
   unit: string;
   warehouseCode?: string | null;
@@ -665,6 +667,7 @@ const toOriginalInventoryNameSuggestion = (item: {
   const indexCode = item.indexCode ? String(item.indexCode).trim() : null;
   return {
     catalogId: item.id,
+    catalogIds: item.catalogIds,
     name: item.name,
     unit: item.unit,
     previousNames: item.previousNames,
@@ -837,9 +840,6 @@ const OriginalInventoryNameSearch = ({
                     Indeks 2: {suggestion.indexCode2}
                   </span>
                 )}
-                {!suggestion.indexCode2 && suggestion.indexCode && (
-                  <span className="block break-all text-xs font-semibold text-dim">Indeks 1: {suggestion.indexCode}</span>
-                )}
               </span>
               {suggestion.warehouseCode && (
                 <span
@@ -957,6 +957,7 @@ export default function SpisRzeczywisty() {
   });
   const [inventoryMode, setInventoryMode] = useState<'pieces' | 'pallets'>('pieces');
   const [selectedCatalogId, setSelectedCatalogId] = useState('');
+  const [selectedCatalogAliases, setSelectedCatalogAliases] = useState<string[]>([]);
   const [selectedErpMaterial, setSelectedErpMaterial] = useState<{ name: string; indexCode: string | null } | null>(null);
   const selectedCatalogRef = useRef({ id: '', name: '' });
   const [selectedPalletSetId, setSelectedPalletSetId] = useState('');
@@ -967,8 +968,9 @@ export default function SpisRzeczywisty() {
     queryKey: ['original-inventory-pallet-sets'], queryFn: getOriginalInventoryPalletSets,
     enabled: activeTab === 'spis', staleTime: 15_000, refetchOnMount: 'always', retry: false
   });
-  const matchingPalletSets = useMemo(() => palletSets.filter((set) => set.active &&
-    set.primaryCatalogId === selectedCatalogId && !palletSetError(set)), [palletSets, selectedCatalogId]);
+  const selectedCatalogIds = new Set([selectedCatalogId, ...selectedCatalogAliases]);
+  const matchingPalletSets = palletSets.filter((set) => set.active &&
+    selectedCatalogIds.has(set.primaryCatalogId) && !palletSetError(set));
   const selectedPalletSet = matchingPalletSets.find((set) => set.id === selectedPalletSetId) ?? matchingPalletSets[0];
   const palletPreview = selectedPalletSet ? palletSetTotals(selectedPalletSet, Number(form.qty)) : [];
 
@@ -1350,6 +1352,7 @@ export default function SpisRzeczywisty() {
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] });
       setForm((prev) => ({ ...prev, name: '', qty: '' }));
       selectedCatalogRef.current = { id: '', name: '' };
+      setSelectedCatalogAliases([]);
       setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryMode('pieces');
       palletRequestRef.current = null;
       toast({ title: 'Dodano wszystkie składniki zestawu do spisu', tone: 'success' });
@@ -1367,6 +1370,7 @@ export default function SpisRzeczywisty() {
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] });
       setForm((prev) => ({ ...prev, name: '', qty: '' }));
       selectedCatalogRef.current = { id: '', name: '' };
+      setSelectedCatalogAliases([]);
       setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryMode('pieces');
       toast({ title: 'Dodano wpis do spisu', tone: 'success' });
     },
@@ -2171,6 +2175,7 @@ export default function SpisRzeczywisty() {
     if (!resolvedErpMaterial || resolvedErpMaterial.name === form.name) return;
     const name = resolvedErpMaterial.name;
     selectedCatalogRef.current = { id: resolvedErpMaterial.id, name };
+    setSelectedCatalogAliases(resolvedErpMaterial.catalogIds ?? []);
     setSelectedCatalogId(resolvedErpMaterial.id);
     setSelectedErpMaterial({ name, indexCode: resolvedErpMaterial.indexCode ?? null });
     setForm((current) => current.name === form.name && current.unit === form.unit
@@ -2239,6 +2244,7 @@ export default function SpisRzeczywisty() {
   const applyNameToForm = (rawName: string) => {
     if (selectedCatalogRef.current.name !== rawName) {
       selectedCatalogRef.current = { id: '', name: '' };
+      setSelectedCatalogAliases([]);
       setSelectedErpMaterial(null);
       setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryMode('pieces');
     }
@@ -2247,6 +2253,7 @@ export default function SpisRzeczywisty() {
   const applyNameSuggestionToForm = (suggestion: OriginalInventoryNameSuggestion) => {
     setSelectedErpMaterial({ name: suggestion.name, indexCode: suggestion.indexCode });
     selectedCatalogRef.current = { id: suggestion.catalogId ?? '', name: suggestion.name };
+    setSelectedCatalogAliases(suggestion.catalogIds ?? []);
     setSelectedCatalogId(suggestion.catalogId ?? '');
     setSelectedPalletSetId(''); setInventoryMode('pieces');
     setForm((prev) => ({

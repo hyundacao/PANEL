@@ -547,6 +547,29 @@ test('catalog API finds M2 name fragments in any order without writing or mergin
   assert.ok(f.state.operations.every(operation => operation.mode === 'select'));
 });
 
+test('catalog API links confirmed M-10 pairs for search and Excel without database writes or lost record IDs', async () => {
+  const f=fixture();
+  const name='TRAY HANDLE ASSEMBLY WELDED COST IRON';
+  f.state.tables.original_inventory_catalog.push(
+    row(material({name,indexCode:'M-10-PWY-BSHL-10008',warehouseCode:'M-10'}),'primary'),
+    row(material({name,indexCode:'M-10-8001236303',warehouseCode:'M-10'}),'secondary')
+  );
+  const before=structuredClone(f.state.tables);
+  const catalog=await f.app('getOriginalInventoryCatalog');
+  assert.equal(catalog.length,2);
+  assert.deepEqual(new Set(catalog.map(item=>item.id)),new Set(['primary','secondary']));
+  assert.ok(catalog.every(item=>item.indexCode==='M-10-PWY-BSHL-10008'&&item.indexCode2==='M-10-8001236303'));
+  for(const query of [name,'M-10-PWY-BSHL-10008','M-10-8001236303']) {
+    const results=await f.app('searchOriginalInventoryCatalog',{query,limit:24});
+    assert.equal(results.length,1);
+    assert.equal(results[0].indexCode2,'M-10-8001236303');
+  }
+  const resolved=await f.app('resolveOriginalInventoryCatalogMaterial',{name,unit:'szt.',indexCode:'M-10-8001236303'});
+  assert.equal(resolved.indexCode,'M-10-PWY-BSHL-10008');
+  assert.deepEqual(f.state.tables,before);
+  assert.ok(f.state.operations.every(op=>op.mode==='select'));
+});
+
 test('previously cached empty search immediately finds newly imported catalog rows on each server read', async () => {
   const f = fixture();
   assert.deepEqual(await f.app('searchOriginalInventoryCatalog', { query: 'metal box' }), []);

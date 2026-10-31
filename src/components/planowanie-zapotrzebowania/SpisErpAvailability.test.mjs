@@ -213,19 +213,37 @@ test('indexed matching preserves zero, negatives and already deducted grinding r
 
 test('selecting a suggestion retains its full ERP index and editing the name clears it', () => {
   let selected = null;
+  let aliases = [];
   const context = {
     module: { exports: {} }, selectedCatalogRef: { current: { id: '', name: '' } },
     setSelectedErpMaterial: (value) => { selected = value; },
     setSelectedCatalogId() {}, setSelectedPalletSetId() {}, setInventoryMode() {}, setForm() {},
+    setSelectedCatalogAliases: value => { aliases = value; },
     qtyInputRef: { current: null }
   };
   vm.runInNewContext(compile(`module.exports = { select: ${initializer('applyNameSuggestionToForm')}, commit: ${initializer('applyNameToForm')} };`), context);
-  context.module.exports.select({ name: grateName, indexCode: '1598-7', catalogId: 'catalog-grate', unit: 'szt.' });
+  context.module.exports.select({ name: grateName, indexCode: '1598-7', catalogId: 'catalog-grate', catalogIds: ['catalog-grate','catalog-grate-legacy'], unit: 'szt.' });
   assert.equal(selected.indexCode, '1598-7');
+  assert.deepEqual(aliases,['catalog-grate','catalog-grate-legacy']);
   context.module.exports.commit(grateName);
   assert.equal(selected.indexCode, '1598-7');
   context.module.exports.commit('OTHER MATERIAL');
   assert.equal(selected, null);
+  assert.equal(aliases.length,0);
+});
+
+test('linking two catalog indices keeps pallet profiles attached to either original record ID available', () => {
+  const context = {
+    module:{exports:{}}, selectedCatalogId:'primary',selectedCatalogAliases:['primary','secondary'],
+    palletSets:[
+      {id:'set-primary',primaryCatalogId:'primary',active:true},
+      {id:'set-secondary',primaryCatalogId:'secondary',active:true},
+      {id:'other',primaryCatalogId:'unrelated',active:true},
+      {id:'inactive',primaryCatalogId:'secondary',active:false}
+    ],palletSetError:()=>null
+  };
+  vm.runInNewContext(compile(`const selectedCatalogIds = ${initializer('selectedCatalogIds')}; module.exports = ${initializer('matchingPalletSets')};`),context);
+  assert.deepEqual(Array.from(context.module.exports,item=>item.id),['set-primary','set-secondary']);
 });
 
 test('an old selected index cannot supply stock after the form name was cleared or changed', () => {

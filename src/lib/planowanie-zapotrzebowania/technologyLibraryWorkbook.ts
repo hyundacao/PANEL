@@ -1,5 +1,5 @@
 import type { CellValue, Workbook, Worksheet } from 'exceljs';
-import { buildTechnologyLibraryExport, exportProductionMode, type ExportTechnology } from './technologyLibraryExport';
+import { buildTechnologyExportIndexResolver, buildTechnologyLibraryExport, exportProductionMode, type ExportTechnology, type TechnologyExportCatalogEntry } from './technologyLibraryExport';
 
 type Column = { header: string; key: string; width: number; numeric?: boolean };
 const colors = { header: 'FF293E43', text: 'FF243239', line: 'FFD8E1E4', alternate: 'FFF2F6F7', warning: 'FFFFF0CC', root: 'FFDCEBE7' };
@@ -7,7 +7,7 @@ const numberFormat = '#,##0.########';
 
 const createTable = (workbook: Workbook, name: string, columns: Column[], rows: Record<string, CellValue>[]) => {
   const sheet = workbook.addWorksheet(name, {
-    views: [{ state: 'frozen', ySplit: 1, xSplit: 1, showGridLines: false }],
+    views: [{ state: 'frozen', ySplit: 1, xSplit: 2, showGridLines: false }],
     pageSetup: { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: '1:1' }
   });
   sheet.columns = columns.map((column) => ({ ...column }));
@@ -50,8 +50,13 @@ const tintRow = (sheet: Worksheet, rowNumber: number, color: string, bold = fals
   });
 };
 
-export const createTechnologyLibraryWorkbook = async (technologies: readonly ExportTechnology[], exportedAt = new Date()) => {
+export const createTechnologyLibraryWorkbook = async (
+  technologies: readonly ExportTechnology[],
+  exportedAt = new Date(),
+  catalog: readonly TechnologyExportCatalogEntry[] = []
+) => {
   const data = buildTechnologyLibraryExport(technologies);
+  const indices = buildTechnologyExportIndexResolver(catalog);
   const ExcelJSModule = await import('exceljs');
   const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
   const workbook = new ExcelJS.Workbook();
@@ -78,14 +83,16 @@ export const createTechnologyLibraryWorkbook = async (technologies: readonly Exp
     { topic: 'Wybór w planie', text: 'Biblioteka dopuszcza wybór źródła. Eksport nie przyjmuje samodzielnie magazynu ani maszyny. Rozwinięcie jest podglądem, a źródło trzeba ustalić w planie.' },
     { topic: 'Kolejne warianty', text: 'Wszystkie warianty są pokazane osobno. Drzewo rozwija aktywną bazową technologię półwyrobu, nie wybiera awaryjnej. Przy niejednoznacznym dopasowaniu rozwijanie zatrzymuje się. Archiwalne warianty nie odtwarzają historycznych wersji półwyrobów.' },
     { topic: 'Ilości i jednostki', text: 'Masy są pokazane w gramach na sztukę, tak jak w edytorze. Nie zaokrąglamy przeliczników do pełnych opakowań. Ilość dotyczy bezpośredniego rodzica, nie produktu z pierwszej kolumny. Brak normy pozostaje pusty.' },
+    { topic: 'Indeks 1 i indeks 2', text: 'Oba indeksy są osobnymi kolumnami. Powiązanie pochodzi z kartotek aplikacji, po dokładnym indeksie 1 lub 2. Brakującego indeksu 2 nie wyliczamy z nazwy ani końcówki indeksu 1; jego pole pozostaje puste. Gdy nie ma jednoznacznego powiązania, zachowany jest dotychczasowy indeks zapisu w pierwszej kolumnie indeksu.' },
     { topic: 'Bez podwójnego liczenia', text: 'To skład biblioteki, nie dokument zapotrzebowania. Nie sumuj poziomów drzewa, wariantów ani pakowania nadwyżki. Przykład: wyrób pobiera B z magazynu, B pobiera A z magazynu. A i B były produkowane wcześniej, a bieżący wyrób pobiera gotowe B.' },
     { topic: 'Uwagi', text: `${data.issues.length} uwag do danych lub źródeł. Brak technologii półwyrobu nie jest zastępowany zgadywanym składem. Indeksy są tekstem, także te z zerami na początku.` },
-    { topic: 'Źródło', text: 'Wspólna biblioteka technologii dostępna w aplikacji w chwili eksportu. Bieżące filtry biblioteki nie ograniczają zawartości pliku.' }
+    { topic: 'Źródło', text: 'Wspólna biblioteka technologii i kartoteki indeksów dostępne w aplikacji w chwili eksportu. Bieżące filtry biblioteki nie ograniczają zawartości pliku.' }
   ]);
   info.views = [{ state: 'frozen', ySplit: 1, showGridLines: false }];
 
   createTable(workbook, 'Technologie', [
-    { header: 'Indeks wyrobu', key: 'index', width: 24 }, { header: 'Wyrób / półwyrób', key: 'name', width: 55 },
+    { header: 'Indeks 1', key: 'index1', width: 26 }, { header: 'Indeks 2', key: 'index2', width: 24 },
+    { header: 'Wyrób / półwyrób', key: 'name', width: 55 },
     { header: 'Wariant', key: 'variant', width: 40 }, { header: 'Status', key: 'status', width: 14 },
     { header: 'Skład', key: 'detail', width: 15 }, { header: 'Drzewo', key: 'tree', width: 15 },
     { header: 'Tryb produkcji', key: 'mode', width: 27 }, { header: 'Norma na zmianę (szt.)', key: 'norm', width: 18, numeric: true },
@@ -94,7 +101,7 @@ export const createTechnologyLibraryWorkbook = async (technologies: readonly Exp
   ], data.entries.map((entry) => {
     const technology = entry.technology;
     return {
-      index: technology.productIndex, name: technology.productName, variant: entry.label,
+      ...indices(technology.productIndex), name: technology.productName, variant: entry.label,
       status: technology.archived ? 'Archiwalna' : 'Aktywna',
       detail: firstDirectRow.has(entry.number) ? link('Skład technologii', firstDirectRow.get(entry.number)!, 'Otwórz skład') : 'Brak składników',
       tree: link('Drzewo półwyrobów', firstTreeRow.get(entry.number)!, 'Otwórz drzewo'),
@@ -106,25 +113,30 @@ export const createTechnologyLibraryWorkbook = async (technologies: readonly Exp
   const targetLink = (row: (typeof data.direct)[number]): CellValue => row.target
     ? link('Technologie', row.target.number + 1, `${row.target.technology.productIndex || row.target.technology.productName} · ${row.target.label}`) : '';
   const directSheet = createTable(workbook, 'Skład technologii', [
-    { header: 'Indeks wyrobu', key: 'index', width: 24 }, { header: 'Wyrób / półwyrób', key: 'name', width: 48 },
+    { header: 'Indeks 1 wyrobu', key: 'index1', width: 26 }, { header: 'Indeks 2 wyrobu', key: 'index2', width: 24 },
+    { header: 'Wyrób / półwyrób', key: 'name', width: 48 },
     { header: 'Wariant', key: 'variant', width: 32 }, { header: 'Sekcja', key: 'section', width: 25 },
-    { header: 'Indeks składnika', key: 'code', width: 24 }, { header: 'Składnik', key: 'component', width: 55 },
+    { header: 'Indeks 1 składnika', key: 'code1', width: 26 }, { header: 'Indeks 2 składnika', key: 'code2', width: 24 },
+    { header: 'Składnik', key: 'component', width: 55 },
     { header: 'Rodzaj', key: 'category', width: 18 }, { header: 'Przelicznik', key: 'usage', width: 16, numeric: true },
     { header: 'J.m.', key: 'unit', width: 10 }, { header: 'Podstawa naliczania', key: 'basis', width: 35 },
     { header: 'Źródło składnika', key: 'source', width: 38 }, { header: 'Technologia składnika', key: 'target', width: 32 },
     { header: 'Uwagi', key: 'note', width: 70 }, { header: 'Status technologii', key: 'status', width: 18 }
   ], data.direct.map((row) => ({
-    index: row.parent.technology.productIndex, name: row.parent.technology.productName, variant: row.parent.label,
-    section: row.section, code: row.code, component: row.name, category: row.category, usage: row.usage,
+    ...indices(row.parent.technology.productIndex), name: row.parent.technology.productName, variant: row.parent.label,
+    section: row.section, code1: indices(row.code).index1, code2: indices(row.code).index2,
+    component: row.name, category: row.category, usage: row.usage,
     unit: row.unit, basis: row.basis, source: row.source, target: targetLink(row), note: row.note,
     status: row.parent.technology.archived ? 'Archiwalna' : 'Aktywna'
   })));
   data.direct.forEach((row, index) => { if (row.warning) tintRow(directSheet, index + 2, colors.warning); });
 
   const treeSheet = createTable(workbook, 'Drzewo półwyrobów', [
-    { header: 'Indeks wyrobu głównego', key: 'rootIndex', width: 24 }, { header: 'Wariant wyrobu', key: 'variant', width: 32 },
+    { header: 'Indeks 1 wyrobu głównego', key: 'rootIndex1', width: 26 }, { header: 'Indeks 2 wyrobu głównego', key: 'rootIndex2', width: 24 },
+    { header: 'Wariant wyrobu', key: 'variant', width: 32 },
     { header: 'Poziom', key: 'depth', width: 9, numeric: true }, { header: 'Ścieżka', key: 'path', width: 15 },
-    { header: 'Indeks rodzica', key: 'parent', width: 24 }, { header: 'Indeks składnika', key: 'code', width: 24 },
+    { header: 'Indeks 1 rodzica', key: 'parent1', width: 26 }, { header: 'Indeks 2 rodzica', key: 'parent2', width: 24 },
+    { header: 'Indeks 1 składnika', key: 'code1', width: 26 }, { header: 'Indeks 2 składnika', key: 'code2', width: 24 },
     { header: 'Składnik / wyrób', key: 'component', width: 55 },
     { header: 'Przelicznik / rodzic', key: 'usage', width: 16, numeric: true }, { header: 'J.m.', key: 'unit', width: 10 },
     { header: 'Źródło składnika', key: 'source', width: 38 }, { header: 'Etap produkcji rodzica', key: 'stage', width: 42 },
@@ -132,24 +144,29 @@ export const createTechnologyLibraryWorkbook = async (technologies: readonly Exp
     { header: 'Technologia składnika', key: 'target', width: 32 }, { header: 'Uwagi', key: 'note', width: 70 },
     { header: 'Status technologii wyrobu', key: 'status', width: 20 }
   ], data.tree.map((row) => ({
-    rootIndex: row.root.technology.productIndex, variant: row.root.label, depth: row.depth, path: row.path,
-    parent: row.depth ? row.parent.technology.productIndex : '', code: row.code, component: row.name,
+    rootIndex1: indices(row.root.technology.productIndex).index1, rootIndex2: indices(row.root.technology.productIndex).index2,
+    variant: row.root.label, depth: row.depth, path: row.path,
+    parent1: row.depth ? indices(row.parent.technology.productIndex).index1 : '',
+    parent2: row.depth ? indices(row.parent.technology.productIndex).index2 : '',
+    code1: indices(row.code).index1, code2: indices(row.code).index2, component: row.name,
     usage: row.usage, unit: row.unit, source: row.source, stage: row.stage, section: row.section,
     basis: row.basis, target: targetLink(row), note: row.note, status: row.root.technology.archived ? 'Archiwalna' : 'Aktywna'
   })));
   data.tree.forEach((row, index) => {
-    treeSheet.getRow(index + 2).getCell(7).alignment = { vertical: 'middle', wrapText: true, indent: Math.min(5, row.depth) };
+    treeSheet.getRow(index + 2).getCell('component').alignment = { vertical: 'middle', wrapText: true, indent: Math.min(5, row.depth) };
     if (row.depth === 0) tintRow(treeSheet, index + 2, colors.root, true);
     else if (row.warning) tintRow(treeSheet, index + 2, colors.warning);
   });
 
   createTable(workbook, 'Uwagi', [
-    { header: 'Indeks wyrobu', key: 'index', width: 24 }, { header: 'Wyrób / półwyrób', key: 'name', width: 48 },
-    { header: 'Wariant', key: 'variant', width: 32 }, { header: 'Indeks składnika', key: 'code', width: 24 },
+    { header: 'Indeks 1 wyrobu', key: 'index1', width: 26 }, { header: 'Indeks 2 wyrobu', key: 'index2', width: 24 },
+    { header: 'Wyrób / półwyrób', key: 'name', width: 48 }, { header: 'Wariant', key: 'variant', width: 32 },
+    { header: 'Indeks 1 składnika', key: 'code1', width: 26 }, { header: 'Indeks 2 składnika', key: 'code2', width: 24 },
     { header: 'Składnik', key: 'component', width: 55 }, { header: 'Do sprawdzenia', key: 'message', width: 80 }
   ], data.issues.length ? data.issues.map((issue) => ({
-    index: issue.technology.technology.productIndex, name: issue.technology.technology.productName,
-    variant: issue.technology.label, code: issue.componentCode, component: issue.componentName, message: issue.message
-  })) : [{ index: '', name: '', variant: '', code: '', component: '', message: 'Brak uwag do powiązań i przeliczników.' }]);
+    ...indices(issue.technology.technology.productIndex), name: issue.technology.technology.productName,
+    variant: issue.technology.label, code1: indices(issue.componentCode).index1, code2: indices(issue.componentCode).index2,
+    component: issue.componentName, message: issue.message
+  })) : [{ index1: '', index2: '', name: '', variant: '', code1: '', code2: '', component: '', message: 'Brak uwag do powiązań i przeliczników.' }]);
   return { workbook, data };
 };

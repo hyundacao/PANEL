@@ -1627,10 +1627,8 @@ const ProductCatalogField = ({
                   selectItem(item);
                 }}
               >
-                <span className={cn('block text-sm font-bold', mode === 'name' ? 'catalog-label' : 'text-title')}>{mode === 'name' ? item.name : item.index2 || item.index}</span>
-                <span className={cn('mt-0.5 block text-xs font-medium', mode === 'index' ? 'catalog-label' : 'text-muted')}>
-                  {mode === 'name' ? `Indeks ${item.index2 ? '2' : '1'}: ${item.index2 || item.index || 'brak w kartotece'}` : item.name}
-                </span>
+                <span className="catalog-label block text-sm font-bold">{item.name}</span>
+                {item.index2 ? <span className="mt-0.5 block text-xs font-medium text-muted">Indeks 2: {item.index2}</span> : null}
               </button>
             ))}
           </div>
@@ -1849,7 +1847,7 @@ const MaterialCatalogInput = forwardRef<HTMLInputElement, MaterialCatalogInputPr
         >
           <span className="catalog-label block whitespace-normal break-words text-sm font-bold">{item.name}</span>
           <span className="mt-0.5 flex items-center gap-2 text-xs text-dim">
-            <span>Indeks {item.index2 ? '2' : '1'}: {item.index2 || item.index || 'brak w kartotece'}</span>
+            {item.index2 ? <span>Indeks 2: {item.index2}</span> : null}
             {item.warehouseCode ? <span className="rounded-full border border-border px-1.5 py-0.5 font-bold text-body">{item.warehouseCode}</span> : null}
           </span>
         </button>) : <p className="px-3 py-3 text-sm text-muted">Brak pasującej pozycji w kartotece.</p>}

@@ -20,8 +20,10 @@ export function TechnologyLibraryExportButton({ technologies, editorDirty, onMes
     try {
       // Load the spreadsheet engine only when the user requests an export.
       const { createTechnologyLibraryWorkbook } = await import('@/lib/planowanie-zapotrzebowania/technologyLibraryWorkbook');
+      const { getOriginalInventoryCatalog } = await import('@/lib/api');
+      const catalog = await getOriginalInventoryCatalog();
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      const { workbook, data } = await createTechnologyLibraryWorkbook(technologies);
+      const { workbook, data } = await createTechnologyLibraryWorkbook(technologies, new Date(), catalog);
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = URL.createObjectURL(blob);
