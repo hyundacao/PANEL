@@ -21,6 +21,8 @@ function planningApi() {
     '@/lib/utils/productionTaskReference': reference,
     '@/lib/utils/originalInventorySpisSearch': {},
     '@/lib/utils/originalInventoryM10Indices': {},
+    '@/lib/utils/originalInventoryCatalogRegister': {},
+    '@/lib/utils/originalInventoryCatalogRegisterServer': {},
     '@/lib/planowanie-zapotrzebowania/stateScopes': scopes,
     '@/lib/planowanie-zapotrzebowania/palletSets': {},
     '@/lib/planowanie-zapotrzebowania/productCatalogSearch': {},

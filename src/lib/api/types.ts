@@ -277,6 +277,8 @@ export type OriginalInventoryCatalogImportResult = {
   inserted: number;
   skipped: number;
   updated?: number;
+  linked?: number;
+  blocked?: number;
   catalogSync?: OriginalInventoryCatalogSyncResult;
   catalogRefreshToken?: string;
 };

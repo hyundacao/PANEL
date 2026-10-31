@@ -33,6 +33,16 @@ const load = (file) => {
 const { SpisErpAvailability } = load(path.join(directory, 'SpisErpAvailability.tsx'));
 const { matchOriginalInventoryErpStock, findOriginalInventoryCatalogMaterial, buildOriginalInventoryNameResolver } = load(path.join(root, 'src/lib/utils/originalInventoryErpMatch.ts'));
 const source = readFileSync(path.join(directory, 'SpisRzeczywisty.tsx'), 'utf8');
+
+test('ERP may use the explicitly registered index 2 without matching a different primary index', () => {
+  const material = {name:'HOSTACOM',unit:'kg',indexCode:'M-1-TW-BSHL-5607-00',indexCode2:'527-002'};
+  const stock = {name:'HOSTACOM',unit:'kg',indexCode:'527-002',realQty:100,availableQty:90};
+  const normalize = name => name.toLowerCase();
+  assert.equal(matchOriginalInventoryErpStock([stock],material,normalize).availableQty,90);
+  assert.equal(matchOriginalInventoryErpStock([{...stock,indexCode:'OTHER',indexCode2:'527-002'}],material,normalize),null);
+  assert.equal(matchOriginalInventoryErpStock([{...stock,indexCode:'OTHER'}],{...material,indexCode:null},normalize),null);
+  assert.equal(matchOriginalInventoryErpStock([{...stock,unit:'litr'}],material,normalize),null);
+});
 const ast = ts.createSourceFile('SpisRzeczywisty.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const queryNodes = new Map();
 let availabilityNode;

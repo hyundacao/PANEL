@@ -6,6 +6,7 @@ import { getInventoryImportIndexColumns, normalizeInventoryImportHeader } from '
 
 export const normalizeOriginalInventoryCatalogCell = (value: unknown) =>
   String(value ?? '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -25,7 +26,7 @@ export const normalizeOriginalInventoryCatalogIdentityKey = (
 
 const normalizeHeader = normalizeInventoryImportHeader;
 
-const NAME_HEADERS = new Set(['nazwa', 'material', 'tworzywo', 'kartoteka', 'name']);
+const NAME_HEADERS = new Set(['nazwa', 'nazwa artykulu (materialu)', 'material', 'tworzywo', 'kartoteka', 'name']);
 const UNIT_HEADERS = new Set(['jedn', 'jm', 'j m', 'jednostka', 'unit']);
 
 const findHeaderIndex = (headers: string[], allowed: Set<string>) =>
@@ -53,12 +54,12 @@ const scoreCatalogCandidate = (name: string, unit: string, indexCode: string | n
 
 const parseFallbackCatalogRow = (row: unknown[]) => {
   const firstLayout = {
-    name: normalizeOriginalInventoryName(row?.[0]),
+    name: normalizeOriginalInventoryName(normalizeOriginalInventoryCatalogCell(row?.[0])),
     unit: normalizeOriginalInventoryCatalogCell(row?.[1]) || 'kg',
     indexCode: normalizeOriginalInventoryCatalogCell(row?.[2]) || null
   };
   const erpLayout = {
-    name: normalizeOriginalInventoryName(row?.[2]),
+    name: normalizeOriginalInventoryName(normalizeOriginalInventoryCatalogCell(row?.[2])),
     unit: normalizeOriginalInventoryCatalogCell(row?.[3]) || 'kg',
     indexCode: normalizeOriginalInventoryCatalogCell(row?.[1]) || null
   };
@@ -82,7 +83,7 @@ export const parseOriginalInventoryCatalogRows = (rows: unknown[][]) => {
   rows.forEach((row, index) => {
     const parsed = headerLayout
       ? {
-          name: normalizeOriginalInventoryName(row?.[headerLayout.nameIndex]),
+          name: normalizeOriginalInventoryName(normalizeOriginalInventoryCatalogCell(row?.[headerLayout.nameIndex])),
           unit:
             headerLayout.unitIndex >= 0
               ? normalizeOriginalInventoryCatalogCell(row?.[headerLayout.unitIndex]) || 'kg'
@@ -102,7 +103,7 @@ export const parseOriginalInventoryCatalogRows = (rows: unknown[][]) => {
     if (!parsed.indexCode) return;
 
     const indexCode2 = 'indexCode2' in parsed ? parsed.indexCode2 as string | null : null;
-    const key = `${normalizeOriginalInventoryCatalogIdentityKey(parsed.name, parsed.indexCode)}|${indexCode2 ?? ''}`;
+    const key = `${normalizeOriginalInventoryCatalogIdentityKey(parsed.name, parsed.indexCode)}|${indexCode2 ?? ''}|${parsed.unit.toLowerCase()}`;
     if (seen.has(key)) return;
     seen.add(key);
 

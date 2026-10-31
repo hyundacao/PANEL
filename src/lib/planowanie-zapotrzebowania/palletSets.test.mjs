@@ -12,7 +12,10 @@ const require = createRequire(import.meta.url);
 const ts = require('typescript');
 const serverFile = fileURLToPath(new URL('./palletInventoryServer.ts', import.meta.url));
 const mod = new Module(serverFile);
-mod.require = (id) => id === './palletSets' ? domain : id === '@/lib/utils/productionPlanDate' ? dates : require(id);
+mod.require = (id) => id === './palletSets' ? domain : id === '@/lib/utils/productionPlanDate' ? dates :
+  id === '@/lib/utils/originalInventoryCatalogRegisterServer' ? { readOriginalInventoryCatalogRegister: async db => ({state:db.register ?? null}) } :
+  id === '@/lib/utils/originalInventoryCatalogRegister' ? { createCatalogRegisterResolver: state => ({isBlocked:item => state?.blockedNames?.includes(item.name) ?? false}),
+    applyOriginalInventoryCatalogRegister: items => items } : require(id);
 mod._compile(ts.transpileModule(readFileSync(serverFile, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, serverFile);
 const api = mod.exports;
 const owner = (name) => inventoryOwnership({ id: name, username: name }, [{ id: name, username: name }]);
@@ -62,6 +65,13 @@ function database() {
 test('full pallets expand to ordinary stock quantities, never fractional wrappers', () => {
   assert.deepEqual(domain.palletSetTotals(profile(), 3).map((part) => part.total), [120, 3, 3]);
   for (const count of [0, -1, 0.5, NaN, Infinity, '3']) assert.deepEqual(domain.palletSetTotals(profile(), count), []);
+});
+
+test('a blocked catalog component rejects a new pallet count before any stock writes', async () => {
+  const f = database();
+  f.db.register = {blockedNames:['lid']};
+  await assert.rejects(api.addPalletInventory(f.db, request(), owner('counter')), /CATALOG_BLOCKED/);
+  assert.equal(f.state.writes.length, 0);
 });
 
 test('profiles require precise catalog identities, piece units and positive whole quantities', () => {

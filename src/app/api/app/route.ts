@@ -20,10 +20,13 @@ import {
 } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { normalizeOriginalInventoryCatalogIdentityKey } from '@/lib/utils/originalInventoryCatalog';
+import { normalizeOriginalInventoryNameKey } from '@/lib/utils/originalInventoryName';
 import { buildOriginalInventoryNameResolver, findOriginalInventoryCatalogMaterial } from '@/lib/utils/originalInventoryErpMatch';
 import { splitGrindingQuantity } from '@/lib/utils/originalInventoryGrinding';
 import { matchRegrindCatalogErpStocks } from '@/lib/utils/regrindCatalogErp';
 import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
+import { applyOriginalInventoryCatalogRegister } from '@/lib/utils/originalInventoryCatalogRegister';
+import { readOriginalInventoryCatalogRegister, assertOriginalInventoryCatalogAllowed } from '@/lib/utils/originalInventoryCatalogRegisterServer';
 import { linkOriginalInventoryM10Indices } from '@/lib/utils/originalInventoryM10Indices';
 import { assertOriginalInventoryImportIndices } from '@/lib/utils/originalInventoryIndex';
 import {
@@ -1129,6 +1132,7 @@ const ensureActionAccess = (action: string, user: AppUser, payload: any) => {
       requireOriginalInventoryReadAccess(user);
       return;
     case 'getOriginalInventoryCatalog':
+    case 'getOriginalInventoryCatalogRestrictions':
     case 'searchOriginalInventoryCatalog':
     case 'resolveOriginalInventoryCatalogMaterial':
     case 'getOriginalInventoryPalletSets':
@@ -2389,9 +2393,11 @@ const fetchAllOriginalCatalogRows = async () => {
 
 const fetchOriginalCatalog = async () => {
   const data = await fetchAllOriginalCatalogRows();
-  return linkOriginalInventoryM10Indices(data
+  const { state } = await readOriginalInventoryCatalogRegister(supabaseAdmin);
+  const mapped = data
     .filter((row) => String(row.index_code ?? '').trim().length > 0)
-    .map(mapOriginalInventoryCatalogEntry));
+    .map(mapOriginalInventoryCatalogEntry);
+  return state ? applyOriginalInventoryCatalogRegister(mapped, state) : linkOriginalInventoryM10Indices(mapped);
 };
 
 const loadOriginalCatalog = async (): Promise<OriginalInventoryCatalogEntry[]> => {
@@ -7993,7 +7999,16 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       return;
     }
     case 'getOriginalInventoryCatalogFromErp': {
-      return loadOriginalCatalogFromErpProxy();
+      const rows = await loadOriginalCatalogFromErpProxy();
+      const { state } = await readOriginalInventoryCatalogRegister(supabaseAdmin);
+      return applyOriginalInventoryCatalogRegister(rows, state);
+    }
+    case 'getOriginalInventoryCatalogRestrictions': {
+      const { state } = await readOriginalInventoryCatalogRegister(supabaseAdmin);
+      const activeNames = new Set((state?.items ?? []).map(item => normalizeOriginalInventoryNameKey(item.name)));
+      return { blockedNames: [...new Set((state?.blocked ?? []).map(item => item.name))]
+        .filter(name => !activeNames.has(normalizeOriginalInventoryNameKey(name))),
+        blockedCatalogIds: [...state?.blockedCatalogIds ?? [], ...state?.ambiguousCatalogIds ?? []] };
     }
     case 'getOriginalInventoryErpSnapshot': {
       const snapshotDate = String(payload?.snapshotDate ?? '').trim();
@@ -8031,6 +8046,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!warehouseId) throw new Error('WAREHOUSE_REQUIRED');
       if (!name) throw new Error('NAME_REQUIRED');
       if (!Number.isFinite(qty) || qty <= 0) throw new Error('QTY_REQUIRED');
+      await assertOriginalInventoryCatalogAllowed(supabaseAdmin, { name, unit, indexCode: payload?.indexCode, indexCode2: payload?.indexCode2 });
       const now = new Date();
       let at = now.toISOString();
       if (typeof payload?.at === 'string') {
@@ -8288,6 +8304,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (!name) throw new Error('NAME_REQUIRED');
       if (!indexCode) throw new Error('INDEX_REQUIRED');
       assertOriginalInventoryImportIndices([{ indexCode, indexCode2 }]);
+      await assertOriginalInventoryCatalogAllowed(supabaseAdmin, { name, unit, indexCode, indexCode2 });
       const { data: existing, error } = await supabaseAdmin
         .from('original_inventory_catalog')
         .select('id, name, index_code');

@@ -23,6 +23,7 @@ import {
   getCatalog,
   getOriginalInventory,
   getOriginalInventoryCatalog,
+  getOriginalInventoryCatalogRestrictions,
   getOriginalInventoryCatalogFromErp,
   searchOriginalInventoryCatalog,
   resolveOriginalInventoryCatalogMaterial,
@@ -428,7 +429,7 @@ const buildInventoryIndex2Resolver = (
     const indexCode2 = getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2).trim();
     if (!key || !indexCode2) return;
     const candidates = byName.get(key) ?? [];
-    candidates.push({ ...item, indexCode2, inErp: erpIndices.has(normalizeOriginalInventoryIndex(item.indexCode)) });
+    candidates.push({ ...item, indexCode2, inErp: [item.indexCode, indexCode2].some(code => erpIndices.has(normalizeOriginalInventoryIndex(code))) });
     byName.set(key, candidates);
   });
   const unitKey = (unit: string) => isPieceGrindingUnit(unit) ? 'szt' : unit.trim().toLowerCase().replace(/\.$/, '');
@@ -744,7 +745,7 @@ const OriginalInventoryNameSearch = ({
     return searchOriginalInventorySpisSuggestions(
       [...existingSuggestions, ...remoteSuggestions].map((suggestion) => ({
         ...suggestion,
-        inErp: erpIndexKeys.has(normalizeOriginalInventoryIndex(suggestion.indexCode))
+        inErp: [suggestion.indexCode, suggestion.indexCode2].some(code => erpIndexKeys.has(normalizeOriginalInventoryIndex(code)))
       })),
       query,
       inventoriedNames,
@@ -1019,6 +1020,13 @@ export default function SpisRzeczywisty() {
     gcTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false
   });
+  const { data: catalogRestrictions } = useQuery({
+    queryKey: ['spis-oryginalow-catalog-restrictions'],
+    queryFn: getOriginalInventoryCatalogRestrictions,
+    staleTime: 5 * 60 * 1000
+  });
+  const blockedCatalogNames = useMemo(() => new Set((catalogRestrictions?.blockedNames ?? []).map(normalizeCatalogNameKey)), [catalogRestrictions]);
+  const blockedCatalogIds = useMemo(() => new Set(catalogRestrictions?.blockedCatalogIds ?? []), [catalogRestrictions]);
   const { data: siloConfigs = [] } = useQuery({
     queryKey: ['original-inventory-silos-config'],
     queryFn: getOriginalInventorySilosConfig
@@ -1379,6 +1387,8 @@ export default function SpisRzeczywisty() {
       const messageMap: Record<string, string> = {
         WAREHOUSE_REQUIRED: 'Wybierz hale do spisu.',
         NAME_REQUIRED: 'Podaj pełną nazwę tworzywa lub półproduktu.',
+        CATALOG_BLOCKED: 'Ta kartoteka jest zablokowana. Wybierz aktualny indeks.',
+        CATALOG_AMBIGUOUS: 'Indeks pasuje do kilku kartotek. Wybierz pozycje z aktualnej listy.',
         QTY_REQUIRED: 'Wpisz poprawną ilość.'
       };
       toast({ title: messageMap[err.message] ?? 'Nie dodano wpisu.', tone: 'error' });
@@ -1563,21 +1573,12 @@ export default function SpisRzeczywisty() {
         toast({ title: 'Plik nie zawiera kartotek do importu.', tone: 'error' });
         return;
       }
-      const existingNames = new Set(
-        catalog.map((item) => normalizeOriginalInventoryCatalogIdentityKey(item.name, item.indexCode))
-      );
-      const toImport = items.filter(
-        (item) => !existingNames.has(normalizeOriginalInventoryCatalogIdentityKey(item.name, item.indexCode))
-      );
-      setCatalogImportItems(toImport);
+      setCatalogImportItems(items);
       setCatalogImportSummary({
         parsed: items.length,
-        toImport: toImport.length,
-        skipped: items.length - toImport.length
+        toImport: items.length,
+        skipped: 0
       });
-      if (toImport.length === 0) {
-        toast({ title: 'Wszystkie kartoteki z pliku juz istnieja. Nic do dodania.', tone: 'success' });
-      }
     } catch {
       resetCatalogImportState();
       toast({ title: 'Nie odczytano pliku. Sprawdz format CSV/XLS/XLSX.', tone: 'error' });
@@ -1598,6 +1599,7 @@ export default function SpisRzeczywisty() {
     try {
       const result = await importCatalogMutation.mutateAsync(file);
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-local'] });
+      queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-restrictions'] });
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-material'] });
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow-catalog-search'] });
       queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] });
@@ -1608,13 +1610,17 @@ export default function SpisRzeczywisty() {
       resetCatalogImportState();
       toast({
         title: result.catalogSync?.failed ? 'Import kartotek wymaga uwagi' : 'Wgrano kartoteki',
-        description: `Dodano: ${result.inserted}, zaktualizowano kartoteki: ${result.updated ?? 0}, pominieto: ${result.skipped}. ${result.catalogSync?.warnings.map((warning) => warning.reason).slice(0, 2).join(' ') ?? ''}`,
+        description: `Dodano: ${result.inserted}, zaktualizowano kartoteki: ${result.updated ?? 0}, pominieto: ${result.skipped}.${result.linked !== undefined ? ` Powiazane grupy: ${result.linked}. Zablokowane: ${result.blocked ?? 0}.` : ''} ${result.catalogSync?.warnings.map((warning) => warning.reason).slice(0, 2).join(' ') ?? ''}`,
         tone: result.catalogSync?.failed ? 'error' : 'success'
       });
     } catch (err) {
       const messageMap: Record<string, string> = {
         EMPTY: 'Plik nie zawiera poprawnych nazw kartotek.',
         AMBIGUOUS_INDEX_COLUMNS: 'Plik ma kilka kolumn oznaczonych jako ten sam indeks. Nie zmieniono danych.',
+        CATALOG_REGISTER_UNIT_REQUIRED: 'W tabeli kartotek brakuje kolumny J.M. Nie wgrano pliku.',
+        CATALOG_REGISTER_INVALID: 'Tabela kartotek ma niekompletne dane.',
+        CONFLICTING_INDEX_COLUMNS: 'Ta sama kartoteka ma sprzeczne indeksy lub jednostki w pliku. Nie zmieniono powiazan.',
+        REVISION_CONFLICT: 'Kartoteki zmienily sie w trakcie importu. Ponow import.',
         MIGRATION_REQUIRED_INVENTORY_INDICES: 'Zapis obu indeksów wymaga uruchomienia 11_indeksy_kartotek.sql. Nie zmieniono danych.',
         [ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR]: ORIGINAL_INVENTORY_INDEX_TIMESTAMP_MESSAGE,
         FORBIDDEN: 'Brak uprawnien do importu kartotek.'
@@ -1770,6 +1776,8 @@ export default function SpisRzeczywisty() {
       {
         warehouseId: effectiveSelectedWarehouseId,
         name,
+        indexCode: selectedErpMaterial?.name === name ? selectedErpMaterial.indexCode : null,
+        indexCode2: resolvedErpMaterial?.name === name ? resolvedErpMaterial.indexCode2 : null,
         qty: qtyValue,
         unit: form.unit.trim() || 'kg',
         at: buildEntryTimestamp(spisDate),
@@ -2183,16 +2191,15 @@ export default function SpisRzeczywisty() {
       : current);
     void queryClient.invalidateQueries({ queryKey: ['spis-oryginalow'] });
   }, [resolvedErpMaterial, form.name, form.unit, queryClient]);
-  const matchedErpSnapshot = useMemo(() => {
-    return matchOriginalInventoryErpStock(effectiveErpSnapshotEntries, {
-      name: form.name,
-      unit: form.unit,
-      indexCode: selectedErpIndex || resolvedErpMaterial?.indexCode
-    }, normalizeCatalogNameKey);
-  }, [effectiveErpSnapshotEntries, form.name, form.unit, selectedErpIndex, resolvedErpMaterial]);
+  const matchedErpSnapshot = matchOriginalInventoryErpStock(effectiveErpSnapshotEntries, {
+    name: form.name,
+    unit: form.unit,
+    indexCode: selectedErpIndex || resolvedErpMaterial?.indexCode,
+    indexCode2: resolvedErpMaterial?.indexCode2
+  }, normalizeCatalogNameKey);
   const existingNameSuggestions = useMemo<OriginalInventoryNameSuggestion[]>(
     () =>
-      [...palletSets.filter((set) => set.active && !palletSetError(set)).flatMap((set) => {
+      !catalogRestrictions ? [] : [...palletSets.filter((set) => set.active && !palletSetError(set) && !set.components.some(part => blockedCatalogIds.has(part.catalogId))).flatMap((set) => {
         const part = set.components.find((item) => item.catalogId === set.primaryCatalogId);
         return part ? [toOriginalInventoryNameSuggestion({ ...part, id: part.catalogId })] : [];
       }), ...existingList.map((item) => ({
@@ -2202,12 +2209,12 @@ export default function SpisRzeczywisty() {
         indexCode: null,
         indexCode2: null,
         isMag55: false
-      }))],
-    [existingList, palletSets]
+      }))].filter(item => !blockedCatalogNames.has(normalizeCatalogNameKey(item.name))),
+    [existingList, palletSets, blockedCatalogNames, blockedCatalogIds, catalogRestrictions]
   );
   const inventoriedNameKeys = useMemo(() => [...existingByName.keys()], [existingByName]);
   const erpSuggestionIndexKeys = useMemo(
-    () => new Set(erpSnapshotEntries.map(item => normalizeOriginalInventoryIndex(item.indexCode)).filter(Boolean)),
+    () => new Set(erpSnapshotEntries.flatMap(item => [item.indexCode, item.indexCode2].map(normalizeOriginalInventoryIndex)).filter(Boolean)),
     [erpSnapshotEntries]
   );
   const filteredCatalog = useMemo(() => {
@@ -2215,7 +2222,7 @@ export default function SpisRzeczywisty() {
     if (!normalizeCatalogNameKey(deferredCatalogSearch)) return catalog;
     return catalog
       .filter((item) =>
-        matchesCatalogSearch(deferredCatalogSearch, item.name, item.indexCode, item.warehouseCode)
+        matchesCatalogSearch(deferredCatalogSearch, item.name, [item.indexCode, item.indexCode2].filter(Boolean).join(' '), item.warehouseCode)
       )
       .sort((a, b) => {
         const warehousePriority =
@@ -2234,6 +2241,7 @@ export default function SpisRzeczywisty() {
       visibleCatalogRows.map((item) => [
         item.name,
         item.indexCode ?? '-',
+        item.indexCode2 ?? '-',
         item.warehouseCode ?? '-',
         item.unit,
         new Date(item.createdAt).toLocaleString('pl-PL')
@@ -4224,9 +4232,6 @@ export default function SpisRzeczywisty() {
                 <label className="text-xs uppercase tracking-wide text-dim">
                   Import kartotek
                 </label>
-                <p className="text-xs text-dim">
-                  Obslugiwane uklady: `Nazwa | Jedn. | Indeks` albo ERP `Kod | Indeks | Nazwa | Jm`.
-                </p>
                 <Input
                   key={catalogImportInputKey}
                   type="file"
@@ -4261,8 +4266,7 @@ export default function SpisRzeczywisty() {
             {catalogImportSummary && (
               <div className="rounded-lg border border-border bg-surface2 p-3 text-sm text-body">
                 Plik: <span className="font-semibold">{catalogImportFileName}</span> | odczytano:{' '}
-                {catalogImportSummary.parsed} | do dodania: {catalogImportSummary.toImport} |
-                pominiete jako juz istniejace: {catalogImportSummary.skipped}
+                {catalogImportSummary.parsed} | do importu: {catalogImportSummary.toImport}
               </div>
             )}
           </Card>
@@ -4297,9 +4301,6 @@ export default function SpisRzeczywisty() {
                 <label className="text-xs uppercase tracking-wide text-dim">
                   Import kartotek
                 </label>
-                <p className="text-xs text-dim">
-                  Obslugiwane uklady: `Nazwa | Jedn. | Indeks` albo ERP `Kod | Indeks | Nazwa | Jm`.
-                </p>
                 <Input
                   key={catalogImportInputKey}
                   type="file"
@@ -4319,7 +4320,6 @@ export default function SpisRzeczywisty() {
                 {catalogImportSummary && (
                   <p className="text-xs text-dim">
                     W pliku: {catalogImportSummary.parsed}. Do importu: {catalogImportSummary.toImport}.
-                    Pominiete jako istniejace: {catalogImportSummary.skipped}.
                   </p>
                 )}
                 {importCatalogMutation.isPending && (
@@ -4339,6 +4339,45 @@ export default function SpisRzeczywisty() {
                 {importCatalogMutation.isPending ? 'Wgrywanie...' : 'Wgraj kartoteki'}
               </Button>
             </div>
+            <section aria-label="Struktura pliku kartotek" className="min-w-0 space-y-2 border-t border-border pt-3">
+              <h3 className="text-sm font-semibold text-title">Struktura pliku Excel</h3>
+              <div className="overflow-x-auto rounded-lg border border-border">
+                <table className="w-full min-w-[720px] text-left text-xs">
+                  <thead className="bg-surface2 text-title">
+                    <tr className="border-b border-border">
+                      <th scope="col" className="px-3 py-2 font-semibold">
+                        <span className="mb-1 block text-dim">A: Indeks 1</span>
+                        Indeks [+]
+                      </th>
+                      <th scope="col" className="px-3 py-2 font-semibold">
+                        <span className="mb-1 block text-dim">B: Indeks 2</span>
+                        Indeks 2
+                      </th>
+                      <th scope="col" className="px-3 py-2 font-semibold">
+                        <span className="mb-1 block text-dim">C: Nazwa</span>
+                        Nazwa artykułu (materiału)
+                      </th>
+                      <th scope="col" className="px-3 py-2 font-semibold">
+                        <span className="mb-1 block text-dim">D: Jednostka</span>
+                        J.M.
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-body">
+                    <tr>
+                      <td className="px-3 py-2">M-1-TW-BSHL-5607-00</td>
+                      <td className="px-3 py-2">527-002</td>
+                      <td className="px-3 py-2">HOSTACOM M2 N01 L304698</td>
+                      <td className="px-3 py-2">kg</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-dim">
+                Wiersz 1: nagłówki kolumn. Kolejne wiersze: kartoteki, jak w przykładzie powyżej.
+                {' '}Indeks 1, nazwa i jednostka są wymagane. Indeks 2 może być pusty.
+              </p>
+            </section>
             <div className="rounded-xl border border-[rgba(255,122,26,0.35)] bg-[rgba(255,122,26,0.08)] p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-dim">
                 Pole dla kolejnego programisty
@@ -4359,7 +4398,7 @@ export default function SpisRzeczywisty() {
               placeholder="Szukaj po nazwie lub indeksie"
             />
             <DataTable
-              columns={['Nazwa', 'Indeks', 'Mag.', 'Jedn.', 'Utworzono']}
+              columns={['Nazwa', 'Indeks 1', 'Indeks 2', 'Mag.', 'Jedn.', 'Utworzono']}
               rows={catalogTableRows}
             />
             <div className="flex flex-col gap-2 text-xs text-dim sm:flex-row sm:items-center sm:justify-between">

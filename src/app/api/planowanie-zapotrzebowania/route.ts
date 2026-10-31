@@ -12,6 +12,8 @@ import {
 } from '@/lib/planowanie-zapotrzebowania/productCatalogSearch';
 import { getOriginalInventorySpisIndex2 } from '@/lib/utils/originalInventorySpisSearch';
 import { linkOriginalInventoryM10Indices } from '@/lib/utils/originalInventoryM10Indices';
+import { applyOriginalInventoryCatalogRegister } from '@/lib/utils/originalInventoryCatalogRegister';
+import { readOriginalInventoryCatalogRegister, CATALOG_REGISTER_MODULE_ID } from '@/lib/utils/originalInventoryCatalogRegisterServer';
 import { FIXED_INVENTORY_DEVICE_SOURCE_TYPE } from '@/lib/planowanie-zapotrzebowania/fixedInventoryDevices';
 import {
   isSharedPlanningField,
@@ -31,7 +33,7 @@ const PRODUCT_CATALOG_PAGE_CONCURRENCY = 4;
 const PRODUCT_CATALOG_CACHE_MS = 5 * 60 * 1000;
 const PLANNING_STATE_CACHE_MS = 30 * 1000;
 
-let productCatalogCache: { items: ProductCatalogItem[]; expiresAt: number } | null = null;
+let productCatalogCache: { items: ProductCatalogItem[]; expiresAt: number; registerRevision: number } | null = null;
 let productCatalogLoadPromise: Promise<ProductCatalogItem[]> | null = null;
 let planningStateCache: (PlanningRecord & { expiresAt: number }) | null = null;
 const workspacePreviewCache = new Map<string, { revision: number; projection: unknown }>();
@@ -182,11 +184,13 @@ const queryProductCatalogRows = async () => {
 
 const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
   const rows = await queryProductCatalogRows();
+  const { state } = await readOriginalInventoryCatalogRegister(supabaseAdmin);
   const unique = new Map<string, ProductCatalogItem>();
-  const linked = linkOriginalInventoryM10Indices(rows.map(row => ({
+  const mapped = rows.map(row => ({
     id: String(row.id), name: String(row.name ?? '').replace(/\s+/g, ' ').trim(),
     indexCode: row.index_code, indexCode2: row.index_code2, warehouseCode: row.warehouse_code, unit: row.unit
-  })));
+  }));
+  const linked = state ? applyOriginalInventoryCatalogRegister(mapped, state) : linkOriginalInventoryM10Indices(mapped);
   linked.forEach((row) => {
     const name = row.name;
     const index = String(row.indexCode ?? '').replace(/\s+/g, ' ').trim();
@@ -217,13 +221,16 @@ const queryProductCatalog = async (): Promise<ProductCatalogItem[]> => {
 };
 
 const loadProductCatalog = async () => {
-  if (productCatalogCache && productCatalogCache.expiresAt > Date.now()) {
+  const { data, error } = await supabaseAdmin.from('material_planning_state').select('revision').eq('id', CATALOG_REGISTER_MODULE_ID).maybeSingle();
+  if (error) throw error;
+  const registerRevision = Number(data?.revision ?? 0);
+  if (productCatalogCache && productCatalogCache.registerRevision === registerRevision && productCatalogCache.expiresAt > Date.now()) {
     return productCatalogCache.items;
   }
   if (!productCatalogLoadPromise) productCatalogLoadPromise = queryProductCatalog();
   try {
     const items = await productCatalogLoadPromise;
-    productCatalogCache = { items, expiresAt: Date.now() + PRODUCT_CATALOG_CACHE_MS };
+    productCatalogCache = { items, expiresAt: Date.now() + PRODUCT_CATALOG_CACHE_MS, registerRevision };
     return items;
   } finally {
     productCatalogLoadPromise = null;

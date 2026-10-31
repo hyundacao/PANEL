@@ -634,6 +634,13 @@ let originalInventoryCatalogRefreshToken: string | undefined;
 export const getOriginalInventoryCatalog = async (): Promise<OriginalInventoryCatalogEntry[]> =>
   appRequest('getOriginalInventoryCatalog', { catalogRefreshToken: originalInventoryCatalogRefreshToken });
 
+export const getOriginalInventoryCatalogRestrictions = async (): Promise<{ blockedNames: string[]; blockedCatalogIds: string[] }> =>
+  appRequest('getOriginalInventoryCatalogRestrictions', { catalogRefreshToken: originalInventoryCatalogRefreshToken });
+
+const notifyOriginalCatalogChanged = () => {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('apka:catalog-updated'));
+};
+
 export const searchOriginalInventoryCatalog = async (
   query: string,
   limit = 24,
@@ -739,6 +746,8 @@ export const addOriginalInventory = async (payload: {
   name: string;
   qty: number;
   unit: string;
+  indexCode?: string | null;
+  indexCode2?: string | null;
   location?: string;
   note?: string;
   at?: string;
@@ -766,6 +775,7 @@ export const addOriginalInventoryCatalogBulk = async (payload: {
 }): Promise<OriginalInventoryCatalogImportResult> => {
   const result = await appRequest<OriginalInventoryCatalogImportResult>('addOriginalInventoryCatalogBulk', payload);
   originalInventoryCatalogRefreshToken = result.catalogRefreshToken;
+  notifyOriginalCatalogChanged();
   return result;
 };
 
@@ -800,6 +810,7 @@ export const importOriginalInventoryCatalogFile = async (
 
   const result = await response.json() as OriginalInventoryCatalogImportResult;
   originalInventoryCatalogRefreshToken = result.catalogRefreshToken;
+  notifyOriginalCatalogChanged();
   return result;
 };
 
@@ -836,6 +847,7 @@ export const importOriginalInventoryErpSnapshotFile = async (
 
   const result = await response.json() as OriginalInventoryErpSnapshotImportResult;
   originalInventoryCatalogRefreshToken = result.catalogRefreshToken;
+  notifyOriginalCatalogChanged();
   return result;
 };
 

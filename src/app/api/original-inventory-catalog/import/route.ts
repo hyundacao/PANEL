@@ -7,6 +7,8 @@ import { canSeeTab, isReadOnly } from '@/lib/auth/access';
 import { clearSessionCookie, getAuthenticatedUser } from '@/lib/auth/session';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { parseOriginalInventoryCatalogRows } from '@/lib/utils/originalInventoryCatalog';
+import { normalizeInventoryImportHeader, getInventoryImportIndexColumns } from '@/lib/utils/originalInventoryImportColumns';
+import { importOriginalInventoryCatalogRegister, normalizeCatalogRegisterItem } from '@/lib/utils/originalInventoryCatalogRegisterServer';
 import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalInventoryCatalogSync';
 import { assertOriginalInventoryImportIndices, ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR } from '@/lib/utils/originalInventoryIndex';
 
@@ -14,11 +16,11 @@ export const dynamic = 'force-dynamic';
 
 const parseCatalogImportFile = async (
   file: File
-): Promise<Array<{ name: string; unit: string; indexCode: string | null; indexCode2?: string | null; warehouseCode: string | null }>> => {
+) => {
   const bytes = await file.arrayBuffer();
   const workbook = XLSX.read(bytes, { type: 'array', raw: false, sheetRows: IMPORT_SHEET_ROWS });
   const firstSheetName = workbook.SheetNames[0];
-  if (!firstSheetName) return [];
+  if (!firstSheetName) return { items: [], registerFormat: false };
 
   const sheet = workbook.Sheets[firstSheetName];
   assertWorksheetLimits(sheet);
@@ -28,7 +30,21 @@ const parseCatalogImportFile = async (
     defval: ''
   }) as unknown[][];
 
-  return parseOriginalInventoryCatalogRows(rows);
+  const headers = (rows[0] ?? []).map(normalizeInventoryImportHeader);
+  const columns = getInventoryImportIndexColumns(rows[0] ?? []);
+  const registerFormat = columns.index1 >= 0 && columns.index2 >= 0 && headers.includes('nazwa artykulu (materialu)');
+  if (registerFormat && !headers.some(header => ['jm', 'j m', 'jedn', 'jednostka', 'unit'].includes(header))) {
+    throw new Error('CATALOG_REGISTER_UNIT_REQUIRED');
+  }
+  if (registerFormat) {
+    const nameColumn = headers.indexOf('nazwa artykulu (materialu)');
+    const unitColumn = headers.findIndex(header => ['jm', 'j m', 'jedn', 'jednostka', 'unit'].includes(header));
+    if (rows.slice(1).some(row => row.some(cell => String(cell).trim()) &&
+      [columns.index1, nameColumn, unitColumn].some(column => !String(row[column] ?? '').trim()))) {
+      throw new Error('CATALOG_REGISTER_INVALID');
+    }
+  }
+  return { items: parseOriginalInventoryCatalogRows(rows), registerFormat };
 };
 
 export async function POST(request: Request) {
@@ -63,12 +79,19 @@ export async function POST(request: Request) {
     }
 
     await assertImportFile(file, ['xlsx', 'xls', 'csv']);
-    const normalized = await parseCatalogImportFile(file);
+    const parsed = await parseCatalogImportFile(file);
+    const normalized = parsed.items;
     if (normalized.length === 0) {
       return NextResponse.json({ code: 'EMPTY' }, { status: 400 });
     }
 
     assertOriginalInventoryImportIndices(normalized);
+    if (parsed.registerFormat) {
+      const result = await importOriginalInventoryCatalogRegister(supabaseAdmin,
+        normalized.map(normalizeCatalogRegisterItem), file.name, auth.user.username || auth.user.name);
+      return NextResponse.json({ total: normalized.length, inserted: result.added, updated: Math.max(0, result.processed - result.added),
+        skipped: result.blocked, linked: result.linked, blocked: result.blocked, catalogRefreshToken: randomUUID() });
+    }
     if (normalized.some(item => item.indexCode2)) {
       const { error } = await supabaseAdmin.from('original_inventory_catalog').select('index_code2').range(0, 0);
       if (error) throw new Error(error.code === '42703' || error.code === 'PGRST204' ? 'MIGRATION_REQUIRED_INVENTORY_INDICES' : 'IMPORT_FAILED');
@@ -92,6 +115,8 @@ export async function POST(request: Request) {
         ? 403
         : code === 'EMPTY' || code === 'FILE_REQUIRED' || code === ORIGINAL_INVENTORY_INDEX_TIMESTAMP_ERROR || code === 'AMBIGUOUS_INDEX_COLUMNS'
         ? 400
+        : code === 'REVISION_CONFLICT' ? 409
+        : code === 'CATALOG_REGISTER_INVALID' || code === 'CATALOG_REGISTER_UNIT_REQUIRED' || code === 'CONFLICTING_INDEX_COLUMNS' ? 400
         : code === 'MIGRATION_REQUIRED_INVENTORY_INDICES' ? 503
         : 500;
     return NextResponse.json({ code }, { status });

@@ -2,6 +2,8 @@ import { createHash } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { InventoryOwnership } from '@/lib/utils/originalInventoryOwnership';
 import { isProductionPlanDate } from '@/lib/utils/productionPlanDate';
+import { readOriginalInventoryCatalogRegister } from '@/lib/utils/originalInventoryCatalogRegisterServer';
+import { createCatalogRegisterResolver, applyOriginalInventoryCatalogRegister } from '@/lib/utils/originalInventoryCatalogRegister';
 import {
   PALLET_SET_SOURCE_TYPE, isPalletCount, normalizePalletSets, palletBatchPrefix,
   palletSetError, palletSetFingerprint, palletSourceId, parsePalletSource, refreshPalletSetCatalogNames
@@ -54,11 +56,18 @@ export async function addPalletInventory(db: SupabaseClient, payload: Record<str
   let set = normalizePalletSets(data?.pallet_sets).find((item) => item.id === payload.setId && item.active);
   if (!set || palletSetError(set)) throw new Error('PALLET_SET_NOT_FOUND');
   const { data: catalog, error: catalogError } = await db.from('original_inventory_catalog')
-    .select('id,name,unit').in('id', set.components.map((item) => item.catalogId));
+    .select('*').in('id', set.components.map((item) => item.catalogId));
   if (catalogError) throw catalogError;
-  set = refreshPalletSetCatalogNames([set], catalog ?? [])[0];
+  const { state: register } = await readOriginalInventoryCatalogRegister(db);
+  const restrictions = createCatalogRegisterResolver(register);
+  if (catalog?.some(row => restrictions.isBlocked({ name: row.name, unit: row.unit, indexCode: row.index_code, indexCode2: row.index_code2 }))) {
+    throw new Error('CATALOG_BLOCKED');
+  }
+  const canonical = applyOriginalInventoryCatalogRegister((catalog ?? []).map(row => ({ id: String(row.id), name: String(row.name), unit: String(row.unit),
+    indexCode: row.index_code, indexCode2: row.index_code2, warehouseCode: row.warehouse_code })), register);
+  set = refreshPalletSetCatalogNames([set], canonical)[0];
   if (palletSetFingerprint(set) !== payload.fingerprint) throw new Error('PALLET_SET_CHANGED');
-  if (set.components.some((part) => !catalog?.some((item) => item.id === part.catalogId && item.name === part.name && item.unit === part.unit))) {
+  if (set.components.some((part) => !canonical.some((item) => [item.id, ...item.catalogIds ?? []].includes(part.catalogId) && item.name === part.name && item.unit === part.unit))) {
     throw new Error('PALLET_CATALOG_CHANGED');
   }
   const [year, month, day] = dateKey.split('-').map(Number);

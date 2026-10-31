@@ -61,11 +61,17 @@ export const palletSetFingerprint = (set: PalletSet) => JSON.stringify({
   components: [...set.components].sort((a, b) => a.catalogId.localeCompare(b.catalogId))
 });
 
-export const refreshPalletSetCatalogNames = (sets: PalletSet[], catalog: readonly { id: string; name: string; unit: string }[]) => {
-  const byId = new Map(catalog.map((item) => [item.id, item]));
+export const refreshPalletSetCatalogNames = (sets: PalletSet[], catalog: readonly {
+  id: string; name: string; unit: string; catalogIds?: string[]; indexCode?: string | null; indexCode2?: string | null; warehouseCode?: string | null
+}[]) => {
+  const byId = new Map(catalog.flatMap(item => [item.id, ...item.catalogIds ?? []].map(id => [id, item] as const)));
   return sets.map((set) => ({ ...set, components: set.components.map((part) => {
     const item = byId.get(part.catalogId);
-    return item && item.unit === part.unit ? { ...part, name: item.name } : part;
+    return item && item.unit === part.unit ? { ...part, name: item.name,
+      indexCode: item.indexCode ?? part.indexCode,
+      indexCode2: item.indexCode2 === undefined ? part.indexCode2 : item.indexCode2 ?? '',
+      warehouseCode: item.warehouseCode === undefined ? part.warehouseCode : item.warehouseCode ?? ''
+    } : part;
   }) }));
 };
 
@@ -98,6 +104,7 @@ export const parsePalletSource = (sourceId?: string | null): PalletSource | null
 };
 
 export const palletInventoryError = (code: string) => ({
+  CATALOG_BLOCKED: 'Skladnik zestawu jest zablokowany w kartotekach. Wybierz aktualny zestaw.',
   INVENTORY_NOT_OWNER: 'Możesz zmieniać i usuwać tylko własne wpisy spisu.',
   PALLET_SET_CHANGED: 'Zestaw został zmieniony w ustawieniach. Wybierz go ponownie.',
   PALLET_SET_NOT_FOUND: 'Zestaw nie istnieje lub jest nieaktywny.',

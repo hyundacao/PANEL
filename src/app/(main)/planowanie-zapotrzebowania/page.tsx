@@ -881,10 +881,16 @@ const useProductCatalogSearch = (
   limit: number
 ) => {
   const deferredQuery = useDeferredValue(query);
+  const [catalogVersion, setCatalogVersion] = useState(0);
+  useEffect(() => {
+    const refresh = () => { productCatalogSearchCache.clear(); setCatalogVersion(value => value + 1); };
+    window.addEventListener('apka:catalog-updated', refresh);
+    return () => window.removeEventListener('apka:catalog-updated', refresh);
+  }, []);
   const trimmedQuery = deferredQuery.replace(/\s+/g, ' ').trim();
   const minimumLength = mode === 'material-name' || mode === 'material-code' ? 1 : 2;
   const active = enabled && trimmedQuery.length >= minimumLength;
-  const searchKey = active ? `${mode}|${limit}|${trimmedQuery.toLocaleLowerCase('pl')}` : '';
+  const searchKey = active ? `${catalogVersion}|${mode}|${limit}|${trimmedQuery.toLocaleLowerCase('pl')}` : '';
   const [result, setResult] = useState<{
     key: string;
     items: ProductCatalogItem[];

@@ -70,13 +70,14 @@ function fixture() {
     order(key, options) { this.orders.push([key, options.ascending]); return this; }
     limit(size) { this.size = size; return this; }
     in(key, values) { this.filters.push([key, values]); return this; }
+    eq(key, value) { this.filters.push([key, [value]]); return this; }
     range(start, end) { this.page = [start, end]; return this; }
     then(a, b) { return this.run().then(a, b); }
     async maybeSingle() { const result = await this.run(); return { ...result, data: result.data?.[0] ?? null }; }
     async run() {
       state.reads.push({ table: this.table, filters: this.filters, page: this.page });
       if (state.fail) return { data: null, error: { message: 'Simulated read failure' } };
-      assert.ok(['materials', 'original_inventory_erp_snapshots', 'original_inventory_catalog'].includes(this.table));
+      assert.ok(['materials', 'original_inventory_erp_snapshots', 'original_inventory_catalog', 'material_planning_state'].includes(this.table));
       let rows = structuredClone(this.table === 'materials' ? state.materials : this.table === 'original_inventory_erp_snapshots' ? state.snapshots : []);
       for (const [key, values] of this.filters) rows = rows.filter(row => values.includes(row[key]));
       rows.sort((a, b) => { for (const [key, ascending] of this.orders) { const diff = String(a[key]).localeCompare(String(b[key])); if (diff) return ascending ? diff : -diff; } return 0; });
@@ -105,7 +106,7 @@ test('API returns latest ERP real quantities only for active regrind catalogs, i
     snapshotDate: '2026-10-21', importedAt: '2026-10-21T09:00:00Z', items: [{ catalog: 'ABS', erpQty: 44, indexCode: 'M-40-1' }]
   });
   assert.equal((await f.get('getOriginalInventoryErpSnapshot')).status, 403, 'this feature does not grant full ERP access');
-  assert.ok(f.state.reads.every(read => ['materials', 'original_inventory_catalog', 'original_inventory_erp_snapshots'].includes(read.table)));
+  assert.ok(f.state.reads.every(read => ['materials', 'original_inventory_catalog', 'original_inventory_erp_snapshots', 'material_planning_state'].includes(read.table)));
 });
 
 test('latest snapshot read is paginated and never falls back to an older stock for a missing material', async () => {

@@ -61,13 +61,16 @@ export const matchOriginalInventoryErpStock = (
   const name = normalizeName(material.name);
   if (!name) return null;
   const index = indexKey(material.indexCode);
-  let matches = index ? entries.filter((entry) => indexKey(entry.indexCode) === index) : [];
+  const aliases = new Set([index, indexKey(material.indexCode2)].filter(Boolean));
+  let matches = aliases.size ? entries.filter((entry) => aliases.has(indexKey(entry.indexCode)) ||
+    ((!index || !indexKey(entry.indexCode)) && aliases.has(indexKey(entry.indexCode2)))) : [];
   if (!matches.length) {
     // Name matching is only a fallback for legacy rows without an ERP index.
     matches = entries.filter((entry) => normalizeName(entry.name) === name &&
-      (!index || !indexKey(entry.indexCode)));
+      (!aliases.size || (!indexKey(entry.indexCode) && !indexKey(entry.indexCode2))));
   }
-  if (!matches.length || new Set(matches.map((entry) => indexKey(entry.indexCode))).size > 1) return null;
+  if (!matches.length || (new Set(matches.map((entry) => indexKey(entry.indexCode))).size > 1 &&
+    !matches.every(entry => aliases.has(indexKey(entry.indexCode))))) return null;
   const unit = unitKey(material.unit);
   if (matches.some((entry) => unitKey(entry.unit) !== unit ||
     !Number.isFinite(entry.realQty) || !Number.isFinite(entry.availableQty))) return null;

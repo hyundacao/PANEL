@@ -2,6 +2,8 @@ import { createHash } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { OriginalInventoryCatalogSyncResult } from '@/lib/api/types';
 import { normalizeOriginalInventoryName, normalizeOriginalInventoryNameKey } from './originalInventoryName';
+import { createCatalogRegisterResolver } from './originalInventoryCatalogRegister';
+import { readOriginalInventoryCatalogRegister, updateCatalogRegisterNamesFromSnapshot } from './originalInventoryCatalogRegisterServer';
 import {
   normalizeOriginalInventoryIndex as indexKey,
   hasOriginalInventoryReportTimestamp
@@ -127,7 +129,14 @@ export async function syncOriginalInventoryCatalogFromSnapshot(
     return pending;
   };
   try {
-    const pending = await pendingOnly(candidates, await readCatalog());
+    const { state } = await readOriginalInventoryCatalogRegister(db);
+    const resolver = createCatalogRegisterResolver(state);
+    const allowed = candidates.filter(item => {
+      if (!resolver.isBlocked(item)) return true;
+      warn(item, 'Zablokowana kartoteka - nie przywrocono jej do wyboru.');
+      return false;
+    });
+    const pending = await pendingOnly(allowed, await readCatalog());
     for (let offset = 0; offset < pending.length; offset += 500) {
       let batch = pending.slice(offset, offset + 500);
       for (let attempt = 0; attempt < 2 && batch.length; attempt++) {
@@ -151,6 +160,7 @@ export async function syncOriginalInventoryCatalogFromSnapshot(
         break;
       }
     }
+    if (!result.failed && state) await updateCatalogRegisterNamesFromSnapshot(db, allowed);
   } catch {
     result.failed = true;
     warn(null, 'Stany ERP zostały wgrane, ale nie udało się dopisać wszystkich kartotek. Ponowny import ponowi próbę bez tworzenia duplikatów.');

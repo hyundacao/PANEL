@@ -116,6 +116,8 @@ export default function LoginPage() {
       const messageMap: Record<string, string> = {
         INVALID_CREDENTIALS: 'Nieprawidłowy login lub hasło.',
         INACTIVE: 'Twoje konto jest nieaktywne.',
+        FORBIDDEN_ORIGIN: 'Logowanie z tego adresu strony zostało zablokowane.',
+        LOGIN_TEMPORARILY_UNAVAILABLE: 'Serwer logowania jest chwilowo niedostępny. Spróbuj ponownie za chwilę.',
         RATE_LIMITED: 'Za dużo prób logowania. Odczekaj chwilę i spróbuj ponownie.'
       };
       toast({

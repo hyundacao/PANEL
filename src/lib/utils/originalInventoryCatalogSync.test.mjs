@@ -15,9 +15,9 @@ const row = (item, id = 'old') => ({ id, name: item.name, unit: item.unit, index
 function fixture() {
   const state = {
     user: { id: 'test', username: 'counter', name: 'Counter', role: 'USER', access: { warehouses: { PLANOWANIE_ZAPOTRZEBOWANIA: { readOnly: false, tabs: ['planowanie-zapotrzebowania'] } } } },
-    tables: { original_inventory_catalog: [], original_inventory_erp_snapshots: [], paint_tape_inventory_sessions: [], audit_logs: [] },
+    tables: { original_inventory_catalog: [], original_inventory_erp_snapshots: [], paint_tape_inventory_sessions: [], audit_logs: [], material_planning_state: [] },
     operations: [], failCatalogRead: false, failCatalogWriteFrom: Infinity, catalogWrites: 0,
-    beforeCatalogWrite: null, pdfItems: [], holdCatalogRead: null, afterWork: [], purgeError: null, renameError: null, indicesMigrationMissing: false
+    beforeCatalogWrite: null, beforeRegisterSave: null, pdfItems: [], holdCatalogRead: null, afterWork: [], purgeError: null, renameError: null, indicesMigrationMissing: false
   };
   class Query {
     constructor(table) { this.table = table; this.filters = []; this.mode = 'select'; }
@@ -68,6 +68,16 @@ function fixture() {
     from: (table) => new Query(table),
     rpc(name, payload) {
       state.operations.push({ rpc: name, payload });
+      if (name === 'save_material_planning_state') {
+        const rows = state.tables.material_planning_state;
+        if (state.beforeRegisterSave) { const callback = state.beforeRegisterSave; state.beforeRegisterSave = null; callback(rows); }
+        let current = rows.find(row => row.id === payload.p_module_id);
+        const revision = current?.revision ?? 0;
+        if (revision !== payload.p_expected_revision) return Promise.resolve({data:[{has_conflict:true,new_revision:revision}],error:null});
+        if (!current) { current = {id:payload.p_module_id}; rows.push(current); }
+        Object.assign(current, {state:structuredClone(payload.p_state),revision:revision+1});
+        return Promise.resolve({data:[{has_conflict:false,new_revision:revision+1}],error:null});
+      }
       if (name === 'replace_original_inventory_erp_snapshot_v2' && state.indicesMigrationMissing) return Promise.resolve({data:null,error:{code:'PGRST202'}});
       if (name === 'replace_original_inventory_erp_snapshot' || name === 'replace_original_inventory_erp_snapshot_v2') {
         const before = state.tables.original_inventory_erp_snapshots;
@@ -135,8 +145,156 @@ function fixture() {
     return response.json();
   };
   const parseCatalog = rows => load(join(root, 'lib/utils/originalInventoryCatalog.ts')).parseOriginalInventoryCatalogRows(rows);
-  return { state, sync, importFile, app, parseCatalog };
+  return { state, sync, importFile, app, parseCatalog,
+    register: load(join(root, 'lib/utils/originalInventoryCatalogRegister.ts')),
+    normalizeRegister: load(join(root, 'lib/utils/originalInventoryCatalogRegisterServer.ts')).normalizeCatalogRegisterItem };
 }
+
+const REGISTER_ID = 'original-inventory-catalog-register';
+const registerRow = (name, indexCode, indexCode2 = indexCode, unit = 'szt.') => ({name,indexCode,indexCode2,unit,warehouseCode:indexCode.match(/^M-\d+/)?.[0] ?? null});
+const saveRegisterFixture = (f, items, blocked = []) => {
+  f.state.tables.material_planning_state.push({id:REGISTER_ID,revision:1,state:{version:1,items,blocked,importedAt:'2026-10-31',sourceFileName:'master.xlsx'}});
+};
+
+test('the explicit register joins every index format, preserves source IDs and does not mutate stored stock', async () => {
+  const f = fixture();
+  const items = [registerRow('TRAY WHITE','M-10-PWY-BSHL-9001516433','M-10-9001516433'),
+    registerRow('HOSTACOM','M-1-TW-BSHL-5607-00','527-002','kg'), registerRow('LABEL','INTERNAL/A','000007')];
+  saveRegisterFixture(f, items);
+  for (const [i,item] of items.entries()) for (const [j,index] of [item.indexCode,item.indexCode2].entries()) {
+    f.state.tables.original_inventory_catalog.push(row(material({...item,indexCode:index}), `id-${i}-${j}`));
+  }
+  const before = structuredClone(f.state.tables);
+  const catalog = await f.app('getOriginalInventoryCatalog');
+  assert.equal(catalog.length,3);
+  for (const [i,item] of items.entries()) {
+    const saved = catalog.find(row => row.indexCode === item.indexCode);
+    assert.equal(saved.indexCode2,item.indexCode2);
+    assert.deepEqual(saved.catalogIds,[`id-${i}-0`,`id-${i}-1`]);
+    const found = await f.app('searchOriginalInventoryCatalog',{query:item.indexCode2});
+    assert.equal(found.length,1);
+  }
+  assert.deepEqual(f.state.tables,before);
+});
+
+test('blocked indices disappear without hiding the valid -01 or a different product reusing the same number', async () => {
+  const f = fixture();
+  const name = 'ARTPYLEN CP 30TA POPIEL 99007';
+  const active = [registerRow(name,'1365-1-1-01',undefined,'kg'),registerRow('ACTIVE SYSTEM','1759')];
+  const blocked = [registerRow(name,'1365-1-1',undefined,'kg'),registerRow('OLD BROWN PART','1759')];
+  saveRegisterFixture(f,active,blocked);
+  for (const [i,item] of [...active,...blocked].entries()) f.state.tables.original_inventory_catalog.push(row(material(item),`row-${i}`));
+  const before = structuredClone(f.state.tables);
+  const catalog = await f.app('getOriginalInventoryCatalog');
+  assert.deepEqual(catalog.map(item=>item.indexCode).sort(),['1365-1-1-01','1759']);
+  assert.equal((await f.app('searchOriginalInventoryCatalog',{query:'OLD BROWN'})).length,0);
+  assert.equal((await f.app('searchOriginalInventoryCatalog',{query:'ARTPYLEN'}))[0].indexCode2,'1365-1-1-01');
+  const restrictions = await f.app('getOriginalInventoryCatalogRestrictions');
+  assert.deepEqual(restrictions.blockedNames,['OLD BROWN PART']);
+  await f.app('addOriginalInventory',{warehouseId:'hall-1',name,indexCode:'1365-1-1',qty:5,unit:'kg'},400);
+  assert.deepEqual(f.state.tables,before);
+});
+
+test('new master-format imports need no index-2 schema migration, are repeatable and retain permanent exclusions', async () => {
+  const f = fixture(); f.state.indicesMigrationMissing = true;
+  const active = registerRow('ARTPYLEN','1365-1-1-01',undefined,'kg');
+  const blocked = registerRow('ARTPYLEN','1365-1-1',undefined,'kg');
+  saveRegisterFixture(f,[active],[blocked]);
+  const rows = [['Indeks [+]','Indeks 2','Nazwa artyku\u0142u (materia\u0142u)','J.M.'],
+    [active.indexCode,active.indexCode2,active.name,active.unit],[blocked.indexCode,blocked.indexCode2,blocked.name,blocked.unit]];
+  const first = await f.importFile([],undefined,false,true,rows);
+  assert.equal(first.status,200);
+  assert.equal(first.result.blocked,1);
+  assert.equal(first.result.inserted,1);
+  assert.equal(f.state.tables.original_inventory_catalog[0].index_code,active.indexCode);
+  const again = await f.importFile([],undefined,false,true,rows);
+  assert.equal(again.status,200);
+  assert.equal(again.result.inserted,0);
+  assert.equal(f.state.tables.original_inventory_catalog.length,1);
+  assert.equal(f.state.tables.material_planning_state[0].state.blocked.length,1);
+  assert.equal(f.state.tables.original_inventory_erp_snapshots.length,0);
+});
+
+test('an incomplete blocked-list table is not accepted as a master catalog import', async () => {
+  const f = fixture();
+  const response = await f.importFile([],undefined,false,true,[
+    ['Indeks [+]','Indeks 2','Nazwa artyku\u0142u (materia\u0142u)'],['OLD','OLD','BLOCKED']
+  ]);
+  assert.equal(response.status,400);
+  assert.equal(response.result.code,'CATALOG_REGISTER_UNIT_REQUIRED');
+  assert.equal(f.state.operations.length,0);
+});
+
+test('contradictory indices or units in the master table stop before any catalog or registry write', async () => {
+  for (const other of [['ONE','OTHER','MATERIAL','kg'],['ONE','SECOND','MATERIAL','litr']]) {
+    const f = fixture();
+    const response = await f.importFile([],undefined,false,true,[
+      ['Indeks [+]','Indeks 2','Nazwa artyku\u0142u (materia\u0142u)','J.M.'],['ONE','SECOND','MATERIAL','kg'],other
+    ]);
+    assert.equal(response.status,400);
+    assert.equal(response.result.code,'CONFLICTING_INDEX_COLUMNS');
+    assert.equal(f.state.operations.length,0);
+  }
+});
+
+test('old stock imports cannot restore a blocked catalog and keep actual stock import independent', async () => {
+  const f = fixture();
+  const blocked = registerRow('BLOCKED MATERIAL','OLD',undefined,'kg');
+  saveRegisterFixture(f,[],[blocked]);
+  const response = await f.importFile([material(blocked)]);
+  assert.equal(response.status,200);
+  assert.equal(f.state.tables.original_inventory_erp_snapshots.length,1);
+  assert.equal(f.state.tables.original_inventory_catalog.length,0);
+  assert.equal(response.result.catalogSync.warningCount,1);
+});
+
+test('master import retries a revision conflict and retains a concurrently added exclusion', async () => {
+  const f = fixture();
+  const first = registerRow('FIRST','ONE','SECOND');
+  saveRegisterFixture(f,[first]);
+  f.state.beforeRegisterSave = rows => {
+    rows[0].revision++;
+    rows[0].state.blocked.push(registerRow('BLOCKED','CANCELLED'));
+  };
+  const response = await f.importFile([],undefined,false,true,[
+    ['Indeks [+]','Indeks 2','Nazwa artyku\u0142u (materia\u0142u)','J.M.'],['ONE','SECOND','FIRST','szt.']
+  ]);
+  assert.equal(response.status,200);
+  assert.equal(f.state.tables.material_planning_state[0].state.blocked[0].indexCode,'CANCELLED');
+  assert.equal(f.state.tables.original_inventory_catalog.length,1);
+});
+
+test('a partial master file updates its indices without removing unrelated registered pairs', async () => {
+  const f = fixture();
+  saveRegisterFixture(f,[registerRow('OLD NAME','ONE','SECOND'),registerRow('UNRELATED','TWO','OTHER')]);
+  f.state.tables.original_inventory_catalog.push(row(material({name:'OLD NAME',indexCode:'ONE'}),'one'));
+  const response = await f.importFile([],undefined,false,true,[
+    ['Indeks [+]','Indeks 2','Nazwa artyku\u0142u (materia\u0142u)','J.M.'],['ONE','SECOND','NEW NAME','szt.']
+  ]);
+  assert.equal(response.status,200);
+  const registered = f.state.tables.material_planning_state[0].state.items;
+  assert.equal(registered.length,2);
+  assert.ok(registered.some(row=>row.name==='UNRELATED'));
+  assert.equal((await f.app('searchOriginalInventoryCatalog',{query:'OLD NAME'}))[0].name,'NEW NAME');
+  const again = await f.importFile([],undefined,false,true,[
+    ['Indeks [+]','Indeks 2','Nazwa artyku\u0142u (materia\u0142u)','J.M.'],['ONE','SECOND','THIRD NAME','szt.']
+  ]);
+  assert.equal(again.status,200);
+  assert.equal((await f.app('searchOriginalInventoryCatalog',{query:'NEW NAME',catalogRefreshToken:again.result.catalogRefreshToken}))[0].name,'THIRD NAME');
+});
+
+test('ordinary ERP name changes update register labels but never exchange the two index columns', async () => {
+  const f = fixture();
+  saveRegisterFixture(f,[registerRow('OLD NAME','ONE','SECOND')]);
+  f.state.tables.original_inventory_catalog.push(row(material({name:'OLD NAME',indexCode:'ONE'}),'one'));
+  const result = await f.sync([material({name:'NEW NAME',indexCode:'ONE'})]);
+  assert.equal(result.failed,false);
+  const registered = f.state.tables.material_planning_state[0].state.items[0];
+  assert.equal(registered.name,'NEW NAME');
+  assert.equal(registered.indexCode,'ONE');
+  assert.equal(registered.indexCode2,'SECOND');
+  assert.deepEqual(registered.previousNames,['OLD NAME']);
+});
 
 test('catalog columns, not value shape or warehouse, classify both indices', () => {
   const f = fixture();
@@ -149,6 +307,45 @@ test('catalog columns, not value shape or warehouse, classify both indices', () 
   const legacy = f.parseCatalog([['Kod','Indeks','Nazwa','Jm.'], ['10012','M-10-PWY-BSHL-10012','TRAY','szt.']]);
   assert.equal(legacy[0].indexCode, 'M-10-PWY-BSHL-10012');
   assert.equal(legacy[0].indexCode2, undefined, 'Kod is not index 2');
+});
+
+test('ERP article register headers keep Indeks [+] as index 1 and the separate index 2', async () => {
+  const f = fixture();
+  const headers = ['Indeks [+]', 'Indeks 2', 'Nazwa artyku\u0142u (materia\u0142u)', 'J.M.'];
+  const source = [
+    ['M-10-PWY-BSHL-10008', 'M-10-8001236303', 'TRAY HANDLE ASSEMBLY WELDED COST IRON', 'szt.'],
+    ['M-1-TW-BSHL-5607-00', '527-002', 'HOSTACOM M2 N01 L304698', 'kg'],
+    ['0004-323', '0004-323', 'BLACHA OCYNK 1.35', 'kg'],
+    ['B-AKC-7-005', '', 'CLIP 50MM', 'szt.']
+  ];
+  const parsed = f.parseCatalog([headers, ...source]);
+  assert.deepEqual(parsed.map(item => [item.indexCode, item.indexCode2 ?? '', item.name, item.unit]), source);
+  const response = await f.importFile([], undefined, false, true, [headers, ...source]);
+  assert.equal(response.status, 200);
+  assert.equal(f.state.tables.original_inventory_catalog.length, 4);
+  assert.equal(f.state.tables.original_inventory_erp_snapshots.length, 0, 'A register contains no stock quantities');
+  for (const [one, two, name, unit] of source) {
+    const saved = f.state.tables.original_inventory_catalog.find(item => item.index_code === one);
+    assert.equal(saved.name, name);
+    assert.equal(saved.unit, unit);
+    const registered = f.state.tables.material_planning_state.find(row => row.id === 'original-inventory-catalog-register').state.items;
+    assert.equal(registered.find(item => item.indexCode === one).indexCode2 ?? '', two);
+  }
+});
+
+test('catalog import strips invisible ERP control characters but preserves identifiers and whitespace separators', () => {
+  const f = fixture();
+  const rows = f.parseCatalog([
+    ['Indeks [+]', 'Indeks 2', 'Nazwa artyku\u0142u (materia\u0142u)', 'J.M.'],
+    ['FWP-BSHLODZ-0037', '303019506\u001f\u001f', 'FW-CONTROL PANEL BODY VG1 BO #08 NR 8', 'szt.'],
+    ['0004-323', '0004-323', 'ADAPTER AIR HOSE D60\u001f\u001f', 'kg'],
+    ['0004-670', '0004-670', 'NAME\tWITH\nSPACES', 'kg']
+  ]);
+  assert.equal(rows[0].indexCode, 'FWP-BSHLODZ-0037');
+  assert.equal(rows[0].indexCode2, '303019506');
+  assert.equal(rows[1].indexCode2, '0004-323');
+  assert.equal(rows[1].name, 'ADAPTER AIR HOSE D60');
+  assert.equal(rows[2].name, 'NAME WITH SPACES');
 });
 
 test('both catalog and stock imports save two indices in one row and preserve index 2 on a later one-index import', async () => {
@@ -466,7 +663,8 @@ test('bulk writes and pagination handle more than a thousand rows without per-it
   assert.equal(result.added, 1201);
   assert.equal(result.existing, 1);
   assert.deepEqual(f.state.operations.filter((op) => op.mode === 'upsert').map((op) => op.size), [500, 500, 201]);
-  assert.equal(f.state.operations.filter((op) => op.mode === 'select').length, 2);
+  assert.equal(f.state.operations.filter((op) => op.mode === 'select' && op.table === 'original_inventory_catalog').length, 2);
+  assert.equal(f.state.operations.filter((op) => op.mode === 'select' && op.table === 'material_planning_state').length, 1);
 });
 
 test('partial catalog failure keeps imported stocks and retry inserts only the missing batch', async () => {

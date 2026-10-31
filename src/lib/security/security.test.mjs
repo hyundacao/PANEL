@@ -232,6 +232,48 @@ test('API proxy rejects cross-site writes but accepts normal same-origin request
   assert.equal(proxy(request('https://app.example')).status, 200);
 });
 
+test('development proxy recognizes the exact loopback Host without allowing other sites or ports', () => {
+  const previousEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'development';
+  try {
+    const { NextRequest } = require('next/server');
+    const { proxy } = loader()('proxy.ts');
+    const request = (origin, host = '127.0.0.1:3000', site = 'same-origin') =>
+      new NextRequest('http://localhost:3000/api/auth/login', { method: 'POST',
+        headers: { origin, host, 'sec-fetch-site': site } });
+    assert.equal(proxy(request('http://127.0.0.1:3000')).status, 200);
+    assert.equal(proxy(request('http://localhost:3000', 'localhost:3000')).status, 200);
+    assert.equal(proxy(request('http://[::1]:3000', '[::1]:3000')).status, 200);
+    for (const origin of ['http://evil.example', 'null', 'http://127.0.0.1:3001',
+      'https://127.0.0.1:3000', 'http://localhost:3000', 'http://127.0.0.1.evil.example:3000']) {
+      assert.equal(proxy(request(origin)).status, 403, origin);
+    }
+    assert.equal(proxy(request('http://127.0.0.1:3000', '127.0.0.1:3000', 'cross-site')).status, 403);
+    assert.equal(proxy(request('http://evil.example', 'evil.example')).status, 403);
+    assert.equal(proxy(request('http://127.0.0.1:3000', '127.0.0.1:3000/path')).status, 403);
+  } finally {
+    if (previousEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousEnv;
+  }
+});
+
+test('production proxy never trusts Host or forwarded headers to widen the accepted origin', () => {
+  const previousEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    const { NextRequest } = require('next/server');
+    const { proxy } = loader()('proxy.ts');
+    const request = (url, origin, host) => new NextRequest(url, { method: 'POST',
+      headers: { origin, host, 'x-forwarded-host': host, 'x-forwarded-proto': 'http' } });
+    assert.equal(proxy(request('https://app.example/api/app', 'https://evil.example', 'evil.example')).status, 403);
+    assert.equal(proxy(request('https://app.example/api/app', 'https://app.example', 'evil.example')).status, 200);
+    assert.equal(proxy(request('http://localhost:3000/api/app', 'http://127.0.0.1:3000', '127.0.0.1:3000')).status, 403);
+  } finally {
+    if (previousEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousEnv;
+  }
+});
+
 test('own password change verifies the old password and revokes the session', async () => {
   const calls = [];
   let revoked = false;

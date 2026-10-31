@@ -5,6 +5,8 @@ import { FIXED_INVENTORY_DEVICE_SOURCE_TYPE } from './fixedInventoryDevices.ts';
 import { buildProductCatalogChoices } from './productCatalogSearch.ts';
 import { getOriginalInventorySpisIndex2 } from '../utils/originalInventorySpisSearch.ts';
 import { linkOriginalInventoryM10Indices } from '../utils/originalInventoryM10Indices.ts';
+import { normalizeOriginalInventoryNameKey } from '../utils/originalInventoryName.ts';
+import { normalizeOriginalInventoryIndex } from '../utils/originalInventoryIndex.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -24,8 +26,17 @@ const compiled = ts.transpileModule(definitions.join('\n') + '\nexports.loadOrig
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText;
 
-export function createOriginalInventoryFixture(supabaseAdmin) {
-  const context = { supabaseAdmin, FIXED_INVENTORY_DEVICE_SOURCE_TYPE, buildProductCatalogChoices, getOriginalInventorySpisIndex2, linkOriginalInventoryM10Indices, exports: {} };
+export function createOriginalInventoryFixture(supabaseAdmin, register = null) {
+  const registerModule = new (require('node:module').Module)('register-fixture');
+  registerModule.require = id => id === './originalInventoryName'
+    ? { normalizeOriginalInventoryNameKey }
+    : { normalizeOriginalInventoryIndex };
+  registerModule._compile(ts.transpileModule(readFileSync(new URL('../utils/originalInventoryCatalogRegister.ts', import.meta.url), 'utf8'), {
+    compilerOptions: {module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}
+  }).outputText, 'register-fixture');
+  const context = { supabaseAdmin, FIXED_INVENTORY_DEVICE_SOURCE_TYPE, buildProductCatalogChoices, getOriginalInventorySpisIndex2, linkOriginalInventoryM10Indices,
+    applyOriginalInventoryCatalogRegister: registerModule.exports.applyOriginalInventoryCatalogRegister,
+    readOriginalInventoryCatalogRegister: async () => ({state:register,revision:register?1:0}), exports: {} };
   vm.runInNewContext(compiled, context);
   return {
     load: async date => structuredClone(await context.exports.loadOriginalInventory(date)),
