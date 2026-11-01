@@ -36,6 +36,9 @@ export const productCatalogSearchIndices = (item: ProductCatalogItem) =>
 export const productCatalogIndexMatches = (item: ProductCatalogItem, value: string) =>
   productCatalogSearchIndices(item).some(index => normalizedIndex(index) === normalizedIndex(value));
 
+export const productCatalogSelectionIndex = (item: ProductCatalogItem) =>
+  item.index2?.trim() || item.index.trim();
+
 export const productCatalogSearchText = (item: ProductCatalogItem) =>
   normalizeProductCatalogSearch([item.name, item.warehouseCode, ...productCatalogSearchIndices(item)].join(' '));
 

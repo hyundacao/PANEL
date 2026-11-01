@@ -1,8 +1,22 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildProductCatalogChoices, productCatalogIndexMatches, searchProductCatalog } from './productCatalogSearch.ts';
+import { buildProductCatalogChoices, productCatalogIndexMatches, productCatalogSelectionIndex, searchProductCatalog } from './productCatalogSearch.ts';
 
 const item = (id, name, index, warehouseCode = '') => ({ id, name, index, warehouseCode, unit: 'kg' });
+
+test('catalog selection prefers the explicit second index without changing source identity', () => {
+  for (const warehouse of ['M-1', 'M-4', 'M-10', 'M-11', 'M-51']) {
+    const catalogItem = { ...item('paired', 'MAINT. DOOR CUBIC INOX DO MONTAZU', `${warehouse}-PWY-BSHL-10595`, warehouse), index2: `${warehouse}-10595` };
+    const before = structuredClone(catalogItem);
+    assert.equal(productCatalogSelectionIndex(catalogItem), `${warehouse}-10595`);
+    assert.equal(productCatalogIndexMatches(catalogItem, catalogItem.index), true);
+    assert.equal(productCatalogIndexMatches(catalogItem, catalogItem.index2), true);
+    assert.deepEqual(catalogItem, before);
+  }
+  assert.equal(productCatalogSelectionIndex({ ...item('zero', 'PRODUCT', 'PRIMARY'), index2: ' 0000123 ' }), '0000123');
+  assert.equal(productCatalogSelectionIndex({ ...item('legacy', 'PRODUCT', ' PRIMARY '), index2: ' ' }), 'PRIMARY');
+  assert.equal(productCatalogSelectionIndex(item('legacy', 'PRODUCT', 'PRIMARY')), 'PRIMARY');
+});
 
 test('product search requires every typed fragment and keeps the primary-field match first', () => {
   const items = [
