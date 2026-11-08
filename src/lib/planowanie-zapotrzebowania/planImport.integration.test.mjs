@@ -1130,6 +1130,42 @@ test('a continuing production keeps its selected technology across plan days, th
   assert.notEqual(restarted.runId,first.runId);
 });
 
+test('seven daily imports, reloads and one-day retention preserve a working recipe and new Excel quantities',()=>{
+  const h=setup();
+  const baseMaterial={id:'base-resin',code:'BASE',name:'Base resin',category:'Tworzywo',usage:0.2,unit:'kg',logisticQty:1};
+  const workingMaterial={...baseMaterial,id:'working-resin',code:'ALT',name:'Working resin',usage:0.5};
+  h.ctx.state.technologies=[{id:'base-a',productIndex:'A100',productName:'DETAIL A',variant:'base',alternativeNo:0,
+    description:'',notes:'',shiftNorm:500,materials:[baseMaterial],linkedProducts:[],surplusMaterials:[],archived:false}];
+  let first;
+  for(let day=1;day<=7;day++) {
+    const date=`2026-09-0${day}`;
+    h.selectPlanDate(date);
+    h.ctx.pending={fileName:`${date}.xlsx`,purpose:'plan',workbook:{Sheets:{Plan:{rows:[
+      ['Lp.','','Ilość','ST.','Norma','','Uwagi'],['1','DETAIL A (A100)',8000-day*500,'WTR 34',500]
+    ]}}}};
+    h.importSelectedSheet();
+    if(day===1) {
+      first=h.ctx.state.plan[0];
+      h.ctx.state.plan=[{...first,manualOverride:true,workingMaterials:[workingMaterial],packagingMode:'base'}];
+    }
+    const item=h.ctx.state.plan[0];
+    assert.equal(item.id,first.id);
+    assert.equal(item.runId,first.runId);
+    assert.equal(item.technologyId,'base-a');
+    assert.equal(item.manualOverride,true);
+    assert.equal(item.packagingMode,'base');
+    assert.equal(item.totalQty,8000-day*500);
+    assert.deepEqual(JSON.parse(JSON.stringify(item.workingMaterials)),[workingMaterial]);
+    const restored=h.parseStoredState(JSON.parse(JSON.stringify(h.ctx.state)));
+    assert.equal(restored.plan[0].workingMaterials[0].code,'ALT');
+    assert.equal(restored.plan[0].workingMaterials[0].usage,0.5);
+    h.ctx.state=pruneMaterialPlanningHistory(h.preparePlanningAutosaveState(restored),date);
+    assert.equal(h.ctx.state.plan[0].manualOverride,true);
+    assert.equal(h.ctx.state.technologies[0].materials[0].code,'BASE','working changes do not rewrite the library');
+  }
+  assert.deepEqual(Array.from(h.ctx.state.planVersions,version=>version.planDate).sort(),['2026-09-06','2026-09-07']);
+});
+
 test('opening today keeps yesterday available and manual date selection remains reversible',()=>{
   const h=setup();
   h.ctx.state.technologies=[{id:'base-a',productIndex:'A100',productName:'DETAIL A',variant:'base',alternativeNo:0,description:'',shiftNorm:500,materials:[],archived:false}];

@@ -28,6 +28,8 @@ export const PlanningSaveNotice = ({ info, retry, downloadDraft, loadLatest }: {
       : info.error === 'SHARED_REVISION_CONFLICT'
       ? 'Wspólna biblioteka, dokument lub ustawienia zmieniły się podczas edycji. Zapis jest wstrzymany, aby nie nadpisać tych zmian.'
       : 'Ten sam plan roboczy został zmieniony w innej karcie lub na innym urządzeniu. Zapis jest wstrzymany, aby nie nadpisać zmian.'
+      : info.error === 'PLANNING_PAYLOAD_TOO_LARGE' ? 'Zapis przekracza limit rozmiaru serwera. Zmiany nie zostały usunięte; pobierz ich kopię.'
+      : /^HTTP_\d{3}$/.test(info.error) ? `Serwer odrzucił zapis (HTTP ${info.error.slice(5)}). Zmiany pozostają w tej karcie; pobierz kopię i ponów próbę.`
       : migration ? 'Autozapis wymaga istniejącej migracji zapisu planowania zapotrzebowania.'
         : info.error === 'UNAUTHORIZED' || info.error === 'FORBIDDEN' ? 'Sesja wygasła lub nie masz prawa do zapisu. Zaloguj się ponownie.'
           : info.error === 'LOAD_FAILED' ? 'Nie udało się pobrać aktualnego planu z bazy.'

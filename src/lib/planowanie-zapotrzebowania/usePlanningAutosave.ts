@@ -9,6 +9,8 @@ import {
   changedSharedPlanningFields, combinePlanningState, privatePlanningState,
   rebasePlanningWorkspaceDraft, rebaseSharedPlanningChanges, sharedPlanningState
 } from './stateScopes';
+import { encodePlanningSave, PlanningSaveTransportError } from './saveTransport';
+import { readPlanningDraftCache, writePlanningDraftCache, removePlanningDraftCache } from './draftCache';
 
 const finishingWrites = new Map<string, Promise<void>>();
 const initialInfo: PlanningSaveInfo = { status: 'loading', pending: false, backupAvailable: false, error: '' };
@@ -77,7 +79,7 @@ export const usePlanningAutosave = <T,>({
       let localSharedRevision: number | null = null;
       let localSharedRefreshRequired = false;
       try {
-        const cached = JSON.parse(window.localStorage.getItem(cacheKey) || 'null') as (PlanningDraft<T> & {
+        const cached = JSON.parse(await readPlanningDraftCache(cacheKey) || 'null') as (PlanningDraft<T> & {
           format?: number;
           sharedRevision?: number;
           sharedBaseline?: Record<string, unknown>;
@@ -155,7 +157,7 @@ export const usePlanningAutosave = <T,>({
           const changedSharedFields = changedSharedPlanningFields(
             sharedBaselineRef.current ?? {}, next as Record<string, unknown>
           );
-          const body = JSON.stringify({
+          const payload = {
             state: {
               ...privatePlanningState(next as Record<string, unknown>),
               ...Object.fromEntries(changedSharedFields.map((field) => [field, (next as Record<string, unknown>)[field]]))
@@ -166,14 +168,19 @@ export const usePlanningAutosave = <T,>({
             ...(changedSharedFields.length ? {
               sharedBaseline: Object.fromEntries(changedSharedFields.map((field) => [field, sharedBaselineRef.current?.[field]]))
             } : {})
-          });
+          };
+          let encoded: Awaited<ReturnType<typeof encodePlanningSave>>;
+          try { encoded = await encodePlanningSave(payload); }
+          catch (error) {
+            if (error instanceof PlanningSaveTransportError) throw new PlanningSaveError(error.code);
+            throw error;
+          }
           const response = await fetch('/api/planowanie-zapotrzebowania', {
             method: 'PUT',
-            headers: { 'content-type': 'application/json' },
-            body,
-            keepalive: new Blob([body]).size < 60000,
-            signal: AbortSignal.timeout(15000)
+            ...encoded,
+            signal: AbortSignal.timeout(30000)
           });
+          if (response.status === 413) throw new PlanningSaveError('PLANNING_PAYLOAD_TOO_LARGE');
           if (response.status === 409) {
             const conflict = await response.json() as { code?: string };
             throw new PlanningSaveError(conflict.code === 'SHARED_REVISION_CONFLICT'
@@ -182,14 +189,15 @@ export const usePlanningAutosave = <T,>({
           }
           if (response.status === 401) throw new PlanningSaveError('UNAUTHORIZED');
           if (response.status === 403) throw new PlanningSaveError('FORBIDDEN');
-          const payload = await response.json() as { revision?: number; sharedRevision?: number; code?: string };
+          const result = await response.json().catch(() => null) as { revision?: number; sharedRevision?: number; code?: string } | null;
+          if (!result) throw new PlanningSaveError(response.ok ? 'INVALID_RESPONSE' : `HTTP_${response.status}`);
           if (!response.ok) {
-            throw new PlanningSaveError(payload.code ?? 'SAVE_FAILED');
+            throw new PlanningSaveError(result.code ?? 'SAVE_FAILED');
           }
-          const nextRevision = Number(payload.revision);
+          const nextRevision = Number(result.revision);
           if (!Number.isSafeInteger(nextRevision) || nextRevision <= revision) throw new PlanningSaveError('SAVE_FAILED');
           if (changedSharedFields.length) {
-            const nextSharedRevision = Number(payload.sharedRevision);
+            const nextSharedRevision = Number(result.sharedRevision);
             if (!Number.isSafeInteger(nextSharedRevision) || nextSharedRevision < 0) throw new PlanningSaveError('SAVE_FAILED');
             sharedRevisionRef.current = nextSharedRevision;
             sharedBaselineRef.current = sharedPlanningState(next as Record<string, unknown>);
@@ -201,7 +209,7 @@ export const usePlanningAutosave = <T,>({
           const cacheDraft = next.lastAttempt?.state === next.state
             ? { ...next, lastAttempt: undefined }
             : next;
-          window.localStorage.setItem(cacheKey, JSON.stringify({
+          return writePlanningDraftCache(cacheKey, JSON.stringify({
             format: 2,
             ...cacheDraft,
             sharedRevision: sharedRevisionRef.current,
@@ -384,13 +392,13 @@ export const usePlanningAutosave = <T,>({
       const remote = await readRemote();
       if (engineRef.current !== engine) return false;
       try {
-        window.localStorage.setItem(cacheKey + '-recovery', JSON.stringify(engine.getDraft()));
+        await writePlanningDraftCache(cacheKey + '-recovery', JSON.stringify(engine.getDraft()));
       } catch {
         // Brak miejsca na dodatkową kopię nie może blokować wersji pobranej z bazy.
       }
       try {
         // Stary szkic z konfliktem nie może wrócić po odświeżeniu, nawet gdy pamięć jest pełna.
-        window.localStorage.removeItem(cacheKey);
+        await removePlanningDraftCache(cacheKey);
       } catch {
         // Niedostępna pamięć lokalna nie blokuje pracy na wersji centralnej.
       }

@@ -70,6 +70,60 @@ const setup = (overrides = {}) => {
   return { queue, clock, writes, backups, notifications, reads: () => reads };
 };
 
+test('async backups are reported only after commit and stale completions cannot hide a newer failure', async () => {
+  const completions = [];
+  const h = setup({ cache: () => new Promise((resolve, reject) => completions.push({ resolve, reject })) });
+  const first = h.queue.persist();
+  const second = h.queue.persist();
+  assert.equal(h.queue.getInfo().backupAvailable, false);
+  completions[1].reject(new Error('disk full'));
+  await second;
+  completions[0].resolve();
+  await first;
+  assert.equal(h.queue.getInfo().backupAvailable, false);
+  const third = h.queue.persist();
+  completions[2].resolve();
+  await third;
+  assert.equal(h.queue.getInfo().backupAvailable, true);
+});
+
+test('closing an editor waits for its final async backup without sending an idle plan', async () => {
+  const completions = [];
+  const h = setup({ cache: () => new Promise(resolve => completions.push(resolve)) });
+  let closed = false;
+  const closing = h.queue.close().then(() => { closed = true; });
+  await drain();
+  assert.equal(closed, false);
+  completions.at(-1)();
+  await closing;
+  assert.equal(closed, true);
+  assert.equal(h.writes.length, 0);
+});
+
+test('a previous async backup cannot claim that a more recent edit is already protected', async () => {
+  const completions = [];
+  const h = setup({ cache: () => new Promise(resolve => completions.push(resolve)) });
+  const first = h.queue.persist();
+  h.queue.setSnapshot({ quantity: 2400 }, true);
+  completions[0]();
+  await first;
+  assert.equal(h.queue.getInfo().backupAvailable, false);
+  const latest = h.queue.persist();
+  completions[1]();
+  await latest;
+  assert.equal(h.queue.getInfo().backupAvailable, true);
+});
+
+test('an explicit payload limit stops retries and retains the unsaved state', async () => {
+  const h = setup({ write: async () => { throw new PlanningSaveError('PLANNING_PAYLOAD_TOO_LARGE'); } });
+  h.queue.setSnapshot({ quantity: 2400 }, true);
+  await h.clock.tick(700);
+  assert.equal(h.queue.getInfo().status, 'error');
+  assert.equal(h.queue.getInfo().error, 'PLANNING_PAYLOAD_TOO_LARGE');
+  assert.equal(h.queue.getDraft().state.quantity, 2400);
+  assert.equal(h.queue.getDraft().pending, true);
+});
+
 test('idle plans and local view changes do not send requests', async () => {
   const h = setup();
   await h.clock.tick(60000);

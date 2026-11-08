@@ -46,6 +46,7 @@ names.push('materialIdentityMatches');
 names.push('sharedAreaIds');
 names.push('renderDocumentV2', 'documentStatusLabel', 'documentTone', 'inferPickingWarehouseCode', 'pickingWarehouseCode', 'sortPickingDocumentRows', 'PICKING_WAREHOUSE_OPTIONS', 'MATERIAL_WAREHOUSE_PRIORITY');
 names.push('planNormNeedsReview', 'normIssuePlanItemIds', 'missingNormActiveCount', 'calculationBlockedCount', 'calculationBlockLabel', 'calculationBlockTitle');
+names.push('planningAreas', 'needsMaterialBalances', 'stockPlan', 'incompleteStockPlan', 'zoneDemandSources');
 const definitions = new Map();
 const visit = (node) => {
   if (ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) {
@@ -81,6 +82,7 @@ export const createHeaderFixture = (overrides = {}) => {
   };
   const ctx = vm.createContext({
     exports: {}, require, React, Fragment: React.Fragment, useState: React.useState, useRef: React.useRef,
+    useCallback: fn => fn,
     ...require('lucide-react'), Map,
     ...load('@/components/ui/Button'), ...load('@/components/ui/Badge'),
     ...load('@/components/ui/WarningTriangle'),

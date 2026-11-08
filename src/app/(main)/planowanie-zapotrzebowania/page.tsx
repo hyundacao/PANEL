@@ -55,7 +55,6 @@ import { PlanningSaveNotice, PlanningSaveStatus } from '@/components/planowanie-
 import { usePlanningAutosave } from '@/lib/planowanie-zapotrzebowania/usePlanningAutosave';
 import { shouldInvalidatePlanDocument } from '@/lib/planowanie-zapotrzebowania/stateScopes';
 import {
-  MATERIAL_PLANNING_HISTORY_DAYS,
   isMaterialPlanningDateRetained,
   materialPlanningHistoryCutoffDateKey,
   pruneMaterialPlanningHistory
@@ -2132,7 +2131,8 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     };
     if (readOnly) setState(removeExpiredHistory);
     else changeState(removeExpiredHistory);
-  }, [changeState, hydrated, readOnly, setState, today]);
+  }, [changeState, hydrated, readOnly, setState, today, state.selectedPlanDate, state.dailyPlans,
+    state.planVersions, state.documents, state.archive, state.quantityCorrections, state.returnStatuses, state.pickingDone]);
 
   const flash = (text: string) => {
     setMessage(text);
@@ -2374,7 +2374,8 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     };
   }, [calculationEditorDirty, calculationEditorOpen, calculationEditorSaving, discardManualSave, router, view]);
 
-  const areaName = (id: string) => state.areas.find((area) => area.id === id)?.name ?? 'Brak przypisu';
+  const planningAreas = state.areas;
+  const areaName = useCallback((id: string) => planningAreas.find((area) => area.id === id)?.name ?? 'Brak przypisu', [planningAreas]);
   const selectPlanningArea = (areaId: string) => {
     if (!state.areas.some((area) => area.id === areaId && !area.shared)) return false;
     if (!closeCalculationEditorIfAllowed()) return false;
@@ -2393,24 +2394,42 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     if (!state.areas.some((area) => area.id === areaId && !area.shared)) return;
     if (selectPlanningArea(areaId)) setShowAllPlanAreas(false);
   };
-  const technologiesFor = (item: Pick<PlanItem, 'index' | 'name'> & Partial<Pick<PlanItem, 'technologyId'>>) => {
-    const assigned = state.technologies.find(technology => technology.id === item.technologyId);
-    return state.technologies.filter(technology => !technology.archived && (
-      technologyMatchesProduct(technology, item.index, item.name)
-      || Boolean(assigned && technologyMatchesProduct(technology, assigned.productIndex, assigned.productName))
-    ));
-  };
+  const technologiesFor = useMemo(() => {
+    const technologies = state.technologies;
+    const identityKey = (index: string, name: string) => {
+      const normalizedIndex = normalize(index);
+      return normalizedIndex
+        ? `index:${/^\d+$/.test(normalizedIndex) ? normalizedIndex.replace(/^0+(?=\d)/, '') : normalizedIndex}`
+        : normalize(name) ? `name:${normalize(name)}` : '';
+    };
+    const identitiesById = new Map<string, string>();
+    const variantsByIdentity = new Map<string, Technology[]>();
+    const orderById = new Map<string, number>();
+    const empty: Technology[] = [];
+    technologies.forEach((technology, order) => {
+      const key = identityKey(technology.productIndex, technology.productName);
+      identitiesById.set(technology.id, key);
+      orderById.set(technology.id, order);
+      if (!key || technology.archived) return;
+      const variants = variantsByIdentity.get(key) ?? [];
+      variants.push(technology);
+      variantsByIdentity.set(key, variants);
+    });
+    return (item: Pick<PlanItem, 'index' | 'name'> & Partial<Pick<PlanItem, 'technologyId'>>) => {
+      const key = identityKey(item.index, item.name);
+      const assignedKey = identitiesById.get(item.technologyId ?? '') ?? '';
+      const direct = variantsByIdentity.get(key) ?? empty;
+      if (!assignedKey || assignedKey === key) return direct;
+      const assigned = variantsByIdentity.get(assignedKey) ?? empty;
+      if (!direct.length) return assigned;
+      if (!assigned.length) return direct;
+      return [...direct, ...assigned].sort((left, right) => orderById.get(left.id)! - orderById.get(right.id)!);
+    };
+  }, [state.technologies]);
   const technologyById = useMemo(
     () => new Map(state.technologies.map((technology) => [technology.id, technology])),
     [state.technologies]
   );
-  const technologyForItem = (item: PlanItem) => technologyById.get(item.technologyId);
-  const materialsForItem = (item: PlanItem) => effectiveTechnologyMaterials(
-    item.workingMaterials,
-    technologyForItem(item)?.materials,
-    item.manualOverride
-  );
-
   const selectTechnology = (itemId: string, technologyId: string) => {
     if (technologyId.startsWith(WORKING_TECHNOLOGY_SELECT_PREFIX)) return;
     updateState((current) => ({
@@ -2445,266 +2464,310 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     }));
   };
 
-  const scopeForItem = (item: PlanItem) => {
-    if (item.scopeMode === 'all') return { mode: 'all' as const };
-    if (item.scopeMode === 'quantity') return { mode: 'quantity' as const, quantity: Math.max(0, item.scopeQuantity ?? 0) };
-    if (item.scopeMode === 'shifts') return { mode: 'shifts' as const, shifts: Math.max(0.5, item.scopeShifts ?? state.horizonShifts) };
-    return state.calculationMode === 'all'
-      ? { mode: 'all' as const }
-      : { mode: 'shifts' as const, shifts: state.horizonShifts };
-  };
-
-  const shiftNormForItem = (item: PlanItem) => {
-    const planNorm = Math.max(0, numberValue(item.shiftNorm));
-    const technology = technologyForItem(item);
-    return technology?.productionMode === 'continuous' && planNorm <= 0
-      ? Math.max(0, numberValue(technology.shiftNorm))
-      : planNorm;
-  };
-  const planNormNeedsReview = (item: PlanItem) => shiftNormForItem(item) <= 0;
-  const scopedItemProductionQty = (item: PlanItem) => {
-    const technology = technologyForItem(item);
-    const norm = shiftNormForItem(item);
-    if (technology?.productionMode === 'continuous') {
-      const scope = scopeForItem(item);
-      if (scope.mode === 'quantity') return Math.max(0, scope.quantity);
-      const shifts = scope.mode === 'shifts' ? scope.shifts : state.horizonShifts;
-      return norm * Math.max(0, shifts);
-    }
-    const remaining = knownRemainingQuantity(item);
-    return calculateScopedQuantity(remaining, norm, scopeForItem(item));
-  };
-  const plannedItemProductionQty = (item: PlanItem) => {
-    const scopedQuantity = scopedItemProductionQty(item);
-    if (Number(state.continuationBufferPercent) !== 20 || scopedQuantity <= 0) return scopedQuantity;
-    const technology = technologyForItem(item);
-    if (technology?.productionMode === 'continuous') return Math.ceil(scopedQuantity * 1.2);
-    return calculateContinuationBufferedQuantity(
-      scopedQuantity,
-      knownRemainingQuantity(item),
-      state.continuationBufferPercent
+  // Status-only renders must not rebuild the material balance for the whole plan.
+  const calculationInputs = useMemo(() => ({
+    plan: state.plan, technologies: state.technologies, areas: state.areas,
+    inventory: state.inventory, documents: state.documents,
+    selectedPlanDate: state.selectedPlanDate, selectedAreaId: state.selectedAreaId,
+    calculationMode: state.calculationMode, horizonShifts: state.horizonShifts,
+    continuationBufferPercent: state.continuationBufferPercent
+  }), [state.plan, state.technologies, state.areas, state.inventory, state.documents,
+    state.selectedPlanDate, state.selectedAreaId, state.calculationMode, state.horizonShifts,
+    state.continuationBufferPercent]);
+  const planningCalculations = useMemo(() => {
+    const state = calculationInputs;
+    const technologyForItem = (item: PlanItem) => technologyById.get(item.technologyId);
+    const materialsForItem = (item: PlanItem) => effectiveTechnologyMaterials(
+      item.workingMaterials,
+      technologyForItem(item)?.materials,
+      item.manualOverride
     );
-  };
+    const scopeForItem = (item: PlanItem) => {
+      if (item.scopeMode === 'all') return { mode: 'all' as const };
+      if (item.scopeMode === 'quantity') return { mode: 'quantity' as const, quantity: Math.max(0, item.scopeQuantity ?? 0) };
+      if (item.scopeMode === 'shifts') return { mode: 'shifts' as const, shifts: Math.max(0.5, item.scopeShifts ?? state.horizonShifts) };
+      return state.calculationMode === 'all'
+        ? { mode: 'all' as const }
+        : { mode: 'shifts' as const, shifts: state.horizonShifts };
+    };
 
-  const technologyLinksForItem = (item: PlanItem) => technologyForItem(item)?.linkedProducts ?? [];
-  const linkedProducerCandidates = (link: LinkedProduct, consumerItemId: string) => state.plan.filter(candidate => {
-    if (candidate.id === consumerItemId || !candidate.included) return false;
-    const assigned = technologyForItem(candidate);
-    return linkedProductMatchesPlanItem(link, candidate) || Boolean(assigned && productIdentityMatches(
-      link.productIndex, link.productName, assigned.productIndex, assigned.productName
-    ));
-  });
-  const linkedProducerFor = (item: PlanItem, link: LinkedProduct) => {
-    const selection = linkedSourceSelectionForItem(item, link);
-    const candidates = linkedProducerCandidates(link, item.id);
-    return candidates.find((candidate) => candidate.id === selection.producerPlanItemId) ??
-      (candidates.length === 1 ? candidates[0] : undefined);
-  };
-  const linkedAllocationByProducer = (fullPlan: boolean) => {
-    const allocations = new Map<string, number>();
-    state.plan.filter((item) => item.included && item.technologyId).forEach((item) => {
-      technologyLinksForItem(item).forEach((link) => {
-        const selection = linkedSourceSelectionForItem(item, link);
-        if (selection.mode !== 'production' && selection.mode !== 'mixed') return;
-        const producer = linkedProducerFor(item, link);
-        if (!producer) return;
-        const consumerQuantity = fullPlan && technologyForItem(producer)?.productionMode !== 'continuous'
-          ? knownRemainingQuantity(item)
-          : plannedItemProductionQty(item);
-        const machineProducts = linkedMachineProductQuantity(consumerQuantity, selection);
-        const allocatedOutput = roundTechnologyMaterialQuantity(machineProducts * Math.max(0, link.usage), link.unit);
-        allocations.set(producer.id, (allocations.get(producer.id) ?? 0) + allocatedOutput);
-      });
-    });
-    return allocations;
-  };
-  const selectedLinkedAllocationByProducer = linkedAllocationByProducer(false);
-  const fullLinkedAllocationByProducer = linkedAllocationByProducer(true);
-  const itemProductionQty = (item: PlanItem, fullPlan = false) => {
-    const technology = technologyForItem(item);
-    const plannedQuantity = fullPlan && technology?.productionMode !== 'continuous'
-      ? knownRemainingQuantity(item)
-      : plannedItemProductionQty(item);
-    const allocatedQuantity = (fullPlan ? fullLinkedAllocationByProducer : selectedLinkedAllocationByProducer).get(item.id) ?? 0;
-    return effectiveProducerQuantity(plannedQuantity, allocatedQuantity, technology?.productionMode ?? 'planned');
-  };
-  const planQuantityNeedsReview = (item: PlanItem) => {
-    const productionMode = technologyForItem(item)?.productionMode ?? 'planned';
-    if (productionMode === 'continuous') return false;
-    if (productionMode === 'linked' && itemProductionQty(item) > 0) return false;
-    return quantityNeedsReview(item);
-  };
-  const materialDemandContributionsForItem = (item: PlanItem, fullPlan = false) => {
-    const quantity = itemProductionQty(item, fullPlan);
-    const contributions = materialsForItem(item).map((material) => ({
-      material,
-      demand: roundTechnologyMaterialQuantity(quantity * material.usage, material.unit, material.name)
-    }));
-    technologyLinksForItem(item).forEach((link) => {
-      const selection = linkedSourceSelectionForItem(item, link);
-      const warehouseProducts = linkedWarehouseProductQuantity(quantity, selection);
-      if (warehouseProducts <= 0 || link.usage <= 0) return;
-      const material: TechnologyMaterial = {
-        id: `linked-${link.id}`,
-        code: link.productIndex,
-        name: link.productName,
-        category: 'Półwyrób',
-        usage: link.usage,
-        unit: link.unit || 'szt.',
-        logisticQty: 1
-      };
-      contributions.push({
-        material,
-        demand: roundTechnologyMaterialQuantity(warehouseProducts * link.usage, material.unit)
-      });
-    });
-    const technology = technologyForItem(item);
-    const surplusMaterials = technology?.surplusMaterials ?? [];
-    const allocatedOutput = (fullPlan ? fullLinkedAllocationByProducer : selectedLinkedAllocationByProducer).get(item.id) ?? 0;
-    const surplusQuantity = linkedSurplusQuantity(quantity, allocatedOutput);
-    if (surplusQuantity > 0) {
-      surplusMaterials.forEach((material) => contributions.push({
-        material,
-        demand: roundTechnologyMaterialQuantity(surplusQuantity * material.usage, material.unit, material.name)
-      }));
-    }
-    return contributions;
-  };
-
-  const needsMaterialBalances = (['plan', 'obliczenia', 'dokument', 'zwroty'] as View[]).includes(view);
-  const documentLedger = new Map<string, { issued: number; pending: number }>();
-  if (needsMaterialBalances) {
-    state.documents
-      .filter((document) => document.planDate === state.selectedPlanDate && (
-        document.status === 'issued' ||
-        document.status === 'handed' ||
-        document.rows.some((row) => pickingRowWasWritten(document, row))
-      ))
-      .forEach((document) => document.rows.forEach((row) => {
-        if (document.status !== 'issued' && document.status !== 'handed' && !pickingRowWasWritten(document, row)) return;
-        const key = `${document.areaId}|${canonicalPlanningMaterialKey(row.key)}`;
-        const current = documentLedger.get(key) ?? { issued: 0, pending: 0 };
-        if (document.status === 'issued') current.issued += row.toIssue;
-        else current.pending += row.toIssue;
-        documentLedger.set(key, current);
-      }));
-  }
-
-  const demandByArea = (() => {
-    const all = new Map<string, Map<string, number>>();
-    state.areas.filter((area) => !area.shared).forEach((area) => all.set(area.id, new Map()));
-    if (!needsMaterialBalances) return all;
-    state.plan.filter((item) => item.included && item.areaId && item.technologyId).forEach((item) => {
-      const areaMap = all.get(item.areaId) ?? new Map<string, number>();
-      materialDemandContributionsForItem(item).forEach(({ material, demand }) => {
-        const key = materialKey(material);
-        areaMap.set(key, (areaMap.get(key) ?? 0) + demand);
-      });
-      all.set(item.areaId, areaMap);
-    });
-    return all;
-  })();
-
-  const sharedAreaIds = new Set(state.areas.filter((area) => area.shared).map((area) => area.id));
-  const materialSupply = (key: string, material: TechnologyMaterial, areaId: string) => {
-    const sharedStock = state.inventory
-      .filter((item) => sharedAreaIds.has(item.areaId) && materialMatches(material, item))
-      .reduce((sum, item) => sum + item.qty, 0);
-    const areaNeeds = [...demandByArea.entries()].map(([currentAreaId, demandMap]) => {
-      const demand = demandMap.get(key) ?? 0;
-      const areaStock = state.inventory
-        .filter((item) => item.areaId === currentAreaId && materialMatches(material, item))
-        .reduce((sum, item) => sum + item.qty, 0);
-      const ledger = documentLedger.get(`${currentAreaId}|${key}`) ?? { issued: 0, pending: 0 };
-      const balance = calculateIssueBalance({ demand, areaStock, sharedCoverage: 0, issued: ledger.issued, pending: ledger.pending });
-      const netNeed = roundTechnologyMaterialQuantity(balance.toIssue, material.unit, material.name);
-      return { areaId: currentAreaId, demand, areaStock, issued: ledger.issued, pending: ledger.pending, netNeed };
-    });
-    const globalSharedDemand = areaNeeds.reduce((sum, item) => sum + item.netNeed, 0);
-    const globalSharedShortage = roundTechnologyMaterialQuantity(Math.max(0, globalSharedDemand - sharedStock), material.unit, material.name);
-    const selected = areaNeeds.find((item) => item.areaId === areaId) ?? { areaId, demand: 0, areaStock: 0, issued: 0, pending: 0, netNeed: 0 };
-    const toIssue = roundTechnologyMaterialQuantity(
-      globalSharedDemand > 0 ? globalSharedShortage * (selected.netNeed / globalSharedDemand) : 0,
-      material.unit,
-      material.name
-    );
-    return { ...selected, sharedStock, globalSharedDemand, globalSharedShortage, toIssue };
-  };
-
-  const manualIssueForItem = (item: PlanItem, key: string) => {
-    const override = item.issueQuantityOverrides?.[key];
-    if (!override || override.planDate !== state.selectedPlanDate || override.areaId !== item.areaId) return null;
-    return remainingManualIssueQuantity(override, state.selectedPlanDate, item.areaId,
-      committedIssueQuantity(state.documents, state.selectedPlanDate, item.areaId, key, item.id, canonicalPlanningMaterialKey));
-  };
-
-  const requirementsForArea = (areaId: string) => {
-    const aggregate = new Map<string, { material: TechnologyMaterial; demand: number; fullDemand: number; sources: PickingDocumentSource[] }>();
-    state.plan.filter((item) => item.included && item.areaId === areaId && item.technologyId).forEach((item) => {
-      const fullDemands = new Map<string, number>();
-      materialDemandContributionsForItem(item, true).forEach(({ material, demand }) => {
-        const key = materialKey(material);
-        fullDemands.set(key, (fullDemands.get(key) ?? 0) + demand);
-      });
-      const addedFullDemandKeys = new Set<string>();
-      materialDemandContributionsForItem(item).forEach(({ material, demand }) => {
-        const key = materialKey(material);
-        const row = aggregate.get(key) ?? { material, demand: 0, fullDemand: 0, sources: [] };
-        row.demand += demand;
-        if (!addedFullDemandKeys.has(key)) row.fullDemand += fullDemands.get(key) ?? 0;
-        addedFullDemandKeys.add(key);
-        row.sources.push({ planItemId: item.id, index: item.index, name: item.name, demand });
-        aggregate.set(key, row);
-      });
-    });
-    return [...aggregate.entries()].map(([key, row]) => {
-      const supply = materialSupply(key, row.material, areaId);
-      const issue = allocateIssueQuantities(mergePickingSources(row.sources), supply.toIssue, (source) => {
-        const item = state.plan.find((item) => item.id === source.planItemId);
-        return item ? manualIssueForItem(item, key) : null;
-      }, (quantity) => roundTechnologyMaterialQuantity(quantity, row.material.unit, row.material.name));
-      return {
-        key, code: row.material.code, name: row.material.name, category: row.material.category, unit: row.material.unit,
-        demand: row.demand, selectedDemand: row.demand, fullDemand: row.fullDemand, issued: supply.issued, pending: supply.pending,
-        sources: issue.sources, areaStock: supply.areaStock, sharedStock: supply.sharedStock, toIssue: issue.toIssue,
-        globalSharedDemand: supply.globalSharedDemand, globalSharedShortage: supply.globalSharedShortage
-      };
-    }).sort((a, b) => (CATEGORY_ORDER.get(a.category) ?? 99) - (CATEGORY_ORDER.get(b.category) ?? 99) || a.name.localeCompare(b.name, 'pl')) as Requirement[];
-  };
-
-  const linkedSourceIssuesForArea = (areaId: string) => {
-    const issues: string[] = [];
-    state.plan.filter((item) => item.included && item.areaId === areaId && item.technologyId).forEach((item) => {
+    const shiftNormForItem = (item: PlanItem) => {
+      const planNorm = Math.max(0, numberValue(item.shiftNorm));
       const technology = technologyForItem(item);
-      if (technology?.productionMode === 'continuous' && itemProductionQty(item) <= 0) {
-        issues.push(`${item.index}: uzupełnij wydajność produkcji ciągłej na zmianę.`);
+      return technology?.productionMode === 'continuous' && planNorm <= 0
+        ? Math.max(0, numberValue(technology.shiftNorm))
+        : planNorm;
+    };
+    const planNormNeedsReview = (item: PlanItem) => shiftNormForItem(item) <= 0;
+    const scopedItemProductionQty = (item: PlanItem) => {
+      const technology = technologyForItem(item);
+      const norm = shiftNormForItem(item);
+      if (technology?.productionMode === 'continuous') {
+        const scope = scopeForItem(item);
+        if (scope.mode === 'quantity') return Math.max(0, scope.quantity);
+        const shifts = scope.mode === 'shifts' ? scope.shifts : state.horizonShifts;
+        return norm * Math.max(0, shifts);
       }
+      const remaining = knownRemainingQuantity(item);
+      return calculateScopedQuantity(remaining, norm, scopeForItem(item));
+    };
+    const plannedItemProductionQty = (item: PlanItem) => {
+      const scopedQuantity = scopedItemProductionQty(item);
+      if (Number(state.continuationBufferPercent) !== 20 || scopedQuantity <= 0) return scopedQuantity;
+      const technology = technologyForItem(item);
+      if (technology?.productionMode === 'continuous') return Math.ceil(scopedQuantity * 1.2);
+      return calculateContinuationBufferedQuantity(
+        scopedQuantity,
+        knownRemainingQuantity(item),
+        state.continuationBufferPercent
+      );
+    };
+
+    const technologyLinksForItem = (item: PlanItem) => technologyForItem(item)?.linkedProducts ?? [];
+    const linkedProducerCandidates = (link: LinkedProduct, consumerItemId: string) => state.plan.filter(candidate => {
+      if (candidate.id === consumerItemId || !candidate.included) return false;
+      const assigned = technologyForItem(candidate);
+      return linkedProductMatchesPlanItem(link, candidate) || Boolean(assigned && productIdentityMatches(
+        link.productIndex, link.productName, assigned.productIndex, assigned.productName
+      ));
+    });
+    const linkedProducerFor = (item: PlanItem, link: LinkedProduct) => {
+      const selection = linkedSourceSelectionForItem(item, link);
+      const candidates = linkedProducerCandidates(link, item.id);
+      return candidates.find((candidate) => candidate.id === selection.producerPlanItemId) ??
+        (candidates.length === 1 ? candidates[0] : undefined);
+    };
+    const linkedAllocationByProducer = (fullPlan: boolean) => {
+      const allocations = new Map<string, number>();
+      state.plan.filter((item) => item.included && item.technologyId).forEach((item) => {
+        technologyLinksForItem(item).forEach((link) => {
+          const selection = linkedSourceSelectionForItem(item, link);
+          if (selection.mode !== 'production' && selection.mode !== 'mixed') return;
+          const producer = linkedProducerFor(item, link);
+          if (!producer) return;
+          const consumerQuantity = fullPlan && technologyForItem(producer)?.productionMode !== 'continuous'
+            ? knownRemainingQuantity(item)
+            : plannedItemProductionQty(item);
+          const machineProducts = linkedMachineProductQuantity(consumerQuantity, selection);
+          const allocatedOutput = roundTechnologyMaterialQuantity(machineProducts * Math.max(0, link.usage), link.unit);
+          allocations.set(producer.id, (allocations.get(producer.id) ?? 0) + allocatedOutput);
+        });
+      });
+      return allocations;
+    };
+    const selectedLinkedAllocationByProducer = linkedAllocationByProducer(false);
+    const fullLinkedAllocationByProducer = linkedAllocationByProducer(true);
+    const itemProductionQty = (item: PlanItem, fullPlan = false) => {
+      const technology = technologyForItem(item);
+      const plannedQuantity = fullPlan && technology?.productionMode !== 'continuous'
+        ? knownRemainingQuantity(item)
+        : plannedItemProductionQty(item);
+      const allocatedQuantity = (fullPlan ? fullLinkedAllocationByProducer : selectedLinkedAllocationByProducer).get(item.id) ?? 0;
+      return effectiveProducerQuantity(plannedQuantity, allocatedQuantity, technology?.productionMode ?? 'planned');
+    };
+    const planQuantityNeedsReview = (item: PlanItem) => {
+      const productionMode = technologyForItem(item)?.productionMode ?? 'planned';
+      if (productionMode === 'continuous') return false;
+      if (productionMode === 'linked' && itemProductionQty(item) > 0) return false;
+      return quantityNeedsReview(item);
+    };
+    const materialDemandContributionsForItem = (item: PlanItem, fullPlan = false) => {
+      const quantity = itemProductionQty(item, fullPlan);
+      const contributions = materialsForItem(item).map((material) => ({
+        material,
+        demand: roundTechnologyMaterialQuantity(quantity * material.usage, material.unit, material.name)
+      }));
       technologyLinksForItem(item).forEach((link) => {
         const selection = linkedSourceSelectionForItem(item, link);
-        const label = link.productIndex || link.productName;
-        if (selection.mode === 'unselected') {
-          issues.push(`${item.index}: wybierz źródło półwyrobu ${label}.`);
-          return;
+        const warehouseProducts = linkedWarehouseProductQuantity(quantity, selection);
+        if (warehouseProducts <= 0 || link.usage <= 0) return;
+        const material: TechnologyMaterial = {
+          id: `linked-${link.id}`,
+          code: link.productIndex,
+          name: link.productName,
+          category: 'Półwyrób',
+          usage: link.usage,
+          unit: link.unit || 'szt.',
+          logisticQty: 1
+        };
+        contributions.push({
+          material,
+          demand: roundTechnologyMaterialQuantity(warehouseProducts * link.usage, material.unit)
+        });
+      });
+      const technology = technologyForItem(item);
+      const surplusMaterials = technology?.surplusMaterials ?? [];
+      const allocatedOutput = (fullPlan ? fullLinkedAllocationByProducer : selectedLinkedAllocationByProducer).get(item.id) ?? 0;
+      const surplusQuantity = linkedSurplusQuantity(quantity, allocatedOutput);
+      if (surplusQuantity > 0) {
+        surplusMaterials.forEach((material) => contributions.push({
+          material,
+          demand: roundTechnologyMaterialQuantity(surplusQuantity * material.usage, material.unit, material.name)
+        }));
+      }
+      return contributions;
+    };
+
+    const needsMaterialBalances = (['plan', 'obliczenia', 'dokument', 'zwroty'] as View[]).includes(view);
+    const documentLedger = new Map<string, { issued: number; pending: number }>();
+    if (needsMaterialBalances) {
+      state.documents
+        .filter((document) => document.planDate === state.selectedPlanDate && (
+          document.status === 'issued' ||
+          document.status === 'handed' ||
+          document.rows.some((row) => pickingRowWasWritten(document, row))
+        ))
+        .forEach((document) => document.rows.forEach((row) => {
+          if (document.status !== 'issued' && document.status !== 'handed' && !pickingRowWasWritten(document, row)) return;
+          const key = `${document.areaId}|${canonicalPlanningMaterialKey(row.key)}`;
+          const current = documentLedger.get(key) ?? { issued: 0, pending: 0 };
+          if (document.status === 'issued') current.issued += row.toIssue;
+          else current.pending += row.toIssue;
+          documentLedger.set(key, current);
+        }));
+    }
+
+    const demandByArea = (() => {
+      const all = new Map<string, Map<string, number>>();
+      state.areas.filter((area) => !area.shared).forEach((area) => all.set(area.id, new Map()));
+      if (!needsMaterialBalances) return all;
+      state.plan.filter((item) => item.included && item.areaId && item.technologyId).forEach((item) => {
+        const areaMap = all.get(item.areaId) ?? new Map<string, number>();
+        materialDemandContributionsForItem(item).forEach(({ material, demand }) => {
+          const key = materialKey(material);
+          areaMap.set(key, (areaMap.get(key) ?? 0) + demand);
+        });
+        all.set(item.areaId, areaMap);
+      });
+      return all;
+    })();
+
+    const sharedAreaIds = new Set(state.areas.filter((area) => area.shared).map((area) => area.id));
+    const materialSupply = (key: string, material: TechnologyMaterial, areaId: string) => {
+      const sharedStock = state.inventory
+        .filter((item) => sharedAreaIds.has(item.areaId) && materialMatches(material, item))
+        .reduce((sum, item) => sum + item.qty, 0);
+      const areaNeeds = [...demandByArea.entries()].map(([currentAreaId, demandMap]) => {
+        const demand = demandMap.get(key) ?? 0;
+        const areaStock = state.inventory
+          .filter((item) => item.areaId === currentAreaId && materialMatches(material, item))
+          .reduce((sum, item) => sum + item.qty, 0);
+        const ledger = documentLedger.get(`${currentAreaId}|${key}`) ?? { issued: 0, pending: 0 };
+        const balance = calculateIssueBalance({ demand, areaStock, sharedCoverage: 0, issued: ledger.issued, pending: ledger.pending });
+        const netNeed = roundTechnologyMaterialQuantity(balance.toIssue, material.unit, material.name);
+        return { areaId: currentAreaId, demand, areaStock, issued: ledger.issued, pending: ledger.pending, netNeed };
+      });
+      const globalSharedDemand = areaNeeds.reduce((sum, item) => sum + item.netNeed, 0);
+      const globalSharedShortage = roundTechnologyMaterialQuantity(Math.max(0, globalSharedDemand - sharedStock), material.unit, material.name);
+      const selected = areaNeeds.find((item) => item.areaId === areaId) ?? { areaId, demand: 0, areaStock: 0, issued: 0, pending: 0, netNeed: 0 };
+      const toIssue = roundTechnologyMaterialQuantity(
+        globalSharedDemand > 0 ? globalSharedShortage * (selected.netNeed / globalSharedDemand) : 0,
+        material.unit,
+        material.name
+      );
+      return { ...selected, sharedStock, globalSharedDemand, globalSharedShortage, toIssue };
+    };
+
+    const manualIssueForItem = (item: PlanItem, key: string) => {
+      const override = item.issueQuantityOverrides?.[key];
+      if (!override || override.planDate !== state.selectedPlanDate || override.areaId !== item.areaId) return null;
+      return remainingManualIssueQuantity(override, state.selectedPlanDate, item.areaId,
+        committedIssueQuantity(state.documents, state.selectedPlanDate, item.areaId, key, item.id, canonicalPlanningMaterialKey));
+    };
+
+    const requirementsForArea = (areaId: string) => {
+      const aggregate = new Map<string, { material: TechnologyMaterial; demand: number; fullDemand: number; sources: PickingDocumentSource[] }>();
+      state.plan.filter((item) => item.included && item.areaId === areaId && item.technologyId).forEach((item) => {
+        const fullDemands = new Map<string, number>();
+        materialDemandContributionsForItem(item, true).forEach(({ material, demand }) => {
+          const key = materialKey(material);
+          fullDemands.set(key, (fullDemands.get(key) ?? 0) + demand);
+        });
+        const addedFullDemandKeys = new Set<string>();
+        materialDemandContributionsForItem(item).forEach(({ material, demand }) => {
+          const key = materialKey(material);
+          const row = aggregate.get(key) ?? { material, demand: 0, fullDemand: 0, sources: [] };
+          row.demand += demand;
+          if (!addedFullDemandKeys.has(key)) row.fullDemand += fullDemands.get(key) ?? 0;
+          addedFullDemandKeys.add(key);
+          row.sources.push({ planItemId: item.id, index: item.index, name: item.name, demand });
+          aggregate.set(key, row);
+        });
+      });
+      return [...aggregate.entries()].map(([key, row]) => {
+        const supply = materialSupply(key, row.material, areaId);
+        const issue = allocateIssueQuantities(mergePickingSources(row.sources), supply.toIssue, (source) => {
+          const item = state.plan.find((item) => item.id === source.planItemId);
+          return item ? manualIssueForItem(item, key) : null;
+        }, (quantity) => roundTechnologyMaterialQuantity(quantity, row.material.unit, row.material.name));
+        return {
+          key, code: row.material.code, name: row.material.name, category: row.material.category, unit: row.material.unit,
+          demand: row.demand, selectedDemand: row.demand, fullDemand: row.fullDemand, issued: supply.issued, pending: supply.pending,
+          sources: issue.sources, areaStock: supply.areaStock, sharedStock: supply.sharedStock, toIssue: issue.toIssue,
+          globalSharedDemand: supply.globalSharedDemand, globalSharedShortage: supply.globalSharedShortage
+        };
+      }).sort((a, b) => (CATEGORY_ORDER.get(a.category) ?? 99) - (CATEGORY_ORDER.get(b.category) ?? 99) || a.name.localeCompare(b.name, 'pl')) as Requirement[];
+    };
+
+    const linkedSourceIssuesForArea = (areaId: string) => {
+      const issues: string[] = [];
+      state.plan.filter((item) => item.included && item.areaId === areaId && item.technologyId).forEach((item) => {
+        const technology = technologyForItem(item);
+        if (technology?.productionMode === 'continuous' && itemProductionQty(item) <= 0) {
+          issues.push(`${item.index}: uzupełnij wydajność produkcji ciągłej na zmianę.`);
         }
-        if ((selection.mode === 'production' || selection.mode === 'mixed') && !linkedProducerFor(item, link)) {
-          issues.push(`${item.index}: nie znaleziono jednoznacznej pozycji produkcyjnej ${label} w planie.`);
+        technologyLinksForItem(item).forEach((link) => {
+          const selection = linkedSourceSelectionForItem(item, link);
+          const label = link.productIndex || link.productName;
+          if (selection.mode === 'unselected') {
+            issues.push(`${item.index}: wybierz źródło półwyrobu ${label}.`);
+            return;
+          }
+          if ((selection.mode === 'production' || selection.mode === 'mixed') && !linkedProducerFor(item, link)) {
+            issues.push(`${item.index}: nie znaleziono jednoznacznej pozycji produkcyjnej ${label} w planie.`);
+          }
+        });
+      });
+      selectedLinkedAllocationByProducer.forEach((allocated, producerId) => {
+        const producer = state.plan.find((item) => item.id === producerId);
+        if (!producer || producer.areaId !== areaId) return;
+        const produced = itemProductionQty(producer);
+        if (allocated > produced) {
+          issues.push(`${producer.index}: do paneli przypisano ${fmt(allocated)} szt., a w zakresie produkowane jest ${fmt(produced)} szt.`);
         }
       });
-    });
-    selectedLinkedAllocationByProducer.forEach((allocated, producerId) => {
-      const producer = state.plan.find((item) => item.id === producerId);
-      if (!producer || producer.areaId !== areaId) return;
-      const produced = itemProductionQty(producer);
-      if (allocated > produced) {
-        issues.push(`${producer.index}: do paneli przypisano ${fmt(allocated)} szt., a w zakresie produkowane jest ${fmt(produced)} szt.`);
-      }
-    });
-    return issues;
-  };
+      return issues;
+    };
 
-  const requirements = view === 'dokument' || view === 'obliczenia'
-    ? requirementsForArea(state.selectedAreaId)
-    : [];
+    const requirements = view === 'dokument' || view === 'obliczenia'
+      ? requirementsForArea(state.selectedAreaId)
+      : [];
+    const stockPlan = needsMaterialBalances
+      ? state.plan.filter((row) => row.included && !sharedAreaIds.has(row.areaId))
+      : [];
+    const incompleteStockPlan = stockPlan.filter((row) => !row.areaId || !technologyForItem(row) || planQuantityNeedsReview(row) || planNormNeedsReview(row));
+    const zoneDemandSources = stockPlan.map((row) => ({
+      id: row.id, index: row.index, name: row.name, station: row.station, areaId: row.areaId, areaName: areaName(row.areaId), included: row.included,
+      contributions: materialDemandContributionsForItem(row).map((contribution) => ({
+        ...contribution,
+        demand: planQuantityNeedsReview(row) || planNormNeedsReview(row) ? null : contribution.demand
+      }))
+    }));
+    return {
+      technologyForItem, materialsForItem, scopeForItem, shiftNormForItem, planNormNeedsReview,
+      itemProductionQty, planQuantityNeedsReview, technologyLinksForItem, linkedProducerCandidates,
+      linkedProducerFor, selectedLinkedAllocationByProducer, fullLinkedAllocationByProducer,
+      materialDemandContributionsForItem, sharedAreaIds, materialSupply, manualIssueForItem,
+      requirementsForArea, linkedSourceIssuesForArea, requirements, incompleteStockPlan, zoneDemandSources
+    };
+  }, [calculationInputs, technologyById, areaName, view]);
+  const {
+    technologyForItem, materialsForItem, shiftNormForItem, planNormNeedsReview,
+    itemProductionQty, planQuantityNeedsReview, linkedProducerCandidates,
+    linkedProducerFor, selectedLinkedAllocationByProducer, fullLinkedAllocationByProducer,
+    materialDemandContributionsForItem, sharedAreaIds, materialSupply, manualIssueForItem,
+    requirementsForArea, linkedSourceIssuesForArea, requirements, incompleteStockPlan, zoneDemandSources
+  } = planningCalculations;
   const areaPlan = showAllPlanAreas ? state.plan : state.plan.filter((item) => !item.areaId || item.areaId === state.selectedAreaId);
   const planSearchTokens = normalize(planSearch).split(/\s+/).filter(Boolean);
   const visibleAreaPlan = planSearchTokens.length === 0 ? areaPlan : areaPlan.filter((item) => {
@@ -2959,7 +3022,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   const selectPlanDate = (planDate: string) => {
     if (!planDate) return;
     if (!isMaterialPlanningDateRetained(planDate, today)) {
-      flash(`Plany są dostępne maksymalnie ${MATERIAL_PLANNING_HISTORY_DAYS} dni wstecz.`);
+      flash('Starsze plany nie są dostępne. Wybierz dzisiaj lub wczoraj.');
       return;
     }
     if (!closeCalculationEditorIfAllowed()) return;
@@ -3838,7 +3901,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       {visibleAreaPlan.length ? planningSections(visibleAreaPlan).map((section, index) => <Fragment key={`${index}-${section.title}`}>{renderPlanTable(section.items, section.title,
         section.group === 'planned' ? 'Pozycje przyszłe są wyłączone do ręcznego zaznaczenia.' : section.group === 'emergency' ? 'Pozycje wymagające reakcji.' : '', section.group)}</Fragment>)
         : <p className="py-8 text-center text-sm text-muted">{areaPlan.length ? 'Brak produktów pasujących do wyszukiwania.' : showAllPlanAreas ? 'Brak pozycji w planie.' : `Brak pozycji w strefie: ${areaName(state.selectedAreaId)}.`}</p>}
-    </div> : <EmptyState title={`Brak planu na ${formatPlanDate(state.selectedPlanDate)}`} description={`Wgraj pierwszy plan dla wybranej daty. Poprzednie dni i wersje są dostępne przez ${MATERIAL_PLANNING_HISTORY_DAYS} dni.`} />}
+    </div> : <EmptyState title={`Brak planu na ${formatPlanDate(state.selectedPlanDate)}`} description="Wgraj pierwszy plan dla wybranej daty. Historia obejmuje dzisiaj i wczoraj." />}
     {state.plan.length ? <Card className="flex flex-col gap-4 border-[rgba(255,122,26,0.32)] p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <p className="text-base font-bold text-title">Eksport składu technologii</p>
@@ -4378,16 +4441,6 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     const fullSurplusQuantity = linkedSurplusQuantity(remaining, fullAllocatedOutput);
     const zoneArea = state.areas.find((area) => area.id === item.areaId && !area.shared);
     const zoneStockReady = Boolean(zoneArea && state.inventorySourceDate === state.selectedPlanDate);
-    const stockPlan = state.plan.filter((row) => row.included && !sharedAreaIds.has(row.areaId));
-    const incompleteStockPlan = stockPlan.filter((row) => !row.areaId || !technologyForItem(row) || planQuantityNeedsReview(row) || planNormNeedsReview(row));
-    const zoneDemandSources = stockPlan.map((row) => ({
-      id: row.id, index: row.index, name: row.name, station: row.station, areaId: row.areaId, areaName: areaName(row.areaId), included: row.included,
-      contributions: materialDemandContributionsForItem(row).map((contribution) => ({
-        ...contribution,
-        demand: planQuantityNeedsReview(row) || planNormNeedsReview(row) ? null : contribution.demand
-      }))
-    }));
-
     return <div className="space-y-4 px-5 py-4 md:px-6 md:py-5">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-borderStrong pb-3">
         {item.productionGroupId ? <Badge tone="info">Detal {(item.productionOutputOrder ?? 0) + 1} z {item.productionOutputCount}</Badge> : null}

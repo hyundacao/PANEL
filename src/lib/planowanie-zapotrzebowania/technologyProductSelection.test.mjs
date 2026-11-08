@@ -25,6 +25,7 @@ const catalogItem = { id: 'paired', name: 'MAINT. DOOR CUBIC INOX DO MONTAZU', i
 function editor(technologies = [], draft = technology()) {
   const messages = [];
   const context = vm.createContext({
+    useMemo: factory => factory(),
     productCatalogIndexMatches, productCatalogSelectionIndex, renameTechnologyProduct,
     readOnly: false, hydrated: true, state: { technologies, plan: [] }, technologyDraft: draft, technologyEditorCatalogItem: null, editingTechnologyId: '',
     setEditingTechnologyHeader: () => {},

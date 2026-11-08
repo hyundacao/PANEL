@@ -5,8 +5,19 @@ import { Module, createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import * as reference from './productionTaskReference.ts';
 import * as scopes from '../planowanie-zapotrzebowania/stateScopes.ts';
+import * as retention from '../planowanie-zapotrzebowania/historyRetention.ts';
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
+const loadSaveUtility = filename => {
+  const mod = new Module(filename);
+  mod.require = id => id.startsWith('.')
+    ? loadSaveUtility(fileURLToPath(new URL(`${id}.ts`, `file:///${filename.replaceAll('\\', '/')}`)))
+    : require(id);
+  mod._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, filename);
+  return mod.exports;
+};
+const saveBody = loadSaveUtility(fileURLToPath(new URL('../planowanie-zapotrzebowania/saveBody.server.ts', import.meta.url)));
+const transport = loadSaveUtility(fileURLToPath(new URL('../planowanie-zapotrzebowania/saveTransport.ts', import.meta.url)));
 const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Warsaw' }).format(new Date());
 const item = (id = 'base') => ({ index: '1830', name: 'SYSTEM', station: 'WTR 21', areaId: 'hala-1', technologyId: id });
 const state = (id = 'base') => ({ selectedPlanDate: day, plan: [item(id)], dailyPlans: { [day]: [item(id)] } });
@@ -18,6 +29,8 @@ function planningApi() {
     'next/server': { NextResponse: { json: (data, options) => Response.json(data, options) } },
     '@/lib/auth/access': { canSeeTab: () => true, isReadOnly: () => false, isWarehouseAdmin: () => false },
     '@/lib/auth/session': { getAuthenticatedUser: async () => ({ user: { id: 'planner', username: 'planner', name: 'Planner' } }) },
+    '@/lib/planowanie-zapotrzebowania/saveBody.server': saveBody,
+    '@/lib/planowanie-zapotrzebowania/historyRetention': retention,
     '@/lib/utils/productionTaskReference': reference,
     '@/lib/utils/originalInventorySpisSearch': {},
     '@/lib/utils/originalInventoryM10Indices': {},
@@ -51,9 +64,82 @@ function planningApi() {
   mod._compile(ts.transpileModule(readFileSync(routeFile, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, routeFile);
   return { rows, writes: () => writes, reads: () => reads, fail: value => { fail = value; },
     put: (next, revision = 3) => mod.exports.PUT({ json: async () => ({ state: next, expectedRevision: revision, expectedSharedRevision: 1, changedSharedFields: [] }) }),
+    putDocuments: (next, baseline) => mod.exports.PUT({ json: async () => ({ state: next, expectedRevision: 3,
+      expectedSharedRevision: 1, changedSharedFields: ['documents'], sharedBaseline: { documents: baseline } }) }),
+    putCompressed: async next => {
+      const encoded = await transport.encodePlanningSave({ state: next, expectedRevision: 3, expectedSharedRevision: 1,
+        changedSharedFields: ['technologies'], sharedBaseline: { technologies: [] } });
+      assert.equal(encoded.headers['content-type'], 'application/gzip');
+      return mod.exports.PUT(new Request('http://test/api/planowanie-zapotrzebowania', { method: 'PUT', ...encoded }));
+    },
     get: () => mod.exports.GET({ nextUrl: new URL('http://test/api/planowanie-zapotrzebowania') })
   };
 }
+
+const relativeDay = offset => {
+  const date = new Date(`${day}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + offset);
+  return date.toISOString().slice(0, 10);
+};
+
+test('actual API removes expired workspace history but preserves a continuing working recipe and stock', async () => {
+  const api = planningApi();
+  const old = relativeDay(-2), yesterday = relativeDay(-1);
+  const plan = [{ ...item('alternative'), manualOverride: true, workingMaterials: [{ code: 'ALT', usage: 0.5, unit: 'kg' }] }];
+  const next = { ...state(), plan, dailyPlans: { [old]: plan, [yesterday]: plan, [day]: plan },
+    planVersions: [{ id: 'old', planDate: old }, { id: 'yesterday', planDate: yesterday }],
+    archive: [{ id: 'old', at: `${old}T12:00:00Z` }, { id: 'today', at: `${day}T12:00:00Z` }],
+    returnStatuses: { [`${old}|hall|material`]: 'completed', [`${day}|hall|material`]: 'open' },
+    inventory: [{ code: 'ALT', qty: 12 }], returnExclusions: [{ id: 'permanent' }] };
+  const result = await api.put(next);
+  assert.equal(result.status, 200);
+  const saved = api.rows.get('workspace:planner').state;
+  assert.deepEqual(saved.plan, plan);
+  assert.deepEqual(Object.keys(saved.dailyPlans), [yesterday, day]);
+  assert.deepEqual(saved.planVersions.map(row => row.id), ['yesterday']);
+  assert.deepEqual(saved.archive.map(row => row.id), ['today']);
+  assert.equal(saved.returnStatuses, undefined, 'shared return decisions are not copied into the private workspace');
+  assert.deepEqual(saved.inventory, next.inventory);
+  assert.equal(saved.__technologyPreview.days[day][0].manualOverride, true);
+  assert.equal(saved.__technologyPreview.days[day][0].workingMaterials[0].code, 'ALT');
+  assert.equal(api.writes(), 1);
+});
+
+test('stale document baselines cannot resurrect expired data or cause a false merge conflict', async () => {
+  const api = planningApi();
+  const old = relativeDay(-2);
+  const expired = { id: 'expired', areaId: 'hala-1', planDate: old, rows: [{ qty: 1 }] };
+  const current = { id: 'current', areaId: 'hala-1', planDate: day, rows: [{ qty: 2 }] };
+  const active = [{ ...item('working'), manualOverride: true, workingMaterials: [{ code: 'ALT', usage: 0.5 }] }];
+  api.rows.set('main', { revision: 1, state: { technologies: [], documents: [expired, current],
+    plan: active, selectedPlanDate: old, dailyPlans: { [old]: active }, planVersions: [{ id: 'old', planDate: old }],
+    archive: [{ id: 'old', at: `${old}T12:00:00Z` }],
+    returnStatuses: { [`${old}|hall|material`]: 'completed', [`${day}|hall|material`]: 'open' } } });
+  const result = await api.putDocuments({ ...state(), documents: [expired, { ...current, rows: [{ qty: 9 }] }] }, [expired, current]);
+  assert.equal(result.status, 200);
+  const shared = api.rows.get('main').state;
+  assert.deepEqual(shared.documents.map(row => row.id), ['current']);
+  assert.equal(shared.documents[0].rows[0].qty, 9);
+  assert.deepEqual(shared.plan, active);
+  assert.deepEqual(shared.dailyPlans, {});
+  assert.deepEqual(shared.planVersions, []);
+  assert.deepEqual(shared.archive, []);
+  assert.deepEqual(shared.returnStatuses, { [`${day}|hall|material`]: 'open' });
+  assert.equal(api.writes(), 2, 'cleanup is part of the existing optimistic writes, not a competing extra write');
+});
+
+test('large compressed technology saves use the actual API, preserve history and publish the same preview', async () => {
+  const api = planningApi();
+  const next = { ...state('alternative'), technologies: [{ id: 'new', productIndex: '000703', productName: 'New product', materials: [{ usage: .248, unit: 'kg' }] }],
+    archive: [{ name: 'Synthetic history', note: 'Keep this complete history. '.repeat(210_000), qty: 0 }] };
+  assert.ok(Buffer.byteLength(JSON.stringify(next)) > 4_500_000);
+  const result = await api.putCompressed(next);
+  assert.equal(result.status, 200);
+  assert.equal(api.writes(), 2);
+  assert.deepEqual(api.rows.get('main').state.technologies, next.technologies);
+  assert.deepEqual(api.rows.get('workspace:planner').state.archive, next.archive);
+  assert.equal(api.rows.get('workspace:planner').state.__technologyPreview.days[day][0].technologyId, 'alternative');
+});
 
 test('recipe choice is published atomically in the existing save without shared-state writes', async () => {
   const api = planningApi();

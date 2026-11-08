@@ -70,7 +70,7 @@ type AutosaveOptions<T> = {
   draft: PlanningDraft<T>;
   read: () => Promise<PlanningRemote<T>>;
   write: (state: T, revision: number) => Promise<number>;
-  cache: (draft: PlanningDraft<T>) => void;
+  cache: (draft: PlanningDraft<T>) => void | Promise<void>;
   onChange: (info: PlanningSaveInfo) => void;
   restore?: typeof restorePlanningDraft<T>;
   delay?: number;
@@ -79,7 +79,8 @@ type AutosaveOptions<T> = {
 
 const terminalErrors = new Set([
   'UNAUTHORIZED', 'FORBIDDEN', 'READ_ONLY', 'INVALID_STATE', 'INVALID_REVISION',
-  'CONCURRENCY_MIGRATION_REQUIRED', 'MIGRATION_REQUIRED'
+  'CONCURRENCY_MIGRATION_REQUIRED', 'MIGRATION_REQUIRED',
+  'PLANNING_PAYLOAD_TOO_LARGE', 'INVALID_JSON'
 ]);
 
 export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
@@ -93,6 +94,8 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
   let status: PlanningSaveStatus = draft.pending ? 'pending' : 'saved';
   let error = '';
   let backupAvailable = false;
+  let cacheGeneration = 0;
+  let cacheWrite = Promise.resolve();
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let cacheTimer: ReturnType<typeof setTimeout> | null = null;
   let running: Promise<void> | null = null;
@@ -119,13 +122,24 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
   };
   const persist = () => {
     clearCacheTimer();
+    const cacheVersion = ++cacheGeneration;
+    const cachedDraft = draft;
+    const completed = (available: boolean) => {
+      if (cacheVersion !== cacheGeneration) return;
+      backupAvailable = available && cachedDraft === draft;
+      notify();
+    };
     try {
-      options.cache(draft);
-      backupAvailable = true;
+      const pending = options.cache(draft);
+      if (pending && typeof pending.then === 'function') {
+        backupAvailable = false;
+        cacheWrite = pending.then(() => completed(true), () => completed(false));
+      } else backupAvailable = true;
     } catch {
       backupAvailable = false;
     }
     notify();
+    return cacheWrite;
   };
   const schedule = (milliseconds: number) => {
     clearSaveTimer();
@@ -250,7 +264,7 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
     setSnapshot(state: T, changed = false) {
       if (stopped) return;
       draft = { ...draft, state, pending: draft.pending || changed };
-      if (changed) generation += 1;
+      if (changed) { generation += 1; backupAvailable = false; }
       clearCacheTimer();
       if (!manual) cacheTimer = clock.setTimeout(persist, 200);
       if (changed) {
@@ -301,7 +315,7 @@ export const createPlanningAutosave = <T,>(options: AutosaveOptions<T>) => {
       if (draft.pending && status === 'pending') await flush();
       stopped = true;
       clearSaveTimer();
-      persist();
+      await persist();
     }
   };
 };

@@ -14,6 +14,7 @@ Dotyczy `/planowanie-zapotrzebowania` z widokami planu, obliczen, biblioteki, do
 | Czysta zamiana rol bez zmiany skladow i ID | [technologyVariants.ts](<../../src/lib/planowanie-zapotrzebowania/technologyVariants.ts>) | `promoteTechnologyToBase` |
 | Preferowany indeks i szukanie po obu | [productCatalogSearch.ts](<../../src/lib/planowanie-zapotrzebowania/productCatalogSearch.ts>) | `productCatalogSelectionIndex`, `productCatalogIndexMatches`, `searchProductCatalog` |
 | Zakres, korekty, obliczenia domeny | [domain.ts](<../../src/lib/planowanie-zapotrzebowania/domain.ts>) | `calculateScopedQuantity`, `effectiveTechnologyMaterials`, `calculateIssueBalance` |
+| Koszt przeliczania ekranu, cache wariantow i zaleznosci | [page.tsx](<../../src/app/(main)/planowanie-zapotrzebowania/page.tsx>) | `planningCalculations`, `technologiesFor` |
 | Import ilosci planu | [planImport.ts](<../../src/lib/planowanie-zapotrzebowania/planImport.ts>) | `readPlanningRows`, `quantityNeedsReview` |
 | Stan i podsumowanie strefy | [zoneStock.ts](<../../src/lib/planowanie-zapotrzebowania/zoneStock.ts>) | `buildZoneStockSummary`, `buildZonePlanSummary` |
 | Ilosc reczna / laczenie dokumentu | [manualIssueQuantities.ts](<../../src/lib/planowanie-zapotrzebowania/manualIssueQuantities.ts>) / [pickingDocumentRows.ts](<../../src/lib/planowanie-zapotrzebowania/pickingDocumentRows.ts>) | |
@@ -24,8 +25,12 @@ Dotyczy `/planowanie-zapotrzebowania` z widokami planu, obliczen, biblioteki, do
 ## Zapis I Wplyw
 
 - Ekran -> [usePlanningAutosave](<../../src/lib/planowanie-zapotrzebowania/usePlanningAutosave.ts>) -> [silnik](<../../src/lib/planowanie-zapotrzebowania/autosave.ts>) -> [API GET/PUT](<../../src/app/api/planowanie-zapotrzebowania/route.ts>) -> `material_planning_state` przez RPC `save_material_planning_state`.
+- Duze zapisy: [saveTransport](<../../src/lib/planowanie-zapotrzebowania/saveTransport.ts>) kompresuje JSON, [saveBody.server](<../../src/lib/planowanie-zapotrzebowania/saveBody.server.ts>) odczytuje go po autoryzacji z limitem rozpakowania. Stare klienty JSON pozostaja obslugiwane; to nie zmienia rewizji ani scalania stanu.
+- Kopia lokalna: [draftCache](<../../src/lib/planowanie-zapotrzebowania/draftCache.ts>) uzywa IndexedDB z migracja/fallbackiem localStorage. Silnik czeka na zatwierdzenie kopii i nie pokazuje sukcesu przed zakonczeniem transakcji.
+- [Retencja](<../../src/lib/planowanie-zapotrzebowania/historyRetention.ts>): dzis/wczoraj oraz przyszle plany. Klient usuwa starsza historie po odczycie/zmianie dnia; API filtruje zapis i obie strony scalania. Zachowaj aktywny plan, robocze receptury, spis i stale ustawienia. Nie stosuj do innych modulow/projekcji podgladu.
 - [stateScopes](<../../src/lib/planowanie-zapotrzebowania/stateScopes.ts>) rozdziela `main` (wspolna biblioteka/ustawienia/dokumenty) i `workspace:<userId>` (plan roboczy); pilnuje rewizji i scalania.
 - Technologia -> plan/obliczenia -> strefa -> dokument -> zwroty/Excel. Nie zmieniaj ID przy zmianie roli bazowa/awaryjna.
+- `planningCalculations` zapamietuje wyniki po danych wejsciowych, nie po calym stanie. Zmiana ilosci, receptury roboczej, biblioteki, spisu, dokumentow, zakresu lub strefy musi uniewazniac obliczenia; status autozapisu i historia nie. `technologiesFor` ma ograniczony cache na czas jednej wersji biblioteki. Nie zmieniaj obiektow planu/spisu w miejscu.
 - Zapisana technologia, reczna kopia robocza i wygenerowany dokument to rozne zapisy. Zmiana biblioteki nie upowaznia do przepisywania archiwum.
 - Naglowek edytuje cala rodzine wariantow bez zmiany ID; zajety indeks blokuje laczenie produktow. Referencje `linkedProducts` zachowuja stare klucze wyboru zrodel w `sourceKeys`, nie jako aliasy kartoteki. Plan po zmianie indeksu zachowuje jawne przypisanie po ID; dokumenty i snapshoty nie sa przepisywane.
 - Podglad technologii w zadaniu przygotowania produkcji czyta plan/biblioteke: [karta przygotowania](<preparation.md>).
@@ -39,6 +44,9 @@ W katalogu `src/lib/planowanie-zapotrzebowania/` wybierz tylko powiazane:
 - Wybor indeksu/skladnika: [technologyProductSelection](<../../src/lib/planowanie-zapotrzebowania/technologyProductSelection.test.mjs>), [productCatalogSearch](<../../src/lib/planowanie-zapotrzebowania/productCatalogSearch.test.mjs>).
 - Zamiana bazowej: [technologyVariants](<../../src/lib/planowanie-zapotrzebowania/technologyVariants.test.mjs>), [stateScopes](<../../src/lib/planowanie-zapotrzebowania/stateScopes.test.mjs>).
 - Przeliczenia/plan: [domain](<../../src/lib/planowanie-zapotrzebowania/domain.test.mjs>), [planImport.integration](<../../src/lib/planowanie-zapotrzebowania/planImport.integration.test.mjs>).
+- Wydajnosc i uniewaznianie cache: [planningPerformance](<../../src/lib/planowanie-zapotrzebowania/planningPerformance.test.mjs>). Import integracyjny obejmuje tydzien codziennych importow i ponownych odczytow z receptura robocza.
 - Stany/dokument: [zoneStock](<../../src/lib/planowanie-zapotrzebowania/zoneStock.test.mjs>), [zonePlanSummary](<../../src/lib/planowanie-zapotrzebowania/zonePlanSummary.test.mjs>), [pickingDocumentRows](<../../src/lib/planowanie-zapotrzebowania/pickingDocumentRows.test.mjs>), [manualIssueQuantities](<../../src/lib/planowanie-zapotrzebowania/manualIssueQuantities.test.mjs>).
 - Excel: [technologyLibraryExport](<../../src/lib/planowanie-zapotrzebowania/technologyLibraryExport.test.mjs>), [technologyLibraryWorkbook](<../../src/lib/planowanie-zapotrzebowania/technologyLibraryWorkbook.test.mjs>).
 - Autozapis: [autosave](<../../src/lib/planowanie-zapotrzebowania/autosave.test.mjs>), [stateScopes](<../../src/lib/planowanie-zapotrzebowania/stateScopes.test.mjs>). Przy zmianie kontraktu takze pelny zestaw.
+- Retencja: [historyRetention](<../../src/lib/planowanie-zapotrzebowania/historyRetention.test.mjs>), tygodniowy import w `planImport.integration` oraz rzeczywisty zapis API w [productionTechnologyPreview](<../../src/lib/utils/productionTechnologyPreview.test.mjs>).
+- Rozmiar/backup: [saveTransport](<../../src/lib/planowanie-zapotrzebowania/saveTransport.test.mjs>), [draftCache](<../../src/lib/planowanie-zapotrzebowania/draftCache.test.mjs>).

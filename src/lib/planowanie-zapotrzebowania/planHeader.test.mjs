@@ -553,7 +553,7 @@ test('today, tomorrow, saved dates and custom calendar carry the last plan until
   assert.equal(h.ctx.state.plan.length, original.length);
   control(h, 'Dzień produkcji').props.onChange({ target: { value: 'custom' } });
   const datePicker = control(h, 'Wybrana data produkcji');
-  assert.equal(datePicker.props.min, '2026-08-24');
+  assert.equal(datePicker.props.min, '2026-08-30');
   datePicker.props.onChange({ target: { value: '2026-08-23' } });
   assert.equal(h.ctx.state.selectedPlanDate, '2026-08-31');
 });

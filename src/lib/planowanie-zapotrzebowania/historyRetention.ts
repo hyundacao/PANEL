@@ -1,4 +1,4 @@
-export const MATERIAL_PLANNING_HISTORY_DAYS = 7;
+export const MATERIAL_PLANNING_HISTORY_DAYS = 1;
 
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -53,10 +53,73 @@ export const isMaterialPlanningDateRetained = (
 const filterDatePrefixedRecord = <T>(
   record: Record<string, T>,
   keepDate: (dateKey: string) => boolean
-) => Object.fromEntries(Object.entries(record).filter(([key]) => {
-  const dateKey = key.slice(0, 10);
-  return !isDateKey(dateKey) || keepDate(dateKey);
-}));
+) => {
+  const entries = Object.entries(record);
+  const retained = entries.filter(([key]) => {
+    const dateKey = key.slice(0, 10);
+    return !isDateKey(dateKey) || keepDate(dateKey);
+  });
+  return retained.length === entries.length ? record : Object.fromEntries(retained);
+};
+
+export const materialPlanningHistoryEntryDateKey = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  const text = value.trim();
+  const iso = text.match(/^(\d{4}-\d{2}-\d{2})(?:$|T)/);
+  if (iso) {
+    if (/T.*(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) {
+      const date = new Date(text);
+      if (Number.isFinite(date.getTime())) return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Warsaw' }).format(date);
+    }
+    return iso[1];
+  }
+  const polish = text.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\D|$)/);
+  return polish ? `${polish[3]}-${polish[2].padStart(2, '0')}-${polish[1].padStart(2, '0')}` : '';
+};
+
+// The API also saves partial shared records. Prune only known history fields;
+// never rebuild the active plan or touch inventory, recipes or permanent settings.
+export const pruneMaterialPlanningRecord = <TState extends object>(
+  state: TState,
+  todayKey: string,
+  historyDays = MATERIAL_PLANNING_HISTORY_DAYS
+): TState => {
+  if (!isDateKey(todayKey)) return state;
+  const keepDate = (key: string) => isMaterialPlanningDateRetained(key, todayKey, historyDays);
+  const record = state as Record<string, unknown>;
+  let result = record;
+  const replace = (key: string, value: unknown) => {
+    if (record[key] === value) return;
+    if (result === record) result = { ...record };
+    result[key] = value;
+  };
+  const filterArray = (key: string, keep: (item: unknown) => boolean) => {
+    const items = record[key];
+    if (!Array.isArray(items)) return;
+    const retained = items.filter(keep);
+    if (retained.length !== items.length) replace(key, retained);
+  };
+  for (const key of ['planVersions', 'quantityCorrections', 'documents']) filterArray(key, item => {
+    const date = item && typeof item === 'object' && 'planDate' in item ? item.planDate : undefined;
+    return typeof date !== 'string' || keepDate(date);
+  });
+  filterArray('archive', item => {
+    const date = materialPlanningHistoryEntryDateKey(item && typeof item === 'object' && 'at' in item ? item.at : undefined);
+    return !date || keepDate(date);
+  });
+  if (record.dailyPlans && typeof record.dailyPlans === 'object' && !Array.isArray(record.dailyPlans)) {
+    const entries = Object.entries(record.dailyPlans);
+    const retained = entries.filter(([date]) => keepDate(date));
+    if (retained.length !== entries.length) replace('dailyPlans', Object.fromEntries(retained));
+  }
+  for (const key of ['returnStatuses', 'pickingDone']) {
+    const value = record[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      replace(key, filterDatePrefixedRecord(value as Record<string, unknown>, keepDate));
+    }
+  }
+  return result as TState;
+};
 
 export const pruneMaterialPlanningHistory = <
   TPlanItem,
@@ -68,14 +131,8 @@ export const pruneMaterialPlanningHistory = <
 ): TState => {
   if (!isDateKey(todayKey)) return state;
   const keepDate = (dateKey: string) => isMaterialPlanningDateRetained(dateKey, todayKey, historyDays);
-  const dailyPlans = Object.fromEntries(
-    Object.entries(state.dailyPlans).filter(([dateKey]) => keepDate(dateKey))
-  ) as Record<string, TPlanItem[]>;
-  const planVersions = state.planVersions.filter((version) => keepDate(version.planDate));
-  const quantityCorrections = state.quantityCorrections.filter((correction) => keepDate(correction.planDate));
-  const documents = state.documents.filter((document) => keepDate(document.planDate));
-  const returnStatuses = filterDatePrefixedRecord(state.returnStatuses, keepDate);
-  const pickingDone = filterDatePrefixedRecord(state.pickingDone, keepDate);
+  const retained = pruneMaterialPlanningRecord(state, todayKey, historyDays);
+  const { dailyPlans, planVersions } = retained;
   const selectedPlanDate = keepDate(state.selectedPlanDate) ? state.selectedPlanDate : todayKey;
   const selectedDateChanged = selectedPlanDate !== state.selectedPlanDate;
   const latestVersion = planVersions
@@ -90,17 +147,11 @@ export const pruneMaterialPlanningHistory = <
     ? state.dailyPlans[lastImportedVersion.planDate] ?? lastImportedVersion.items
     : state.plan;
 
-  const changed = selectedDateChanged
-    || Object.keys(dailyPlans).length !== Object.keys(state.dailyPlans).length
-    || planVersions.length !== state.planVersions.length
-    || quantityCorrections.length !== state.quantityCorrections.length
-    || documents.length !== state.documents.length
-    || Object.keys(returnStatuses).length !== Object.keys(state.returnStatuses).length
-    || Object.keys(pickingDone).length !== Object.keys(state.pickingDone).length;
+  const changed = selectedDateChanged || retained !== state;
   if (!changed) return state;
 
   return {
-    ...state,
+    ...retained,
     selectedPlanDate,
     activePlanVersionId: selectedDateChanged ? latestVersion?.id ?? '' : state.activePlanVersionId,
     planName: selectedDateChanged ? latestVersion?.fileName ?? (carryLastPlan ? lastImportedVersion?.fileName ?? state.planName : '') : state.planName,
@@ -110,10 +161,6 @@ export const pruneMaterialPlanningHistory = <
       ? carryLastPlan ? lastPlan : savedSelectedPlan ?? []
       : state.plan,
     dailyPlans: carryLastPlan ? { ...dailyPlans, [selectedPlanDate]: lastPlan } : dailyPlans,
-    planVersions,
-    quantityCorrections,
-    documents,
-    returnStatuses,
-    pickingDone
+    planVersions
   } as TState;
 };

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { canSeeTab, isReadOnly, isWarehouseAdmin } from '@/lib/auth/access';
 import { validPalletSetsState } from '@/lib/planowanie-zapotrzebowania/palletSets';
 import { getAuthenticatedUser } from '@/lib/auth/session';
+import { readPlanningSaveBody, PlanningSaveBodyError } from '@/lib/planowanie-zapotrzebowania/saveBody.server';
+import { pruneMaterialPlanningRecord } from '@/lib/planowanie-zapotrzebowania/historyRetention';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { buildTechnologyPreviewProjection, TECHNOLOGY_PREVIEW_FIELD } from '@/lib/utils/productionTaskReference';
 import {
@@ -73,7 +75,8 @@ const readPlanningRecord = async (id: string): Promise<PlanningRecord> => {
 };
 
 const savePlanningRecord = async (id: string, state: Record<string, unknown>, revision: number, updatedBy: string) => {
-  let storedState = state;
+  const retainedState = pruneMaterialPlanningRecord(state, warsawDateKey());
+  let storedState = retainedState;
   if (id.startsWith('workspace:')) {
     const cached = workspacePreviewCache.get(id);
     let projection: unknown = cached?.revision === revision ? cached.projection : null;
@@ -92,7 +95,7 @@ const savePlanningRecord = async (id: string, state: Record<string, unknown>, re
       if (legacy.error) throw legacy.error;
       projection = buildTechnologyPreviewProjection(legacy.data ?? {}, null, '');
     }
-    storedState = { ...state, [TECHNOLOGY_PREVIEW_FIELD]: buildTechnologyPreviewProjection(state, projection, new Date().toISOString()) };
+    storedState = { ...retainedState, [TECHNOLOGY_PREVIEW_FIELD]: buildTechnologyPreviewProjection(retainedState, projection, new Date().toISOString()) };
   }
   const { data, error } = await supabaseAdmin.rpc('save_material_planning_state', {
     p_module_id: id,
@@ -416,8 +419,11 @@ export async function PUT(request: NextRequest) {
   if (access.response || !access.user) return access.response;
   let body: unknown;
   try {
-    body = await request.json();
-  } catch {
+    body = await readPlanningSaveBody(request);
+  } catch (error) {
+    if (error instanceof PlanningSaveBodyError) {
+      return NextResponse.json({ code: error.code }, { status: error.status });
+    }
     return NextResponse.json({ code: 'INVALID_JSON' }, { status: 400 });
   }
   const payload = body && typeof body === 'object' ? body as {
@@ -459,10 +465,24 @@ export async function PUT(request: NextRequest) {
   }
   const updatedBy = access.user.username ?? access.user.name;
   try {
+    const todayKey = warsawDateKey();
+    const retain = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
+      ? pruneMaterialPlanningRecord(value as Record<string, unknown>, todayKey) : value;
+    // Expired records must be removed from both merge sides, including stale tabs.
+    const retainingStore: PlanningStore = {
+      ...planningStore,
+      read: async (id) => {
+        const record = await planningStore.read(id);
+        return { ...record, state: retain(record.state) };
+      }
+    };
+    const documentBaseline = Array.isArray(payload.documentBaseline)
+      ? pruneMaterialPlanningRecord({ documents: payload.documentBaseline }, todayKey).documents
+      : payload.documentBaseline;
     const result = await savePlanningWorkspace(
-      planningStore, access.user.id, state as Record<string, unknown>,
+      retainingStore, access.user.id, retain(state) as Record<string, unknown>,
       expectedRevision, expectedSharedRevision, changedFields as SharedPlanningField[],
-      payload.documentBaseline, updatedBy, payload.sharedBaseline as Record<string, unknown> | undefined
+      documentBaseline, updatedBy, retain(payload.sharedBaseline) as Record<string, unknown> | undefined
     );
     if (!result.ok) {
       return NextResponse.json(result, { status: result.code.startsWith('INVALID_') ? 400 : 409 });
