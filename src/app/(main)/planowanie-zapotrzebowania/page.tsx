@@ -76,7 +76,7 @@ import { isHeadAdmin, isReadOnly, isWarehouseAdmin } from '@/lib/auth/access';
 import { normalizePalletSets, type PalletSet } from '@/lib/planowanie-zapotrzebowania/palletSets';
 import PalletSetSettings from '@/components/planowanie-zapotrzebowania/PalletSetSettings';
 import { TechnologyLibraryExportButton } from '@/components/planowanie-zapotrzebowania/TechnologyLibraryExportButton';
-import { promoteTechnologyToBase } from '@/lib/planowanie-zapotrzebowania/technologyVariants';
+import { promoteTechnologyToBase, renameTechnologyProduct } from '@/lib/planowanie-zapotrzebowania/technologyVariants';
 import { useUiStore } from '@/lib/store/ui';
 import { cn } from '@/lib/utils/cn';
 import {
@@ -158,6 +158,7 @@ type LinkedProduct = {
   usage: number;
   unit: string;
   sourcePolicy?: 'select' | 'warehouse' | 'production';
+  sourceKeys?: string[];
 };
 
 type LinkedSourceMode = 'unselected' | 'warehouse' | 'production' | 'mixed';
@@ -731,7 +732,9 @@ const linkedProductMatchesPlanItem = (
   (normalize(link.productName) && normalize(link.productName) === normalize(item.name))
 );
 const linkedSourceSelectionForItem = (item: Pick<PlanItem, 'linkedSources'>, link: LinkedProduct): LinkedSourceSelection => {
-  const selection = item.linkedSources?.[linkedProductKey(link)] ?? { mode: 'unselected', producerPlanItemId: '', productionQuantity: 0 };
+  const selection = [linkedProductKey(link), ...(link.sourceKeys ?? [])]
+    .map(key => item.linkedSources?.[key]).find(Boolean)
+    ?? { mode: 'unselected', producerPlanItemId: '', productionQuantity: 0 };
   if (link.sourcePolicy === 'warehouse' || link.sourcePolicy === 'production') {
     return { ...selection, mode: link.sourcePolicy, productionQuantity: 0 };
   }
@@ -1153,6 +1156,7 @@ const sameLinkedProducts = (left: LinkedProduct[], right: LinkedProduct[]) =>
       link.productName === other.productName &&
       link.usage === other.usage &&
       link.unit === other.unit &&
+      (link.sourceKeys ?? []).join('\n') === (other.sourceKeys ?? []).join('\n') &&
       (link.sourcePolicy ?? 'select') === (other.sourcePolicy ?? 'select');
   });
 
@@ -1217,6 +1221,7 @@ const parseStoredState = (value: unknown): AppState | null => {
         id: String(link.id || uid('link')),
         productIndex: String(link.productIndex ?? '').trim(),
         productName: String(link.productName ?? '').trim(),
+        sourceKeys: Array.isArray(link.sourceKeys) ? link.sourceKeys.filter((key): key is string => typeof key === 'string' && Boolean(key)) : [],
         usage: Math.max(0, numberValue(link.usage)),
         unit: String(link.unit ?? '').trim() || 'szt.',
         sourcePolicy: link.sourcePolicy === 'warehouse' || link.sourcePolicy === 'production'
@@ -1608,6 +1613,7 @@ const ProductCatalogField = ({
       <div className="relative">
         <Input
           className={mode === 'name' ? 'catalog-label font-semibold' : undefined}
+          aria-label={label}
           value={value}
           autoComplete="off"
           placeholder={loading ? 'Wczytywanie głównej bazy...' : mode === 'name' ? 'Wpisz nazwę produktu' : 'Wpisz indeks produktu'}
@@ -1989,6 +1995,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   const [editingTechnologyId, setEditingTechnologyId] = useState('');
   const [technologyDraft, setTechnologyDraft] = useState<Technology>(emptyTechnologyDraft);
   const [technologyEditorCatalogItem, setTechnologyEditorCatalogItem] = useState<ProductCatalogItem | null>(null);
+  const [editingTechnologyHeader, setEditingTechnologyHeader] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inventorySyncRequestRef = useRef(0);
   const currentUserName = user?.username ?? user?.name ?? 'nieznany';
@@ -2036,12 +2043,14 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     12
   );
   const resetTechnologyEditor = useCallback(() => {
+    setEditingTechnologyHeader(false);
     setTechnologyEditorCatalogItem(null);
     setTechnologyDraft(selectedTechnologyEditorSource
       ? cloneTechnologyForEditor(selectedTechnologyEditorSource)
       : emptyTechnologyDraft());
   }, [selectedTechnologyEditorSource]);
   const clearTechnologyEditor = useCallback(() => {
+    setEditingTechnologyHeader(false);
     setTechnologyEditorCatalogItem(null);
     setEditingTechnologyId('');
     setTechnologyDraft(emptyTechnologyDraft());
@@ -2384,9 +2393,13 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     if (!state.areas.some((area) => area.id === areaId && !area.shared)) return;
     if (selectPlanningArea(areaId)) setShowAllPlanAreas(false);
   };
-  const technologiesFor = (item: Pick<PlanItem, 'index' | 'name'>) => state.technologies.filter((technology) => (
-    !technology.archived && technologyMatchesProduct(technology, item.index, item.name)
-  ));
+  const technologiesFor = (item: Pick<PlanItem, 'index' | 'name'> & Partial<Pick<PlanItem, 'technologyId'>>) => {
+    const assigned = state.technologies.find(technology => technology.id === item.technologyId);
+    return state.technologies.filter(technology => !technology.archived && (
+      technologyMatchesProduct(technology, item.index, item.name)
+      || Boolean(assigned && technologyMatchesProduct(technology, assigned.productIndex, assigned.productName))
+    ));
+  };
   const technologyById = useMemo(
     () => new Map(state.technologies.map((technology) => [technology.id, technology])),
     [state.technologies]
@@ -2474,9 +2487,13 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   };
 
   const technologyLinksForItem = (item: PlanItem) => technologyForItem(item)?.linkedProducts ?? [];
-  const linkedProducerCandidates = (link: LinkedProduct, consumerItemId: string) => state.plan.filter((candidate) =>
-    candidate.id !== consumerItemId && candidate.included && linkedProductMatchesPlanItem(link, candidate)
-  );
+  const linkedProducerCandidates = (link: LinkedProduct, consumerItemId: string) => state.plan.filter(candidate => {
+    if (candidate.id === consumerItemId || !candidate.included) return false;
+    const assigned = technologyForItem(candidate);
+    return linkedProductMatchesPlanItem(link, candidate) || Boolean(assigned && productIdentityMatches(
+      link.productIndex, link.productName, assigned.productIndex, assigned.productName
+    ));
+  });
   const linkedProducerFor = (item: PlanItem, link: LinkedProduct) => {
     const selection = linkedSourceSelectionForItem(item, link);
     const candidates = linkedProducerCandidates(link, item.id);
@@ -3072,6 +3089,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
 
   const addTechnology = (productIndex = '', productName = '', shiftNorm = 0) => {
     if (!confirmDiscardTechnologyEditor()) return;
+    setEditingTechnologyHeader(false);
     setTechnologyEditorCatalogItem(null);
     const same = state.technologies.filter((technology) => normalize(technology.productIndex) === normalize(productIndex));
     const technology: Technology = {
@@ -3089,6 +3107,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
 
   const startTechnologyDraft = () => {
     if (!confirmDiscardTechnologyEditor()) return;
+    setEditingTechnologyHeader(false);
     setTechnologyEditorCatalogItem(null);
     setEditingTechnologyId('');
     setTechnologyDraft(emptyTechnologyDraft());
@@ -3100,6 +3119,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     if (!confirmDiscardTechnologyEditor()) return;
     const technology = state.technologies.find((item) => item.id === technologyId);
     if (!technology) return;
+    setEditingTechnologyHeader(false);
     setTechnologyEditorCatalogItem(null);
     setEditingTechnologyId(technology.id);
     setTechnologyDraft(cloneTechnologyForEditor(technology));
@@ -3135,6 +3155,10 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     if (readOnly) return;
     const productIndex = productCatalogSelectionIndex(item);
     setTechnologyEditorCatalogItem(item);
+    if (editingTechnologyId) {
+      setTechnologyDraft(current => ({ ...current, productIndex, productName: item.name }));
+      return;
+    }
     const variants = state.technologies.filter((technology) => !technology.archived && technologyMatchesProduct(technology, productIndex, item.name, item));
     const baseTechnology = variants.find((technology) => technology.variant === 'base');
     const alternativeNo = Math.max(
@@ -3173,6 +3197,9 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
 
   const editTechnologyEditorProductField = (mode: 'index' | 'name', value: string) => {
     if (readOnly) return;
+    if (mode === 'index' && technologyEditorCatalogItem && !productCatalogIndexMatches(technologyEditorCatalogItem, value)) {
+      setTechnologyEditorCatalogItem(null);
+    }
     setTechnologyDraft((current) => ({
       ...current,
       ...(mode === 'name' ? { productName: value } : { productIndex: value })
@@ -3180,6 +3207,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   };
 
   const saveTechnologyEditor = () => {
+    if (readOnly || !hydrated) return;
     const productIndex = technologyDraft.productIndex.trim();
     const productName = technologyDraft.productName.trim();
     const description = technologyDraft.variant === 'base'
@@ -3203,9 +3231,18 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       flash('Nie znaleziono edytowanej technologii. Otwórz ją ponownie z listy.');
       return;
     }
+    const headerChanged = Boolean(source && (source.productIndex !== productIndex || source.productName !== productName));
+    const sourceFamilyIds = new Set(source ? state.technologies.filter(item => technologyMatchesProduct(
+      item, source.productIndex, source.productName
+    )).map(item => item.id) : []);
+    if (headerChanged && state.technologies.some(item => !sourceFamilyIds.has(item.id)
+      && technologyMatchesProduct(item, productIndex, productName, technologyEditorCatalogItem))) {
+      flash('Ten indeks należy już do innej technologii. Nie połączono produktów.');
+      return;
+    }
     const baseConflict = technologyDraft.variant === 'base'
       ? state.technologies.find((technology) =>
-        technology.id !== source?.id &&
+        technology.id !== source?.id && !(headerChanged && sourceFamilyIds.has(technology.id)) &&
         technology.variant === 'base' &&
         technologyMatchesProduct(technology, productIndex, productName, technologyEditorCatalogItem)
       )
@@ -3216,7 +3253,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     }
     const alternativeConflict = technologyDraft.variant === 'alternative'
       ? state.technologies.find((technology) =>
-        technology.id !== source?.id &&
+        technology.id !== source?.id && !(headerChanged && sourceFamilyIds.has(technology.id)) &&
         technology.variant === 'alternative' &&
         technology.alternativeNo === Math.max(1, technologyDraft.alternativeNo) &&
         technologyMatchesProduct(technology, productIndex, productName, technologyEditorCatalogItem)
@@ -3235,12 +3272,21 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       description,
       alternativeNo: technologyDraft.variant === 'base' ? 0 : Math.max(1, technologyDraft.alternativeNo)
     };
-    updateState((current) => ({
-      ...current,
-      technologies: source
-        ? current.technologies.map((item) => item.id === source.id ? technology : item)
-        : [...current.technologies, technology]
-    }));
+    try {
+      updateState(current => ({
+        ...current,
+        technologies: source && headerChanged
+          ? renameTechnologyProduct(current.technologies, technology, source,
+            (left, right) => productIdentityMatches(left.productIndex, left.productName, right.productIndex, right.productName),
+            linkedProductKey)
+          : source ? current.technologies.map(item => item.id === source.id ? technology : item)
+          : [...current.technologies, technology]
+      }));
+    } catch {
+      flash('Nie zmieniono nagłówka. Sprawdź, czy indeks nie jest zajęty, i otwórz technologię ponownie.');
+      return;
+    }
+    setEditingTechnologyHeader(false);
     setEditingTechnologyId(technology.id);
     setTechnologyDraft(cloneTechnologyForEditor(technology));
     flash(source ? 'Zmiany technologii zostały zapisane.' : 'Technologia została dodana do biblioteki.');
@@ -3837,13 +3883,14 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     const selected = selectedTechnologyEditorSource;
     const editorTechnology = technologyDraft;
     const isDraft = selected === null;
-    const editorProductVariants = editorTechnology.productIndex || editorTechnology.productName
+    const variantProduct = selected ?? editorTechnology;
+    const editorProductVariants = variantProduct.productIndex || variantProduct.productName
       ? state.technologies
         .filter((technology) => !technology.archived && technologyMatchesProduct(
           technology,
-          editorTechnology.productIndex,
-          editorTechnology.productName,
-          technologyEditorCatalogItem
+          variantProduct.productIndex,
+          variantProduct.productName,
+          selected ? null : technologyEditorCatalogItem
         ))
         .sort((left, right) => Number(left.variant !== 'base') - Number(right.variant !== 'base') || left.alternativeNo - right.alternativeNo)
       : [];
@@ -3919,6 +3966,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         ...link,
         productIndex: productCatalogSelectionIndex(item) || link.productIndex,
         productName: item.name || link.productName,
+        sourceKeys: [],
         unit: item.unit || link.unit
       } : link));
     };
@@ -4026,7 +4074,17 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
           <section className="rounded-lg border border-borderStrong bg-[var(--surface-faint)] px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-sm font-black text-title">Produkt i technologia</h2>
-              <Badge tone={editorTechnology.archived ? 'default' : selected ? 'success' : 'info'}>{editorTechnology.archived ? 'Archiwalna' : selected ? 'Aktywna' : 'Nowa'}</Badge>
+              <div className="flex shrink-0 items-center gap-2">
+                {selected && !readOnly ? editingTechnologyHeader ? <>
+                  <Button variant="outline" className="h-9 min-h-9 w-9 shrink-0 p-0" aria-label="Anuluj edycję nagłówka" title="Anuluj edycję nagłówka" onClick={() => {
+                    setTechnologyDraft(current => ({ ...current, productIndex: selected.productIndex, productName: selected.productName }));
+                    setTechnologyEditorCatalogItem(null);
+                    setEditingTechnologyHeader(false);
+                  }}><Undo2 className="h-4 w-4" /></Button>
+                  <Button className="h-9 min-h-9 w-9 shrink-0 p-0" aria-label="Zapisz zmiany technologii" title="Zapisz zmiany technologii" disabled={!hydrated || !technologyEditorDirty || !editorTechnology.productIndex.trim() || !editorTechnology.productName.trim()} onClick={saveTechnologyEditor}><Check className="h-4 w-4" /></Button>
+                </> : <Button variant="outline" className="h-9 min-h-9 w-9 shrink-0 p-0" aria-label="Edytuj indeks i nazwę produktu" title="Edytuj indeks i nazwę produktu" disabled={!hydrated} onClick={() => setEditingTechnologyHeader(true)}><PencilLine className="h-4 w-4" /></Button> : null}
+                <Badge tone={editorTechnology.archived ? 'default' : selected ? 'success' : 'info'}>{editorTechnology.archived ? 'Archiwalna' : selected ? 'Aktywna' : 'Nowa'}</Badge>
+              </div>
             </div>
             {isDraft ? <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(210px,0.7fr)_minmax(320px,1.3fr)_minmax(280px,0.8fr)] lg:items-end">
               <ProductCatalogField label="Indeks produktu" mode="index" value={editorTechnology.productIndex} items={technologyProductIndexSearch.items} loading={technologyProductIndexSearch.loading} onChange={(value) => editTechnologyEditorProductField('index', value)} onSelect={selectTechnologyEditorProduct} />
@@ -4052,9 +4110,14 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
                 {editorBaseTechnology ? <p className="normal-case tracking-normal text-muted">Bazowa już istnieje. Tworzysz kolejny wariant awaryjny.</p> : editorTechnology.productIndex.trim() || editorTechnology.productName.trim() ? <p className="normal-case tracking-normal text-muted">Dla nowego produktu najpierw zapisz technologię bazową.</p> : null}
               </div>
             </div> : <div className="mt-2 grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)] lg:items-end">
-              <div className="flex min-w-0 flex-wrap items-baseline gap-x-5 gap-y-1 border-b border-border pb-3 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-5">
-                <span className="text-lg font-black text-title">{editorTechnology.productIndex}</span>
-                <span className="catalog-label min-w-0 break-words text-sm font-bold">{editorTechnology.productName}</span>
+              <div className="min-w-0 border-b border-border pb-3 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-5">
+                {editingTechnologyHeader ? <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
+                  <ProductCatalogField label="Indeks produktu" mode="index" value={editorTechnology.productIndex} items={technologyProductIndexSearch.items} loading={technologyProductIndexSearch.loading} onChange={value => editTechnologyEditorProductField('index', value)} onSelect={selectTechnologyEditorProduct} />
+                  <ProductCatalogField label="Nazwa produktu" mode="name" value={editorTechnology.productName} items={technologyProductNameSearch.items} loading={technologyProductNameSearch.loading} onChange={value => editTechnologyEditorProductField('name', value)} onSelect={selectTechnologyEditorProduct} />
+                </div> : <div className="flex min-w-0 flex-wrap items-baseline gap-x-5 gap-y-1">
+                  <span className="min-w-0 break-words text-lg font-black text-title">{editorTechnology.productIndex}</span>
+                  <span className="catalog-label min-w-0 break-words text-sm font-bold">{editorTechnology.productName}</span>
+                </div>}
               </div>
               <Field label="Wariant technologii">
                 <SelectField className="h-11 min-h-11 rounded-lg" value={selected?.id ?? ''} onChange={(event) => event.target.value && openTechnologyEditor(event.target.value)}>
@@ -4210,8 +4273,8 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
               </div>
               {(editorTechnology.linkedProducts ?? []).length ? <div className="space-y-2">
                 {(editorTechnology.linkedProducts ?? []).map((link) => <div key={link.id} className="grid gap-2 border-y border-border py-2 lg:grid-cols-[200px_minmax(280px,1fr)_190px_140px_100px_44px] lg:items-end">
-                  <Field label="Indeks półwyrobu"><Input list="material-code-suggestions" value={link.productIndex} onCatalogSelect={(item) => selectEditorLink(link.id, item)} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, productIndex: event.target.value } : row))} /></Field>
-                  <Field label="Nazwa półwyrobu"><Input list="material-name-suggestions" value={link.productName} onCatalogSelect={(item) => selectEditorLink(link.id, item)} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, productName: event.target.value } : row))} /></Field>
+                  <Field label="Indeks półwyrobu"><Input list="material-code-suggestions" value={link.productIndex} onCatalogSelect={(item) => selectEditorLink(link.id, item)} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, productIndex: event.target.value, sourceKeys: [] } : row))} /></Field>
+                  <Field label="Nazwa półwyrobu"><Input list="material-name-suggestions" value={link.productName} onCatalogSelect={(item) => selectEditorLink(link.id, item)} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, productName: event.target.value, sourceKeys: [] } : row))} /></Field>
                   <Field label="Źródło"><SelectField value={link.sourcePolicy ?? 'select'} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, sourcePolicy: event.target.value as LinkedProduct['sourcePolicy'] } : row))}><option value="select">Wybór w planie</option><option value="warehouse">Zawsze magazyn</option><option value="production">Zawsze maszyna</option></SelectField></Field>
                   <Field label="Zużycie / produkt"><Input className="text-right tabular-nums" type="number" min="0" step="0.001" value={link.usage} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, usage: Math.max(0, numberValue(event.target.value)) } : row))} /></Field>
                   <Field label="J.m."><Input value={link.unit} onChange={(event) => updateEditorLinks((links) => links.map((row) => row.id === link.id ? { ...row, unit: event.target.value } : row))} /></Field>

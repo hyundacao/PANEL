@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { promoteTechnologyToBase } from './technologyVariants.ts';
+import { promoteTechnologyToBase, renameTechnologyProduct } from './technologyVariants.ts';
 import { rebaseSharedPlanningChanges } from './stateScopes.ts';
 
 const technology = (id, variant, alternativeNo, patch = {}) => ({
@@ -17,6 +17,55 @@ const library = () => [technology('base', 'base', 0), technology('alt-1', 'alter
 const sameProduct = (left, right) => left.productIndex === right.productIndex;
 const promote = (items, id = 'alt-2', description = 'Poprzednia bazowa', baseId = 'base') =>
   promoteTechnologyToBase(items, id, description, sameProduct, baseId);
+
+const rename = (items, edited, source = items[0]) => renameTechnologyProduct(
+  items, edited, source, sameProduct, link => link.productIndex.toLowerCase()
+);
+
+test('header rename preserves all variant IDs, roles, quantities and archived variants', () => {
+  const items = library();
+  const before = structuredClone(items);
+  const renamed = rename(items, { ...items[0], productIndex: ' NEW-001 ', productName: ' New name ' });
+  for (let index = 0; index < items.length - 1; index++) {
+    assert.deepEqual(renamed[index], { ...items[index], productIndex: 'NEW-001', productName: 'New name' });
+    for (const field of ['materials', 'linkedProducts', 'surplusMaterials']) assert.equal(renamed[index][field], items[index][field]);
+  }
+  assert.equal(renamed.at(-1), items.at(-1));
+  assert.deepEqual(items, before);
+});
+
+test('header rename retargets only exact semi-finished references and preserves their source keys', () => {
+  const source = technology('source', 'base', 0);
+  const link = { id: 'link', productIndex: source.productIndex, productName: source.productName, usage: 2, unit: 'szt.', sourcePolicy: 'production' };
+  const unrelated = { ...link, id: 'unrelated', productIndex: 'DIFFERENT' };
+  const parent = technology('parent', 'base', 0, { productIndex: 'PARENT', linkedProducts: [link, unrelated] });
+  const renamed = rename([source, parent], { ...source, productIndex: 'NEW', productName: 'New name' });
+  assert.deepEqual(renamed[1].linkedProducts[0], { ...link, productIndex: 'NEW', productName: 'New name', sourceKeys: [link.productIndex.toLowerCase()] });
+  assert.equal(renamed[1].linkedProducts[1], unrelated);
+  assert.equal(renamed[1].materials, parent.materials);
+  const repeated = rename(renamed, { ...renamed[0], productIndex: 'NEXT', productName: 'Next name' });
+  assert.deepEqual(repeated[1].linkedProducts[0].sourceKeys, [link.productIndex.toLowerCase(), 'new']);
+});
+
+test('rename rejects occupied, missing, empty and concurrently changed identities without mutation', () => {
+  const items = library();
+  const before = structuredClone(items);
+  assert.throws(() => rename(items, { ...items[0], productIndex: 'OTHER' }), /TECHNOLOGY_PRODUCT_CONFLICT/);
+  assert.throws(() => rename(items, { ...items[0], id: 'missing' }), /TECHNOLOGY_NOT_FOUND/);
+  assert.throws(() => rename(items, { ...items[0], productIndex: ' ' }), /TECHNOLOGY_PRODUCT_REQUIRED/);
+  assert.throws(() => rename(items, { ...items[0], productName: ' ' }), /TECHNOLOGY_PRODUCT_REQUIRED/);
+  assert.throws(() => rename(items, { ...items[0], productIndex: 'NEW' }, { ...items[0], productName: 'Stale' }), /TECHNOLOGY_PRODUCT_CHANGED/);
+  assert.deepEqual(items, before);
+});
+
+test('renaming just the label keeps the recipe and selection IDs intact', () => {
+  const items = library();
+  const renamed = rename(items, { ...items[2], productName: 'Updated ERP name' }, items[2]);
+  assert.deepEqual(renamed.map(item => item.id), items.map(item => item.id));
+  assert.equal(renamed[2].description, 'Turcja + NOVODUR');
+  assert.equal(renamed[2].materials, items[2].materials);
+  assert.equal(renamed[0].productName, 'Updated ERP name');
+});
 
 test('promotion atomically swaps roles and reuses the former alternative number', () => {
   const items = library();

@@ -1,5 +1,16 @@
 # Zasady pracy w tym projekcie
 
+## Nawigacja agenta
+
+- To repo panelu magazynowego/produkcyjnego (lokalnie `C:/APKA DLA KAMILA`), nie projekt MOVIS.
+- Zanim zaczniesz szukac kodu, przeczytaj `docs/agent/INDEX.md`. Wybierz jedna karte tematu; druga tylko dla wskazanej zaleznosci. Nie wczytuj wszystkich kart.
+- Dla drobnej zmiany: karta -> wskazany plik i symbol -> potrzebny fragment kodu -> testy z karty. Najpierw `rg -n` w tych plikach, nie przeszukanie calego repo.
+- Jesli zadanie dotyka kontraktu wspolnego, przeczytaj tylko odpowiednia sekcje `docs/agent/contracts.md`. Sprawdz odbiorcow zmiany, nie tylko ekran z polecenia.
+- Mapa jest indeksem, nie kopia kodu ani dowodem dzialania produkcji. Potwierdz aktualny symbol i zachowanie; rozszerz poszukiwania, gdy mapa nie wystarcza.
+- Nie zmieniaj automatycznie danych produkcyjnych na podstawie samej mapy. Kod, dane bazy, migracje oraz wdrozenie to oddzielne zakresy.
+- Zmiana pliku, przeplywu lub kontraktu wymaga aktualizacji odpowiedniej karty. Nie dopisuj dziennika rozmowy, pelnych listingow ani wynikow starych audytow.
+- Sprawdz mape przez `node scripts/check-agent-map.mjs`. Nie oszczedzaj na potrzebnych testach regresji; oszczedzaj na powtarzanym odczycie i niepowiazanych testach.
+
 - Gdy użytkownik zleca zmianę, wykonaj ją samodzielnie od analizy do wdrożenia i weryfikacji.
 - Traktuj jednoznaczne polecenie użytkownika jako zgodę na wszystkie bezpieczne, odwracalne kroki mieszczące się w zakresie zadania.
 - Przy brakujących drobnych szczegółach korzystaj z kontekstu projektu i przyjmuj rozsądne założenia zamiast zatrzymywać pracę pytaniem.

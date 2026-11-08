@@ -1,5 +1,9 @@
 # Przeglad kodu i mapa edycji
 
+> Dokument historyczny, nie biezaca instrukcja nawigacji. Agent zaczyna od
+> [krotkiego indeksu](agent/INDEX.md) i czyta tylko karte zwiazana z zadaniem.
+> Ponizsze opisy modulow, SQL i statusu lint/build nie stanowia aktualnego audytu.
+
 ## 1. Co to za aplikacja
 To monolit Next.js (App Router), ktory laczy:
 - frontend panelu magazynowego,
