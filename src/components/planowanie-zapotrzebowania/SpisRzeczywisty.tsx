@@ -723,11 +723,12 @@ const OriginalInventoryNameSearch = ({
 
   const normalizedDebouncedQuery = normalizeCatalogNameKey(debouncedQuery);
   const { data: remoteCatalogSuggestions = [], isFetching } = useQuery({
-    queryKey: ['spis-oryginalow-catalog-search', normalizedDebouncedQuery],
+    queryKey: ['spis-oryginalow-catalog-search', normalizedDebouncedQuery, 'index2-only'],
     queryFn: ({ signal }) => searchOriginalInventoryCatalog(
       debouncedQuery,
       SPIS_SEARCH_SERVER_LIMIT,
-      signal
+      signal,
+      true
     ),
     enabled: remoteSearchEnabled && normalizedDebouncedQuery.replace(/\s/g, '').length >= SPIS_SEARCH_MIN_LENGTH,
     staleTime: 5 * 60 * 1000,
@@ -749,7 +750,8 @@ const OriginalInventoryNameSearch = ({
       })),
       query,
       inventoriedNames,
-      8
+      8,
+      true
     );
   }, [existingSuggestions, inventoriedNames, erpIndexKeys, normalizedDebouncedQuery, normalizedQuery, query, remoteCatalogSuggestions]);
 
@@ -842,18 +844,6 @@ const OriginalInventoryNameSearch = ({
                   </span>
                 )}
               </span>
-              {suggestion.warehouseCode && (
-                <span
-                  className={cn(
-                    'shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-                    suggestion.isMag55
-                      ? 'border-[rgba(244,114,182,0.45)] bg-[rgba(244,114,182,0.16)] text-[rgb(251,207,232)]'
-                      : 'border-border bg-surface2 text-dim'
-                  )}
-                >
-                  {suggestion.warehouseCode}
-                </span>
-              )}
             </button>
           ))}
           {remoteResultsPending && (

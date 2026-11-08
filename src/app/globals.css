@@ -306,6 +306,10 @@ body > * {
   overflow: visible;
 }
 
+.reports-donut-chart-area[aria-hidden='true'] .recharts-pie-sector:focus {
+  outline: none;
+}
+
 .reports-donut-center {
   width: min(7.25rem, 42%);
 }

@@ -49,6 +49,23 @@ test('other worker teams keep their existing views; module administrators retain
   assert.equal(resolveView(access([], true)).isPreparationAdmin, true);
 });
 
+test('process-engineer columns prioritize additional work and retain due-date, assignee and completion filters', () => {
+  const make = (id, station, assignee = 'Engineer 1') => ({ ...makeTask(id, station), teams: ['process'], kinds: ['inne'], notes: { processAssignee: assignee } });
+  const tasks = [make('recurring', 'ZADANIE CYKLICZNE'), make('production', 'WTR 1'),
+    make('additional', 'ZADANIE DODATKOWE'), make('other-assignee', 'ZADANIE DODATKOWE', 'Engineer 2'),
+    { ...make('future', 'ZADANIE DODATKOWE'), notes: { processAssignee: 'Engineer 1', [lifecycle.PRODUCTION_TASK_DUE_DATE_NOTE]: '2026-11-09' } },
+    { ...make('done', 'ZADANIE DODATKOWE'), teamProgress: progress.setProductionTeamCompletion({}, 'process', true) },
+    { ...make('cancelled', 'ZADANIE DODATKOWE'), kinds: ['anulowane'] }];
+  const before = JSON.stringify(tasks);
+  const { queues } = compile(`${declaration('processTasksByEngineer')} export const queues = processTasksByEngineer;`, {
+    ...progress, ...lifecycle, tasks, selectedPlanDate: '2026-11-08', processEngineers: ['Engineer 1', 'Engineer 2'],
+    useMemo: calculate => calculate(), isPanelGroupHeader: () => false
+  });
+  assert.deepEqual(Array.from(queues.get('Engineer 1'), task => task.id), ['additional', 'recurring', 'production']);
+  assert.deepEqual(Array.from(queues.get('Engineer 2'), task => task.id), ['other-assignee']);
+  assert.equal(JSON.stringify(tasks), before);
+});
+
 test('URL normalization does not redirect a mechanic away from the plan', () => {
   const ast = ts.createSourceFile('page.tsx', pageSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const effect = findNode(ast, node => ts.isCallExpression(node) && node.expression.getText(ast) === 'useEffect'

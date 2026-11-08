@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { RegrindDonutChart } from '@/components/reports/RegrindDonutChart';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { formatKg } from '@/lib/utils/format';
 import {
@@ -15,9 +16,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -100,23 +98,17 @@ const formatCompactKg = (value: number) => {
   return Math.round(value).toLocaleString('pl-PL');
 };
 
-const formatPercent = (value: number) => `${value.toFixed(1).replace('.', ',')}%`;
-
 const formatDelta = (value: number) => `${value >= 0 ? '+' : '-'}${formatKg(Math.abs(value))}`;
 
 const buildPieItems = <T extends { label: string }>(
   rows: T[],
-  getValue: (row: T) => number,
-  limit = 8
+  getValue: (row: T) => number
 ): PieItem[] => {
   const sorted = rows
     .map((row) => ({ label: row.label, value: Math.max(0, getValue(row)) }))
     .filter((row) => row.value > 0)
     .sort((a, b) => b.value - a.value);
-  const visible = sorted.slice(0, limit);
-  const other = sorted.slice(limit).reduce((sum, row) => sum + row.value, 0);
-  const output = other > 0 ? [...visible, { label: 'Pozostałe', value: other }] : visible;
-  return output.map((row, index) => ({
+  return sorted.map((row, index) => ({
     ...row,
     color: chartColors[index % chartColors.length]
   }));
@@ -259,10 +251,6 @@ const DonutPanel = ({
   emptyLabel: string;
   accent?: 'added' | 'removed' | 'neutral';
 }) => {
-  const [activeIndex, setActiveIndex] = useState(0);
-  const activeItem = items[activeIndex] ?? items[0] ?? null;
-  const activePercent = activeItem && total > 0 ? (activeItem.value / total) * 100 : 0;
-
   return (
     <Card className={`reports-panel reports-donut-panel reports-donut-panel-${accent} overflow-hidden p-0`}>
       <div className="reports-panel-header reports-donut-header border-b border-border p-4 md:p-5">
@@ -277,85 +265,8 @@ const DonutPanel = ({
       {items.length === 0 ? (
         <div className="p-5 text-sm text-muted">{emptyLabel}</div>
       ) : (
-        <div className="reports-panel-body grid min-w-0 gap-4 p-4 md:p-5 xl:grid-cols-[320px_1fr] xl:items-start">
-          <div className="reports-donut-chart-area relative min-w-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart onMouseLeave={() => setActiveIndex(0)}>
-                <Pie
-                  data={items}
-                  dataKey="value"
-                  nameKey="label"
-                  cx="50%"
-                  cy="44%"
-                  innerRadius={74}
-                  outerRadius={124}
-                  paddingAngle={3}
-                  cornerRadius={9}
-                  startAngle={90}
-                  endAngle={-270}
-                  stroke="var(--surface-1)"
-                  strokeWidth={2}
-                  onMouseEnter={(_, index) => setActiveIndex(index)}
-                  isAnimationActive={false}
-                >
-                  {items.map((entry, index) => (
-                    <Cell
-                      key={`${title}-${entry.label}`}
-                      fill={entry.color}
-                      opacity={activeIndex === index ? 1 : 0.48}
-                      stroke={activeIndex === index ? 'var(--t-title)' : 'var(--surface-1)'}
-                      strokeWidth={activeIndex === index ? 3 : 2}
-                    />
-                  ))}
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
-            <div className={`reports-donut-center reports-donut-center-${accent} pointer-events-none absolute left-1/2 top-[44%] flex -translate-x-1/2 -translate-y-1/2 items-center justify-center`}>
-              <div className="text-center">
-                <p className="reports-donut-center-label line-clamp-3 text-[10px] font-semibold uppercase leading-tight" title={activeItem?.label ?? 'Brak danych'}>
-                  {activeItem?.label ?? 'Brak danych'}
-                </p>
-                <p className="reports-donut-center-value mt-1 text-xl font-semibold tabular-nums">{formatKg(activeItem?.value ?? 0)}</p>
-                <p className="reports-donut-center-percent text-sm font-semibold tabular-nums">
-                  {formatPercent(activePercent)}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid min-w-0 gap-2">
-            {items.map((entry, index) => {
-              const percent = total > 0 ? (entry.value / total) * 100 : 0;
-              return (
-                <button
-                  key={`${title}-legend-${entry.label}`}
-                  type="button"
-                  onMouseEnter={() => setActiveIndex(index)}
-                  onFocus={() => setActiveIndex(index)}
-                  className={`reports-legend-button min-w-0 rounded-lg border px-2.5 py-2.5 text-left transition ${
-                    activeIndex === index
-                      ? 'reports-legend-button-active border-[var(--brand)] bg-[rgba(255,122,26,0.1)]'
-                      : 'border-border bg-[rgba(255,255,255,0.025)] hover:border-borderStrong'
-                  }`}
-                >
-                  <span className="flex min-w-0 items-center justify-between gap-3">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: entry.color }} />
-                      <span className="truncate text-sm font-semibold text-body">{entry.label}</span>
-                    </span>
-                    <span className="shrink-0 text-xs font-semibold tabular-nums text-dim">{formatPercent(percent)}</span>
-                  </span>
-                  <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-[rgba(255,255,255,0.08)]">
-                    <span
-                      className="block h-full rounded-full"
-                      style={{ width: `${Math.max(percent, 2)}%`, background: entry.color }}
-                    />
-                  </span>
-                  <span className="mt-1 block text-sm font-semibold tabular-nums text-title">{formatKg(entry.value)}</span>
-                </button>
-              );
-            })}
-          </div>
+        <div className="reports-panel-body min-w-0 p-4 md:p-5">
+          <RegrindDonutChart title={title} items={items} total={total} />
         </div>
       )}
     </Card>
@@ -791,20 +702,20 @@ export default function ReportsPage() {
             />
           </div>
 
-          <div className="grid gap-5 xl:grid-cols-2">
-            <DonutPanel
-              title="Przybyło"
-              items={dailyAddedPie}
-              total={dailyTotals.added}
-              emptyLabel="Brak przyrostów dla dzisiejszego raportu."
-              accent="added"
-            />
+          <div className="grid gap-6">
             <DonutPanel
               title="Wyrobiono"
               items={dailyRemovedPie}
               total={dailyTotals.removed}
               emptyLabel="Brak ubytków dla dzisiejszego raportu."
               accent="removed"
+            />
+            <DonutPanel
+              title="Przybyło"
+              items={dailyAddedPie}
+              total={dailyTotals.added}
+              emptyLabel="Brak przyrostów dla dzisiejszego raportu."
+              accent="added"
             />
           </div>
 
@@ -865,20 +776,20 @@ export default function ReportsPage() {
                 <MetricTile label="Wyrobiono w zakresie" value={formatKg(summaryTotals?.removed ?? 0)} tone="removed" />
                 <MetricTile label="Wynik zakresu" value={formatKg(summaryTotals?.net ?? 0)} tone="net" />
               </div>
-              <div className="grid gap-5 xl:grid-cols-2">
-                <DonutPanel
-                  title="Przybyło"
-                  items={summaryAddedPie}
-                  total={summaryTotals?.added ?? 0}
-                  emptyLabel="Brak przyrostów w wybranym zakresie."
-                  accent="added"
-                />
+              <div className="grid gap-6">
                 <DonutPanel
                   title="Wyrobiono"
                   items={summaryRemovedPie}
                   total={summaryTotals?.removed ?? 0}
                   emptyLabel="Brak ubytków w wybranym zakresie."
                   accent="removed"
+                />
+                <DonutPanel
+                  title="Przybyło"
+                  items={summaryAddedPie}
+                  total={summaryTotals?.added ?? 0}
+                  emptyLabel="Brak przyrostów w wybranym zakresie."
+                  accent="added"
                 />
               </div>
               <FlowList title="Ranking materiałów w zakresie" rows={summaryTopRows} emptyLabel="Brak pozycji w zakresie." />
@@ -1038,20 +949,20 @@ export default function ReportsPage() {
             </div>
           </Card>
 
-          <div className="grid gap-5 xl:grid-cols-2">
-            <DonutPanel
-              title="Przybyło"
-              items={yearlyAddedPie}
-              total={overallYearTotals.added}
-              emptyLabel="Brak przyrostów w tym roku."
-              accent="added"
-            />
+          <div className="grid gap-6">
             <DonutPanel
               title="Wyrobiono"
               items={yearlyRemovedPie}
               total={overallYearTotals.removed}
               emptyLabel="Brak ubytków w tym roku."
               accent="removed"
+            />
+            <DonutPanel
+              title="Przybyło"
+              items={yearlyAddedPie}
+              total={overallYearTotals.added}
+              emptyLabel="Brak przyrostów w tym roku."
+              accent="added"
             />
           </div>
 

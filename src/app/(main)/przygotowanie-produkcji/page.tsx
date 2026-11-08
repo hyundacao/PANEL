@@ -1832,11 +1832,11 @@ export default function PrzygotowanieProdukcjiPage() {
   }), [reportDays]);
 
   const processTasksByEngineer = useMemo(() => {
-    const processTasks = tasks.filter(
+    const processTasks = productionWorkQueueForTeam(tasks.filter(
       (task) => !isPanelGroupHeader(task) && task.teams.includes('process')
         && !isProductionTeamDone(task, 'process') && !task.kinds.includes('anulowane')
         && (!productionTaskDueDate(task.notes) || productionTaskDueDate(task.notes) <= selectedPlanDate)
-    );
+    ), 'process');
     return new Map(
       processEngineers.map((engineer) => [
         engineer,

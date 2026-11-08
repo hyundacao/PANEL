@@ -644,9 +644,10 @@ const notifyOriginalCatalogChanged = () => {
 export const searchOriginalInventoryCatalog = async (
   query: string,
   limit = 24,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onlyIndex2 = false
 ): Promise<OriginalInventoryCatalogEntry[]> =>
-  appRequest('searchOriginalInventoryCatalog', { query, limit, catalogRefreshToken: originalInventoryCatalogRefreshToken }, signal);
+  appRequest('searchOriginalInventoryCatalog', { query, limit, ...(onlyIndex2 ? { onlyIndex2: true } : {}), catalogRefreshToken: originalInventoryCatalogRefreshToken }, signal);
 
 export const resolveOriginalInventoryCatalogMaterial = async (
   name: string,

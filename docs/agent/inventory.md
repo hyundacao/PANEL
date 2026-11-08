@@ -7,7 +7,7 @@ UI: `/planowanie-zapotrzebowania?view=spis`. [Stary adres](<../../src/app/(main)
 | Zmiana | Plik | Kotwice |
 | --- | --- | --- |
 | Formularz, katalog, import, zestawienie i eksport spisu | [SpisRzeczywisty](<../../src/components/planowanie-zapotrzebowania/SpisRzeczywisty.tsx>) | `handleCatalogFileChange`, `handleCatalogImport`, `buildInventoryIndex2Resolver` |
-| Podpowiedzi / indeks 2 | [originalInventorySpisSearch](<../../src/lib/utils/originalInventorySpisSearch.ts>) | `getOriginalInventorySpisIndex2`, `searchOriginalInventorySpisSuggestions` |
+| Podpowiedzi / indeks 2 | [originalInventorySpisSearch](<../../src/lib/utils/originalInventorySpisSearch.ts>) | `getOriginalInventorySpisIndex2`, `searchOriginalInventorySpisSuggestions`; formularz spisu wlacza onlyIndex2 przed limitem wynikow |
 | Naglowki Excel i odczyt wierszy | [kolumny](<../../src/lib/utils/originalInventoryImportColumns.ts>) / [parser](<../../src/lib/utils/originalInventoryCatalog.ts>) | |
 | Zapis importu kartotek | [import route](<../../src/app/api/original-inventory-catalog/import/route.ts>) | |
 | Rejestr par i zablokowane kartoteki | [register](<../../src/lib/utils/originalInventoryCatalogRegister.ts>) | `createCatalogRegisterResolver`, `applyOriginalInventoryCatalogRegister` |
@@ -25,6 +25,7 @@ UI: `/planowanie-zapotrzebowania?view=spis`. [Stary adres](<../../src/app/(main)
 - Klient/typy: [api/index](<../../src/lib/api/index.ts>), [api/types](<../../src/lib/api/types.ts>). Backend: [api/app](<../../src/app/api/app/route.ts>).
 - W duzym backendzie szukaj `case 'getOriginalInventory'`, `case 'getOriginalInventoryCatalog'`, `case 'searchOriginalInventoryCatalog'`, `case 'getOriginalInventoryCatalogRestrictions'`, `case 'addOriginalInventory'`, `case 'saveOriginalInventorySiloEntry'`, `case 'saveOriginalInventoryFixedDeviceEntry'`.
 - Cache/nazwy na odczycie: `loadOriginalCatalog`, `invalidateOriginalCatalogCache`, `withCurrentInventoryNames`. Import odswieza tez katalog produktow planowania (zdarzenie `apka:catalog-updated` i rewizja rejestru).
+- Formularz spisu pokazuje tylko nazwe i jawny indeks 2 (szukanie nadal po obu indeksach). `onlyIndex2` ma osobne klucze cache UI/API; domyslne szukanie skladnikow zestawow paletowych pozostaje bez zmian. Brak indeksu 2 nie usuwa kartoteki ani dawnych wpisow.
 - Tabele: `original_inventory_catalog`, `original_inventory_entries`, `original_inventory_erp_snapshots`, `original_inventory_silos`, `original_inventory_silo_entries`. Rzeczywisty spis != stan ERP.
 - Pary indeksow i lista zablokowanych sa rowniez w `material_planning_state`, ID `original-inventory-catalog-register`. Nie zakladaj obecnosci kolumny `index_code2` w produkcji tylko dlatego, ze jest SQL 11.
 - Zablokowane kartoteki wypadaja z biezacego wyboru; historia i stare ID nie sa kasowane. `catalogIds` i `previousNames` podtrzymuja odwolania.

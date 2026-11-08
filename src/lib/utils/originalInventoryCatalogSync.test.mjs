@@ -745,6 +745,30 @@ test('catalog API finds M2 name fragments in any order without writing or mergin
   assert.ok(f.state.operations.every(operation => operation.mode === 'select'));
 });
 
+test('spis-only index-2 filtering is before the limit and isolated from pallet catalog caches', async () => {
+  for (const modes of [[false, true, false], [true, false, true]]) {
+    const f = fixture();
+    const name = 'KOSZ STUDZIENKI RYNNY 01826';
+    f.state.tables.original_inventory_catalog.push(
+      row(material({ name, indexCode: 'M-1-OLD-KOSZ', warehouseCode: 'M-1' }), 'legacy-kosz'),
+      row(material({ name, indexCode: 'M-1-NEW-KOSZ', indexCode2: '1826', warehouseCode: 'M-1' }), 'current-kosz')
+    );
+    const before = structuredClone(f.state.tables);
+    for (const onlyIndex2 of modes) {
+      const results = await f.app('searchOriginalInventoryCatalog', { query: name, limit: 24, onlyIndex2 });
+      assert.deepEqual(results.map(item => item.id).sort(), onlyIndex2 ? ['current-kosz'] : ['current-kosz', 'legacy-kosz']);
+    }
+    const limited = await f.app('searchOriginalInventoryCatalog', { query: name, limit: 1, onlyIndex2: true });
+    assert.equal(limited.length, 1);
+    assert.equal(limited[0].id, 'current-kosz');
+    assert.equal(limited[0].indexCode2, '1826');
+    const byIndex1 = await f.app('searchOriginalInventoryCatalog', { query: 'M-1-NEW-KOSZ', onlyIndex2: true });
+    assert.equal(byIndex1[0].id, 'current-kosz');
+    assert.deepEqual(f.state.tables, before);
+    assert.ok(f.state.operations.every(operation => operation.mode === 'select'));
+  }
+});
+
 test('catalog API links confirmed M-10 pairs for search and Excel without database writes or lost record IDs', async () => {
   const f=fixture();
   const name='TRAY HANDLE ASSEMBLY WELDED COST IRON';

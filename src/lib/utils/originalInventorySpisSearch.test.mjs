@@ -28,6 +28,43 @@ const irisSuggestions = [
   { name: 'IRIS LR WHEEL', indexCode: 'A22154704', indexCode2: 'A22154704', warehouseCode: null }
 ];
 
+test('spis index-2-only mode hides old name-only and index-1-only KOSZ choices', () => {
+  const name = 'KOSZ STUDZIENKI RYNNY 01826';
+  const indexed = { catalogId: 'current-kosz', name, unit: 'szt.', indexCode: 'M-1-PWY-1826', indexCode2: '1826', warehouseCode: 'M-1' };
+  const candidates = [
+    { name, indexCode: null, indexCode2: null },
+    { name, indexCode: 'M-1-LEGACY-01826', indexCode2: '' },
+    indexed
+  ];
+  for (const query of [name, 'kosz', indexed.indexCode, indexed.indexCode2]) {
+    const result = searchOriginalInventorySpisSuggestions(candidates, query, [name], 8, true);
+    assert.deepEqual(result, [indexed]);
+    assert.equal(result[0], indexed);
+  }
+});
+
+test('index-2-only mode never guesses a missing second index from a name or index 1', () => {
+  const candidates = [
+    { name: 'MATERIAL 1826', indexCode: 'M-10-8001236303', indexCode2: null },
+    { name: 'MATERIAL 1826', indexCode: '1826', indexCode2: '   ' },
+    { name: 'MATERIAL 1826', indexCode: null, indexCode2: '' }
+  ];
+  assert.deepEqual(searchOriginalInventorySpisSuggestions(candidates, 'material', [], 8, true), []);
+  assert.deepEqual(searchOriginalInventorySpisSuggestions(candidates, 'M-10-8001236303', [], 8, true), []);
+  const explicit = { name: 'MATERIAL 1826', indexCode: 'INDEX-1', indexCode2: 'M-10-8001236303' };
+  assert.deepEqual(searchOriginalInventorySpisSuggestions([explicit], 'INDEX-1', [], 8, true), [explicit]);
+});
+
+test('index-2 filtering happens before the suggestion limit and leaves general catalog search unchanged', () => {
+  const oldRows = Array.from({ length: 30 }, (_, i) => ({ name: `KOSZ A ${i}`, indexCode: `M-1-OLD-${i}`, indexCode2: null, warehouseCode: 'M-1' }));
+  const indexed = { name: 'KOSZ Z', indexCode: 'M-55-NEW', indexCode2: '01826', warehouseCode: 'M-55' };
+  const candidates = [...oldRows, indexed];
+  const before = JSON.stringify(candidates);
+  assert.deepEqual(searchOriginalInventorySpisSuggestions(candidates, 'kosz', [], 1, true), [indexed]);
+  assert.equal(searchOriginalInventorySpisSuggestions(candidates, 'kosz', [], 1)[0].indexCode2, null);
+  assert.equal(JSON.stringify(candidates), before);
+});
+
 test('same-name IRIS indices both survive server search and an already counted name', () => {
   const serverResults = searchOriginalInventorySpisSuggestions(irisSuggestions, 'iris lr wheel', [], 24);
   assert.deepEqual(serverResults.map(item => item.indexCode), ['A22154703', 'A22154704']);
@@ -71,6 +108,7 @@ test('different full indices sharing a name and suffix are never deduplicated', 
   ];
   assert.equal(dedupeOriginalInventorySpisSuggestions(candidates).length, 2);
   assert.equal(searchOriginalInventorySpisSuggestions(candidates, 'material', ['MATERIAL'], 8).length, 2);
+  assert.equal(searchOriginalInventorySpisSuggestions(candidates, 'material', ['MATERIAL'], 8, true).length, 2);
 });
 
 test('spis searches both imported indices and displays the explicit second index', () => {
@@ -312,6 +350,10 @@ test('spis suggestions commit the full name on selection and allow touch scrolli
   assert.match(suggestionRow, /Indeks 2: \{suggestion\.indexCode2\}/);
   assert.doesNotMatch(suggestionRow, /Indeks 1:|\{suggestion\.indexCode\}/);
   assert.doesNotMatch(suggestionRow, /W ERP/);
+  assert.doesNotMatch(suggestionRow, /\{suggestion\.warehouseCode\}/);
+  assert.match(search, /queryKey: \['spis-oryginalow-catalog-search', normalizedDebouncedQuery, 'index2-only'\]/);
+  assert.match(search, /SPIS_SEARCH_SERVER_LIMIT,\s*signal,\s*true/);
+  assert.match(search, /inventoriedNames,\s*8,\s*true/);
   assert.match(search, /max-h-64[^"\n]*touch-pan-y[^"\n]*overflow-y-auto/);
   assert.match(suggestionRow, /onMouseDown=\{\(event\) => \{\s*event\.preventDefault\(\);\s*chooseSuggestion\(suggestion\)/);
   assert.match(suggestionRow, /onClick=\{\(\) => chooseSuggestion\(suggestion\)\}/);

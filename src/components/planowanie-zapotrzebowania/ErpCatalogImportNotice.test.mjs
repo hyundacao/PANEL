@@ -90,4 +90,10 @@ test('browser API forwards import freshness token to later searches and catalog 
   assert.equal(requests[3].options.signal, signal);
   assert.equal(JSON.parse(requests[3].options.body).payload.unit, 'szt.');
   for (const request of requests.slice(1)) assert.equal(JSON.parse(request.options.body).payload.catalogRefreshToken, token);
+  await mod.exports.searchOriginalInventoryCatalog('spis material', 24, signal, true);
+  assert.equal(requests.length, 5);
+  assert.equal(requests[4].options.signal, signal);
+  assert.equal(JSON.parse(requests[4].options.body).payload.onlyIndex2, true);
+  assert.equal(JSON.parse(requests[4].options.body).payload.catalogRefreshToken, token);
+  assert.equal(JSON.parse(requests[1].options.body).payload.onlyIndex2, undefined);
 });

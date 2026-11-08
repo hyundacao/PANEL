@@ -18,6 +18,7 @@ Nie myl zwyklych transferow przemialow z [dokumentami ERP](<erp-transfers.md>) a
 | Jednostki / ilosci wejscia | [regrindStockInput](<../../src/lib/utils/regrindStockInput.ts>) | |
 | Anulowanie transferu | [transferCancellation](<../../src/lib/utils/transferCancellation.ts>) | |
 | Statystyki / ERP kartotek | [regrindStats](<../../src/lib/utils/regrindStats.ts>) / [regrindCatalogErp](<../../src/lib/utils/regrindCatalogErp.ts>) | |
+| Wykresy raportow: Wyrobiono nad Przybylo, duze kola, stale etykiety wokol | [raporty](<../../src/app/(main)/raporty/page.tsx>) / [RegrindDonutChart](<../../src/components/reports/RegrindDonutChart.tsx>) / [regrindDonutLayout](<../../src/lib/utils/regrindDonutLayout.ts>) | `DonutPanel`, `buildPieItems`, `regrindDonutLayout`; katy z Recharts, wysokosci z DOM, lagodne radialne odnosniki, uporzadkowany wariant dla gestych etykiet |
 | Mielenie ze spisu: limit, sugestia, masa | [originalInventoryGrinding](<../../src/lib/utils/originalInventoryGrinding.ts>) / [grindingTargetSuggestions](<../../src/lib/utils/grindingTargetSuggestions.ts>) / [grindingTechnologyMass](<../../src/lib/utils/grindingTechnologyMass.ts>) | |
 | Formularz celu mielenia | [GrindingTargetInput](<../../src/components/planowanie-zapotrzebowania/GrindingTargetInput.tsx>) | |
 
@@ -35,5 +36,6 @@ Nie myl zwyklych transferow przemialow z [dokumentami ERP](<erp-transfers.md>) a
 
 - Stan/transfer: [regrindStockInput](<../../src/lib/utils/regrindStockInput.test.mjs>), [transferCancellation](<../../src/lib/utils/transferCancellation.test.mjs>), [regrindStats](<../../src/lib/utils/regrindStats.test.mjs>).
 - Kartoteka/ERP: [regrindCatalogErp](<../../src/lib/utils/regrindCatalogErp.test.mjs>).
+- Wykresy raportow: [regrindDonutLayout](<../../src/lib/utils/regrindDonutLayout.test.mjs>) - kolejnosc pionowa obu raportow, stale nazwy/kg bez hover, duze zaokraglone kola, brak kolizji etykiet i krzyzowania odnosnikow.
 - Mielenie: [originalInventoryGrinding](<../../src/lib/utils/originalInventoryGrinding.test.mjs>), [grindingDocumentSplit](<../../src/lib/utils/grindingDocumentSplit.test.mjs>), [grindingTargetSuggestions](<../../src/lib/utils/grindingTargetSuggestions.test.mjs>), [grindingTechnologyMass](<../../src/lib/utils/grindingTechnologyMass.test.mjs>).
 - DB/RPC: [SQL 02](<../../supabase/02_magazyn_przemialow.sql>) i [SQL 04](<../../supabase/04_spis_rzeczywisty_i_stany_erp.sql>); testy [sqlModules](<../../src/lib/utils/sqlModules.test.mjs>) na bazie izolowanej.

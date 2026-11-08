@@ -155,13 +155,15 @@ export const searchOriginalInventorySpisSuggestions = <T extends OriginalInvento
   suggestions: readonly T[],
   query: unknown,
   inventoriedNames: Iterable<unknown>,
-  limit = 8
+  limit = 8,
+  onlyIndex2 = false
 ) => {
   if (!normalizeSearchText(query)) return [];
   const safeLimit = Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 8));
   return rankOriginalInventorySpisSuggestions(
-    suggestions.filter(item => [item.name, ...item.previousNames ?? []].some(name =>
-      matchesOriginalInventorySpisSearch(query, name, item.indexCode2, item.indexCode))),
+    suggestions.filter(item => (!onlyIndex2 || Boolean(getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2))) &&
+      [item.name, ...item.previousNames ?? []].some(name =>
+        matchesOriginalInventorySpisSearch(query, name, item.indexCode2, item.indexCode))),
     inventoriedNames
   ).slice(0, safeLimit);
 };

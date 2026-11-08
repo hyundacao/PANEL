@@ -55,6 +55,7 @@ const latestDistributionCompletion = (
 };
 
 type ProgressTask = {
+  station?: string;
   teams?: readonly unknown[];
   kinds?: readonly unknown[];
   teamProgress?: unknown;
@@ -209,14 +210,18 @@ export const keepsProductionCompletedWorkInQueue = (team: ProductionTeam): boole
   team === 'distribution' || team === 'technician' || team === 'additional';
 
 export const productionWorkQueueForTeam = <T extends ProgressTask>(tasks: readonly T[], team: ProductionTeam): T[] => {
+  const additional: T[] = [];
   const pending: T[] = [];
   const completed: T[] = [];
   for (const task of tasks) {
     if (!task.teams?.includes(team) || task.kinds?.includes('anulowane')) continue;
-    if (!isProductionTeamDone(task, team)) pending.push(task);
+    if (!isProductionTeamDone(task, team)) {
+      if (task.station === 'ZADANIE DODATKOWE') additional.push(task);
+      else pending.push(task);
+    }
     else if (keepsProductionCompletedWorkInQueue(team)) completed.push(task);
   }
-  return [...pending, ...completed];
+  return [...additional, ...pending, ...completed];
 };
 
 export const productionDistributionStageCompletion = (

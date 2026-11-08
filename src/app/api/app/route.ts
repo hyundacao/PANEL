@@ -2435,17 +2435,18 @@ const loadOriginalCatalogSpisSearchItems = async () => {
   return originalCatalogSpisSearchItems;
 };
 
-const searchOriginalCatalogForSpis = async (rawQuery: unknown, rawLimit: unknown) => {
+const searchOriginalCatalogForSpis = async (rawQuery: unknown, rawLimit: unknown, rawOnlyIndex2: unknown = false) => {
   const query = String(rawQuery ?? '').replace(/\s+/g, ' ').trim();
   if (query.replace(/\s/g, '').length < 2) return [];
   const requestedLimit = Math.floor(Number(rawLimit));
   const limit = Number.isFinite(requestedLimit) ? Math.min(32, Math.max(1, requestedLimit)) : 24;
-  const cacheKey = `${query.toLocaleLowerCase('pl')}|${limit}`;
+  const onlyIndex2 = rawOnlyIndex2 === true;
+  const cacheKey = `${query.toLocaleLowerCase('pl')}|${limit}|${onlyIndex2 ? 'index2' : 'all'}`;
   const items = await loadOriginalCatalogSpisSearchItems();
   const cached = originalCatalogSpisSearchResults.get(cacheKey);
   if (cached) return cached;
 
-  const result = searchOriginalInventorySpisSuggestions(items, query, [], limit);
+  const result = searchOriginalInventorySpisSuggestions(items, query, [], limit, onlyIndex2);
   if (originalCatalogSpisSearchResults.size >= 100) {
     const oldestKey = originalCatalogSpisSearchResults.keys().next().value;
     if (oldestKey) originalCatalogSpisSearchResults.delete(oldestKey);
@@ -6867,7 +6868,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     }
     case 'searchOriginalInventoryCatalog': {
       acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);
-      return searchOriginalCatalogForSpis(payload?.query, payload?.limit);
+      return searchOriginalCatalogForSpis(payload?.query, payload?.limit, payload?.onlyIndex2);
     }
     case 'resolveOriginalInventoryCatalogMaterial': {
       acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);
