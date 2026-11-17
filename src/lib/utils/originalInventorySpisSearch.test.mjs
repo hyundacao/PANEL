@@ -356,6 +356,10 @@ test('spis suggestions commit the full name on selection and allow touch scrolli
   assert.match(search, /SPIS_SEARCH_SERVER_LIMIT,\s*signal,\s*true/);
   assert.match(search, /inventoriedNames,\s*8,\s*true/);
   assert.match(search, /max-h-64[^"\n]*touch-pan-y[^"\n]*overflow-y-auto/);
+  assert.match(search, /bindSuggestionListTouchScroll\(list/);
+  assert.match(search, /maxHeight: '16rem', overflowY: 'auto'/);
+  assert.match(search, /touchAction: 'pinch-zoom'/);
+  assert.match(search, /if \(listTouchActiveRef\.current\) return/);
   assert.match(suggestionRow, /onMouseDown=\{\(event\) => \{\s*event\.preventDefault\(\);\s*chooseSuggestion\(suggestion\)/);
   assert.match(suggestionRow, /onClick=\{\(\) => chooseSuggestion\(suggestion\)\}/);
   assert.doesNotMatch(suggestionRow, /onPointerDown/);

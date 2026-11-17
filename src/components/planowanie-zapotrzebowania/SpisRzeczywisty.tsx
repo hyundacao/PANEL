@@ -75,6 +75,7 @@ import {
   type GrindingTechnology
 } from '@/lib/utils/grindingTechnologyMass';
 import { cn } from '@/lib/utils/cn';
+import { bindSuggestionListTouchScroll } from '@/lib/utils/suggestionListTouchScroll';
 import {
   getOriginalInventorySpisEntriesQueryKey,
   getOriginalInventorySpisWarehousePriority,
@@ -710,6 +711,9 @@ const OriginalInventoryNameSearch = ({
     if (query === previousValue) setQuery(value);
   }
   const queryRef = useRef(value);
+  const searchContainerRef = useRef<HTMLDivElement | null>(null);
+  const suggestionsListRef = useRef<HTMLDivElement | null>(null);
+  const listTouchActiveRef = useRef(false);
   const closeSuggestionsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelSuggestionsClose = () => { if (closeSuggestionsTimer.current) clearTimeout(closeSuggestionsTimer.current); };
   useEffect(() => () => { if (closeSuggestionsTimer.current) clearTimeout(closeSuggestionsTimer.current); }, []);
@@ -767,6 +771,25 @@ const OriginalInventoryNameSearch = ({
     normalizedDebouncedQuery !== normalizedQuery || isFetching
   );
   const remoteResultsFailed = remoteSearchEnabled && normalizedDebouncedQuery === normalizedQuery && isError && !isFetching;
+  const suggestionsOpen = showSuggestions && (suggestions.length > 0 || remoteResultsPending || remoteResultsFailed);
+  useEffect(() => {
+    const list = suggestionsListRef.current;
+    if (!suggestionsOpen || !list) return;
+    const release = bindSuggestionListTouchScroll(list, active => {
+      listTouchActiveRef.current = active;
+      if (active && closeSuggestionsTimer.current) clearTimeout(closeSuggestionsTimer.current);
+    });
+    const closeOutside = (event: Event) => {
+      if (event.target instanceof Node && !searchContainerRef.current?.contains(event.target)) setShowSuggestions(false);
+    };
+    document.addEventListener('touchstart', closeOutside, { capture: true, passive: true });
+    document.addEventListener('mousedown', closeOutside, true);
+    return () => {
+      release();
+      document.removeEventListener('touchstart', closeOutside, true);
+      document.removeEventListener('mousedown', closeOutside, true);
+    };
+  }, [suggestionsOpen]);
   const chooseSuggestion = (suggestion: OriginalInventoryNameSuggestion) => {
     cancelSuggestionsClose();
     queryRef.current = suggestion.name;
@@ -776,7 +799,7 @@ const OriginalInventoryNameSearch = ({
   };
 
   return (
-    <div className="relative">
+    <div ref={searchContainerRef} className="relative">
       <Input
         ref={inputRef}
         value={query}
@@ -802,6 +825,7 @@ const OriginalInventoryNameSearch = ({
         onBlur={() => {
           onCommit(queryRef.current);
           cancelSuggestionsClose();
+          if (listTouchActiveRef.current) return;
           closeSuggestionsTimer.current = setTimeout(() => setShowSuggestions(false), 120);
         }}
       />
@@ -822,8 +846,14 @@ const OriginalInventoryNameSearch = ({
         </button>
       )}
 
-      {showSuggestions && (suggestions.length > 0 || remoteResultsPending || remoteResultsFailed) && (
-        <div className="absolute z-20 mt-2 max-h-64 w-full touch-pan-y overflow-y-auto overscroll-contain rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+      {suggestionsOpen && (
+        <div
+          ref={suggestionsListRef}
+          role="region"
+          aria-label="Podpowiedzi materiałów"
+          className="absolute z-20 mt-2 max-h-64 w-full touch-pan-y overflow-y-auto overscroll-contain rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]"
+          style={{ maxHeight: '16rem', overflowY: 'auto', overscrollBehaviorY: 'contain', WebkitOverflowScrolling: 'touch', touchAction: 'pinch-zoom' }}
+        >
           {suggestions.map((suggestion) => (
             <button
               key={`${suggestion.name}|${suggestion.warehouseCode ?? ''}|${suggestion.indexCode ?? suggestion.indexCode2 ?? ''}`}
