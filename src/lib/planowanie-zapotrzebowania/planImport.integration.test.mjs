@@ -26,6 +26,7 @@ if (directQuantityEditing) names.push('updatePlanNorm');
 names.push('returnMaterialKey');
 names.push('updateIssueQuantity');
 names.push('planNormNeedsReview');
+names.push('handleImportSelectedSheet');
 const definitions = new Map();
 const areaCalculationNames = ['technologyForItem','materialsForItem','technologyLinksForItem','linkedProducerCandidates','linkedProducerFor','linkedAllocationByProducer','selectedLinkedAllocationByProducer','fullLinkedAllocationByProducer','materialDemandContributionsForItem','demandByArea','sharedAreaIds','materialSupply','requirementsForArea','linkedSourceIssuesForArea'];
 const areaCalculationDefinitions = new Map();
@@ -64,6 +65,10 @@ function setup() {
   ctx.setQuantityInputs=(update)=>{ctx.quantityInputs=update(ctx.quantityInputs);};
   ctx.setPending=(value)=>{ctx.pending=value;};
   ctx.setLastPlanWorkbook=(value)=>{ctx.lastPlanWorkbook=value;};
+  ctx.planImportInFlightRef={current:false};
+  ctx.planImportRequestRef={current:0};
+  ctx.setIsImportingPlan=value=>{ctx.isImportingPlan=value;};
+  ctx.ensurePlanTechnologies=async()=>true;
   ctx.setSheetName=(value)=>{ctx.sheetName=value;};
   ctx.setShowChanges=()=>{};
   ctx.technologyForItem=(item)=>ctx.state.technologies.find((technology)=>technology.id===item.technologyId);
@@ -75,6 +80,48 @@ const setQuantity = (h,item,value) => {
   if(directQuantityEditing) h.updatePlanQuantity(item.id,value,'edit-'+item.id);
   else { h.ctx.quantityInputs[item.id]=String(value); h.applyQuantityCorrection(item,'exact'); }
 };
+
+test('the UI import waits for matching technology recipes before assigning a new product',async()=>{
+  const h=setup();
+  let release;
+  h.ctx.ensurePlanTechnologies=products=>new Promise(resolve=>{
+    assert.ok(products.some(row=>row.index==='A100'));
+    release=()=>{h.ctx.state.technologies=[{id:'late-base',productIndex:'A100',productName:'LEFT',variant:'base',materials:[],shiftNorm:1400,archived:false}];resolve(true);};
+  });
+  const importing=h.handleImportSelectedSheet();
+  assert.equal(h.ctx.state.plan.length,0);
+  assert.equal(h.ctx.isImportingPlan,true);
+  release();
+  await importing;
+  assert.equal(h.ctx.state.plan.find(row=>row.index==='A100').technologyId,'late-base');
+  assert.equal(h.ctx.isImportingPlan,false);
+});
+
+test('failed lazy technology loading leaves the existing plan and uploaded workbook untouched',async()=>{
+  const h=setup();
+  const before=h.ctx.state;
+  const pending=h.ctx.pending;
+  h.ctx.ensurePlanTechnologies=async()=>{throw new Error('offline');};
+  await h.handleImportSelectedSheet();
+  assert.equal(h.ctx.state,before);
+  assert.equal(h.ctx.pending,pending);
+  assert.equal(h.ctx.isImportingPlan,false);
+  assert.match(h.messages.at(-1),/Plan nie zostal zmieniony/);
+});
+
+test('a changed plan date or card cancels a late lazy import and repeated clicks do not duplicate it',async()=>{
+  const h=setup();
+  let release,reads=0;
+  h.ctx.ensurePlanTechnologies=()=>{reads++;return new Promise(resolve=>{release=resolve;});};
+  const importing=h.handleImportSelectedSheet();
+  await h.handleImportSelectedSheet();
+  assert.equal(reads,1);
+  h.ctx.planImportRequestRef.current++;
+  release(true);
+  await importing;
+  assert.equal(h.ctx.state.plan.length,0);
+  assert.equal(h.ctx.isImportingPlan,false);
+});
 
 test('product technologies match by index, not by a shared name',()=>{
   const h=setup();

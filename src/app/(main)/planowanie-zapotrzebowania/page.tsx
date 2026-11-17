@@ -1943,12 +1943,14 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     info: saveInfo,
     retry: retrySave,
     downloadDraft,
-    loadLatest
+    loadLatest,
+    ensurePlanTechnologies
   } = usePlanningAutosave({
     initial: emptyState,
     parse: parseStoredState,
     prepare: preparePlanningAutosaveState,
     storageKey: `${LOCAL_KEY}-${user?.id ?? 'anonymous'}`,
+    scope: view === 'technologie' ? 'technology-library' : 'workspace',
     readOnly,
     sharedRefreshEnabled: view !== 'technologie' && view !== 'ustawienia'
   });
@@ -1956,6 +1958,10 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
   const [sheetName, setSheetName] = useState('');
   const [pending, setPending] = useState<PendingWorkbook | null>(null);
   const [lastPlanWorkbook, setLastPlanWorkbook] = useState<PendingWorkbook | null>(null);
+  const [isImportingPlan, setIsImportingPlan] = useState(false);
+  const planImportInFlightRef = useRef(false);
+  const planImportRequestRef = useRef(0);
+  useEffect(() => { planImportRequestRef.current += 1; }, [pending, sheetName, state.selectedPlanDate, view]);
   const planUploadModeRef = useRef<'plan' | 'update'>('plan');
   const [expandedPlan, setExpandedPlan] = useState('');
   const [showAllPlanAreas, setShowAllPlanAreas] = useState(false);
@@ -2148,6 +2154,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
       const next = updater(current);
       if (next === current) return current;
       changed = true;
+      if (view === 'technologie') return { ...next, updatedAt: nowLabel() };
       const mappedPlan = applyStationMappings(next.plan, next.stationMappings);
       const plan = applyDefaultTechnologyAssignments(mappedPlan, next.technologies);
       return {
@@ -3019,6 +3026,33 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     flash(`Zaimportowano wersję ${importedVersionNo}: ${importedProductionCount} produkcji, ${imported.length} detali. Ilości z pliku do sprawdzenia: ${imported.filter(quantityNeedsReview).length}.`);
   };
 
+  const handleImportSelectedSheet = async () => {
+    if (planImportInFlightRef.current || !pending || !sheetName) return;
+    if (pending.purpose !== 'plan') return importSelectedSheet();
+    if (readOnly || !XLSX) return;
+    const sheet = pending.workbook.Sheets[sheetName];
+    if (!sheet) return;
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
+    const rowOffset = XLSX.utils.decode_range(sheet['!ref'] || 'A1').s.r;
+    const products = parsePlanRows(planningRowsWithMergedNorms(sheet, rows), state.stationMappings,
+      rowOffset, highlightedPlanSourceRows(sheet));
+    if (!products.length) return flash('Nie znaleziono rozpoznawalnych pozycji planu.');
+    const request = ++planImportRequestRef.current;
+    planImportInFlightRef.current = true;
+    setIsImportingPlan(true);
+    try {
+      const ready = await ensurePlanTechnologies(products);
+      if (request !== planImportRequestRef.current) return;
+      if (!ready) return flash('Zapisz biezace zmiany przed importem planu.');
+      importSelectedSheet();
+    } catch {
+      flash('Nie udalo sie pobrac technologii. Plan nie zostal zmieniony. Sprobuj ponownie.');
+    } finally {
+      planImportInFlightRef.current = false;
+      setIsImportingPlan(false);
+    }
+  };
+
   const selectPlanDate = (planDate: string) => {
     if (!planDate) return;
     if (!isMaterialPlanningDateRetained(planDate, today)) {
@@ -3527,7 +3561,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
             {pending.workbook.SheetNames.map((name) => <option value={name} key={name}>{name}</option>)}
           </SelectField>
         </Field>
-        <Button onClick={importSelectedSheet}><Upload className="mr-2 h-4 w-4" />Importuj zakładkę</Button>
+        <Button disabled={isImportingPlan} onClick={handleImportSelectedSheet}><Upload className="mr-2 h-4 w-4" />{isImportingPlan ? 'Wczytywanie technologii...' : 'Importuj zakladke'}</Button>
         <Button variant="ghost" onClick={() => setPending(null)}>Anuluj</Button>
       </div>
     </Card>
@@ -3863,7 +3897,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
         {!readOnly ? <div className="flex flex-wrap justify-start gap-2 xl:justify-end">
           {pendingPlanWorkbook ? <>
             <Button variant="ghost" className="min-h-10 rounded-lg px-3 shadow-none" onClick={() => { setPending(null); setSheetName(''); }}><X className="mr-2 h-4 w-4" />Anuluj</Button>
-            <Button className="min-h-10 rounded-lg px-3" disabled={!sheetName} onClick={importSelectedSheet}><Check className="mr-2 h-4 w-4" />Wczytaj arkusz</Button>
+            <Button className="min-h-10 rounded-lg px-3" disabled={!sheetName || isImportingPlan} onClick={handleImportSelectedSheet}><Check className="mr-2 h-4 w-4" />{isImportingPlan ? 'Wczytywanie technologii...' : 'Wczytaj arkusz'}</Button>
           </> : <>
             <Button variant="outline" className="min-h-10 rounded-lg px-3 shadow-none" onClick={() => { if (!closeCalculationEditorIfAllowed()) return; planUploadModeRef.current = 'plan'; fileInputRef.current?.click(); }}><Upload className="mr-2 h-4 w-4" />Wgraj plan</Button>
             {currentPlanVersion || state.plan.length > 0 ? <Button variant="outline" className="min-h-10 rounded-lg px-3 shadow-none" onClick={() => { if (!closeCalculationEditorIfAllowed()) return; planUploadModeRef.current = 'update'; fileInputRef.current?.click(); }}><RefreshCw className="mr-2 h-4 w-4" />Wgraj aktualizację</Button> : null}
@@ -5891,7 +5925,7 @@ function MaterialPlanningWorkspace({ requestedView, requestedSettingsSection }: 
     ['8. Zwroty i przesunięcia', 'Materiał używany w aktywnym planie swojej strefy pozostaje na miejscu. Nieużywany zapas najpierw pokrywa niedobór innej strefy, a dopiero pozostałość trafia do zwrotu do magazynu.']
   ].map(([title, text]) => <Card key={title}><h2 className="font-black text-title">{title}</h2><p className="mt-2 text-sm leading-6 text-muted">{text}</p></Card>)}</div>;
 
-  if (!hydrated) return <div className="py-8 text-sm text-dim" role="status">Wczytywanie planowania...</div>;
+  if (!hydrated) return <div className="py-8 text-sm text-dim" role="status">{view === 'technologie' ? 'Wczytywanie biblioteki technologii...' : 'Wczytywanie planowania...'}</div>;
 
   const renderer: Record<View, () => React.ReactNode> = {
     plan: renderPlan,

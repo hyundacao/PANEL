@@ -1,6 +1,6 @@
 # Planowanie I Technologie
 
-Dotyczy `/planowanie-zapotrzebowania` z widokami planu, obliczen, biblioteki, dokumentu, zwrotow i ustawien. Dla `view=spis` przejdz do [spisu](<inventory.md>).
+`/planowanie-zapotrzebowania`: plan, obliczenia, biblioteka, dokument, zwroty, ustawienia. `view=spis`: [spis](<inventory.md>).
 
 ## Punkty Wejscia
 
@@ -25,28 +25,31 @@ Dotyczy `/planowanie-zapotrzebowania` z widokami planu, obliczen, biblioteki, do
 ## Zapis I Wplyw
 
 - Ekran -> [usePlanningAutosave](<../../src/lib/planowanie-zapotrzebowania/usePlanningAutosave.ts>) -> [silnik](<../../src/lib/planowanie-zapotrzebowania/autosave.ts>) -> [API GET/PUT](<../../src/app/api/planowanie-zapotrzebowania/route.ts>) -> `material_planning_state` przez RPC `save_material_planning_state`.
-- Duze zapisy: [saveTransport](<../../src/lib/planowanie-zapotrzebowania/saveTransport.ts>) kompresuje JSON, [saveBody.server](<../../src/lib/planowanie-zapotrzebowania/saveBody.server.ts>) odczytuje go po autoryzacji z limitem rozpakowania. Stare klienty JSON pozostaja obslugiwane; to nie zmienia rewizji ani scalania stanu.
-- Kopia lokalna: [draftCache](<../../src/lib/planowanie-zapotrzebowania/draftCache.ts>) uzywa IndexedDB z migracja/fallbackiem localStorage. Silnik czeka na zatwierdzenie kopii i nie pokazuje sukcesu przed zakonczeniem transakcji.
-- [Retencja](<../../src/lib/planowanie-zapotrzebowania/historyRetention.ts>): dzis/wczoraj oraz przyszle plany. Klient usuwa starsza historie po odczycie/zmianie dnia; API filtruje zapis i obie strony scalania. Zachowaj aktywny plan, robocze receptury, spis i stale ustawienia. Nie stosuj do innych modulow/projekcji podgladu.
+- Duze zapisy: [saveTransport](<../../src/lib/planowanie-zapotrzebowania/saveTransport.ts>) kompresuje JSON; [saveBody.server](<../../src/lib/planowanie-zapotrzebowania/saveBody.server.ts>) po autoryzacji limituje rozpakowanie. Stary JSON nadal dziala; rewizje/scalanie bez zmian.
+- [draftCache](<../../src/lib/planowanie-zapotrzebowania/draftCache.ts>): IndexedDB z migracja/fallbackiem localStorage. Sukces kopii dopiero po transakcji.
+- [Retencja](<../../src/lib/planowanie-zapotrzebowania/historyRetention.ts>): dzis/wczoraj/przyszlosc; filtr na kliencie, zapisie i obu stronach scalania. Chroni aktywny plan, receptury robocze, spis i ustawienia; nie dotyczy innych modulow/projekcji.
 - [stateScopes](<../../src/lib/planowanie-zapotrzebowania/stateScopes.ts>) rozdziela `main` (wspolna biblioteka/ustawienia/dokumenty) i `workspace:<userId>` (plan roboczy); pilnuje rewizji i scalania.
+- `scope=technology-library`: tylko kolumna technologii, osobny zapis bez nadpisywania workspace/dokumentow. `scope=workspace`: `projectPlanningWorkspace`/`selectPlanningTechnologies` wybieraja receptury planu, warianty i zaleznosci. Bez scope stary pelny odczyt.
+- Import: `handleImportSelectedSheet` -> `ensurePlanTechnologies` -> POST `plan-technologies`, potem zwykly import. Oddzielne cache, wspolna bariera zapisu przy przejsciu. Stary niezapisany draft odzyskiwany w pelnym trybie.
 - Technologia -> plan/obliczenia -> strefa -> dokument -> zwroty/Excel. Nie zmieniaj ID przy zmianie roli bazowa/awaryjna.
-- `planningCalculations` zapamietuje wyniki po danych wejsciowych, nie po calym stanie. Zmiana ilosci, receptury roboczej, biblioteki, spisu, dokumentow, zakresu lub strefy musi uniewazniac obliczenia; status autozapisu i historia nie. `technologiesFor` ma ograniczony cache na czas jednej wersji biblioteki. Nie zmieniaj obiektow planu/spisu w miejscu.
+- `planningCalculations`: cache po wejsciu (ilosc, receptura, biblioteka, spis, dokumenty, zakres, strefa), nie statusie zapisu/historii. `technologiesFor`: ograniczony cache jednej wersji biblioteki. Bez mutacji planu/spisu w miejscu.
 - Zapisana technologia, reczna kopia robocza i wygenerowany dokument to rozne zapisy. Zmiana biblioteki nie upowaznia do przepisywania archiwum.
-- Naglowek edytuje cala rodzine wariantow bez zmiany ID; zajety indeks blokuje laczenie produktow. Referencje `linkedProducts` zachowuja stare klucze wyboru zrodel w `sourceKeys`, nie jako aliasy kartoteki. Plan po zmianie indeksu zachowuje jawne przypisanie po ID; dokumenty i snapshoty nie sa przepisywane.
+- Naglowek zmienia rodzine bez zmiany ID; zajety indeks blokuje zapis. `linkedProducts.sourceKeys` zachowuje stare wybory zrodel (nie aliasy kartoteki). Plan trzyma ID; dokumenty/snapshoty bez zmian.
 - Podglad technologii w zadaniu przygotowania produkcji czyta plan/biblioteke: [karta przygotowania](<preparation.md>).
-- Zmiana indeksow, jednostek lub dopasowania do stanu wymaga [kontraktow](<contracts.md#indeksy-i-jednostki>) i [spisu](<inventory.md>). Receptura polwyrobu i pakowanie nadwyzki nie sa ponownym biezacym rozchodem wszystkich poziomow drzewa.
+- Indeksy/jednostki/dopasowanie: [kontrakty](<contracts.md#indeksy-i-jednostki>) i [spis](<inventory.md>). Polwyrob/pakowanie nadwyzki nie oznacza ponownego rozchodu calego drzewa.
 - Urzadzenia strefowe: [fixedInventoryDevices](<../../src/lib/planowanie-zapotrzebowania/fixedInventoryDevices.ts>); zestawy paletowe: [karta spisu](<inventory.md>).
 
 ## Testy Wg Zmiany
 
-W katalogu `src/lib/planowanie-zapotrzebowania/` wybierz tylko powiazane:
+Wybrane testy domeny:
 
 - Wybor indeksu/skladnika: [technologyProductSelection](<../../src/lib/planowanie-zapotrzebowania/technologyProductSelection.test.mjs>), [productCatalogSearch](<../../src/lib/planowanie-zapotrzebowania/productCatalogSearch.test.mjs>).
 - Zamiana bazowej: [technologyVariants](<../../src/lib/planowanie-zapotrzebowania/technologyVariants.test.mjs>), [stateScopes](<../../src/lib/planowanie-zapotrzebowania/stateScopes.test.mjs>).
 - Przeliczenia/plan: [domain](<../../src/lib/planowanie-zapotrzebowania/domain.test.mjs>), [planImport.integration](<../../src/lib/planowanie-zapotrzebowania/planImport.integration.test.mjs>).
-- Wydajnosc i uniewaznianie cache: [planningPerformance](<../../src/lib/planowanie-zapotrzebowania/planningPerformance.test.mjs>). Import integracyjny obejmuje tydzien codziennych importow i ponownych odczytow z receptura robocza.
+- Cache: [planningPerformance](<../../src/lib/planowanie-zapotrzebowania/planningPerformance.test.mjs>); import integracyjny obejmuje tydzien z receptura robocza.
 - Stany/dokument: [zoneStock](<../../src/lib/planowanie-zapotrzebowania/zoneStock.test.mjs>), [zonePlanSummary](<../../src/lib/planowanie-zapotrzebowania/zonePlanSummary.test.mjs>), [pickingDocumentRows](<../../src/lib/planowanie-zapotrzebowania/pickingDocumentRows.test.mjs>), [manualIssueQuantities](<../../src/lib/planowanie-zapotrzebowania/manualIssueQuantities.test.mjs>).
 - Excel: [technologyLibraryExport](<../../src/lib/planowanie-zapotrzebowania/technologyLibraryExport.test.mjs>), [technologyLibraryWorkbook](<../../src/lib/planowanie-zapotrzebowania/technologyLibraryWorkbook.test.mjs>).
 - Autozapis: [autosave](<../../src/lib/planowanie-zapotrzebowania/autosave.test.mjs>), [stateScopes](<../../src/lib/planowanie-zapotrzebowania/stateScopes.test.mjs>). Przy zmianie kontraktu takze pelny zestaw.
-- Retencja: [historyRetention](<../../src/lib/planowanie-zapotrzebowania/historyRetention.test.mjs>), tygodniowy import w `planImport.integration` oraz rzeczywisty zapis API w [productionTechnologyPreview](<../../src/lib/utils/productionTechnologyPreview.test.mjs>).
+- Odczyt/zapis zakresow: [scopedPlanningLoading](<../../src/lib/planowanie-zapotrzebowania/scopedPlanningLoading.test.mjs>), [productionTechnologyPreview](<../../src/lib/utils/productionTechnologyPreview.test.mjs>).
+- Retencja: [historyRetention](<../../src/lib/planowanie-zapotrzebowania/historyRetention.test.mjs>), `planImport.integration` i [productionTechnologyPreview](<../../src/lib/utils/productionTechnologyPreview.test.mjs>).
 - Rozmiar/backup: [saveTransport](<../../src/lib/planowanie-zapotrzebowania/saveTransport.test.mjs>), [draftCache](<../../src/lib/planowanie-zapotrzebowania/draftCache.test.mjs>).

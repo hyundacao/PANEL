@@ -115,6 +115,7 @@ export const createHeaderFixture = (overrides = {}) => {
     linkedSourceIssuesForArea: () => [], createOrRefreshPickingDocument: () => {},
     expandedDocument: '', expandedMaterial: '', documentWarehouseFilter: 'all', documentSort: 'warehouse',
     pending: null, sheetName: '', lastPlanWorkbook: null, planUploadModeRef: { current: 'plan' }, importSelectedSheet: () => {},
+    isImportingPlan: false, handleImportSelectedSheet: () => ctx.importSelectedSheet(),
     renderPendingImport: () => null, technologiesFor: () => [], technologyForItem: () => undefined,
     materialsForItem: () => [], itemProductionQty: () => 0,
     materialDemandContributionsForItem: () => [],

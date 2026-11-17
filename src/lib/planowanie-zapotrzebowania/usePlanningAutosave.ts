@@ -7,7 +7,8 @@ import {
 } from './autosave';
 import {
   changedSharedPlanningFields, combinePlanningState, privatePlanningState,
-  rebasePlanningWorkspaceDraft, rebaseSharedPlanningChanges, sharedPlanningState
+  rebasePlanningWorkspaceDraft, rebasePlanningTechnologyLibraryDraft, rebaseSharedPlanningChanges, sharedPlanningState,
+  type PlanningLoadScope, type PlanningTechnologyRequest
 } from './stateScopes';
 import { encodePlanningSave, PlanningSaveTransportError } from './saveTransport';
 import { readPlanningDraftCache, writePlanningDraftCache, removePlanningDraftCache } from './draftCache';
@@ -17,7 +18,7 @@ const initialInfo: PlanningSaveInfo = { status: 'loading', pending: false, backu
 type StateUpdate<T> = T | ((current: T) => T);
 
 export const usePlanningAutosave = <T,>({
-  initial, parse, prepare, storageKey, readOnly, sharedRefreshEnabled = true
+  initial, parse, prepare, storageKey, readOnly, sharedRefreshEnabled = true, scope = 'workspace'
 }: {
   initial: () => T;
   parse: (value: unknown) => T | null;
@@ -25,10 +26,11 @@ export const usePlanningAutosave = <T,>({
   storageKey: string;
   readOnly: boolean;
   sharedRefreshEnabled?: boolean;
+  scope?: PlanningLoadScope;
 }) => {
   const [state, setReactState] = useState(initial);
   const stateRef = useRef(state);
-  const [hydrated, setHydrated] = useState(false);
+  const [hydratedKey, setHydratedKey] = useState('');
   const [info, setInfo] = useState<PlanningSaveInfo>(initialInfo);
   const [reloadVersion, setReloadVersion] = useState(0);
   const engineRef = useRef<ReturnType<typeof createPlanningAutosave<T>> | null>(null);
@@ -36,7 +38,9 @@ export const usePlanningAutosave = <T,>({
   const sharedRevisionRef = useRef<number | null>(null);
   const sharedBaselineRef = useRef<Record<string, unknown> | null>(null);
   const needsSharedRefreshRef = useRef(false);
-  const cacheKey = storageKey + '-autosave-v1';
+  const cacheKey = storageKey + (scope === 'technology-library' ? '-technology-library' : '') + '-autosave-v1';
+  const hydrated = hydratedKey === cacheKey;
+  const legacyRecoveryRef = useRef(false);
 
   useEffect(() => { writableRef.current = !readOnly; }, [readOnly]);
 
@@ -47,9 +51,13 @@ export const usePlanningAutosave = <T,>({
   }, []);
 
   const readRemote = useCallback(async (known?: { state: T; revision: number }): Promise<PlanningRemote<T>> => {
-    const query = known && sharedRevisionRef.current !== null
-      ? `?revision=${known.revision}&sharedRevision=${sharedRevisionRef.current}` : '';
-    const response = await fetch(`/api/planowanie-zapotrzebowania${query}`, {
+    const params = new URLSearchParams();
+    if (!legacyRecoveryRef.current) params.set('scope', scope);
+    if (known && sharedRevisionRef.current !== null) {
+      params.set('revision', String(known.revision));
+      params.set('sharedRevision', String(sharedRevisionRef.current));
+    }
+    const response = await fetch(`/api/planowanie-zapotrzebowania?${params}`, {
       cache: 'no-store', signal: AbortSignal.timeout(15000)
     });
     if (!response.ok) throw new PlanningSaveError(response.status === 401 ? 'UNAUTHORIZED'
@@ -66,27 +74,30 @@ export const usePlanningAutosave = <T,>({
     const parsedState = payload.state == null ? null : parse(payload.state);
     if (payload.state != null && !parsedState) throw new PlanningSaveError('INVALID_STATE');
     return { state: parsedState, revision, sharedRevision };
-  }, [parse]);
+  }, [parse, scope]);
 
   useEffect(() => {
     let active = true;
     let engine: ReturnType<typeof createPlanningAutosave<T>> | null = null;
     const load = async () => {
-      await finishingWrites.get(cacheKey)?.catch(() => undefined);
+      await finishingWrites.get(storageKey)?.catch(() => undefined);
       if (!active) return;
       let local: PlanningDraft<T> | null = null;
       let localSharedBaseline: Record<string, unknown> | null = null;
       let localSharedRevision: number | null = null;
       let localSharedRefreshRequired = false;
+      let localScopeMatches = false;
       try {
         const cached = JSON.parse(await readPlanningDraftCache(cacheKey) || 'null') as (PlanningDraft<T> & {
           format?: number;
           sharedRevision?: number;
           sharedBaseline?: Record<string, unknown>;
           sharedRefreshRequired?: boolean;
+          loadScope?: string;
         }) | null;
-        const parsedCachedState = cached?.format === 1 || cached?.format === 2 ? parse(cached.state) : null;
-        if ((cached?.format === 1 || cached?.format === 2) && parsedCachedState
+        const supportedFormat = cached?.format === 1 || cached?.format === 2 || cached?.format === 3;
+        const parsedCachedState = supportedFormat ? parse(cached.state) : null;
+        if (supportedFormat && parsedCachedState
           && (cached.revision === null || (Number.isSafeInteger(cached.revision) && cached.revision >= 0))) {
           const parsedLastAttemptState = cached.lastAttempt ? parse(cached.lastAttempt.state) : null;
           local = {
@@ -97,19 +108,22 @@ export const usePlanningAutosave = <T,>({
               ? { ...cached.lastAttempt, state: parsedLastAttemptState }
               : undefined
           };
-          if (cached.format === 2 && Number.isSafeInteger(cached.sharedRevision) &&
+          localScopeMatches = cached.loadScope === scope;
+          if ((cached.format === 2 || cached.format === 3) && Number.isSafeInteger(cached.sharedRevision) &&
             cached.sharedRevision! >= 0 && cached.sharedBaseline && typeof cached.sharedBaseline === 'object') {
             localSharedRevision = cached.sharedRevision!;
             localSharedBaseline = cached.sharedBaseline;
             localSharedRefreshRequired = cached.sharedRefreshRequired === true;
           }
         } else {
-          const legacy = parse(JSON.parse(window.localStorage.getItem(storageKey) || 'null'));
+          const legacy = scope === 'workspace' ? parse(JSON.parse(window.localStorage.getItem(storageKey) || 'null')) : null;
           if (legacy) local = { state: legacy, revision: null, pending: false };
         }
       } catch {
         // An unavailable local cache must not prevent loading the shared plan.
       }
+      // Recover an old unsaved full-state draft before switching it to scoped reads.
+      legacyRecoveryRef.current = scope === 'workspace' && Boolean(local?.pending) && !localScopeMatches;
       sharedRevisionRef.current = localSharedRevision;
       sharedBaselineRef.current = localSharedBaseline;
       needsSharedRefreshRef.current = localSharedRefreshRequired;
@@ -118,12 +132,14 @@ export const usePlanningAutosave = <T,>({
       let conflict = false;
       let sharedConflict = false;
       try {
-        const remote = await readRemote(local && !local.pending && !localSharedRefreshRequired && local.revision !== null
+        const remote = await readRemote(localScopeMatches && local && !local.pending && !localSharedRefreshRequired && local.revision !== null
           ? { state: local.state, revision: local.revision }
           : undefined);
         if (!active) return;
         if (local?.pending && remote.state) {
-          const rebased = rebasePlanningWorkspaceDraft(localSharedBaseline, local, remote);
+          const rebased = scope === 'technology-library'
+            ? rebasePlanningTechnologyLibraryDraft(localSharedBaseline, local, remote)
+            : rebasePlanningWorkspaceDraft(localSharedBaseline, local, remote);
           if (rebased) local = rebased;
           else sharedConflict = true;
         }
@@ -142,7 +158,9 @@ export const usePlanningAutosave = <T,>({
         draft: { ...draft, state: nextState },
         read: readRemote,
         restore: (remote, local, fallback) => {
-          const rebased = local ? rebasePlanningWorkspaceDraft(sharedBaselineRef.current, local, remote) : null;
+          const rebased = local ? scope === 'technology-library'
+            ? rebasePlanningTechnologyLibraryDraft(sharedBaselineRef.current, local, remote)
+            : rebasePlanningWorkspaceDraft(sharedBaselineRef.current, local, remote) : null;
           if (local && !rebased) throw new PlanningSaveError('SHARED_REVISION_CONFLICT');
           const restored = restorePlanningDraft(remote, rebased, fallback);
           if (!restored.conflict) {
@@ -154,12 +172,13 @@ export const usePlanningAutosave = <T,>({
         },
         write: async (next, revision) => {
           if (!writableRef.current) throw new PlanningSaveError('READ_ONLY');
-          const changedSharedFields = changedSharedPlanningFields(
+          const changedSharedFields = scope === 'technology-library' ? ['technologies'] as const : changedSharedPlanningFields(
             sharedBaselineRef.current ?? {}, next as Record<string, unknown>
           );
           const payload = {
+            scope: scope === 'technology-library' ? scope : undefined,
             state: {
-              ...privatePlanningState(next as Record<string, unknown>),
+              ...(scope === 'workspace' ? privatePlanningState(next as Record<string, unknown>) : {}),
               ...Object.fromEntries(changedSharedFields.map((field) => [field, (next as Record<string, unknown>)[field]]))
             },
             expectedRevision: revision,
@@ -210,7 +229,8 @@ export const usePlanningAutosave = <T,>({
             ? { ...next, lastAttempt: undefined }
             : next;
           return writePlanningDraftCache(cacheKey, JSON.stringify({
-            format: 2,
+            format: 3,
+            loadScope: legacyRecoveryRef.current ? 'legacy-full' : scope,
             ...cacheDraft,
             sharedRevision: sharedRevisionRef.current,
             sharedBaseline: sharedBaselineRef.current,
@@ -227,7 +247,7 @@ export const usePlanningAutosave = <T,>({
         loadError
       );
       engine.persist();
-      setHydrated(true);
+      setHydratedKey(cacheKey);
       if (writableRef.current) engine.start();
     };
     void load();
@@ -247,7 +267,7 @@ export const usePlanningAutosave = <T,>({
     const online = () => {
       if (engine?.getDraft().pending && writableRef.current) void engine.retry();
       else if (engine?.getInfo().error === 'LOAD_FAILED') {
-        setHydrated(false);
+        setHydratedKey('');
         setInfo(initialInfo);
         setReloadVersion((value) => value + 1);
       }
@@ -264,14 +284,14 @@ export const usePlanningAutosave = <T,>({
       document.removeEventListener('visibilitychange', visibilityChange);
       if (engine) {
         const closing = engine.close();
-        finishingWrites.set(cacheKey, closing);
+        finishingWrites.set(storageKey, closing);
         void closing.finally(() => {
-          if (finishingWrites.get(cacheKey) === closing) finishingWrites.delete(cacheKey);
+          if (finishingWrites.get(storageKey) === closing) finishingWrites.delete(storageKey);
         });
       }
       engineRef.current = null;
     };
-  }, [cacheKey, storageKey, initial, parse, prepare, readRemote, adoptRemote, reloadVersion]);
+  }, [cacheKey, storageKey, initial, parse, prepare, readRemote, adoptRemote, reloadVersion, scope]);
 
   useEffect(() => {
     if (!hydrated || !sharedRefreshEnabled) return;
@@ -288,7 +308,8 @@ export const usePlanningAutosave = <T,>({
       lastCheck = Date.now();
       try {
         const query = needsSharedRefreshRef.current ? '' : `&sharedRevision=${sharedRevisionRef.current ?? ''}`;
-        const response = await fetch(`/api/planowanie-zapotrzebowania?source=shared${query}`, {
+        const scopeQuery = legacyRecoveryRef.current ? '' : `&scope=${scope}`;
+        const response = await fetch(`/api/planowanie-zapotrzebowania?source=shared${scopeQuery}${query}`, {
           cache: 'no-store', signal: AbortSignal.timeout(15000)
         });
         if (!response.ok) return;
@@ -326,7 +347,43 @@ export const usePlanningAutosave = <T,>({
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', visible);
     };
-  }, [hydrated, sharedRefreshEnabled, parse, prepare]);
+  }, [hydrated, sharedRefreshEnabled, parse, prepare, scope]);
+
+  const ensurePlanTechnologies = useCallback(async (products: PlanningTechnologyRequest[]) => {
+    const engine = engineRef.current;
+    if (!engine || scope !== 'workspace' || engine.isManual()) return false;
+    await engine.flush();
+    if (engine !== engineRef.current || engine.getDraft().pending) return false;
+    const response = await fetch('/api/planowanie-zapotrzebowania', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'plan-technologies', products }), signal: AbortSignal.timeout(15000)
+    });
+    if (!response.ok) throw new PlanningSaveError('LOAD_FAILED');
+    const payload = await response.json() as { items?: unknown };
+    if (engine !== engineRef.current) return false;
+    await engine.flush();
+    if (engine !== engineRef.current || engine.getDraft().pending || engine.isManual()) return false;
+    if (!Array.isArray(payload.items)) throw new PlanningSaveError('INVALID_STATE');
+    const parsed = parse({ ...(stateRef.current as Record<string, unknown>), plan: [], technologies: payload.items });
+    if (!parsed) throw new PlanningSaveError('INVALID_STATE');
+    const incoming = (parsed as Record<string, unknown>).technologies as { id: string }[];
+    const current = stateRef.current as Record<string, unknown>;
+    const existing = current.technologies as { id: string }[];
+    const ids = new Set(existing.map((item) => item.id));
+    const additions = incoming.filter((item) => !ids.has(item.id));
+    if (!additions.length) return true;
+    const baseline = sharedBaselineRef.current ?? {};
+    const baselineItems = baseline.technologies as { id: string }[] ?? [];
+    const baselineIds = new Set(baselineItems.map((item) => item.id));
+    sharedBaselineRef.current = { ...baseline, technologies: [
+      ...baselineItems, ...additions.filter((item) => !baselineIds.has(item.id))
+    ] };
+    const next = { ...current, technologies: [...existing, ...additions] } as T;
+    stateRef.current = next;
+    setReactState(next);
+    engine.setSnapshot(next);
+    return true;
+  }, [parse, scope]);
 
   const setState = useCallback((updater: StateUpdate<T>) => {
     const next = typeof updater === 'function' ? (updater as (current: T) => T)(stateRef.current) : updater;
@@ -367,7 +424,7 @@ export const usePlanningAutosave = <T,>({
   const retry = useCallback(() => {
     if (engineRef.current?.getDraft().pending) void engineRef.current.retry();
     else {
-      setHydrated(false);
+      setHydratedKey('');
       setInfo(initialInfo);
       setReloadVersion((value) => value + 1);
     }
@@ -425,6 +482,7 @@ export const usePlanningAutosave = <T,>({
     info,
     retry,
     downloadDraft,
-    loadLatest
+    loadLatest,
+    ensurePlanTechnologies
   };
 };

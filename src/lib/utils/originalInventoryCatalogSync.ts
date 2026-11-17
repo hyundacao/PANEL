@@ -4,6 +4,7 @@ import type { OriginalInventoryCatalogSyncResult } from '@/lib/api/types';
 import { normalizeOriginalInventoryName, normalizeOriginalInventoryNameKey } from './originalInventoryName';
 import { createCatalogRegisterResolver } from './originalInventoryCatalogRegister';
 import { readOriginalInventoryCatalogRegister, updateCatalogRegisterNamesFromSnapshot } from './originalInventoryCatalogRegisterServer';
+import { refreshOriginalInventorySearchProjection } from './originalInventorySearchProjection';
 import {
   normalizeOriginalInventoryIndex as indexKey,
   hasOriginalInventoryReportTimestamp
@@ -165,5 +166,6 @@ export async function syncOriginalInventoryCatalogFromSnapshot(
     result.failed = true;
     warn(null, 'Stany ERP zostały wgrane, ale nie udało się dopisać wszystkich kartotek. Ponowny import ponowi próbę bez tworzenia duplikatów.');
   }
+  await refreshOriginalInventorySearchProjection(db);
   return result;
 }

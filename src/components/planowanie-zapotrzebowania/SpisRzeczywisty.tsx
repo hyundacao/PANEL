@@ -93,6 +93,7 @@ import {
   Database,
   Factory,
   FileSpreadsheet,
+  Loader2,
   Maximize2,
   Minimize2,
   PencilLine,
@@ -118,6 +119,10 @@ import {
   normalizeOriginalInventoryName
 } from '@/lib/utils/originalInventoryName';
 import { buildOriginalInventoryExportRows } from '@/lib/utils/originalInventoryLocationHierarchy';
+import {
+  buildOriginalInventoryReportErpHistory,
+  buildOriginalInventoryReportRows
+} from '@/lib/utils/originalInventoryReport';
 import {
   FIXED_INVENTORY_DEVICE_SOURCE_TYPE,
   fixedInventoryDeviceSourceId,
@@ -722,13 +727,15 @@ const OriginalInventoryNameSearch = ({
   }, [query]);
 
   const normalizedDebouncedQuery = normalizeCatalogNameKey(debouncedQuery);
+  const priorityNames = useMemo(() => [...new Set(inventoriedNames)].sort(), [inventoriedNames]);
   const { data: remoteCatalogSuggestions = [], isFetching } = useQuery({
-    queryKey: ['spis-oryginalow-catalog-search', normalizedDebouncedQuery, 'index2-only'],
+    queryKey: ['spis-oryginalow-catalog-search', normalizedDebouncedQuery, 'index2-only', priorityNames],
     queryFn: ({ signal }) => searchOriginalInventoryCatalog(
       debouncedQuery,
       SPIS_SEARCH_SERVER_LIMIT,
       signal,
-      true
+      true,
+      priorityNames
     ),
     enabled: remoteSearchEnabled && normalizedDebouncedQuery.replace(/\s/g, '').length >= SPIS_SEARCH_MIN_LENGTH,
     staleTime: 5 * 60 * 1000,
@@ -900,6 +907,8 @@ export default function SpisRzeczywisty() {
   const [showReportUncountedItems, setShowReportUncountedItems] = useState(false);
   const [showReportIndex2, setShowReportIndex2] = useState(false);
   const [isExportingInventory, setIsExportingInventory] = useState(false);
+  const [isExportingReport, setIsExportingReport] = useState(false);
+  const reportExportInFlightRef = useRef(false);
   const reportFullscreenRef = useRef<HTMLDivElement | null>(null);
   const [isReportFullscreen, setIsReportFullscreen] = useState(false);
   const [isReportFullscreenFallback, setIsReportFullscreenFallback] = useState(false);
@@ -2432,13 +2441,14 @@ export default function SpisRzeczywisty() {
       items: [] as OriginalInventoryErpSnapshotEntry[],
       migrationRequired: false
     },
-    isFetching: isHistoricalErpSnapshotFetching
+    isLoading: isHistoricalErpSnapshotLoading,
+    isError: isHistoricalErpSnapshotError
   } = useQuery({
-    queryKey: ['spis-oryginalow-erp-snapshot-history', reportHistoryDatesTwoMonths],
+    queryKey: ['spis-oryginalow-erp-snapshot-history', reportHistoryDates],
     queryFn: async () => {
       try {
         return {
-          items: await getOriginalInventoryErpSnapshotsByDates(reportHistoryDatesTwoMonths),
+          items: await getOriginalInventoryErpSnapshotsByDates(reportHistoryDates),
           migrationRequired: false
         };
       } catch (error) {
@@ -2488,39 +2498,13 @@ export default function SpisRzeczywisty() {
   );
   const reportErpSnapshotMigrationRequired =
     erpSnapshotMigrationRequired || historicalErpSnapshotState.migrationRequired;
-  const erpSnapshotByDateAndMaterial = useMemo(() => {
-    const datesMap = new Map<
-      string,
-      Map<string, { name: string; unit: string; realQty: number; availableQty: number }>
-    >();
-    const addEntry = (entry: OriginalInventoryErpSnapshotEntry) => {
-      const dateKey = entry.snapshotDate;
-      let materialMap = datesMap.get(dateKey);
-      if (!materialMap) {
-        materialMap = new Map();
-        datesMap.set(dateKey, materialMap);
-      }
-      const key = normalizeCatalogNameKey(entry.name);
-      const current = materialMap.get(key);
-      if (current) {
-        current.realQty += entry.realQty;
-        current.availableQty += entry.availableQty;
-        if (!current.unit && entry.unit) {
-          current.unit = entry.unit;
-        }
-      } else {
-        materialMap.set(key, {
-          name: entry.name,
-          unit: entry.unit,
-          realQty: entry.realQty,
-          availableQty: entry.availableQty
-        });
-      }
-    };
-    effectiveErpSnapshotEntries.forEach(addEntry);
-    historicalErpSnapshotEntries.forEach(addEntry);
-    return datesMap;
-  }, [effectiveErpSnapshotEntries, historicalErpSnapshotEntries]);
+  const erpSnapshotByDateAndMaterial = useMemo(
+    () => buildOriginalInventoryReportErpHistory(
+      [...effectiveErpSnapshotEntries, ...historicalErpSnapshotEntries],
+      normalizeCatalogNameKey
+    ),
+    [effectiveErpSnapshotEntries, historicalErpSnapshotEntries]
+  );
   const currentErpSnapshotMeta = useMemo(() => {
     if (erpSnapshotEntries.length === 0) return null;
     const latest = [...erpSnapshotEntries].sort((a, b) => b.importedAt.localeCompare(a.importedAt))[0];
@@ -2531,140 +2515,13 @@ export default function SpisRzeczywisty() {
       sourceFileName: latest.sourceFileName || null
     };
   }, [erpSnapshotEntries]);
-  const reportRows = useMemo(() => {
-    return [...reportSourceEntries]
-      .map((entry) => {
-        const historyByDate = new Map(
-          (inventoryHistoryByMaterial.get(entry.key) ?? []).map((point) => [point.dateKey, point])
-        );
-        const previousComparisons = reportHistoryDates.map((dateKey) => {
-          const point = historyByDate.get(dateKey);
-          if (!point) return null;
-            const erpPoint = erpSnapshotByDateAndMaterial.get(point.dateKey)?.get(entry.key) ?? null;
-            const realErpQty = erpPoint?.realQty ?? null;
-            const availableErpQty = erpPoint?.availableQty ?? null;
-            return {
-              dateKey: point.dateKey,
-              spisQty: point.qty,
-              realErpQty,
-              availableErpQty,
-              realDiffQty: realErpQty === null ? null : point.qty - realErpQty,
-              availableDiffQty: availableErpQty === null ? null : point.qty - availableErpQty
-            };
-          });
-        const currentSnapshot = erpSnapshotMap.get(entry.key);
-        const currentComparison = {
-          dateKey: spisDate,
-          spisQty: entry.qty,
-          realErpQty: currentSnapshot?.realQty ?? null,
-          availableErpQty: currentSnapshot?.availableQty ?? null,
-          realDiffQty:
-            currentSnapshot?.realQty === undefined ? null : entry.qty - (currentSnapshot?.realQty ?? 0),
-          availableDiffQty:
-            currentSnapshot?.availableQty === undefined
-              ? null
-              : entry.qty - (currentSnapshot?.availableQty ?? 0)
-        };
-        return {
-          key: entry.key,
-          name: entry.name,
-          unit: entry.unit,
-          currentRealErpQty: currentComparison.realErpQty,
-          currentAvailableErpQty: currentComparison.availableErpQty,
-          currentSpisQty: currentComparison.spisQty,
-          currentRealDiffQty: currentComparison.realDiffQty,
-          currentAvailableDiffQty: currentComparison.availableDiffQty,
-          previousRealDiffs: previousComparisons.map((point) =>
-            point
-              ? {
-                  dateKey: point.dateKey,
-                  diffQty: point.realDiffQty
-                }
-              : null
-          ),
-          previousAvailableDiffs: previousComparisons.map((point) =>
-            point
-              ? {
-                  dateKey: point.dateKey,
-                  diffQty: point.availableDiffQty
-                }
-              : null
-          )
-        };
-      })
-      .sort((a, b) => {
-        const nameCompare = exportCatalogCollator.compare(a.name.trim(), b.name.trim());
-        if (nameCompare !== 0) return nameCompare;
-        return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
-      });
-  }, [erpSnapshotByDateAndMaterial, erpSnapshotMap, inventoryHistoryByMaterial, reportHistoryDates, reportSourceEntries, spisDate]);
-  const reportRowsForExport = useMemo(() => {
-    return [...reportSourceEntries]
-      .map((entry) => {
-        const historyByDate = new Map(
-          (inventoryHistoryByMaterial.get(entry.key) ?? []).map((point) => [point.dateKey, point])
-        );
-        const previousComparisons = reportHistoryDatesForExport.map((dateKey) => {
-          const point = historyByDate.get(dateKey);
-          if (!point) return null;
-          const erpPoint = erpSnapshotByDateAndMaterial.get(point.dateKey)?.get(entry.key) ?? null;
-          const realErpQty = erpPoint?.realQty ?? null;
-          const availableErpQty = erpPoint?.availableQty ?? null;
-          return {
-            dateKey: point.dateKey,
-            spisQty: point.qty,
-            realErpQty,
-            availableErpQty,
-            realDiffQty: realErpQty === null ? null : point.qty - realErpQty,
-            availableDiffQty: availableErpQty === null ? null : point.qty - availableErpQty
-          };
-        });
-        const currentSnapshot = erpSnapshotMap.get(entry.key);
-        const currentComparison = {
-          dateKey: spisDate,
-          spisQty: entry.qty,
-          realErpQty: currentSnapshot?.realQty ?? null,
-          availableErpQty: currentSnapshot?.availableQty ?? null,
-          realDiffQty:
-            currentSnapshot?.realQty === undefined ? null : entry.qty - (currentSnapshot?.realQty ?? 0),
-          availableDiffQty:
-            currentSnapshot?.availableQty === undefined
-              ? null
-              : entry.qty - (currentSnapshot?.availableQty ?? 0)
-        };
-        return {
-          key: entry.key,
-          name: entry.name,
-          unit: entry.unit,
-          currentRealErpQty: currentComparison.realErpQty,
-          currentAvailableErpQty: currentComparison.availableErpQty,
-          currentSpisQty: currentComparison.spisQty,
-          currentRealDiffQty: currentComparison.realDiffQty,
-          currentAvailableDiffQty: currentComparison.availableDiffQty,
-          previousRealDiffs: previousComparisons.map((point) =>
-            point
-              ? {
-                  dateKey: point.dateKey,
-                  diffQty: point.realDiffQty
-                }
-              : null
-          ),
-          previousAvailableDiffs: previousComparisons.map((point) =>
-            point
-              ? {
-                  dateKey: point.dateKey,
-                  diffQty: point.availableDiffQty
-                }
-              : null
-          )
-        };
-      })
-      .sort((a, b) => {
-        const nameCompare = exportCatalogCollator.compare(a.name.trim(), b.name.trim());
-        if (nameCompare !== 0) return nameCompare;
-        return exportCatalogCollator.compare(a.unit.trim(), b.unit.trim());
-      });
-  }, [erpSnapshotByDateAndMaterial, erpSnapshotMap, inventoryHistoryByMaterial, reportHistoryDatesForExport, reportSourceEntries, spisDate]);
+  const reportRows = useMemo(() => buildOriginalInventoryReportRows({
+    sourceEntries: reportSourceEntries,
+    inventoryHistoryByMaterial,
+    historyDates: reportHistoryDates,
+    erpHistory: erpSnapshotByDateAndMaterial,
+    currentErp: erpSnapshotMap
+  }), [erpSnapshotByDateAndMaterial, erpSnapshotMap, inventoryHistoryByMaterial, reportHistoryDates, reportSourceEntries]);
   const resolveReportIndex2 = useMemo(
     () => buildInventoryIndex2Resolver([...localCatalog, ...erpCatalogItems], erpSnapshotEntries),
     [localCatalog, erpCatalogItems, erpSnapshotEntries]
@@ -2813,17 +2670,38 @@ export default function SpisRzeczywisty() {
       .slice(0, 8);
   }, [reportOptions, reportQuery]);
 
-  const reportExportHistoryDateLabels = useMemo(
-    () =>
-      Array.from({ length: reportHistoryDatesForExport.length }, (_, index) =>
-        reportHistoryDatesForExport[index] ? formatCompactDate(reportHistoryDatesForExport[index]) : '-'
-      ),
-    [reportHistoryDatesForExport]
-  );
-
+  const isReportDataLoading = isLoading || isErpSnapshotLoading || isGrindTasksLoading;
+  const isReportDataError = isErpSnapshotError || isGrindTasksError;
   const handleExportDaily = async () => {
-    if (!spisDate || reportRowsForExport.length === 0) return;
+    if (!spisDate || reportSourceEntries.length === 0 || reportExportInFlightRef.current
+      || isReportDataLoading || isReportDataError || reportErpSnapshotMigrationRequired) return;
+    reportExportInFlightRef.current = true;
+    setIsExportingReport(true);
     try {
+      // Keep the wide ERP history out of the screen query and release it after export.
+      const exportHistory = reportHistoryDatesForExport.length > 0
+        ? await queryClient.fetchQuery({
+            queryKey: ['spis-oryginalow-erp-snapshot-history', reportHistoryDatesForExport],
+            queryFn: async () => ({
+              items: await getOriginalInventoryErpSnapshotsByDates(reportHistoryDatesForExport),
+              migrationRequired: false
+            }),
+            staleTime: 0,
+            gcTime: 0,
+            retry: false
+          })
+        : { items: [] as OriginalInventoryErpSnapshotEntry[], migrationRequired: false };
+      if (exportHistory.migrationRequired) throw new Error(ERP_SNAPSHOT_MIGRATION_REQUIRED);
+      const reportRowsForExport = buildOriginalInventoryReportRows({
+        sourceEntries: reportSourceEntries,
+        inventoryHistoryByMaterial,
+        historyDates: reportHistoryDatesForExport,
+        erpHistory: buildOriginalInventoryReportErpHistory(
+          [...effectiveErpSnapshotEntries, ...exportHistory.items], normalizeCatalogNameKey
+        ),
+        currentErp: erpSnapshotMap
+      });
+      const reportExportHistoryDateLabels = reportHistoryDatesForExport.map(formatCompactDate);
       const ExcelJSModule = await import('exceljs');
       const ExcelJS = ExcelJSModule.default ?? ExcelJSModule;
       const generatedAt = new Date().toLocaleString('pl-PL');
@@ -3096,6 +2974,9 @@ export default function SpisRzeczywisty() {
       URL.revokeObjectURL(url);
     } catch {
       toast({ title: 'Nie udalo sie wyeksportowac raportu XLSX.', tone: 'error' });
+    } finally {
+      reportExportInFlightRef.current = false;
+      setIsExportingReport(false);
     }
   };
   const handleExportInventoryByLocation = async () => {
@@ -4685,11 +4566,16 @@ export default function SpisRzeczywisty() {
                 <Button
                   variant="secondary"
                   onClick={handleExportDaily}
-                  disabled={reportRowsForExport.length === 0 || isHistoricalErpSnapshotFetching}
+                  disabled={reportRows.length === 0 || isExportingReport || isReportDataLoading || isReportDataError || reportErpSnapshotMigrationRequired}
+                  aria-busy={isExportingReport}
                   className={reportExportButtonClassName}
                 >
-                  <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
-                  <span>Eksportuj do Excel</span>
+                  {isExportingReport ? (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  <span>{isExportingReport ? 'Przygotowywanie...' : 'Eksportuj do Excel'}</span>
                 </Button>
                 <Button
                   variant="secondary"
@@ -4711,8 +4597,10 @@ export default function SpisRzeczywisty() {
             <p className="text-xs text-dim">Dla detali w sztukach kolumna „dysp.” uwzględnia pozycje z koszyka mielenia. Oryginalny import ERP pozostaje bez zmian.</p>
             {isGrindTasksError ? (
               <p className="text-sm text-danger">Nie udało się pobrać rezerwacji mielenia. Odśwież raport przed sprawdzeniem dostępności ERP.</p>
-            ) : isGrindTasksLoading ? (
-              <p className="text-sm text-dim">Wczytywanie rezerwacji mielenia...</p>
+            ) : isErpSnapshotError || isHistoricalErpSnapshotError ? (
+              <p className="text-sm text-danger">Nie udalo sie pobrac stanow ERP. Odswiez raport przed porownaniem.</p>
+            ) : isReportDataLoading || isHistoricalErpSnapshotLoading ? (
+              <p className="text-sm text-dim">Wczytywanie raportu...</p>
             ) : reportErpSnapshotMigrationRequired ? (
               <p className="text-sm text-dim">
                 Brakuje migracji bazy dla stanów ERP. Uruchom plik `supabase/04_spis_rzeczywisty_i_stany_erp.sql`.

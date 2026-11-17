@@ -4,6 +4,15 @@ To jedyny bieżący katalog SQL. Każdy plik można wkleić i uruchomić **w ca�
 
 ## Kolejność
 
+### Przyspieszenie Wyszukiwania Kartotek (17.11.2026)
+
+Na dzialajacej bazie z plikami 04 i 07 uruchom caly **[12_wyszukiwanie_kartotek.sql](12_wyszukiwanie_kartotek.sql)**, a nastepnie wdroz kod aplikacji.
+Plik tworzy tylko pochodny katalog wyszukiwania, funkcje dostepne dla serwera i triggery wykrywajace zmiany kartotek/rejestru. Nie zmienia spisow, stanow, ilosci, indeksow zrodlowych, technologii ani raportow. Mozna go uruchomic ponownie.
+
+Pierwsze wyszukanie po instalacji przygotuje katalog; kolejne odczytuja tylko dopasowanych kandydatow. Po imporcie kartotek lub aktualizacji nazw ERP przygotowanie odbywa sie przy zapisie. Restart serwera nie usuwa przygotowanego katalogu. Zmiana danych bezposrednio w bazie uniewaznia go, wiec nastepny odczyt najpierw go odtwarza. Sortowanie i dopasowanie obu indeksow pozostaje w dotychczasowej funkcji aplikacji; spisane pozycje sa uwzgledniane przed limitem wynikow.
+
+Bez pliku 12 albo przy awarii przygotowania aplikacja uzywa starszej sciezki wyszukiwania; nie podaje nieaktualnego katalogu jako aktualnego. Nie oznacza to jednak uzyskania przyspieszenia bez migracji. Wycofanie kodu nie wymaga usuwania tych tabel. Przed migracja zachowaj odtwarzalna kopie bazy, tak jak przy pozostalych aktualizacjach.
+
 ### Indeks 1 I Indeks 2 (30.10.2026)
 
 Po zainstalowanych plikach 04 i 10 uruchom **[11_indeksy_kartotek.sql](11_indeksy_kartotek.sql)**.

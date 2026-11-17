@@ -26,6 +26,7 @@
 - Uprawnienia sprawdzaj na serwerze, nie tylko w przycisku/layout. Sprawdz role HEAD_ADMIN, zwyklego autora, obcego autora i konto read-only dla danego modulu.
 - Service-role nie trafia do klienta/logow/dokumentacji. Nie odczytuj ani nie drukuj `.env` dla zwyklej zmiany UI.
 - Dla logowania/Origin petle lokalne i produkcyjny adres maja rozne warunki. Nie oslabiaj ochrony produkcji dla naprawy localhost.
+- Aktualizacja frameworka: [package.json](<../../package.json>), [lockfile](<../../package-lock.json>) i [next.config](<../../next.config.ts>). Next/ESLint Next maja zgodne, jawne wersje; `experimental.agentUpgrade: 'security'` zachowuje ostrzezenia. Po aktualizacji: npm audit, testy, typy, lint i build przy wylaczonym dev. Bez automatycznej migracji SQL.
 - Wspolny komponent UI -> wszystkie jego uzycia. `SelectField` jest Radix, nie zwyklym HTML select; test przegladarki wybiera opcje przez combobox/listbox.
 - Stan lokalny Zustand nie zastepuje autoryzacji sesji serwera. Stan zapisu planu jest opisany na [karcie planowania](<planning.md>).
 

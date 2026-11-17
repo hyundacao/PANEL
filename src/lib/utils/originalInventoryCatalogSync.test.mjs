@@ -67,7 +67,14 @@ function fixture() {
   const db = {
     from: (table) => new Query(table),
     rpc(name, payload) {
-      state.operations.push({ rpc: name, payload });
+      state.operations.push({ rpc: name, payload, ...(name === 'get_original_inventory_search_candidates' ? { mode: 'select' } : {}) });
+      if (name === 'get_original_inventory_search_candidates') {
+        return Promise.resolve(state.searchProjectionError
+          ? {data:null,error:state.searchProjectionError}
+          : state.preparedSearchItems
+            ? {data:{ready:true,items:structuredClone(state.preparedSearchItems)},error:null}
+            : {data:null,error:{code:'PGRST202'}});
+      }
       if (name === 'save_material_planning_state') {
         const rows = state.tables.material_planning_state;
         if (state.beforeRegisterSave) { const callback = state.beforeRegisterSave; state.beforeRegisterSave = null; callback(rows); }
@@ -729,6 +736,40 @@ test('missing metadata warnings are capped without blocking any stock row', asyn
   assert.equal(response.result.catalogSync.warningCount, 70);
   assert.equal(response.result.catalogSync.warnings.length, 50);
   assert.equal(f.state.tables.original_inventory_catalog.length, 0);
+});
+
+test('server applies counted priority before 24-result limit in prepared and legacy paths; contexts never share results', async () => {
+  for (const prepared of [false, true]) {
+    const f = fixture();
+    const items = Array.from({length:35}, (_,i) => ({id:`item-${i}`,name:`KONCENTRAT A ${String(i).padStart(2,'0')}`,
+      unit:'kg',indexCode:`M-1-BAR-${i}`,indexCode2:`K-A-${i}`,warehouseCode:'M-1'}));
+    items.push({id:'counted',name:'KONCENTRAT Z SPISANY',previousNames:['DAWNY KONCENTRAT'],
+      unit:'kg',indexCode:'M-55-BAR-XYZ',indexCode2:'K-Z-001',warehouseCode:'M-55'});
+    f.state.tables.original_inventory_catalog.push(...items.map(item => ({...row(item,item.id),previous_names:item.previousNames??[]})));
+    if (prepared) f.state.preparedSearchItems = items;
+    const before = structuredClone(f.state.tables);
+    const payload = {query:'koncentrat',limit:24,onlyIndex2:true};
+    assert.equal((await f.app('searchOriginalInventoryCatalog', payload)).some(item=>item.id==='counted'),false);
+    for (const name of ['KONCENTRAT Z SPISANY','DAWNY KONCENTRAT']) {
+      assert.equal((await f.app('searchOriginalInventoryCatalog', {...payload,inventoriedNames:[name]}))[0].id,'counted');
+    }
+    assert.equal((await f.app('searchOriginalInventoryCatalog', payload)).some(item=>item.id==='counted'),false);
+    for (const query of ['M-55-BAR-XYZ','K-Z-001']) {
+      assert.equal((await f.app('searchOriginalInventoryCatalog',{...payload,query}))[0].id,'counted');
+    }
+    assert.deepEqual(f.state.tables,before);
+    assert.ok(f.state.operations.every(op=>op.mode==='select'));
+    if (prepared) assert.ok(f.state.operations.every(op=>op.rpc==='get_original_inventory_search_candidates'), 'prepared search must not read raw catalog/register');
+  }
+});
+
+test('projection outage uses a fresh legacy catalog, not an old process-local result', async () => {
+  const f = fixture();
+  f.state.tables.original_inventory_catalog.push(row(material({name:'BEFORE',indexCode2:'001'}),'one'));
+  await f.app('searchOriginalInventoryCatalog',{query:'before',onlyIndex2:true});
+  f.state.tables.original_inventory_catalog[0].name = 'AFTER';
+  f.state.searchProjectionError = {code:'TIMEOUT'};
+  assert.equal((await f.app('searchOriginalInventoryCatalog',{query:'after',onlyIndex2:true}))[0].name,'AFTER');
 });
 
 test('catalog API finds M2 name fragments in any order without writing or merging distinct indices', async () => {

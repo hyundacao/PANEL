@@ -25,6 +25,7 @@ const state = (id = 'base') => ({ selectedPlanDate: day, plan: [item(id)], daily
 function planningApi() {
   const rows = new Map([['workspace:planner', { state: state(), revision: 3 }], ['main', { state: { technologies: [] }, revision: 1 }]]);
   let writes = 0, reads = 0, fail = false;
+  const selections = [];
   const stubs = {
     'next/server': { NextResponse: { json: (data, options) => Response.json(data, options) } },
     '@/lib/auth/access': { canSeeTab: () => true, isReadOnly: () => false, isWarehouseAdmin: () => false },
@@ -43,8 +44,10 @@ function planningApi() {
     '@/lib/supabase/admin': { supabaseAdmin: {
       from: () => ({ select: field => ({ eq: (_, id) => ({ maybeSingle: async () => {
         reads++;
+        selections.push({ id, field });
         const row = rows.get(id);
-        const data = !row ? null : field.startsWith('preview:') ? { preview: row.state.__technologyPreview }
+        const data = !row ? null : field.startsWith('technologies:') ? { technologies: row.state.technologies, revision: row.revision }
+          : field.startsWith('preview:') ? { preview: row.state.__technologyPreview }
           : field.startsWith('plan:') ? { plan: row.state.plan, dailyPlans: row.state.dailyPlans, selectedPlanDate: row.state.selectedPlanDate } : row;
         return { data: structuredClone(data), error: null };
       } }) }) }),
@@ -62,7 +65,13 @@ function planningApi() {
   const mod = new Module(routeFile);
   mod.require = id => { assert.ok(id in stubs, id); return stubs[id]; };
   mod._compile(ts.transpileModule(readFileSync(routeFile, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, routeFile);
-  return { rows, writes: () => writes, reads: () => reads, fail: value => { fail = value; },
+  return { rows, selections, writes: () => writes, reads: () => reads, fail: value => { fail = value; },
+    postTechnologies: products => mod.exports.POST({ json: async () => ({ source: 'plan-technologies', products }) }),
+    putLibrary: (technologies, baseline, revision = 1) => mod.exports.PUT({ json: async () => ({
+      scope: 'technology-library', state: { technologies, plan: [], documents: [] },
+      expectedRevision: revision, expectedSharedRevision: revision,
+      changedSharedFields: ['technologies'], sharedBaseline: { technologies: baseline }
+    }) }),
     put: (next, revision = 3) => mod.exports.PUT({ json: async () => ({ state: next, expectedRevision: revision, expectedSharedRevision: 1, changedSharedFields: [] }) }),
     putDocuments: (next, baseline) => mod.exports.PUT({ json: async () => ({ state: next, expectedRevision: 3,
       expectedSharedRevision: 1, changedSharedFields: ['documents'], sharedBaseline: { documents: baseline } }) }),
@@ -72,7 +81,7 @@ function planningApi() {
       assert.equal(encoded.headers['content-type'], 'application/gzip');
       return mod.exports.PUT(new Request('http://test/api/planowanie-zapotrzebowania', { method: 'PUT', ...encoded }));
     },
-    get: () => mod.exports.GET({ nextUrl: new URL('http://test/api/planowanie-zapotrzebowania') })
+    get: (query = '') => mod.exports.GET({ nextUrl: new URL('http://test/api/planowanie-zapotrzebowania' + query) })
   };
 }
 
@@ -81,6 +90,70 @@ const relativeDay = offset => {
   date.setUTCDate(date.getUTCDate() + offset);
   return date.toISOString().slice(0, 10);
 };
+
+test('library GET reads only the technology column and never loads a user plan or documents', async () => {
+  const api = planningApi();
+  const technologies = [{ id: 'one', productIndex: 'A', materials: [{ code: 'ABS', usage: 0.248 }] }];
+  api.rows.get('main').state = { technologies, documents: [{ id: 'private-doc' }] };
+  const result = await api.get('?scope=technology-library');
+  assert.equal(result.status, 200);
+  const payload = await result.json();
+  assert.deepEqual(payload.state, { plan: [], technologies });
+  assert.equal(payload.revision, 1);
+  assert.deepEqual(api.selections, [{ id: 'main', field: 'technologies:state->technologies, updated_at, updated_by, revision' }]);
+  assert.equal(api.writes(), 0);
+});
+
+test('scoped planning GET omits unrelated recipes but preserves the working plan and documents', async () => {
+  const api = planningApi();
+  api.rows.get('main').state = { technologies: [
+    { id: 'base', productIndex: '1830', materials: [{ usage: 0.2 }] },
+    { id: 'not-used', productIndex: 'OTHER', materials: [{ usage: 99 }] }
+  ], documents: [{ id: 'keep' }] };
+  const result = await api.get('?scope=workspace');
+  const payload = await result.json();
+  assert.deepEqual(payload.state.technologies.map(row => row.id), ['base']);
+  assert.deepEqual(payload.state.plan, state().plan);
+  assert.deepEqual(payload.state.documents, [{ id: 'keep' }]);
+  assert.equal(api.writes(), 0);
+});
+
+test('new plan import reads matching recipes on demand without reading the workspace or writing data', async () => {
+  const api = planningApi();
+  api.rows.get('main').state.technologies = [
+    { id: 'new-product', productIndex: 'NEW' }, { id: 'unused', productIndex: 'OTHER' }
+  ];
+  const result = await api.postTechnologies([{ index: 'NEW' }]);
+  assert.equal(result.status, 200);
+  assert.deepEqual((await result.json()).items.map(row => row.id), ['new-product']);
+  assert.equal(api.selections.length, 1);
+  assert.equal(api.selections[0].id, 'main');
+  assert.equal(api.writes(), 0);
+  assert.equal((await api.postTechnologies([{ index: {} }])).status, 400);
+});
+
+test('actual library PUT saves recipes without replacing the user plan, shared documents or preview', async () => {
+  const api = planningApi();
+  const before = structuredClone(api.rows.get('workspace:planner'));
+  api.rows.get('main').state.documents = [{ id: 'keep' }];
+  const result = await api.putLibrary([{ id: 'added', productIndex: 'A' }], []);
+  assert.equal(result.status, 200);
+  assert.deepEqual(api.rows.get('workspace:planner'), before);
+  assert.deepEqual(api.rows.get('main').state.documents, [{ id: 'keep' }]);
+  assert.deepEqual(api.rows.get('main').state.technologies, [{ id: 'added', productIndex: 'A' }]);
+  assert.equal(api.writes(), 1);
+  assert.equal(api.selections.every(selection => selection.id === 'main'), true);
+});
+
+test('unchanged scoped reads check only the revision instead of rereading recipes or plans', async () => {
+  for (const query of ['?scope=technology-library&revision=1', '?scope=workspace&source=shared&sharedRevision=1']) {
+    const api = planningApi();
+    const response = await api.get(query);
+    assert.equal((await response.json()).unchanged, true);
+    assert.deepEqual(api.selections, [{ id: 'main', field: 'revision' }]);
+    assert.equal(api.writes(), 0);
+  }
+});
 
 test('actual API removes expired workspace history but preserves a continuing working recipe and stock', async () => {
   const api = planningApi();

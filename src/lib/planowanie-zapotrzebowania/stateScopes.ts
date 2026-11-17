@@ -187,6 +187,40 @@ export const rebasePlanningWorkspaceDraft = <T,>(
   };
 };
 
+export const rebasePlanningTechnologyLibraryDraft = <T,>(
+  baseline: Record<string, unknown> | null,
+  local: { state: T; revision: number | null; pending: boolean; lastAttempt?: { state: T; revision: number } },
+  remote: { state: T | null; revision: number }
+) => {
+  if (!remote.state || !local.pending) return local;
+  const remoteState = remote.state as Record<string, unknown>;
+  const localState = local.state as Record<string, unknown>;
+  let mergeBase = baseline;
+  const attempt = local.lastAttempt;
+  if (baseline && attempt && remote.revision > attempt.revision) {
+    const before = technologyItems(baseline.technologies);
+    const proposed = technologyItems((attempt.state as Record<string, unknown>).technologies);
+    const current = technologyItems(remoteState.technologies);
+    if (before && proposed && current) {
+      const beforeById = new Map(before.map((row) => [row.id, row]));
+      const proposedById = new Map(proposed.map((row) => [row.id, row]));
+      const currentById = new Map(current.map((row) => [row.id, row]));
+      const applied = [...new Set([...beforeById.keys(), ...proposedById.keys()])].every((id) => {
+        const previous = beforeById.get(id), next = proposedById.get(id), latest = currentById.get(id);
+        if (sameSharedValue(previous, next)) return true;
+        if (!previous || !next) return sameSharedValue(next, latest);
+        return Boolean(latest) && [...new Set([...Object.keys(previous), ...Object.keys(next)])]
+          .every((key) => sameSharedValue(previous[key], next[key]) || sameSharedValue(next[key], latest![key]));
+      });
+      if (applied) mergeBase = sharedPlanningState(attempt.state as Record<string, unknown>);
+    }
+  }
+  const shared = mergeBase ? rebaseSharedPlanningChanges(mergeBase, localState, remoteState)
+    : sameSharedValue(sharedPlanningState(localState), sharedPlanningState(remoteState)) ? sharedPlanningState(remoteState) : null;
+  if (!shared) return null;
+  return { ...local, state: { ...localState, ...shared } as T, revision: remote.revision, lastAttempt: undefined };
+};
+
 export const shouldInvalidatePlanDocument = (
   document: { planDate: string; status: string; createdBy: string }, planDate: string, author: string
 ) => document.planDate === planDate && document.status === 'draft' && document.createdBy === author;
@@ -259,6 +293,61 @@ export const prepareSharedPlanningUpdate = (
   return updated;
 };
 
+export type PlanningLoadScope = 'workspace' | 'technology-library';
+export type PlanningTechnologyRequest = { index?: string; name?: string; technologyId?: string };
+
+const objectRows = (value: unknown): Record<string, unknown>[] => Array.isArray(value)
+  ? value.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object') : [];
+const productIdentityKey = (index: unknown, name: unknown) => {
+  const normalize = (value: unknown) => String(value ?? '').toLocaleLowerCase('pl-PL')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replaceAll('\u0142', 'l').trim();
+  const code = normalize(index);
+  return code ? `index:${/^\d+$/.test(code) ? code.replace(/^0+(?=\d)/, '') : code}`
+    : normalize(name) ? `name:${normalize(name)}` : '';
+};
+
+/** Keep assigned recipes, their variants and linked-product dependencies, never guesses by name. */
+export const selectPlanningTechnologies = (technologies: unknown, products: PlanningTechnologyRequest[]) => {
+  const rows = objectRows(technologies);
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const families = new Map<string, Record<string, unknown>[]>();
+  rows.forEach((row) => {
+    const key = productIdentityKey(row.productIndex, row.productName);
+    if (key) families.set(key, [...families.get(key) ?? [], row]);
+  });
+  const selected = new Set<Record<string, unknown>>();
+  const queue = [...products];
+  for (let position = 0; position < queue.length; position++) {
+    const product = queue[position];
+    const assigned = byId.get(product.technologyId);
+    const candidates = new Set([
+      ...families.get(productIdentityKey(product.index, product.name)) ?? [],
+      ...assigned ? [assigned, ...families.get(productIdentityKey(assigned.productIndex, assigned.productName)) ?? []] : []
+    ]);
+    candidates.forEach((row) => {
+      if (selected.has(row)) return;
+      selected.add(row);
+      objectRows(row.linkedProducts).forEach((link) => queue.push({
+        index: String(link.productIndex ?? ''), name: String(link.productName ?? '')
+      }));
+    });
+  }
+  return rows.filter((row) => selected.has(row));
+};
+
+export const planningTechnologyRequests = (state: Record<string, unknown>): PlanningTechnologyRequest[] => [
+  ...objectRows(state.plan),
+  ...Object.values(state.dailyPlans && typeof state.dailyPlans === 'object' ? state.dailyPlans : {}).flatMap(objectRows),
+  ...objectRows(state.planVersions).flatMap((version) => objectRows(version.items)),
+  ...objectRows(state.archive).flatMap((entry) => objectRows([entry.planItem]))
+].map((item) => ({ index: String(item.index ?? ''), name: String(item.name ?? ''), technologyId: String(item.technologyId ?? '') }));
+
+export const projectPlanningWorkspace = (value: unknown) => {
+  if (!value || typeof value !== 'object') return value;
+  const state = value as Record<string, unknown>;
+  return { ...state, technologies: selectPlanningTechnologies(state.technologies, planningTechnologyRequests(state)) };
+};
+
 export type PlanningRecord = {
   state: unknown;
   updatedAt: string | null;
@@ -309,6 +398,47 @@ export const loadPlanningWorkspace = async (store: PlanningStore, userId: string
     updatedBy: workspace.updatedBy ?? shared.updatedBy,
     shared
   };
+};
+
+export const savePlanningTechnologyLibrary = async (
+  store: PlanningStore, userId: string, technologies: unknown, baseline: unknown,
+  expectedRevision: number, updatedBy: string
+) => {
+  if (!technologyItems(technologies) || !technologyItems(baseline)) {
+    return { ok: false as const, code: 'INVALID_TECHNOLOGIES' };
+  }
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const shared = await store.read('main');
+    const updated = prepareSharedPlanningUpdate(
+      shared.state as Record<string, unknown> ?? {}, shared.revision, expectedRevision,
+      ['technologies'], { technologies }, null, { technologies: baseline }
+    );
+    if (!updated) return { ok: false as const, code: 'SHARED_REVISION_CONFLICT' };
+    const saved = await store.save('main', updated, shared.revision, updatedBy);
+    if (saved.conflict) continue;
+    const nextIds = new Set(technologyItems(technologies)!.map((row) => row.id));
+    const deletedIds = new Set(technologyItems(baseline)!.filter((row) => !nextIds.has(row.id)).map((row) => row.id));
+    // Deleting a recipe keeps the old behavior for this user's active plan only.
+    if (deletedIds.size) {
+      for (let retry = 0; retry < 4; retry++) {
+        const workspace = await store.read(planningWorkspaceId(userId));
+        const current = workspace.state as Record<string, unknown> | null;
+        if (!current || !objectRows(current.plan).some((item) => deletedIds.has(String(item.technologyId)))) break;
+        const plan = objectRows(current.plan).map((item) => deletedIds.has(String(item.technologyId))
+          ? { ...item, technologyId: '', workingMaterials: null, packagingMode: 'base', linkedSources: {}, manualOverride: false }
+          : item);
+        const dailyPlans = current.dailyPlans && typeof current.dailyPlans === 'object' ? current.dailyPlans : {};
+        const result = await store.save(planningWorkspaceId(userId), {
+          ...current, plan, dailyPlans: { ...dailyPlans, [String(current.selectedPlanDate)]: plan }
+        }, workspace.revision, updatedBy);
+        if (!result.conflict) break;
+        if (retry === 3) return { ok: false as const, code: 'PARTIAL_SAVE_CONFLICT' };
+      }
+    }
+    return { ok: true as const, revision: saved.revision, sharedRevision: saved.revision,
+      sharedSaved: { state: updated, revision: saved.revision, updatedAt: new Date().toISOString(), updatedBy } };
+  }
+  return { ok: false as const, code: 'SHARED_REVISION_CONFLICT' };
 };
 
 export const savePlanningWorkspace = async (

@@ -28,9 +28,11 @@ import { syncOriginalInventoryCatalogFromSnapshot } from '@/lib/utils/originalIn
 import { applyOriginalInventoryCatalogRegister } from '@/lib/utils/originalInventoryCatalogRegister';
 import { readOriginalInventoryCatalogRegister, assertOriginalInventoryCatalogAllowed } from '@/lib/utils/originalInventoryCatalogRegisterServer';
 import { linkOriginalInventoryM10Indices } from '@/lib/utils/originalInventoryM10Indices';
+import { mapOriginalInventoryCatalogEntry, readOriginalInventorySearchCandidates, refreshOriginalInventorySearchProjection } from '@/lib/utils/originalInventorySearchProjection';
 import { assertOriginalInventoryImportIndices } from '@/lib/utils/originalInventoryIndex';
 import {
   getOriginalInventorySpisIndex2,
+  originalInventorySearchPriorityNames,
   searchOriginalInventorySpisSuggestions
 } from '@/lib/utils/originalInventorySpisSearch';
 import {
@@ -498,17 +500,6 @@ const mapOriginalInventoryEntry = (row: any): OriginalInventoryEntry => ({
   sourceType: row.source_type ?? null,
   sourceId: row.source_id ?? null,
   user: row.user_name
-});
-
-const mapOriginalInventoryCatalogEntry = (row: any): OriginalInventoryCatalogEntry => ({
-  id: row.id,
-  name: row.name,
-  unit: row.unit,
-  createdAt: row.created_at,
-  indexCode: row.index_code ? String(row.index_code).trim() : null,
-  indexCode2: row.index_code2 ? String(row.index_code2).trim() : null,
-  warehouseCode: row.warehouse_code ? String(row.warehouse_code).trim() : null,
-  previousNames: Array.isArray(row.previous_names) ? row.previous_names.filter((name: unknown) => typeof name === 'string') : []
 });
 
 const mapOriginalInventorySiloConfig = (row: any): OriginalInventorySiloConfig => ({
@@ -2435,18 +2426,29 @@ const loadOriginalCatalogSpisSearchItems = async () => {
   return originalCatalogSpisSearchItems;
 };
 
-const searchOriginalCatalogForSpis = async (rawQuery: unknown, rawLimit: unknown, rawOnlyIndex2: unknown = false) => {
+const searchOriginalCatalogForSpis = async (
+  rawQuery: unknown, rawLimit: unknown, rawOnlyIndex2: unknown = false, rawInventoriedNames: unknown = []
+) => {
   const query = String(rawQuery ?? '').replace(/\s+/g, ' ').trim();
   if (query.replace(/\s/g, '').length < 2) return [];
   const requestedLimit = Math.floor(Number(rawLimit));
   const limit = Number.isFinite(requestedLimit) ? Math.min(32, Math.max(1, requestedLimit)) : 24;
   const onlyIndex2 = rawOnlyIndex2 === true;
-  const cacheKey = `${query.toLocaleLowerCase('pl')}|${limit}|${onlyIndex2 ? 'index2' : 'all'}`;
+  const inventoriedNames = originalInventorySearchPriorityNames(Array.isArray(rawInventoriedNames) ? rawInventoriedNames : []);
+  try {
+    const candidates = await readOriginalInventorySearchCandidates(supabaseAdmin, query, onlyIndex2);
+    if (candidates) return searchOriginalInventorySpisSuggestions(candidates, query, inventoriedNames, limit, onlyIndex2);
+  } catch {
+    // Never serve a stale local catalog after the database invalidated its projection.
+    invalidateOriginalCatalogCache();
+    console.warn('ORIGINAL_INVENTORY_SEARCH_FALLBACK');
+  }
+  const cacheKey = JSON.stringify([query.toLocaleLowerCase('pl'), limit, onlyIndex2, inventoriedNames]);
   const items = await loadOriginalCatalogSpisSearchItems();
   const cached = originalCatalogSpisSearchResults.get(cacheKey);
   if (cached) return cached;
 
-  const result = searchOriginalInventorySpisSuggestions(items, query, [], limit, onlyIndex2);
+  const result = searchOriginalInventorySpisSuggestions(items, query, inventoriedNames, limit, onlyIndex2);
   if (originalCatalogSpisSearchResults.size >= 100) {
     const oldestKey = originalCatalogSpisSearchResults.keys().next().value;
     if (oldestKey) originalCatalogSpisSearchResults.delete(oldestKey);
@@ -6868,7 +6870,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     }
     case 'searchOriginalInventoryCatalog': {
       acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);
-      return searchOriginalCatalogForSpis(payload?.query, payload?.limit, payload?.onlyIndex2);
+      return searchOriginalCatalogForSpis(payload?.query, payload?.limit, payload?.onlyIndex2, payload?.inventoriedNames);
     }
     case 'resolveOriginalInventoryCatalogMaterial': {
       acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);
@@ -8334,6 +8336,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
         .maybeSingle();
       if (insertError) throw insertError;
       invalidateOriginalCatalogCache();
+      await refreshOriginalInventorySearchProjection(supabaseAdmin);
       return mapOriginalInventoryCatalogEntry(data);
     }
     case 'addOriginalInventoryCatalogBulk': {
@@ -8444,6 +8447,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
       if (error) throw error;
       if (!data) throw new Error('ENTRY_MISSING');
       invalidateOriginalCatalogCache();
+      await refreshOriginalInventorySearchProjection(supabaseAdmin);
       return;
     }
     case 'removeOriginalInventoryErpSnapshot': {

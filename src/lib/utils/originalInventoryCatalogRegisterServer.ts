@@ -7,6 +7,7 @@ import {
 import { normalizeOriginalInventoryCatalogCell, extractOriginalInventoryWarehouseCode } from './originalInventoryCatalog';
 import { normalizeOriginalInventoryName } from './originalInventoryName';
 import { assertOriginalInventoryImportIndices } from './originalInventoryIndex';
+import { refreshOriginalInventorySearchProjection } from './originalInventorySearchProjection';
 
 export const CATALOG_REGISTER_MODULE_ID = 'original-inventory-catalog-register';
 
@@ -31,6 +32,7 @@ export const saveOriginalInventoryCatalogRegister = async (
   const saved = Array.isArray(data) ? data[0] : null;
   if (saved?.has_conflict) return false;
   if (saved?.has_conflict !== false) throw new Error('SAVE_NOT_CONFIRMED');
+  await refreshOriginalInventorySearchProjection(db);
   return true;
 };
 

@@ -1,4 +1,4 @@
-const normalizeSearchText = (value: unknown) =>
+export const normalizeOriginalInventorySearchText = (value: unknown) =>
   String(value ?? '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -6,6 +6,11 @@ const normalizeSearchText = (value: unknown) =>
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+
+const normalizeSearchText = normalizeOriginalInventorySearchText;
+
+export const originalInventorySearchPriorityNames = (values: readonly unknown[]) =>
+  [...new Set(values.map(normalizeSearchText).filter(Boolean))].sort();
 
 const compactSearchCode = (value: unknown) =>
   normalizeSearchText(value)

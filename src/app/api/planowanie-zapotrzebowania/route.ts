@@ -21,6 +21,10 @@ import {
   isSharedPlanningField,
   loadPlanningWorkspace,
   loadSharedPlanningSnapshot,
+  projectPlanningWorkspace,
+  sharedPlanningState,
+  selectPlanningTechnologies,
+  savePlanningTechnologyLibrary,
   savePlanningWorkspace,
   type PlanningRecord,
   type PlanningStore,
@@ -72,6 +76,15 @@ const readPlanningRecord = async (id: string): Promise<PlanningRecord> => {
     updatedBy: data?.updated_by ?? null,
     revision: Number(data?.revision ?? 0)
   };
+};
+
+const readTechnologyLibraryRecord = async (): Promise<PlanningRecord> => {
+  const { data, error } = await supabaseAdmin.from('material_planning_state')
+    .select('technologies:state->technologies, updated_at, updated_by, revision')
+    .eq('id', MODULE_KEY).maybeSingle();
+  if (error) throw error;
+  return { state: { plan: [], technologies: data?.technologies ?? [] },
+    revision: Number(data?.revision ?? 0), updatedAt: data?.updated_at ?? null, updatedBy: data?.updated_by ?? null };
 };
 
 const savePlanningRecord = async (id: string, state: Record<string, unknown>, revision: number, updatedBy: string) => {
@@ -331,11 +344,33 @@ export async function GET(request: NextRequest) {
   const access = await ensureAccess(request);
   if (access.response) return access.response;
   const source = request.nextUrl.searchParams.get('source');
+  const scope = request.nextUrl.searchParams.get('scope');
+  if (scope === 'technology-library') {
+    try {
+      const known = request.nextUrl.searchParams.get('revision');
+      if (known !== null && /^\d+$/.test(known)) {
+        const revision = await readPlanningRevision(MODULE_KEY);
+        if (String(revision) === known) return NextResponse.json({ unchanged: true, revision, sharedRevision: revision });
+      }
+      const loaded = await readTechnologyLibraryRecord();
+      return NextResponse.json({ state: loaded.state, revision: loaded.revision, sharedRevision: loaded.revision });
+    } catch {
+      return NextResponse.json({ code: 'LOAD_FAILED' }, { status: 503 });
+    }
+  }
   if (source === 'shared') {
     const revision = request.nextUrl.searchParams.get('sharedRevision');
     const knownRevision = revision !== null && /^\d+$/.test(revision) ? Number(revision) : null;
     try {
-      return NextResponse.json(await loadSharedPlanningSnapshot(planningStore, knownRevision));
+      if (scope !== 'workspace') return NextResponse.json(await loadSharedPlanningSnapshot(planningStore, knownRevision));
+      if (knownRevision !== null) {
+        const revision = await readPlanningRevision(MODULE_KEY);
+        if (revision === knownRevision) return NextResponse.json({ unchanged: true, sharedRevision: revision });
+      }
+      const loaded = await loadPlanningWorkspace(planningStore, access.user!.id);
+      const projected = projectPlanningWorkspace(loaded.state) as Record<string, unknown>;
+      return NextResponse.json({ unchanged: false, sharedRevision: loaded.sharedRevision,
+        state: sharedPlanningState(projected ?? {}) });
     } catch {
       return NextResponse.json({ code: 'LOAD_FAILED' }, { status: 503 });
     }
@@ -402,7 +437,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ unchanged: true, revision: loaded.revision, sharedRevision: loaded.sharedRevision });
     }
     return NextResponse.json({
-      state: loaded.state,
+      state: scope === 'workspace' ? projectPlanningWorkspace(loaded.state) : loaded.state,
       revision: loaded.revision,
       sharedRevision: loaded.sharedRevision,
       updatedAt: loaded.updatedAt,
@@ -411,6 +446,26 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'LOAD_FAILED';
     return NextResponse.json({ code: 'MIGRATION_REQUIRED', detail }, { status: 503 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  const access = await ensureAccess(request);
+  if (access.response) return access.response;
+  try {
+    const body = await readPlanningSaveBody(request) as { source?: unknown; products?: unknown };
+    if (body?.source !== 'plan-technologies' || !Array.isArray(body.products) || body.products.length > 5000
+      || body.products.some((item) => !item || typeof item !== 'object'
+        || ['index', 'name', 'technologyId'].some((key) => item[key] !== undefined
+          && (typeof item[key] !== 'string' || item[key].length > 300)))) {
+      return NextResponse.json({ code: 'INVALID_TECHNOLOGY_REQUEST' }, { status: 400 });
+    }
+    const loaded = await readTechnologyLibraryRecord();
+    return NextResponse.json({ items: selectPlanningTechnologies(
+      (loaded.state as Record<string, unknown>).technologies, body.products
+    ) });
+  } catch (error) {
+    return NextResponse.json({ code: error instanceof PlanningSaveBodyError ? error.code : 'LOAD_FAILED' }, { status: 503 });
   }
 }
 
@@ -433,6 +488,7 @@ export async function PUT(request: NextRequest) {
     changedSharedFields?: unknown;
     documentBaseline?: unknown;
     sharedBaseline?: unknown;
+    scope?: unknown;
   } : {};
   const state = payload.state;
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
@@ -464,6 +520,21 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ code: 'INVALID_SHARED_REVISION' }, { status: 400 });
   }
   const updatedBy = access.user.username ?? access.user.name;
+  if (payload.scope === 'technology-library') {
+    if (changedFields.some((field) => field !== 'technologies') || !payload.sharedBaseline) {
+      return NextResponse.json({ code: 'INVALID_SHARED_FIELDS' }, { status: 400 });
+    }
+    try {
+      const result = await savePlanningTechnologyLibrary(planningStore, access.user.id,
+        (state as Record<string, unknown>).technologies,
+        (payload.sharedBaseline as Record<string, unknown>).technologies, expectedRevision, updatedBy);
+      if (!result.ok) return NextResponse.json(result, { status: result.code.startsWith('INVALID_') ? 400 : 409 });
+      rememberPlanningState(result.sharedSaved);
+      return NextResponse.json({ ok: true, revision: result.revision, sharedRevision: result.sharedRevision });
+    } catch {
+      return NextResponse.json({ code: 'SAVE_FAILED' }, { status: 500 });
+    }
+  }
   try {
     const todayKey = warsawDateKey();
     const retain = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value)

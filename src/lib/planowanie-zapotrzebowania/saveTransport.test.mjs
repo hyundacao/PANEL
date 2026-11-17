@@ -67,7 +67,7 @@ test('oversized compressed requests are bounded even without Content-Length', as
   await assert.rejects(bodyReader.readPlanningSaveBody(request), error => error.code === 'PLANNING_PAYLOAD_TOO_LARGE' && error.status === 413);
 });
 
-function clientWriter(fetch) {
+function clientWriter(fetch, scope = 'workspace') {
   const filename = fileURLToPath(new URL('./usePlanningAutosave.ts', import.meta.url));
   const source = ts.createSourceFile(filename, readFileSync(filename, 'utf8'), ts.ScriptTarget.Latest, true);
   let write;
@@ -81,7 +81,7 @@ function clientWriter(fetch) {
   const autosave = load('autosave.ts');
   const context = vm.createContext({ ...scopes, ...transport, PlanningSaveError: autosave.PlanningSaveError,
     writableRef: { current: true }, sharedBaselineRef: { current: { technologies: [] } },
-    sharedRevisionRef: { current: 5 }, needsSharedRefreshRef: { current: false }, AbortSignal, fetch });
+    sharedRevisionRef: { current: 5 }, needsSharedRefreshRef: { current: false }, AbortSignal, fetch, scope });
   vm.runInContext(ts.transpileModule(`this.write = ${write}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return context;
 }
@@ -109,4 +109,17 @@ test('actual client distinguishes proxy payload and HTML server errors from loss
     await assert.rejects(client.write({ technologies: [{ id: 'new' }] }, 4), error => error.code === code);
     assert.equal(client.sharedRevisionRef.current, 5);
   }
+});
+
+test('library transport sends only technologies and their baseline, never private plan or documents', async () => {
+  let decoded;
+  const client = clientWriter(async (url, options) => {
+    decoded = await bodyReader.readPlanningSaveBody(new Request('http://local/api', options));
+    return Response.json({ revision: 6, sharedRevision: 6 });
+  }, 'technology-library');
+  await client.write({ technologies: [{ id: 'new' }], plan: [{ id: 'must-not-send' }], documents: [] }, 5);
+  assert.equal(decoded.scope, 'technology-library');
+  assert.deepEqual(decoded.state, { technologies: [{ id: 'new' }] });
+  assert.deepEqual(decoded.changedSharedFields, ['technologies']);
+  assert.deepEqual(decoded.sharedBaseline, { technologies: [] });
 });
