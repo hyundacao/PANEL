@@ -2316,6 +2316,8 @@ let originalErpCatalogLoad: Promise<OriginalInventoryCatalogEntry[]> | null = nu
 let originalCatalogCache: { items: OriginalInventoryCatalogEntry[]; expiresAt: number } | null = null;
 let originalCatalogLoad: Promise<OriginalInventoryCatalogEntry[]> | null = null;
 let originalCatalogGeneration = 0;
+let originalSearchSourceGeneration = '';
+let originalSearchPrepareAt = 0;
 const originalCatalogRefreshTokens = new Set<string>();
 let originalCatalogSpisSearchSource: OriginalInventoryCatalogEntry[] | null = null;
 let originalCatalogSpisSearchItems: OriginalInventoryCatalogEntry[] = [];
@@ -2436,7 +2438,16 @@ const searchOriginalCatalogForSpis = async (
   const onlyIndex2 = rawOnlyIndex2 === true;
   const inventoriedNames = originalInventorySearchPriorityNames(Array.isArray(rawInventoriedNames) ? rawInventoriedNames : []);
   try {
-    const candidates = await readOriginalInventorySearchCandidates(supabaseAdmin, query, onlyIndex2);
+    const candidates = await readOriginalInventorySearchCandidates(supabaseAdmin, query, onlyIndex2, generation => {
+      if (originalSearchSourceGeneration !== generation) {
+        originalSearchSourceGeneration = generation;
+        originalSearchPrepareAt = 0;
+        invalidateOriginalCatalogCache();
+      }
+      if (originalSearchPrepareAt > Date.now()) return;
+      originalSearchPrepareAt = Date.now() + 30_000;
+      after(async () => { await refreshOriginalInventorySearchProjection(supabaseAdmin); });
+    });
     if (candidates) return searchOriginalInventorySpisSuggestions(candidates, query, inventoriedNames, limit, onlyIndex2);
   } catch {
     // Never serve a stale local catalog after the database invalidated its projection.

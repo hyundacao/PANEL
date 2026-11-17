@@ -78,7 +78,8 @@ begin
     from public.original_inventory_search_meta where id for update;
   if current_generation is distinct from p_generation then return false; end if;
   if prepared = p_generation and current_format = p_format then return true; end if;
-  delete from public.original_inventory_search_items;
+  -- Supabase safe-update protection rejects DELETE without a WHERE clause.
+  delete from public.original_inventory_search_items where ordinal > 0;
   insert into public.original_inventory_search_items(ordinal, item, search_values, has_index2)
     select n, value -> 'item', array(select jsonb_array_elements_text(value -> 'searchValues')),
       btrim(coalesce(value -> 'item' ->> 'indexCode2', '')) <> ''

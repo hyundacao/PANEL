@@ -3,6 +3,7 @@ import type { OriginalInventoryCatalogEntry } from '@/lib/api/types';
 import { applyOriginalInventoryCatalogRegister, type CatalogRegisterState } from './originalInventoryCatalogRegister';
 import { linkOriginalInventoryM10Indices } from './originalInventoryM10Indices';
 import { normalizeOriginalInventorySearchText } from './originalInventorySpisSearch';
+import { withOriginalInventorySearchTimeout } from './originalInventorySearchTimeout';
 
 export const ORIGINAL_INVENTORY_SEARCH_FORMAT = 1;
 
@@ -37,8 +38,13 @@ const missingMigration = (error: { code?: string } | null) =>
   error?.code === 'PGRST202' || error?.code === '42883';
 
 const loading = new WeakMap<SupabaseClient, Promise<boolean>>();
+const rpc = (db: SupabaseClient, name: string, args?: Record<string, unknown>, timeoutMs = 2000) =>
+  withOriginalInventorySearchTimeout(signal => {
+    const request = db.rpc(name, args);
+    return typeof request.abortSignal === 'function' ? request.abortSignal(signal) : request;
+  }, undefined, timeoutMs);
 const candidates = (db: SupabaseClient, terms: string[], onlyIndex2: boolean) =>
-  db.rpc('get_original_inventory_search_candidates', {
+  rpc(db, 'get_original_inventory_search_candidates', {
     p_terms: terms, p_only_index2: onlyIndex2, p_format: ORIGINAL_INVENTORY_SEARCH_FORMAT
   });
 
@@ -52,20 +58,22 @@ export const refreshOriginalInventorySearchProjection = (db: SupabaseClient): Pr
     if (status.error) throw status.error;
     if (status.data?.ready) return true;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const source = await db.rpc('get_original_inventory_search_source');
+      const source = await rpc(db, 'get_original_inventory_search_source', undefined, 15_000);
       if (source.error) throw source.error;
       if (!source.data || !Array.isArray(source.data.rows)) throw new Error('SEARCH_SOURCE_INVALID');
       const rows = buildOriginalInventorySearchProjection(source.data.rows, source.data.register ?? null);
-      const published = await db.rpc('publish_original_inventory_search', {
+      const published = await rpc(db, 'publish_original_inventory_search', {
         p_generation: source.data.generation, p_format: ORIGINAL_INVENTORY_SEARCH_FORMAT, p_rows: rows
-      });
+      }, 10_000);
       if (published.error) throw published.error;
       if (published.data === true) return true;
     }
     return false;
-  })().catch(() => {
+  })().catch((error: unknown) => {
     // A derived read model must never turn a completed catalog import into a failed import.
-    console.warn('ORIGINAL_INVENTORY_SEARCH_PREPARE_FAILED');
+    console.warn('ORIGINAL_INVENTORY_SEARCH_PREPARE_FAILED', {
+      code: error && typeof error === 'object' && 'code' in error ? String(error.code) : 'UNKNOWN'
+    });
     return false;
   }).finally(() => { if (loading.get(db) === work) loading.delete(db); });
   loading.set(db, work);
@@ -73,16 +81,17 @@ export const refreshOriginalInventorySearchProjection = (db: SupabaseClient): Pr
 };
 
 export const readOriginalInventorySearchCandidates = async (
-  db: SupabaseClient, query: string, onlyIndex2: boolean
+  db: SupabaseClient, query: string, onlyIndex2: boolean,
+  onNotReady?: (generation: string) => void
 ): Promise<OriginalInventoryCatalogEntry[] | null> => {
   const terms = normalizeOriginalInventorySearchText(query).split(' ').filter(Boolean);
-  let result = await candidates(db, terms, onlyIndex2);
+  const result = await candidates(db, terms, onlyIndex2);
   if (missingMigration(result.error)) return null;
   if (result.error) throw result.error;
   if (!result.data?.ready) {
-    if (!await refreshOriginalInventorySearchProjection(db)) throw new Error('SEARCH_PROJECTION_NOT_READY');
-    result = await candidates(db, terms, onlyIndex2);
-    if (result.error) throw result.error;
+    // Typing must not wait for a full catalog rebuild or retry a failed publication.
+    onNotReady?.(String(result.data?.generation ?? 'unknown'));
+    return null;
   }
   if (!result.data?.ready || !Array.isArray(result.data.items)) throw new Error('SEARCH_PROJECTION_NOT_READY');
   // SQL returns a superset, without LIMIT. Existing JS matching/ranking remains authoritative.

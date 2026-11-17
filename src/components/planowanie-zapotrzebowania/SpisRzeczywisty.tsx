@@ -97,6 +97,7 @@ import {
   Maximize2,
   Minimize2,
   PencilLine,
+  RefreshCw,
   Search,
   Trash2,
   Undo2
@@ -728,7 +729,7 @@ const OriginalInventoryNameSearch = ({
 
   const normalizedDebouncedQuery = normalizeCatalogNameKey(debouncedQuery);
   const priorityNames = useMemo(() => [...new Set(inventoriedNames)].sort(), [inventoriedNames]);
-  const { data: remoteCatalogSuggestions = [], isFetching } = useQuery({
+  const { data: remoteCatalogSuggestions = [], isFetching, isError, refetch } = useQuery({
     queryKey: ['spis-oryginalow-catalog-search', normalizedDebouncedQuery, 'index2-only', priorityNames],
     queryFn: ({ signal }) => searchOriginalInventoryCatalog(
       debouncedQuery,
@@ -765,6 +766,7 @@ const OriginalInventoryNameSearch = ({
   const remoteResultsPending = remoteSearchEnabled && (
     normalizedDebouncedQuery !== normalizedQuery || isFetching
   );
+  const remoteResultsFailed = remoteSearchEnabled && normalizedDebouncedQuery === normalizedQuery && isError && !isFetching;
   const chooseSuggestion = (suggestion: OriginalInventoryNameSuggestion) => {
     cancelSuggestionsClose();
     queryRef.current = suggestion.name;
@@ -820,7 +822,7 @@ const OriginalInventoryNameSearch = ({
         </button>
       )}
 
-      {showSuggestions && (suggestions.length > 0 || remoteResultsPending) && (
+      {showSuggestions && (suggestions.length > 0 || remoteResultsPending || remoteResultsFailed) && (
         <div className="absolute z-20 mt-2 max-h-64 w-full touch-pan-y overflow-y-auto overscroll-contain rounded-xl border border-border bg-[var(--bg-0)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
           {suggestions.map((suggestion) => (
             <button
@@ -855,6 +857,21 @@ const OriginalInventoryNameSearch = ({
           ))}
           {remoteResultsPending && (
             <p className="px-3 py-2 text-xs font-semibold text-dim" role="status">Wyszukiwanie...</p>
+          )}
+          {remoteResultsFailed && (
+            <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-danger" role="alert">
+              <span>Nie udało się pobrać podpowiedzi. Ponów wyszukiwanie.</span>
+              <button
+                type="button"
+                title="Ponów wyszukiwanie"
+                aria-label="Ponów wyszukiwanie"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border text-body hover:border-borderStrong"
+                onMouseDown={event => event.preventDefault()}
+                onClick={() => { void refetch(); }}
+              >
+                <RefreshCw className="h-4 w-4" />
+              </button>
+            </div>
           )}
         </div>
       )}

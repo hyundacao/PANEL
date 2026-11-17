@@ -71,6 +71,8 @@ function fixture() {
       if (name === 'get_original_inventory_search_candidates') {
         return Promise.resolve(state.searchProjectionError
           ? {data:null,error:state.searchProjectionError}
+          : state.searchProjectionNotReady
+            ? {data:{ready:false,generation:String(state.searchProjectionNotReady),items:[]},error:null}
           : state.preparedSearchItems
             ? {data:{ready:true,items:structuredClone(state.preparedSearchItems)},error:null}
             : {data:null,error:{code:'PGRST202'}});
@@ -761,6 +763,20 @@ test('server applies counted priority before 24-result limit in prepared and leg
     assert.ok(f.state.operations.every(op=>op.mode==='select'));
     if (prepared) assert.ok(f.state.operations.every(op=>op.rpc==='get_original_inventory_search_candidates'), 'prepared search must not read raw catalog/register');
   }
+});
+
+test('unprepared projection returns 9203 through the old search and schedules rebuild only after response', async () => {
+  const f = fixture();
+  const item = material({name:'KONCENTRAT ABS BLACK MB SY9203 SAN',indexCode:'M-1-BA-BSHTR-001-00',indexCode2:'S0K009000937762000'});
+  f.state.tables.original_inventory_catalog.push(row(item,'9203'));
+  f.state.searchProjectionNotReady = 1;
+  for (const query of ['9203','SY9203',item.indexCode,item.indexCode2]) {
+    const results = await f.app('searchOriginalInventoryCatalog',{query,onlyIndex2:true});
+    assert.equal(results[0].id,'9203');
+  }
+  assert.equal(f.state.afterWork.length,1,'do not queue one rebuild per keystroke');
+  assert.ok(f.state.operations.every(op => op.mode==='select'),'search must not load source or publish before response');
+  assert.ok(!f.state.operations.some(op => op.rpc==='get_original_inventory_search_source' || op.rpc==='publish_original_inventory_search'));
 });
 
 test('projection outage uses a fresh legacy catalog, not an old process-local result', async () => {

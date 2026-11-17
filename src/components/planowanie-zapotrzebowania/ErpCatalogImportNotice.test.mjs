@@ -71,6 +71,7 @@ test('actual import handler invalidates catalog suggestions and shows warnings w
 test('browser API forwards import freshness token to later searches and catalog reads', async () => {
   const apiPath = new URL('../../lib/api/index.ts', import.meta.url);
   const requests = [];
+  let holdSearch = false;
   const mod = { exports: {} };
   const token = 'e47d8d87-0c1a-4d4e-9bba-123456789abc';
   vm.runInNewContext(compile(readFileSync(apiPath, 'utf8')), {
@@ -78,6 +79,7 @@ test('browser API forwards import freshness token to later searches and catalog 
     require: (name) => name.startsWith('.') ? require(fileURLToPath(new URL(`${name}.ts`, apiPath))) : require(name),
     fetch: async (url, options) => {
       requests.push({ url, options });
+      if (holdSearch) return new Promise(() => {});
       return new Response(JSON.stringify(url.includes('snapshot/import') ? { catalogRefreshToken: token } : []), { status: 200 });
     }
   }, { filename: fileURLToPath(apiPath) });
@@ -90,10 +92,19 @@ test('browser API forwards import freshness token to later searches and catalog 
   assert.equal(requests[3].options.signal, signal);
   assert.equal(JSON.parse(requests[3].options.body).payload.unit, 'szt.');
   for (const request of requests.slice(1)) assert.equal(JSON.parse(request.options.body).payload.catalogRefreshToken, token);
-  await mod.exports.searchOriginalInventoryCatalog('spis material', 24, signal, true);
+  await mod.exports.searchOriginalInventoryCatalog('spis material', 24, signal, true, ['SPISANY']);
   assert.equal(requests.length, 5);
-  assert.equal(requests[4].options.signal, signal);
+  assert.ok(requests[4].options.signal instanceof AbortSignal);
+  assert.equal(requests[4].options.signal.aborted, false);
   assert.equal(JSON.parse(requests[4].options.body).payload.onlyIndex2, true);
   assert.equal(JSON.parse(requests[4].options.body).payload.catalogRefreshToken, token);
   assert.equal(JSON.parse(requests[1].options.body).payload.onlyIndex2, undefined);
+  assert.deepEqual(JSON.parse(requests[4].options.body).payload.inventoriedNames, ['SPISANY']);
+  holdSearch = true;
+  const cancellation = new AbortController();
+  const pending = mod.exports.searchOriginalInventoryCatalog('9203', 24, cancellation.signal, true);
+  const transport = requests.at(-1).options.signal;
+  cancellation.abort(new Error('CHANGED_QUERY'));
+  await assert.rejects(pending, /CHANGED_QUERY/);
+  assert.equal(transport.aborted, true);
 });

@@ -29,6 +29,11 @@ function load(file) {
 const projection = load(join(here, 'originalInventorySearchProjection.ts'));
 const { searchOriginalInventorySpisSuggestions: search } = load(join(here, 'originalInventorySpisSearch.ts'));
 
+test('publication deletes only derived rows with an explicit predicate required by Supabase safe-update protection', () => {
+  assert.match(sql, /delete from public\.original_inventory_search_items where ordinal > 0;/i);
+  assert.doesNotMatch(sql, /delete from public\.original_inventory_search_items\s*;/i);
+});
+
 const fixture = async () => {
   const pg = new PGlite();
   await pg.exec(`create role anon; create role authenticated; create role service_role bypassrls;
@@ -105,6 +110,7 @@ test('generation guards block stale publication; renames, pairing, blocks, delet
     await pg.query('insert into material_planning_state(id,state) values ($1,$2)', ['original-inventory-catalog-register', state]);
     assert.equal((await db.rpc('publish_original_inventory_search', { p_generation: source.generation, p_format: 1,
       p_rows: projection.buildOriginalInventorySearchProjection(source.rows, null) })).data, false);
+    assert.equal(await projection.refreshOriginalInventorySearchProjection(db), true);
     const paired = await projection.readOriginalInventorySearchCandidates(db, 'tray', true);
     assert.equal(paired.length, 1);
     assert.equal(paired[0].indexCode, 'M-10-PWY-BSHL-10012');
@@ -119,14 +125,17 @@ test('generation guards block stale publication; renames, pairing, blocks, delet
     state.items[0].previousNames = ['TRAY HANDLE'];
     state.items[0].name = 'TRAY RENAMED';
     await pg.query('update material_planning_state set state=$1,revision=revision+1 where id=$2', [state, 'original-inventory-catalog-register']);
+    assert.equal(await projection.refreshOriginalInventorySearchProjection(db), true);
     const renamed = await projection.readOriginalInventorySearchCandidates(db, 'handle', true);
     assert.equal(renamed[0].name, 'TRAY RENAMED');
     assert.ok(renamed[0].previousNames.includes('TRAY HANDLE'));
     await pg.exec('begin; delete from original_inventory_catalog; rollback;');
     assert.deepEqual(await projection.readOriginalInventorySearchCandidates(db, 'handle', true), renamed);
     await pg.exec("delete from original_inventory_catalog where id in ('tray-old','tray-second');");
+    assert.equal(await projection.refreshOriginalInventorySearchProjection(db), true);
     assert.deepEqual(await projection.readOriginalInventorySearchCandidates(db, 'handle', true), []);
     await pg.exec('delete from material_planning_state; truncate original_inventory_catalog;');
+    assert.equal(await projection.refreshOriginalInventorySearchProjection(db), true);
     assert.deepEqual(await projection.readOriginalInventorySearchCandidates(db, 'blocked', false), []);
   } finally { await pg.close(); }
 });
@@ -153,8 +162,18 @@ test('projection tables and RPCs deny public access; failed publication is atomi
       await pg.exec('reset role;');
     }
     const restartedClient = { rpc: db.rpc.bind(db) };
+    assert.equal(await projection.refreshOriginalInventorySearchProjection(restartedClient), true);
     assert.equal((await projection.readOriginalInventorySearchCandidates(restartedClient, 'two', true))[0].id, 'two');
   } finally { await pg.close(); }
+});
+
+test('an unprepared catalog immediately selects fallback instead of loading or publishing the full catalog while typing', async () => {
+  const calls = [];
+  const db = { async rpc(name) { calls.push(name); return {data:{ready:false,generation:'17',items:[]},error:null}; } };
+  const generations = [];
+  assert.equal(await projection.readOriginalInventorySearchCandidates(db,'9203',true, generation => generations.push(generation)), null);
+  assert.deepEqual(generations,['17']);
+  assert.deepEqual(calls,['get_original_inventory_search_candidates']);
 });
 
 test('missing migration falls back, failures never masquerade as empty results and concurrent preparations coalesce', async () => {

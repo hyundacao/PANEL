@@ -64,6 +64,7 @@ import type {
   YearlyReport
 } from './types';
 import { formatDate } from '../utils/format';
+import { withOriginalInventorySearchTimeout } from '../utils/originalInventorySearchTimeout';
 
 const apiRequest = async <T,>(path: string, options?: RequestInit): Promise<T> => {
   const response = await fetch(path, {
@@ -648,8 +649,9 @@ export const searchOriginalInventoryCatalog = async (
   onlyIndex2 = false,
   inventoriedNames: readonly string[] = []
 ): Promise<OriginalInventoryCatalogEntry[]> =>
-  appRequest('searchOriginalInventoryCatalog', { query, limit, ...(onlyIndex2 ? { onlyIndex2: true } : {}),
-    ...(inventoriedNames.length ? { inventoriedNames } : {}), catalogRefreshToken: originalInventoryCatalogRefreshToken }, signal);
+  withOriginalInventorySearchTimeout(requestSignal => appRequest<OriginalInventoryCatalogEntry[]>(
+    'searchOriginalInventoryCatalog', { query, limit, ...(onlyIndex2 ? { onlyIndex2: true } : {}),
+      ...(inventoriedNames.length ? { inventoriedNames } : {}), catalogRefreshToken: originalInventoryCatalogRefreshToken }, requestSignal), signal);
 
 export const resolveOriginalInventoryCatalogMaterial = async (
   name: string,
