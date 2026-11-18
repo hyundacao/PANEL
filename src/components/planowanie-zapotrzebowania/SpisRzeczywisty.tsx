@@ -661,6 +661,15 @@ const SPIS_SEARCH_DEBOUNCE_MS = 160;
 const SPIS_SEARCH_MIN_LENGTH = 2;
 const SPIS_SEARCH_SERVER_LIMIT = 24;
 
+const retryOriginalInventoryNameSearch = (failureCount: number, error: unknown) => {
+  if (failureCount >= 1) return false;
+  const code = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
+  const name = error && typeof error === 'object' && 'name' in error ? String(error.name) : '';
+  return name !== 'AbortError' && ![
+    'UNAUTHORIZED', 'SESSION_EXPIRED', 'FORBIDDEN', 'PASSWORD_CHANGE_REQUIRED', 'PAYLOAD_TOO_LARGE', 'SEARCH_CANCELLED'
+  ].includes(code) && !code.startsWith('MIGRATION_REQUIRED');
+};
+
 const toOriginalInventoryNameSuggestion = (item: {
   id?: string;
   catalogIds?: string[];
@@ -733,28 +742,28 @@ const OriginalInventoryNameSearch = ({
 
   const normalizedDebouncedQuery = normalizeCatalogNameKey(debouncedQuery);
   const priorityNames = useMemo(() => [...new Set(inventoriedNames)].sort(), [inventoriedNames]);
-  const { data: remoteCatalogSuggestions = [], isFetching, isError, refetch } = useQuery({
-    queryKey: ['spis-oryginalow-catalog-search', normalizedDebouncedQuery, 'index2-only', priorityNames],
+  const { data: remoteCatalogSuggestions = [], isFetching, isPending, isSuccess, isError, refetch } = useQuery({
+    queryKey: ['spis-oryginalow-catalog-search', normalizedQuery, 'index2-only', priorityNames],
     queryFn: ({ signal }) => searchOriginalInventoryCatalog(
-      debouncedQuery,
+      query,
       SPIS_SEARCH_SERVER_LIMIT,
       signal,
       true,
       priorityNames
     ),
-    enabled: remoteSearchEnabled && normalizedDebouncedQuery.replace(/\s/g, '').length >= SPIS_SEARCH_MIN_LENGTH,
-    staleTime: 5 * 60 * 1000,
+    enabled: showSuggestions && remoteSearchEnabled && normalizedDebouncedQuery === normalizedQuery,
+    staleTime: searchQuery => searchQuery.state.data?.length === 0 ? 0 : 5 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    retry: false
+    networkMode: 'always',
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    retry: retryOriginalInventoryNameSearch,
+    retryDelay: 350
   });
 
   const suggestions = useMemo(() => {
     if (!normalizedQuery) return [];
-    const remoteResultsAreCurrent = normalizedDebouncedQuery === normalizedQuery;
-    const remoteSuggestions = remoteResultsAreCurrent
-      ? remoteCatalogSuggestions.map(toOriginalInventoryNameSuggestion)
-      : [];
+    const remoteSuggestions = remoteCatalogSuggestions.map(toOriginalInventoryNameSuggestion);
     return searchOriginalInventorySpisSuggestions(
       [...existingSuggestions, ...remoteSuggestions].map((suggestion) => ({
         ...suggestion,
@@ -765,13 +774,12 @@ const OriginalInventoryNameSearch = ({
       8,
       true
     );
-  }, [existingSuggestions, inventoriedNames, erpIndexKeys, normalizedDebouncedQuery, normalizedQuery, query, remoteCatalogSuggestions]);
+  }, [existingSuggestions, inventoriedNames, erpIndexKeys, normalizedQuery, query, remoteCatalogSuggestions]);
 
-  const remoteResultsPending = remoteSearchEnabled && (
-    normalizedDebouncedQuery !== normalizedQuery || isFetching
-  );
-  const remoteResultsFailed = remoteSearchEnabled && normalizedDebouncedQuery === normalizedQuery && isError && !isFetching;
-  const suggestionsOpen = showSuggestions && (suggestions.length > 0 || remoteResultsPending || remoteResultsFailed);
+  const remoteResultsPending = remoteSearchEnabled && (isPending || isFetching);
+  const remoteResultsFailed = remoteSearchEnabled && isError && !isFetching;
+  const remoteResultsEmpty = remoteSearchEnabled && isSuccess && !isFetching && suggestions.length === 0;
+  const suggestionsOpen = showSuggestions && (suggestions.length > 0 || remoteResultsPending || remoteResultsFailed || remoteResultsEmpty);
   useEffect(() => {
     const list = suggestionsListRef.current;
     if (!suggestionsOpen || !list) return;
@@ -813,6 +821,13 @@ const OriginalInventoryNameSearch = ({
         placeholder="Nazwa lub indeks 2, np. STAREX 8178"
         className={query ? 'min-h-[46px] pr-10' : 'min-h-[46px]'}
         onFocus={() => { cancelSuggestionsClose(); setShowSuggestions(true); }}
+        onClick={() => {
+          cancelSuggestionsClose();
+          setShowSuggestions(true);
+          if (remoteSearchEnabled && isSuccess && remoteCatalogSuggestions.length === 0) {
+            void refetch({ cancelRefetch: false });
+          }
+        }}
         onKeyDown={(event) => {
           if (event.key !== 'Enter') return;
           event.preventDefault();
@@ -887,6 +902,9 @@ const OriginalInventoryNameSearch = ({
           ))}
           {remoteResultsPending && (
             <p className="px-3 py-2 text-xs font-semibold text-dim" role="status">Wyszukiwanie...</p>
+          )}
+          {remoteResultsEmpty && (
+            <p className="px-3 py-2 text-xs font-semibold text-dim" role="status">Brak pasujących kartotek.</p>
           )}
           {remoteResultsFailed && (
             <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-danger" role="alert">

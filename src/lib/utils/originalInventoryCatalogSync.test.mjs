@@ -788,6 +788,29 @@ test('projection outage uses a fresh legacy catalog, not an old process-local re
   assert.equal((await f.app('searchOriginalInventoryCatalog',{query:'after',onlyIndex2:true}))[0].name,'AFTER');
 });
 
+test('concurrent failed projection queries share one legacy read instead of discarding and restarting it', async () => {
+  const f=fixture();
+  f.state.tables.original_inventory_catalog.push(row(material({name:'KONCENTRAT BLACK 9203',indexCode2:'9203'}),'one'));
+  f.state.searchProjectionError={code:'TIMEOUT'};
+  let started, release;
+  const reading=new Promise(resolve=>{started=resolve;});
+  const held=new Promise(resolve=>{release=resolve;});
+  f.state.holdCatalogRead=()=>{started();return held;};
+  const first=f.app('searchOriginalInventoryCatalog',{query:'9203',onlyIndex2:true});
+  await reading;
+  const second=f.app('searchOriginalInventoryCatalog',{query:'black',onlyIndex2:true});
+  await new Promise(resolve=>setImmediate(resolve));
+  release();
+  assert.equal((await first)[0].id,'one');
+  assert.equal((await second)[0].id,'one');
+  assert.equal(f.state.operations.filter(op=>op.table==='original_inventory_catalog'&&op.mode==='select').length,1);
+  assert.equal(f.state.operations.filter(op=>op.rpc==='get_original_inventory_search_candidates').length,1);
+  f.state.searchProjectionError=null;
+  f.state.preparedSearchItems=[{id:'new',name:'NEW 9203',unit:'szt.',indexCode:'M-1-NEW',indexCode2:'9203'}];
+  const fresh=await f.app('searchOriginalInventoryCatalog',{query:'9203',onlyIndex2:true,catalogRefreshToken:'00000000-0000-4000-8000-000000000009'});
+  assert.equal(fresh[0].id,'new','explicit import refresh must bypass the temporary circuit');
+});
+
 test('catalog API finds M2 name fragments in any order without writing or merging distinct indices', async () => {
   const f = fixture();
   f.state.tables.original_inventory_catalog.push(

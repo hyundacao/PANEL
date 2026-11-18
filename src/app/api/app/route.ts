@@ -2318,6 +2318,7 @@ let originalCatalogLoad: Promise<OriginalInventoryCatalogEntry[]> | null = null;
 let originalCatalogGeneration = 0;
 let originalSearchSourceGeneration = '';
 let originalSearchPrepareAt = 0;
+let originalSearchProjectionRetryAt = 0;
 const originalCatalogRefreshTokens = new Set<string>();
 let originalCatalogSpisSearchSource: OriginalInventoryCatalogEntry[] | null = null;
 let originalCatalogSpisSearchItems: OriginalInventoryCatalogEntry[] = [];
@@ -2437,22 +2438,27 @@ const searchOriginalCatalogForSpis = async (
   const limit = Number.isFinite(requestedLimit) ? Math.min(32, Math.max(1, requestedLimit)) : 24;
   const onlyIndex2 = rawOnlyIndex2 === true;
   const inventoriedNames = originalInventorySearchPriorityNames(Array.isArray(rawInventoriedNames) ? rawInventoriedNames : []);
-  try {
-    const candidates = await readOriginalInventorySearchCandidates(supabaseAdmin, query, onlyIndex2, generation => {
-      if (originalSearchSourceGeneration !== generation) {
-        originalSearchSourceGeneration = generation;
-        originalSearchPrepareAt = 0;
+  if (Date.now() >= originalSearchProjectionRetryAt) {
+    try {
+      const candidates = await readOriginalInventorySearchCandidates(supabaseAdmin, query, onlyIndex2, generation => {
+        if (originalSearchSourceGeneration !== generation) {
+          originalSearchSourceGeneration = generation;
+          originalSearchPrepareAt = 0;
+          invalidateOriginalCatalogCache();
+        }
+        if (originalSearchPrepareAt > Date.now()) return;
+        originalSearchPrepareAt = Date.now() + 30_000;
+        after(async () => { await refreshOriginalInventorySearchProjection(supabaseAdmin); });
+      });
+      if (candidates) return searchOriginalInventorySpisSuggestions(candidates, query, inventoriedNames, limit, onlyIndex2);
+    } catch {
+      // One failed RPC must not make concurrent keystrokes discard/restart the same full read.
+      if (Date.now() >= originalSearchProjectionRetryAt) {
         invalidateOriginalCatalogCache();
+        originalSearchProjectionRetryAt = Date.now() + 30_000;
+        console.warn('ORIGINAL_INVENTORY_SEARCH_FALLBACK');
       }
-      if (originalSearchPrepareAt > Date.now()) return;
-      originalSearchPrepareAt = Date.now() + 30_000;
-      after(async () => { await refreshOriginalInventorySearchProjection(supabaseAdmin); });
-    });
-    if (candidates) return searchOriginalInventorySpisSuggestions(candidates, query, inventoriedNames, limit, onlyIndex2);
-  } catch {
-    // Never serve a stale local catalog after the database invalidated its projection.
-    invalidateOriginalCatalogCache();
-    console.warn('ORIGINAL_INVENTORY_SEARCH_FALLBACK');
+    }
   }
   const cacheKey = JSON.stringify([query.toLocaleLowerCase('pl'), limit, onlyIndex2, inventoriedNames]);
   const items = await loadOriginalCatalogSpisSearchItems();
@@ -2469,6 +2475,7 @@ const searchOriginalCatalogForSpis = async (
 };
 
 const invalidateOriginalCatalogCache = () => {
+  originalSearchProjectionRetryAt = 0;
   originalCatalogGeneration++;
   originalCatalogLoad = null;
   originalCatalogCache = null;

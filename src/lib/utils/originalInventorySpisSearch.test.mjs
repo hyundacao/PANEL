@@ -351,7 +351,8 @@ test('spis suggestions commit the full name on selection and allow touch scrolli
   assert.doesNotMatch(suggestionRow, /Indeks 1:|\{suggestion\.indexCode\}/);
   assert.doesNotMatch(suggestionRow, /W ERP/);
   assert.doesNotMatch(suggestionRow, /\{suggestion\.warehouseCode\}/);
-  assert.match(search, /queryKey: \['spis-oryginalow-catalog-search', normalizedDebouncedQuery, 'index2-only', priorityNames\]/);
+  assert.match(search, /queryKey: \['spis-oryginalow-catalog-search', normalizedQuery, 'index2-only', priorityNames\]/);
+  assert.match(search, /onClick=\{\(\) => \{\s*cancelSuggestionsClose\(\);\s*setShowSuggestions\(true\)/);
   assert.match(search, /SPIS_SEARCH_SERVER_LIMIT,\s*signal,\s*true,\s*priorityNames/);
   assert.match(search, /SPIS_SEARCH_SERVER_LIMIT,\s*signal,\s*true/);
   assert.match(search, /inventoriedNames,\s*8,\s*true/);
