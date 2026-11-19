@@ -4,7 +4,7 @@ const TAP_MOVEMENT_PX = 6;
 // touches on an overflowing popup to the page despite overscroll-behavior.
 export const bindSuggestionListTouchScroll = (
   list: HTMLElement,
-  onInteraction: (active: boolean) => void
+  onInteraction: (active: boolean) => void = () => undefined
 ) => {
   let gesture: {
     x: number; y: number; lastY: number; moved: boolean; button: HTMLButtonElement | null;

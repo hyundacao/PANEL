@@ -12,6 +12,7 @@ const ast=ts.createSourceFile('SpisRzeczywisty.tsx',source,ts.ScriptTarget.Lates
 const definitions=new Map();
 let optionsText;
 let inputClickText;
+let inputBlurText;
 function visit(node){
   if(ts.isVariableDeclaration(node)&&node.initializer) definitions.set(node.name.getText(ast),node.initializer.getText(ast));
   if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useQuery'){
@@ -21,6 +22,7 @@ function visit(node){
   if(ts.isJsxSelfClosingElement(node)&&node.tagName.getText(ast)==='Input'&&
     node.attributes.properties.some(property=>property.name?.getText(ast)==='ref'&&property.initializer?.getText(ast)==='{inputRef}')){
     inputClickText=node.attributes.properties.find(property=>property.name?.getText(ast)==='onClick')?.initializer.expression.getText(ast);
+    inputBlurText=node.attributes.properties.find(property=>property.name?.getText(ast)==='onBlur')?.initializer.expression.getText(ast);
   }
   ts.forEachChild(node,visit);
 }
@@ -172,7 +174,7 @@ test('a completed empty query has a visible state instead of silently removing t
   assert.equal(mod.exports.suggestionsOpen,true);
   assert.equal(mod.exports.remoteResultsPending,false);
   assert.match(source,/Brak pasujących kartotek\./);
-  assert.match(source,/onClick=\{\(\) => \{\s*cancelSuggestionsClose\(\);\s*setShowSuggestions\(true\)/);
+  assert.match(source,/onClick=\{\(\) => \{\s*setShowSuggestions\(true\)/);
 });
 
 test('tapping an already focused field with an empty result retries without requiring any edit',()=>{
@@ -180,7 +182,7 @@ test('tapping an already focused field with an empty result retries without requ
   const mod={exports:{}};
   let open=false,calls=0;
   vm.runInNewContext(compile(`module.exports=${inputClickText};`),{
-    module:mod,cancelSuggestionsClose:()=>{},setShowSuggestions:value=>{open=value;},
+    module:mod,setShowSuggestions:value=>{open=value;},
     remoteSearchEnabled:true,isSuccess:true,remoteCatalogSuggestions:[],refetch:options=>{
       assert.equal(options.cancelRefetch,false,'reuse a request already started by focus');
       calls++;return Promise.resolve();
@@ -189,4 +191,17 @@ test('tapping an already focused field with an empty result retries without requ
   mod.exports();
   assert.equal(open,true);
   assert.equal(calls,1);
+});
+
+test('the actual input blur commits text but never hides the list or schedules a delayed dismissal',()=>{
+  assert.ok(inputBlurText);
+  const mod={exports:{}};
+  const commits=[];
+  vm.runInNewContext(compile(`module.exports=${inputBlurText};`),{
+    module:mod,queryRef:{current:'WKRET 9203'},onCommit:value=>commits.push(value),
+    setShowSuggestions:()=>assert.fail('blur must not dismiss during page scrolling'),
+    setTimeout:()=>assert.fail('a delayed blur timer must not race a native touch gesture')
+  });
+  mod.exports();
+  assert.deepEqual(commits,['WKRET 9203']);
 });

@@ -76,6 +76,7 @@ import {
 } from '@/lib/utils/grindingTechnologyMass';
 import { cn } from '@/lib/utils/cn';
 import { bindSuggestionListTouchScroll } from '@/lib/utils/suggestionListTouchScroll';
+import { bindSuggestionListDismissal } from '@/lib/utils/suggestionListDismissal';
 import {
   getOriginalInventorySpisEntriesQueryKey,
   getOriginalInventorySpisWarehousePriority,
@@ -722,10 +723,6 @@ const OriginalInventoryNameSearch = ({
   const queryRef = useRef(value);
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
   const suggestionsListRef = useRef<HTMLDivElement | null>(null);
-  const listTouchActiveRef = useRef(false);
-  const closeSuggestionsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const cancelSuggestionsClose = () => { if (closeSuggestionsTimer.current) clearTimeout(closeSuggestionsTimer.current); };
-  useEffect(() => () => { if (closeSuggestionsTimer.current) clearTimeout(closeSuggestionsTimer.current); }, []);
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const normalizedQuery = normalizeCatalogNameKey(query);
@@ -782,24 +779,16 @@ const OriginalInventoryNameSearch = ({
   const suggestionsOpen = showSuggestions && (suggestions.length > 0 || remoteResultsPending || remoteResultsFailed || remoteResultsEmpty);
   useEffect(() => {
     const list = suggestionsListRef.current;
-    if (!suggestionsOpen || !list) return;
-    const release = bindSuggestionListTouchScroll(list, active => {
-      listTouchActiveRef.current = active;
-      if (active && closeSuggestionsTimer.current) clearTimeout(closeSuggestionsTimer.current);
-    });
-    const closeOutside = (event: Event) => {
-      if (event.target instanceof Node && !searchContainerRef.current?.contains(event.target)) setShowSuggestions(false);
-    };
-    document.addEventListener('touchstart', closeOutside, { capture: true, passive: true });
-    document.addEventListener('mousedown', closeOutside, true);
+    const container = searchContainerRef.current;
+    if (!suggestionsOpen || !list || !container) return;
+    const release = bindSuggestionListTouchScroll(list);
+    const releaseDismissal = bindSuggestionListDismissal(container, () => setShowSuggestions(false));
     return () => {
       release();
-      document.removeEventListener('touchstart', closeOutside, true);
-      document.removeEventListener('mousedown', closeOutside, true);
+      releaseDismissal();
     };
   }, [suggestionsOpen]);
   const chooseSuggestion = (suggestion: OriginalInventoryNameSuggestion) => {
-    cancelSuggestionsClose();
     queryRef.current = suggestion.name;
     setQuery(suggestion.name);
     setShowSuggestions(false);
@@ -813,16 +802,14 @@ const OriginalInventoryNameSearch = ({
         value={query}
         title={query}
         onChange={(event) => {
-          cancelSuggestionsClose();
           queryRef.current = event.target.value;
           setQuery(event.target.value);
           setShowSuggestions(true);
         }}
         placeholder="Nazwa lub indeks 2, np. STAREX 8178"
         className={query ? 'min-h-[46px] pr-10' : 'min-h-[46px]'}
-        onFocus={() => { cancelSuggestionsClose(); setShowSuggestions(true); }}
+        onFocus={() => setShowSuggestions(true)}
         onClick={() => {
-          cancelSuggestionsClose();
           setShowSuggestions(true);
           if (remoteSearchEnabled && isSuccess && remoteCatalogSuggestions.length === 0) {
             void refetch({ cancelRefetch: false });
@@ -839,9 +826,6 @@ const OriginalInventoryNameSearch = ({
         }}
         onBlur={() => {
           onCommit(queryRef.current);
-          cancelSuggestionsClose();
-          if (listTouchActiveRef.current) return;
-          closeSuggestionsTimer.current = setTimeout(() => setShowSuggestions(false), 120);
         }}
       />
       {query && (

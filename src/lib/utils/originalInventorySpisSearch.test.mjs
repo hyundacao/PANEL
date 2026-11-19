@@ -352,7 +352,7 @@ test('spis suggestions commit the full name on selection and allow touch scrolli
   assert.doesNotMatch(suggestionRow, /W ERP/);
   assert.doesNotMatch(suggestionRow, /\{suggestion\.warehouseCode\}/);
   assert.match(search, /queryKey: \['spis-oryginalow-catalog-search', normalizedQuery, 'index2-only', priorityNames\]/);
-  assert.match(search, /onClick=\{\(\) => \{\s*cancelSuggestionsClose\(\);\s*setShowSuggestions\(true\)/);
+  assert.match(search, /onClick=\{\(\) => \{\s*setShowSuggestions\(true\)/);
   assert.match(search, /SPIS_SEARCH_SERVER_LIMIT,\s*signal,\s*true,\s*priorityNames/);
   assert.match(search, /SPIS_SEARCH_SERVER_LIMIT,\s*signal,\s*true/);
   assert.match(search, /inventoriedNames,\s*8,\s*true/);
@@ -360,7 +360,8 @@ test('spis suggestions commit the full name on selection and allow touch scrolli
   assert.match(search, /bindSuggestionListTouchScroll\(list/);
   assert.match(search, /maxHeight: '16rem', overflowY: 'auto'/);
   assert.match(search, /touchAction: 'pinch-zoom'/);
-  assert.match(search, /if \(listTouchActiveRef\.current\) return/);
+  assert.match(search, /bindSuggestionListDismissal\(container, \(\) => setShowSuggestions\(false\)\)/);
+  assert.doesNotMatch(search, /closeSuggestionsTimer|listTouchActiveRef|addEventListener\('touchstart', closeOutside/);
   assert.match(suggestionRow, /onMouseDown=\{\(event\) => \{\s*event\.preventDefault\(\);\s*chooseSuggestion\(suggestion\)/);
   assert.match(suggestionRow, /onClick=\{\(\) => chooseSuggestion\(suggestion\)\}/);
   assert.doesNotMatch(suggestionRow, /onPointerDown/);
