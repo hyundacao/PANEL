@@ -2430,17 +2430,19 @@ const loadOriginalCatalogSpisSearchItems = async () => {
 };
 
 const searchOriginalCatalogForSpis = async (
-  rawQuery: unknown, rawLimit: unknown, rawOnlyIndex2: unknown = false, rawInventoriedNames: unknown = []
+  rawQuery: unknown, rawLimit: unknown, rawOnlyIndex2: unknown = false, rawInventoriedNames: unknown = [],
+  rawAllowMissingIndex2: unknown = false
 ) => {
   const query = String(rawQuery ?? '').replace(/\s+/g, ' ').trim();
   if (query.replace(/\s/g, '').length < 2) return [];
   const requestedLimit = Math.floor(Number(rawLimit));
   const limit = Number.isFinite(requestedLimit) ? Math.min(32, Math.max(1, requestedLimit)) : 24;
   const onlyIndex2 = rawOnlyIndex2 === true;
+  const allowMissingIndex2 = onlyIndex2 && rawAllowMissingIndex2 === true;
   const inventoriedNames = originalInventorySearchPriorityNames(Array.isArray(rawInventoriedNames) ? rawInventoriedNames : []);
   if (Date.now() >= originalSearchProjectionRetryAt) {
     try {
-      const candidates = await readOriginalInventorySearchCandidates(supabaseAdmin, query, onlyIndex2, generation => {
+      const candidates = await readOriginalInventorySearchCandidates(supabaseAdmin, query, onlyIndex2 && !allowMissingIndex2, generation => {
         if (originalSearchSourceGeneration !== generation) {
           originalSearchSourceGeneration = generation;
           originalSearchPrepareAt = 0;
@@ -2450,7 +2452,7 @@ const searchOriginalCatalogForSpis = async (
         originalSearchPrepareAt = Date.now() + 30_000;
         after(async () => { await refreshOriginalInventorySearchProjection(supabaseAdmin); });
       });
-      if (candidates) return searchOriginalInventorySpisSuggestions(candidates, query, inventoriedNames, limit, onlyIndex2);
+      if (candidates) return searchOriginalInventorySpisSuggestions(candidates, query, inventoriedNames, limit, onlyIndex2, allowMissingIndex2);
     } catch {
       // One failed RPC must not make concurrent keystrokes discard/restart the same full read.
       if (Date.now() >= originalSearchProjectionRetryAt) {
@@ -2460,12 +2462,12 @@ const searchOriginalCatalogForSpis = async (
       }
     }
   }
-  const cacheKey = JSON.stringify([query.toLocaleLowerCase('pl'), limit, onlyIndex2, inventoriedNames]);
+  const cacheKey = JSON.stringify([query.toLocaleLowerCase('pl'), limit, onlyIndex2, allowMissingIndex2, inventoriedNames]);
   const items = await loadOriginalCatalogSpisSearchItems();
   const cached = originalCatalogSpisSearchResults.get(cacheKey);
   if (cached) return cached;
 
-  const result = searchOriginalInventorySpisSuggestions(items, query, inventoriedNames, limit, onlyIndex2);
+  const result = searchOriginalInventorySpisSuggestions(items, query, inventoriedNames, limit, onlyIndex2, allowMissingIndex2);
   if (originalCatalogSpisSearchResults.size >= 100) {
     const oldestKey = originalCatalogSpisSearchResults.keys().next().value;
     if (oldestKey) originalCatalogSpisSearchResults.delete(oldestKey);
@@ -6888,7 +6890,7 @@ const handleAction = async (action: string, payload: any, currentUser: AppUser) 
     }
     case 'searchOriginalInventoryCatalog': {
       acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);
-      return searchOriginalCatalogForSpis(payload?.query, payload?.limit, payload?.onlyIndex2, payload?.inventoriedNames);
+      return searchOriginalCatalogForSpis(payload?.query, payload?.limit, payload?.onlyIndex2, payload?.inventoriedNames, payload?.allowMissingIndex2);
     }
     case 'resolveOriginalInventoryCatalogMaterial': {
       acknowledgeOriginalCatalogRefresh(payload?.catalogRefreshToken);

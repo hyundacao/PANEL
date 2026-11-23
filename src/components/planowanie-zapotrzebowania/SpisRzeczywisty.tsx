@@ -740,13 +740,14 @@ const OriginalInventoryNameSearch = ({
   const normalizedDebouncedQuery = normalizeCatalogNameKey(debouncedQuery);
   const priorityNames = useMemo(() => [...new Set(inventoriedNames)].sort(), [inventoriedNames]);
   const { data: remoteCatalogSuggestions = [], isFetching, isPending, isSuccess, isError, refetch } = useQuery({
-    queryKey: ['spis-oryginalow-catalog-search', normalizedQuery, 'index2-only', priorityNames],
+    queryKey: ['spis-oryginalow-catalog-search', normalizedQuery, 'index2-or-name', priorityNames],
     queryFn: ({ signal }) => searchOriginalInventoryCatalog(
       query,
       SPIS_SEARCH_SERVER_LIMIT,
       signal,
       true,
-      priorityNames
+      priorityNames,
+      true
     ),
     enabled: showSuggestions && remoteSearchEnabled && normalizedDebouncedQuery === normalizedQuery,
     staleTime: searchQuery => searchQuery.state.data?.length === 0 ? 0 : 5 * 60 * 1000,
@@ -769,6 +770,7 @@ const OriginalInventoryNameSearch = ({
       query,
       inventoriedNames,
       8,
+      true,
       true
     );
   }, [existingSuggestions, inventoriedNames, erpIndexKeys, normalizedQuery, query, remoteCatalogSuggestions]);

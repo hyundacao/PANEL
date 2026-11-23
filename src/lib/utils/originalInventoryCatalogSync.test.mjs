@@ -74,7 +74,8 @@ function fixture() {
           : state.searchProjectionNotReady
             ? {data:{ready:false,generation:String(state.searchProjectionNotReady),items:[]},error:null}
           : state.preparedSearchItems
-            ? {data:{ready:true,items:structuredClone(state.preparedSearchItems)},error:null}
+            ? {data:{ready:true,items:structuredClone(state.preparedSearchItems.filter(item =>
+              !payload.p_only_index2 || String(item.indexCode2 ?? '').trim()))},error:null}
             : {data:null,error:{code:'PGRST202'}});
       }
       if (name === 'save_material_planning_state') {
@@ -846,6 +847,48 @@ test('spis-only index-2 filtering is before the limit and isolated from pallet c
     assert.equal(byIndex1[0].id, 'current-kosz');
     assert.deepEqual(f.state.tables, before);
     assert.ok(f.state.operations.every(operation => operation.mode === 'select'));
+  }
+});
+
+test('spis fallback finds PLASTOPERM with no index 2 in prepared and legacy paths without changing data or strict caches', async () => {
+  for (const prepared of [false, true]) {
+    const f = fixture();
+    const item = { id: 'plastoperm', name: 'PLASTOPERM CZARNY KA 24005', unit: 'kg', indexCode: 'M-1-BA-BSHL-10479', indexCode2: null, warehouseCode: 'M-1' };
+    f.state.tables.original_inventory_catalog.push(row(item, item.id));
+    if (prepared) f.state.preparedSearchItems = [item];
+    const before = structuredClone(f.state.tables);
+    for (const query of [item.name, '24005', item.indexCode]) {
+      const payload = { query, onlyIndex2: true };
+      assert.deepEqual(await f.app('searchOriginalInventoryCatalog', payload), []);
+      const result = await f.app('searchOriginalInventoryCatalog', { ...payload, allowMissingIndex2: true });
+      assert.equal(result.length, 1);
+      assert.equal(result[0].id, item.id);
+      assert.equal(result[0].indexCode, item.indexCode);
+      assert.equal(result[0].indexCode2, null);
+      assert.deepEqual(await f.app('searchOriginalInventoryCatalog', payload), [], 'strict and fallback results must not share cache');
+    }
+    if (prepared) assert.ok(f.state.operations.some(op => op.rpc === 'get_original_inventory_search_candidates' && op.payload.p_only_index2 === false));
+    assert.deepEqual(f.state.tables, before);
+    assert.ok(f.state.operations.every(op => op.mode === 'select'));
+  }
+});
+
+test('fallback deduplicates name-only counterparts before server limits, retaining counted priority and general catalog results', async () => {
+  for (const prepared of [false, true]) {
+    const f = fixture();
+    const items = Array.from({ length: 30 }, (_, i) => ({ id: `a-${i}`, name: `KONCENTRAT A ${i}`, unit: 'kg', indexCode: `M-1-A-${i}`, indexCode2: `A-${i}`, warehouseCode: 'M-1' }));
+    const counted = { id: 'counted', name: 'KONCENTRAT Z SPISANY', unit: 'kg', indexCode: 'M-55-Z', indexCode2: null, warehouseCode: 'M-55' };
+    const legacy = { ...items[0], id: 'legacy', indexCode: 'M-1-OLD-A', indexCode2: null };
+    items.push(counted, legacy);
+    f.state.tables.original_inventory_catalog.push(...items.map(item => row(item, item.id)));
+    if (prepared) f.state.preparedSearchItems = items;
+    const payload = { query: 'koncentrat', limit: 24, onlyIndex2: true, allowMissingIndex2: true, inventoriedNames: [counted.name] };
+    const results = await f.app('searchOriginalInventoryCatalog', payload);
+    assert.equal(results.length, 24);
+    assert.equal(results[0].id, counted.id);
+    assert.equal(results.some(item => item.id === legacy.id), false);
+    const general = await f.app('searchOriginalInventoryCatalog', { query: items[0].name, limit: 24 });
+    assert.ok(general.some(item => item.id === legacy.id), 'pallet/general catalog mode remains unchanged');
   }
 });
 

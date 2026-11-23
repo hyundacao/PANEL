@@ -41,6 +41,7 @@ export const getOriginalInventorySpisWarehousePriority = (...values: unknown[]) 
 
 type OriginalInventorySpisSuggestion = {
   name: string;
+  unit?: string | null;
   previousNames?: readonly string[];
   warehouseCode?: string | null;
   indexCode?: string | null;
@@ -161,14 +162,20 @@ export const searchOriginalInventorySpisSuggestions = <T extends OriginalInvento
   query: unknown,
   inventoriedNames: Iterable<unknown>,
   limit = 8,
-  onlyIndex2 = false
+  onlyIndex2 = false,
+  allowMissingIndex2 = false
 ) => {
   if (!normalizeSearchText(query)) return [];
   const safeLimit = Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 8));
+  const matches = suggestions.filter(item => [item.name, ...item.previousNames ?? []].some(name =>
+    matchesOriginalInventorySpisSearch(query, name, item.indexCode2, item.indexCode)));
+  const nameUnitKey = (item: T) => `${normalizeSearchText(item.name)}|${normalizeSearchText(item.unit).replace(/\.$/, '')}`;
+  const namesWithIndex2 = new Set(onlyIndex2 && allowMissingIndex2 ? matches
+    .filter(item => !isFormSuggestion(item) && Boolean(getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2)))
+    .map(nameUnitKey) : []);
   return rankOriginalInventorySpisSuggestions(
-    suggestions.filter(item => (!onlyIndex2 || Boolean(getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2))) &&
-      [item.name, ...item.previousNames ?? []].some(name =>
-        matchesOriginalInventorySpisSearch(query, name, item.indexCode2, item.indexCode))),
+    matches.filter(item => !onlyIndex2 || Boolean(getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2)) ||
+      (allowMissingIndex2 && !namesWithIndex2.has(nameUnitKey(item)))),
     inventoriedNames
   ).slice(0, safeLimit);
 };

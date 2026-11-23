@@ -647,10 +647,12 @@ export const searchOriginalInventoryCatalog = async (
   limit = 24,
   signal?: AbortSignal,
   onlyIndex2 = false,
-  inventoriedNames: readonly string[] = []
+  inventoriedNames: readonly string[] = [],
+  allowMissingIndex2 = false
 ): Promise<OriginalInventoryCatalogEntry[]> =>
   withOriginalInventorySearchTimeout(requestSignal => appRequest<OriginalInventoryCatalogEntry[]>(
     'searchOriginalInventoryCatalog', { query, limit, ...(onlyIndex2 ? { onlyIndex2: true } : {}),
+      ...(onlyIndex2 && allowMissingIndex2 ? { allowMissingIndex2: true } : {}),
       ...(inventoriedNames.length ? { inventoriedNames } : {}), catalogRefreshToken: originalInventoryCatalogRefreshToken }, requestSignal), signal);
 
 export const resolveOriginalInventoryCatalogMaterial = async (

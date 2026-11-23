@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 import vm from 'node:vm';
 import { QueryClient, QueryObserver, onlineManager } from '@tanstack/react-query';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 const require=createRequire(import.meta.url);
 const ts=require('typescript');
@@ -13,8 +14,16 @@ const definitions=new Map();
 let optionsText;
 let inputClickText;
 let inputBlurText;
+let suggestionRowsText;
 function visit(node){
   if(ts.isVariableDeclaration(node)&&node.initializer) definitions.set(node.name.getText(ast),node.initializer.getText(ast));
+  if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='OriginalInventoryNameSearch'){
+    const findRows=child=>{
+      if(ts.isCallExpression(child)&&child.expression.getText(ast)==='suggestions.map') suggestionRowsText=child.getText(ast);
+      ts.forEachChild(child,findRows);
+    };
+    findRows(node.initializer);
+  }
   if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useQuery'){
     const options=node.arguments[0];
     if(options?.getText(ast).includes("queryKey: ['spis-oryginalow-catalog-search'")) optionsText=options.getText(ast);
@@ -28,7 +37,7 @@ function visit(node){
 }
 visit(ast);
 assert.ok(optionsText);
-const compile=text=>ts.transpileModule(text,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+const compile=text=>ts.transpileModule(text,{fileName:'fixture.tsx',compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
 const options=(query,fetcher,{debounced=query,open=true,counted=[]}={})=>{
   const mod={exports:{}};
   vm.runInNewContext(compile(`const retryOriginalInventoryNameSearch=${definitions.get('retryOriginalInventoryNameSearch')}; module.exports=(${optionsText});`),{
@@ -204,4 +213,68 @@ test('the actual input blur commits text but never hides the list or schedules a
   });
   mod.exports();
   assert.deepEqual(commits,['WKRET 9203']);
+});
+
+test('spis query enables name fallback in a distinct cache without changing counted context or cancellation',async()=>{
+  const client=new QueryClient();
+  const counted=['PLASTOPERM CZARNY KA 24005'];
+  let args;
+  try{
+    const queryOptions=options('plastoperm',async(...values)=>{args=values;return [];},{counted});
+    assert.equal(queryOptions.queryKey[2],'index2-or-name');
+    await client.fetchQuery(queryOptions);
+    assert.equal(args[0],'plastoperm');
+    assert.equal(args[1],24);
+    assert.ok(args[2] instanceof AbortSignal);
+    assert.equal(args[3],true);
+    assert.equal(args[4],counted);
+    assert.equal(args[5],true);
+  }finally{client.clear();}
+});
+
+test('actual suggestion markup displays a missing-index-2 material by name only while retaining its internal identity',()=>{
+  assert.ok(suggestionRowsText);
+  const mod={exports:{}};
+  const suggestions=[
+    {name:'PLASTOPERM CZARNY KA 24005',indexCode:'M-1-BA-BSHL-10479',indexCode2:null},
+    {name:'OTHER MATERIAL',indexCode:'PRIVATE-INDEX1',indexCode2:'EXPLICIT-INDEX2'}
+  ];
+  vm.runInNewContext(compile(`module.exports=(${suggestionRowsText});`),{
+    module:mod,exports:mod.exports,require,suggestions,cn:(...values)=>values.filter(Boolean).join(' '),chooseSuggestion:()=>{}
+  });
+  const html=renderToStaticMarkup(mod.exports);
+  assert.match(html,/PLASTOPERM CZARNY KA 24005/);
+  assert.match(html,/Indeks 2: EXPLICIT-INDEX2/);
+  assert.doesNotMatch(html,/10479|PRIVATE-INDEX1|Indeks 1:|Indeks 2: null/);
+  assert.equal(suggestions[0].indexCode,'M-1-BA-BSHL-10479');
+  assert.equal(suggestions[0].indexCode2,null);
+});
+
+test('browser search API forwards the opt-in fallback flag and leaves general catalog callers unchanged',async()=>{
+  const apiSource=readFileSync(new URL('../../lib/api/index.ts',import.meta.url),'utf8');
+  const apiAst=ts.createSourceFile('api.ts',apiSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
+  let searchText;
+  const find=node=>{
+    if(ts.isVariableDeclaration(node)&&node.name.getText(apiAst)==='searchOriginalInventoryCatalog') searchText=node.initializer.getText(apiAst);
+    ts.forEachChild(node,find);
+  };
+  find(apiAst);
+  assert.ok(searchText);
+  const mod={exports:{}};
+  const calls=[];
+  vm.runInNewContext(compile(`module.exports=(${searchText});`),{
+    module:mod,originalInventoryCatalogRefreshToken:'fresh-token',
+    withOriginalInventorySearchTimeout:(callback,signal)=>callback(signal),
+    appRequest:async(action,payload,signal)=>{calls.push({action,payload,signal});return [];}
+  });
+  const signal=new AbortController().signal;
+  await mod.exports('plastoperm',24,signal,true,['SPISANE'],true);
+  assert.equal(calls[0].payload.onlyIndex2,true);
+  assert.equal(calls[0].payload.allowMissingIndex2,true);
+  assert.equal(calls[0].payload.inventoriedNames[0],'SPISANE');
+  assert.equal(calls[0].payload.catalogRefreshToken,'fresh-token');
+  assert.equal(calls[0].signal,signal);
+  await mod.exports('general');
+  assert.equal(Object.hasOwn(calls[1].payload,'onlyIndex2'),false);
+  assert.equal(Object.hasOwn(calls[1].payload,'allowMissingIndex2'),false);
 });

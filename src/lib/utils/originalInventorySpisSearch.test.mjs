@@ -55,6 +55,48 @@ test('index-2-only mode never guesses a missing second index from a name or inde
   assert.deepEqual(searchOriginalInventorySpisSuggestions([explicit], 'INDEX-1', [], 8, true), [explicit]);
 });
 
+test('spis name fallback finds PLASTOPERM by name and index 1 without inventing index 2', () => {
+  const item = { id: 'plastoperm', name: 'PLASTOPERM CZARNY KA 24005', unit: 'kg',
+    indexCode: 'M-1-BA-BSHL-10479', indexCode2: null, warehouseCode: 'M-1' };
+  const before = structuredClone(item);
+  for (const query of [item.name, 'plastoperm', '24005', item.indexCode, '10479', 'czarny plastoperm']) {
+    assert.deepEqual(searchOriginalInventorySpisSuggestions([item], query, [], 8, true, true), [item]);
+  }
+  assert.deepEqual(searchOriginalInventorySpisSuggestions([item], item.name, [], 8, true), []);
+  assert.equal(getOriginalInventorySpisIndex2(item.indexCode, item.indexCode2), '');
+  assert.deepEqual(item, before);
+});
+
+test('spis name fallback prefers the existing index 2 choice before limits and does not revive old KOSZ duplicates', () => {
+  const name = 'KOSZ STUDZIENKI RYNNY 01826';
+  const indexed = { name, unit: 'szt.', indexCode: 'M-1-NEW-KOSZ', indexCode2: '1826', warehouseCode: 'M-1' };
+  const legacy = { name, unit: 'szt.', indexCode: 'M-1-OLD-KOSZ', indexCode2: null, warehouseCode: 'M-1' };
+  const candidates = [{ name, unit: 'szt.', indexCode: null, indexCode2: null }, legacy, indexed];
+  assert.deepEqual(searchOriginalInventorySpisSuggestions(candidates, 'kosz', [name], 1, true, true), [indexed]);
+  assert.deepEqual(searchOriginalInventorySpisSuggestions(candidates, legacy.indexCode, [], 8, true, true), [legacy], 'an explicit primary-index search still finds the exact unpaired card');
+  assert.equal(searchOriginalInventorySpisSuggestions(candidates, 'kosz', [], 8).length, 2, 'general catalog choices do not change');
+});
+
+test('name fallback does not hide another unit or a material merely sharing part of its name', () => {
+  const candidates = [
+    { name: 'PLASTOPERM', unit: 'kg', indexCode: 'KG', indexCode2: null },
+    { name: 'PLASTOPERM', unit: 'szt.', indexCode: 'PCS', indexCode2: 'PCS2' },
+    { name: 'PLASTOPERM CZARNY', unit: 'kg', indexCode: 'OTHER', indexCode2: 'OTHER2' }
+  ];
+  assert.equal(searchOriginalInventorySpisSuggestions(candidates, 'plastoperm', [], 8, true, true).length, 3);
+});
+
+test('fallback keeps counted and previous-name priority before limits, plus FW exclusion and meaningful index zeroes', () => {
+  const items = Array.from({ length: 30 }, (_, i) => ({ name: `KONCENTRAT A ${i}`, indexCode: `M-1-A-${i}`, indexCode2: `${i}`, warehouseCode: 'M-1' }));
+  const counted = { name: 'KONCENTRAT Z', previousNames: ['KONCENTRAT DAWNY'], indexCode: 'M-55-00123', indexCode2: null, warehouseCode: 'M-55' };
+  const form = { name: 'KONCENTRAT FW-100', indexCode: 'FW-100', indexCode2: null };
+  const results = searchOriginalInventorySpisSuggestions([...items, counted, form], 'koncentrat', ['KONCENTRAT DAWNY'], 8, true, true);
+  assert.equal(results[0], counted);
+  assert.equal(results.length, 8);
+  assert.equal(results.includes(form), false);
+  assert.equal(results[0].indexCode, 'M-55-00123');
+});
+
 test('index-2 filtering happens before the suggestion limit and leaves general catalog search unchanged', () => {
   const oldRows = Array.from({ length: 30 }, (_, i) => ({ name: `KOSZ A ${i}`, indexCode: `M-1-OLD-${i}`, indexCode2: null, warehouseCode: 'M-1' }));
   const indexed = { name: 'KOSZ Z', indexCode: 'M-55-NEW', indexCode2: '01826', warehouseCode: 'M-55' };
@@ -351,11 +393,11 @@ test('spis suggestions commit the full name on selection and allow touch scrolli
   assert.doesNotMatch(suggestionRow, /Indeks 1:|\{suggestion\.indexCode\}/);
   assert.doesNotMatch(suggestionRow, /W ERP/);
   assert.doesNotMatch(suggestionRow, /\{suggestion\.warehouseCode\}/);
-  assert.match(search, /queryKey: \['spis-oryginalow-catalog-search', normalizedQuery, 'index2-only', priorityNames\]/);
+  assert.match(search, /queryKey: \['spis-oryginalow-catalog-search', normalizedQuery, 'index2-or-name', priorityNames\]/);
   assert.match(search, /onClick=\{\(\) => \{\s*setShowSuggestions\(true\)/);
-  assert.match(search, /SPIS_SEARCH_SERVER_LIMIT,\s*signal,\s*true,\s*priorityNames/);
+  assert.match(search, /SPIS_SEARCH_SERVER_LIMIT,\s*signal,\s*true,\s*priorityNames,\s*true/);
   assert.match(search, /SPIS_SEARCH_SERVER_LIMIT,\s*signal,\s*true/);
-  assert.match(search, /inventoriedNames,\s*8,\s*true/);
+  assert.match(search, /inventoriedNames,\s*8,\s*true,\s*true/);
   assert.match(search, /max-h-64[^"\n]*touch-pan-y[^"\n]*overflow-y-auto/);
   assert.match(search, /bindSuggestionListTouchScroll\(list/);
   assert.match(search, /maxHeight: '16rem', overflowY: 'auto'/);
