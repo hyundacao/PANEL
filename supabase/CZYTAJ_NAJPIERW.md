@@ -4,6 +4,12 @@ To jedyny bieżący katalog SQL. Każdy plik można wkleić i uruchomić **w ca�
 
 ## Kolejność
 
+### Mniejszy Transfer Przy Zapisie Spisu (25.11.2026)
+
+Na dzialajacej bazie uruchom tylko nowy plik **[13_weryfikacja_kartotek_spisu.sql](13_weryfikacja_kartotek_spisu.sql)**, nastepnie wdroz nowy kod. Wymaga tabeli z 07. Tworzy odczyt dostepny tylko dla serwera; nie zapisuje danych i nie zmienia SQL 12, podpowiedzi ani blokad.
+
+Serwer weryfikuje wersje rejestru przy kazdym zapisie. Baza przesyla pelny rejestr tylko przy braku lokalnej kopii lub po jego zmianie, w tym po bezposredniej aktualizacji w bazie. Stary kod nadal dziala po dodaniu funkcji. Bez 13 nowy kod zachowuje poprzednia weryfikacje z pelnym odczytem. Cofniecie aplikacji nie wymaga cofania SQL ani przywracania danych.
+
 ### Przyspieszenie Wyszukiwania Kartotek (17.11.2026)
 
 Na dzialajacej bazie z plikami 04 i 07 uruchom caly **[12_wyszukiwanie_kartotek.sql](12_wyszukiwanie_kartotek.sql)**, a nastepnie wdroz kod aplikacji.

@@ -1006,7 +1006,7 @@ export default function SpisRzeczywisty() {
     qty: '',
     unit: 'kg'
   });
-  const [inventoryMode, setInventoryMode] = useState<'pieces' | 'pallets'>('pieces');
+  const [inventoryModeOverride, setInventoryModeOverride] = useState<'pieces' | 'pallets' | null>(null);
   const [selectedCatalogId, setSelectedCatalogId] = useState('');
   const [selectedCatalogAliases, setSelectedCatalogAliases] = useState<string[]>([]);
   const [selectedErpMaterial, setSelectedErpMaterial] = useState<{ name: string; indexCode: string | null } | null>(null);
@@ -1023,6 +1023,7 @@ export default function SpisRzeczywisty() {
   const matchingPalletSets = palletSets.filter((set) => set.active &&
     selectedCatalogIds.has(set.primaryCatalogId) && !palletSetError(set));
   const selectedPalletSet = matchingPalletSets.find((set) => set.id === selectedPalletSetId) ?? matchingPalletSets[0];
+  const inventoryMode = inventoryModeOverride ?? (selectedPalletSet ? 'pallets' : 'pieces');
   const palletPreview = selectedPalletSet ? palletSetTotals(selectedPalletSet, Number(form.qty)) : [];
 
   const { data: warehouses = [] } = useQuery({
@@ -1411,7 +1412,7 @@ export default function SpisRzeczywisty() {
       setForm((prev) => ({ ...prev, name: '', qty: '' }));
       selectedCatalogRef.current = { id: '', name: '' };
       setSelectedCatalogAliases([]);
-      setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryMode('pieces');
+      setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryModeOverride(null);
       palletRequestRef.current = null;
       toast({ title: 'Dodano wszystkie składniki zestawu do spisu', tone: 'success' });
       nameInputRef.current?.focus({ preventScroll: true });
@@ -1429,7 +1430,7 @@ export default function SpisRzeczywisty() {
       setForm((prev) => ({ ...prev, name: '', qty: '' }));
       selectedCatalogRef.current = { id: '', name: '' };
       setSelectedCatalogAliases([]);
-      setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryMode('pieces');
+      setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryModeOverride(null);
       toast({ title: 'Dodano wpis do spisu', tone: 'success' });
     },
     onError: (err: Error) => {
@@ -2300,27 +2301,40 @@ export default function SpisRzeczywisty() {
   );
   const hasMoreCatalogRows = catalogVisibleCount < filteredCatalog.length;
   const applyNameToForm = (rawName: string) => {
-    if (selectedCatalogRef.current.name !== rawName) {
+    const materialChanged = selectedCatalogRef.current.name !== rawName;
+    if (materialChanged) {
       selectedCatalogRef.current = { id: '', name: '' };
       setSelectedCatalogAliases([]);
       setSelectedErpMaterial(null);
-      setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryMode('pieces');
+      setSelectedCatalogId(''); setSelectedPalletSetId(''); setInventoryModeOverride(null);
     }
-    setForm((prev) => ({ ...prev, name: rawName }));
+    setForm((prev) => ({ ...prev, name: rawName, qty: materialChanged && inventoryMode === 'pallets' ? '' : prev.qty }));
   };
   const applyNameSuggestionToForm = (suggestion: OriginalInventoryNameSuggestion) => {
     setSelectedErpMaterial({ name: suggestion.name, indexCode: suggestion.indexCode });
     selectedCatalogRef.current = { id: suggestion.catalogId ?? '', name: suggestion.name };
     setSelectedCatalogAliases(suggestion.catalogIds ?? []);
     setSelectedCatalogId(suggestion.catalogId ?? '');
-    setSelectedPalletSetId(''); setInventoryMode('pieces');
+    setSelectedPalletSetId(''); setInventoryModeOverride(null);
     setForm((prev) => ({
       ...prev,
       name: suggestion.name,
+      qty: '',
       unit: suggestion.unit || prev.unit
     }));
     qtyInputRef.current?.focus();
     qtyInputRef.current?.select();
+  };
+
+  const setEntryQuantity = (qty: string) => {
+    // Keep the unit of an entered quantity even if set data arrives or refreshes later.
+    if (qty.trim()) setInventoryModeOverride(inventoryMode);
+    setForm((prev) => ({ ...prev, qty }));
+  };
+  const selectInventoryMode = (mode: typeof inventoryMode) => {
+    if (mode === inventoryMode) return;
+    setInventoryModeOverride(mode);
+    setForm((prev) => ({ ...prev, qty: '' }));
   };
 
   const materialGroups = useMemo(() => {
@@ -3662,9 +3676,9 @@ export default function SpisRzeczywisty() {
                 />
                 {(matchingPalletSets.length > 0 || inventoryMode === 'pallets') && <div className="mt-2 space-y-2">
                   <div className="inline-flex max-w-full rounded-md border border-border p-1" role="group" aria-label="Sposób spisu">
-                    {(['pieces', 'pallets'] as const).map((mode) => <button key={mode} type="button" aria-pressed={inventoryMode === mode} disabled={addPalletMutation.isPending}
+                    {(['pallets', 'pieces'] as const).map((mode) => <button key={mode} type="button" aria-pressed={inventoryMode === mode} disabled={addPalletMutation.isPending}
                       className={cn('min-h-10 rounded px-3 py-2 text-sm font-semibold', inventoryMode === mode ? 'bg-[var(--brand)] text-black' : 'text-muted')}
-                      onClick={() => { setInventoryMode(mode); setForm((prev) => ({ ...prev, qty: '' })); }}>{mode === 'pieces' ? 'Sztuki' : 'Zestawy paletowe'}</button>)}
+                      onClick={() => selectInventoryMode(mode)}>{mode === 'pieces' ? 'Sztuki' : 'Zestawy paletowe'}</button>)}
                   </div>
                   {inventoryMode === 'pallets' && matchingPalletSets.length > 1 && <SelectField aria-label="Wariant zestawu paletowego" value={selectedPalletSet?.id ?? ''} onChange={(event) => setSelectedPalletSetId(event.target.value)}>
                     {matchingPalletSets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}
@@ -3698,7 +3712,7 @@ export default function SpisRzeczywisty() {
                 <Input
                   ref={qtyInputRef}
                   value={form.qty}
-                  onChange={(event) => setForm((prev) => ({ ...prev, qty: event.target.value }))}
+                  onChange={(event) => setEntryQuantity(event.target.value)}
                   placeholder="0"
                   inputMode={inventoryMode === 'pallets' ? 'numeric' : 'decimal'}
                   className="min-h-[46px]"

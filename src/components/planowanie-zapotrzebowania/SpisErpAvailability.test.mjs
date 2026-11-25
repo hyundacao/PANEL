@@ -10,6 +10,7 @@ import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import { applyPieceGrindingReservations } from '../../lib/utils/originalInventoryGrinding.ts';
 import { searchOriginalInventorySpisSuggestions } from '../../lib/utils/originalInventorySpisSearch.ts';
 import { normalizeOriginalInventoryIndex } from '../../lib/utils/originalInventoryIndex.ts';
+import { isPalletCount, palletInventoryError, palletSetError, palletSetFingerprint, palletSetTotals } from '../../lib/planowanie-zapotrzebowania/palletSets.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -227,7 +228,7 @@ test('selecting a suggestion retains its full ERP index and editing the name cle
   const context = {
     module: { exports: {} }, selectedCatalogRef: { current: { id: '', name: '' } },
     setSelectedErpMaterial: (value) => { selected = value; },
-    setSelectedCatalogId() {}, setSelectedPalletSetId() {}, setInventoryMode() {}, setForm() {},
+    setSelectedCatalogId() {}, setSelectedPalletSetId() {}, setInventoryModeOverride() {}, setForm() {},
     setSelectedCatalogAliases: value => { aliases = value; },
     qtyInputRef: { current: null }
   };
@@ -254,6 +255,106 @@ test('linking two catalog indices keeps pallet profiles attached to either origi
   };
   vm.runInNewContext(compile(`const selectedCatalogIds = ${initializer('selectedCatalogIds')}; module.exports = ${initializer('matchingPalletSets')};`),context);
   assert.deepEqual(Array.from(context.module.exports,item=>item.id),['set-primary','set-secondary']);
+});
+
+const palletSet = {
+  id: 'set', name: 'Zestaw pojemników', primaryCatalogId: 'legacy', active: true,
+  components: [
+    { catalogId: 'legacy', name: 'POJEMNIK', unit: 'szt.', qty: 40 },
+    { catalogId: 'lid', name: 'POKRYWA', unit: 'szt.', qty: 1 }
+  ]
+};
+const containerSuggestion = { catalogId: 'canonical', catalogIds: ['legacy'], name: 'POJEMNIK', unit: 'szt.', indexCode: 'M-4-1234' };
+const entryForm = (palletSets = [palletSet]) => {
+  const calls = [];
+  const context = {
+    module: { exports: {} }, form: { name: '', unit: 'kg', qty: '' },
+    selectedCatalogRef: { current: { id: '', name: '' } }, selectedCatalogId: '', selectedCatalogAliases: [], selectedPalletSetId: '',
+    inventoryModeOverride: null, palletSets, qtyInputRef: { current: null },
+    setSelectedCatalogId: value => { context.selectedCatalogId = value; },
+    setSelectedCatalogAliases: value => { context.selectedCatalogAliases = value; },
+    setSelectedErpMaterial: value => { context.selectedErpMaterial = value; },
+    setSelectedPalletSetId: value => { context.selectedPalletSetId = value; },
+    setInventoryModeOverride: value => { context.inventoryModeOverride = value; },
+    setForm: update => { context.form = update(context.form); },
+    palletSetError, palletSetTotals, palletSetFingerprint, isPalletCount, palletInventoryError,
+    effectiveSelectedWarehouseId: 'hall-2', spisDate: '2026-11-25', readOnly: false, isSilosSelected: false,
+    palletSavingRef: { current: false }, palletRequestRef: { current: null }, crypto,
+    parseQtyInput: qty => Number(qty), toast: message => calls.push(['error', message]),
+    addPalletMutation: { mutate: request => calls.push(['pallets', request]) },
+    addMutation: { mutate: entry => calls.push(['pieces', entry]) },
+    entryFormViewportTopRef: { current: null }, entryFormRef: { current: null },
+    buildEntryTimestamp: date => date, resolvedErpMaterial: undefined, user: null
+  };
+  const declarations = ['selectedCatalogIds', 'matchingPalletSets', 'selectedPalletSet', 'inventoryMode', 'palletPreview',
+    'applyNameSuggestionToForm', 'applyNameToForm', 'setEntryQuantity', 'selectInventoryMode', 'handleAdd'];
+  const code = compile(`
+    module.exports = () => {
+      ${declarations.map(name => `const ${name} = ${initializer(name)};`).join('\n')}
+      return { ${declarations.join(', ')} };
+    };
+  `);
+  vm.runInNewContext(code, context);
+  return { context, calls, render: context.module.exports };
+};
+
+test('a matching set at a linked catalog ID is the default and 3 sets still count 120 containers and 3 lids', () => {
+  const { calls, render } = entryForm();
+  assert.equal(render().inventoryMode, 'pieces');
+  render().applyNameSuggestionToForm(containerSuggestion);
+  assert.equal(render().inventoryMode, 'pallets');
+  render().setEntryQuantity('3');
+  assert.deepEqual(Array.from(render().palletPreview, part => part.total), [120, 3]);
+  render().handleAdd();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'pallets');
+  assert.equal(calls[0][1].count, 3);
+  assert.equal(calls[0][1].setId, 'set');
+});
+
+test('switching to pieces clears the set amount, stays selected and submits individual pieces', () => {
+  const { context, calls, render } = entryForm();
+  render().applyNameSuggestionToForm(containerSuggestion);
+  render().setEntryQuantity('3');
+  render().selectInventoryMode('pieces');
+  assert.equal(context.form.qty, '');
+  render().setEntryQuantity('5');
+  render().selectInventoryMode('pieces');
+  assert.equal(render().inventoryMode, 'pieces');
+  assert.equal(context.form.qty, '5');
+  render().handleAdd();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'pieces');
+  assert.equal(calls[0][1].qty, 5);
+  assert.equal(calls[0][1].indexCode, 'M-4-1234');
+  render().applyNameSuggestionToForm(containerSuggestion);
+  assert.equal(render().inventoryMode, 'pallets', 'a new material selection starts with the default again');
+  assert.equal(context.form.qty, '');
+});
+
+test('set loading or refresh cannot reinterpret a typed amount, and clearing the material resets the selection', () => {
+  const { context, calls, render } = entryForm([]);
+  render().applyNameSuggestionToForm(containerSuggestion);
+  assert.equal(render().inventoryMode, 'pieces');
+  const inactive = { ...palletSet, active: false };
+  const invalid = { ...palletSet, components: [] };
+  context.palletSets = [inactive, invalid, { ...palletSet, primaryCatalogId: 'unrelated' }];
+  assert.equal(render().inventoryMode, 'pieces');
+  context.palletSets = [palletSet];
+  assert.equal(render().inventoryMode, 'pallets', 'a late valid set is the default while quantity is empty');
+  render().setEntryQuantity('4');
+  context.palletSets = [];
+  assert.equal(render().inventoryMode, 'pallets');
+  render().handleAdd();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'error');
+  render().applyNameToForm('');
+  assert.equal(render().inventoryMode, 'pieces');
+  assert.equal(context.form.qty, '');
+  render().applyNameSuggestionToForm(containerSuggestion);
+  render().setEntryQuantity('4');
+  context.palletSets = [palletSet];
+  assert.equal(render().inventoryMode, 'pieces', 'a late set must not change units after typing pieces');
 });
 
 test('an old selected index cannot supply stock after the form name was cleared or changed', () => {

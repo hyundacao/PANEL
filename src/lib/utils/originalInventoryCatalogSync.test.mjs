@@ -68,6 +68,7 @@ function fixture() {
     from: (table) => new Query(table),
     rpc(name, payload) {
       state.operations.push({ rpc: name, payload, ...(name === 'get_original_inventory_search_candidates' ? { mode: 'select' } : {}) });
+      if (name === 'get_original_inventory_validation_register') return Promise.resolve({ data: null, error: { code: 'PGRST202' } });
       if (name === 'get_original_inventory_search_candidates') {
         return Promise.resolve(state.searchProjectionError
           ? {data:null,error:state.searchProjectionError}

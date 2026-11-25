@@ -11,15 +11,19 @@ import { refreshOriginalInventorySearchProjection } from './originalInventorySea
 
 export const CATALOG_REGISTER_MODULE_ID = 'original-inventory-catalog-register';
 
+const validateCatalogRegisterState = (value: unknown) => {
+  const state = value as CatalogRegisterState | null | undefined;
+  if (state && (state.version !== 1 || !Array.isArray(state.items) || !Array.isArray(state.blocked))) {
+    throw new Error('CATALOG_REGISTER_INVALID');
+  }
+  return state ?? null;
+};
+
 export const readOriginalInventoryCatalogRegister = async (db: SupabaseClient) => {
   const { data, error } = await db.from('material_planning_state').select('state,revision')
     .eq('id', CATALOG_REGISTER_MODULE_ID).maybeSingle();
   if (error) throw error;
-  const state = data?.state as CatalogRegisterState | undefined;
-  if (state && (state.version !== 1 || !Array.isArray(state.items) || !Array.isArray(state.blocked))) {
-    throw new Error('CATALOG_REGISTER_INVALID');
-  }
-  return { state: state ?? null, revision: Number(data?.revision ?? 0) };
+  return { state: validateCatalogRegisterState(data?.state), revision: Number(data?.revision ?? 0) };
 };
 
 export const saveOriginalInventoryCatalogRegister = async (
@@ -134,11 +138,45 @@ export const importOriginalInventoryCatalogRegister = async (
   throw new Error('REVISION_CONFLICT');
 };
 
+type ValidationRegisterCache = {
+  version: string;
+  resolver: ReturnType<typeof createCatalogRegisterResolver>;
+};
+const validationRegisters = new WeakMap<SupabaseClient, ValidationRegisterCache>();
+
+const readCatalogValidationResolver = async (db: SupabaseClient) => {
+  const cached = validationRegisters.get(db);
+  const { data, error } = await db.rpc('get_original_inventory_validation_register', {
+    p_known_version: cached?.version ?? null
+  });
+  if (error) {
+    if (error.code !== 'PGRST202' && error.code !== '42883') throw error;
+    validationRegisters.delete(db);
+    const { state } = await readOriginalInventoryCatalogRegister(db);
+    return createCatalogRegisterResolver(state);
+  }
+
+  if (!Array.isArray(data) || data.length > 1) throw new Error('CATALOG_REGISTER_INVALID');
+  const row = data[0] as { version: string; unchanged: boolean; state: unknown } | undefined;
+  if (!row) {
+    validationRegisters.delete(db);
+    return createCatalogRegisterResolver(null);
+  }
+  if (typeof row.version !== 'string' || typeof row.unchanged !== 'boolean') throw new Error('CATALOG_REGISTER_INVALID');
+  if (row.unchanged) {
+    if (!cached || cached.version !== row.version) throw new Error('CATALOG_REGISTER_INVALID');
+    return cached.resolver;
+  }
+
+  const resolver = createCatalogRegisterResolver(validateCatalogRegisterState(row.state));
+  validationRegisters.set(db, { version: row.version, resolver });
+  return resolver;
+};
+
 export const assertOriginalInventoryCatalogAllowed = async (
   db: SupabaseClient, item: { name: string; unit?: string; indexCode?: string | null; indexCode2?: string | null }
 ) => {
-  const { state } = await readOriginalInventoryCatalogRegister(db);
-  const resolver = createCatalogRegisterResolver(state);
+  const resolver = await readCatalogValidationResolver(db);
   if (resolver.isBlocked(item)) throw new Error('CATALOG_BLOCKED');
   if (resolver.hasRegisteredCode(item) && !resolver.resolve(item)) throw new Error('CATALOG_AMBIGUOUS');
 };

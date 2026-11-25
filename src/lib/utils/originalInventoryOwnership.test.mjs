@@ -75,7 +75,10 @@ function fixture(user = candidate()) {
   }
   const mocks = {
     '@/lib/auth/session': { getAuthenticatedUser: async () => ({ user: state.user, code: state.user ? null : 'UNAUTHORIZED' }), clearSessionCookie() {} },
-    '@/lib/supabase/admin': { supabaseAdmin: { from: table => new Query(table) } },
+    '@/lib/supabase/admin': { supabaseAdmin: {
+      from: table => new Query(table),
+      rpc: async () => ({ data: null, error: { code: 'PGRST202' } })
+    } },
     '@/lib/push/server': {}
   };
   const cache = new Map();
